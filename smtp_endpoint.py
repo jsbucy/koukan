@@ -15,13 +15,15 @@ class SmtpEndpoint:
     resolve_mx = False
     smtp : smtplib.SMTP
     chunk_id = None
-    data = None
+    data : bytes = None
+    current_chunk : bytes = None
+    ok_rcpt = False
 
     def __init__(self, host, port, resolve_mx=False):
         self.host = host
         self.port = port
         self.resolve_mx = resolve_mx
-        self.smtp = smtplib.SMTP(host)
+        self.smtp = smtplib.SMTP(host, port)
 
     def on_connect(self, remote_host, local_host) -> Response:
         # go down the list until we get a good banner
@@ -75,31 +77,53 @@ class SmtpEndpoint:
     def add_rcpt(self, forward_path, esmtp_options=None):
         print('SmtpEndpoint.add_rcpt ', forward_path)
         resp = Response.from_smtp(self.smtp.rcpt(forward_path))
+        print('SmtpEndpoint.add_rcpt ', resp)
         if resp.ok():
-            self.chunk_id = 0
-            self.data = bytes()
+            self.ok_rcpt = True
         return resp
 
-    # -> (resp, chunk_id)
-    def append_data(self, last : bool, chunk_id = None):
-        print('SmtpEndpoint.append_data', last, chunk_id)
-        self.chunk_id += 1
+    # -> resp
+    def append_data(self, last : bool, chunk_id : int, d : bytes = None):
+        print('SmtpEndpoint.append_data last=', last,
+              "chunk_id=", chunk_id, self.chunk_id)
+
+        if not self.ok_rcpt:
+            return Response(500, 'smtp_endpoint no rcpt')
+
+        if chunk_id == self.chunk_id:  # noop
+            return Response()
+        if self.chunk_id is None and chunk_id == 0:
+            self.data = bytes()
+            self.chunk_id = 0
+        elif chunk_id != self.chunk_id + 1:
+            return Response(500, 'smtp_endpoint: bad chunk id')
+
+        self.current_chunk = bytes()
+        self.chunk_id = chunk_id
         self.last_chunk = last
-        return Response(), str(self.chunk_id)
+        if d is not None:
+            resp, chunk_len = self.append_data_chunk(
+                self.chunk_id, offset=0, d=d, last=True)
+            # this condition -> smtp connection timeout
+            assert(chunk_len == len(d))
+        return Response()
 
     # -> (resp, len)
-    def append_data_chunk(self, chunk_id, offset,
-                          d : bytes, last : bool):
+    def append_data_chunk(self, chunk_id, offset, d : bytes, last : bool):
         print('SmtpEndpoint.append_data_chunk', chunk_id, offset, len(d), last)
-        assert(str(self.chunk_id) == chunk_id)
-        if offset > len(self.data):
+        assert(self.chunk_id == chunk_id)
+        if offset > len(self.current_chunk):
             print('hole', offset, len(self.data))
             return Response(500, 'hole'), len(self.data)
-        self.data += d[offset - len(self.data):]
+        self.current_chunk += d[offset - len(self.current_chunk):]
+        current_chunk_len = len(self.current_chunk)
+        if last:
+            self.data += self.current_chunk
+            self.current_chunk = None
         if last and self.last_chunk:
             self.final_status = Response.from_smtp(self.smtp.data(self.data))
             print(self.final_status)
-        return Response(), len(self.data)
+        return Response(), current_chunk_len
 
     def get_transaction_status(self):
         print('SmtpEndpoint.get_transaction_status')

@@ -54,11 +54,11 @@ class SmtpHandler:
         # no hook for data chunks but could override handler in SMTP
         # object to get at it
 
-        data_resp, chunk_id = session.endpoint.append_data(last=True)
+        data_resp = session.endpoint.append_data(last=True, chunk_id=0)
         if data_resp.err():
             return data_resp.to_smtp_resp()
         chunk_resp,result_len = session.endpoint.append_data_chunk(
-            chunk_id, offset=0,
+            chunk_id=0, offset=0,
             d=envelope.content, last=True)
         if chunk_resp.err():
             return chunk_resp.to_smtp_resp()

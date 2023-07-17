@@ -91,46 +91,39 @@ class Router:
             self.received = False
         return resp
 
-    # -> (resp, chunk_id)
-    def append_data(self, last : bool, chunk_id = None):
+    # -> resp
+    def append_data(self, last : bool, chunk_id = None, d : bytes = None):
         print('Router.append_data', last, chunk_id)
-
-        # probably don't need return-path for inbound-gw, def. not for relay
 
         if not self.endpoint:
             return Response(500, "router no rcpt"), None
 
-        if not self.received or not chunk_id:
-            resp, id = self.endpoint.append_data(
-                last=(False if chunk_id else last), chunk_id=None)
+        # probably don't need return-path for inbound-gw, def. not for relay
 
         if not self.received:
             received = 'Received: from %s ([%s]);\r\n\t%s\r\n' % (
                 self.ehlo, self.remote_host,
                 email.utils.format_datetime(email.utils.localtime()))
             received_ascii = received.encode('ascii')
-            # something downstream may have added something else ahead of us
-            resp, self.data_offset = self.endpoint.append_data_chunk(
-                id, offset=0, d=received_ascii, last=(chunk_id is not None))
+            resp = self.endpoint.append_data(
+                last=False, chunk_id=0, d=received_ascii)
             if resp.err():
-                return resp, None
+                return resp
             self.received = True
-        if chunk_id:
-            resp, id = self.endpoint.append_data(last, chunk_id)
-        return resp, id
+
+        # we inserted an extra append_data() at the beginning for received
+        return self.endpoint.append_data(last, chunk_id + 1)
 
     # -> (resp, len)
     def append_data_chunk(self, chunk_id, offset,
                           d : bytes, last: bool):
         if not self.endpoint:
             return Response(500, "router no rcpt")
-        # XXX this manipulation of len/offset only works because the
-        # received header is added first, I think this doesn't work
-        # correctly if stuff gets added later
-        resp,len = self.endpoint.append_data_chunk(  
-          chunk_id, offset + self.data_offset, d, last)
+        # we inserted an extra append_data() at the beginning for received
+        resp,len = self.endpoint.append_data_chunk(
+            chunk_id=(chunk_id + 1), offset=offset, d=d, last=last)
         print(resp, len)
-        return resp, len - self.data_offset
+        return resp, len
 
     # -> resp
     def get_transaction_status(self):
