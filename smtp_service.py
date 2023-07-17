@@ -68,7 +68,8 @@ class SmtpHandler:
 
 
 def service(endpoint, hostname="localhost", port=9025):
-    logging.basicConfig(level=logging.DEBUG)
+    # DEBUG logs message contents!
+    logging.basicConfig(level=logging.INFO)
 
     from aiosmtpd.controller import Controller
     controller = Controller(SmtpHandler(endpoint),
