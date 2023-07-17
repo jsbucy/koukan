@@ -21,7 +21,7 @@ class SmtpEndpoint:
         self.host = host
         self.port = port
         self.resolve_mx = resolve_mx
-        self.smtp = smtplib.SMTP()
+        self.smtp = smtplib.SMTP(host)
 
     def on_connect(self, remote_host, local_host) -> Response:
         # go down the list until we get a good banner
@@ -55,9 +55,9 @@ class SmtpEndpoint:
         starttls_resp = Response.from_smtp(self.smtp.starttls())
         if starttls_resp.err(): return starttls_resp
 
-        ehlo_resp = Response.from_smtp(self.smtp.ehlo(ehlo_domain))
+        ehlo_resp = Response.from_smtp(self.smtp.ehlo(hostname))
         if ehlo_resp.err(): return ehlo_resp
-        return ehlo_resp, smtp.esmtp_features
+        return ehlo_resp, self.smtp.esmtp_features
 
     # -> (resp, rcpt_status)
     def start_transaction(self, reverse_path, esmtp_options=None,
@@ -93,7 +93,7 @@ class SmtpEndpoint:
         print('SmtpEndpoint.append_data_chunk', chunk_id, offset, len(d), last)
         assert(str(self.chunk_id) == chunk_id)
         if offset > len(self.data):
-            print('hole')
+            print('hole', offset, len(self.data))
             return Response(500, 'hole'), len(self.data)
         self.data += d[offset - len(self.data):]
         if last and self.last_chunk:

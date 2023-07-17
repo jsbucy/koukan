@@ -21,11 +21,11 @@ class Router:
     def on_connect(self, remote_host, local_host):
         self.remote_host = remote_host
         self.local_host = local_host
-        return Response(200, 'router ready')
+        return Response(220, 'router ready')
 
     def on_ehlo(self, hostname):
         self.ehlo = hostname
-        return Response(200, 'router at your service'), Esmtp()
+        return Response(220, 'router at your service'), Esmtp()
 
     def setup_endpoint(self, rcpt):
         if self.endpoint:
@@ -51,7 +51,7 @@ class Router:
         self.reverse_path_esmtp = esmtp_options
         self.transaction_esmtp_options = esmtp_options
         if not forward_path:
-            return Response(200, "mail ok"), None
+            return Response(250, "mail ok"), None
 
         # 1. find the first address that the routing policy accepts
         # 2. filter all of the remaining recipients that the policy will
@@ -93,10 +93,12 @@ class Router:
 
     # -> (resp, chunk_id)
     def append_data(self, last : bool, chunk_id = None):
+        print('Router.append_data', last, chunk_id)
+
         # probably don't need return-path for inbound-gw, def. not for relay
 
         if not self.endpoint:
-            return Response(500, "router no rcpt")
+            return Response(500, "router no rcpt"), None
 
         if not self.received or not chunk_id:
             resp, id = self.endpoint.append_data(
@@ -107,10 +109,10 @@ class Router:
                 self.ehlo, self.remote_host,
                 email.utils.format_datetime(email.utils.localtime()))
             received_ascii = received.encode('ascii')
-            self.received_len = len(received_ascii)
-            resp, data_len = self.endpoint.append_data_chunk(
+            # something downstream may have added something else ahead of us
+            resp, self.data_offset = self.endpoint.append_data_chunk(
                 id, offset=0, d=received_ascii, last=(chunk_id is not None))
-            if resp.err() or data_len != self.received_len:
+            if resp.err():
                 return resp, None
             self.received = True
         if chunk_id:
@@ -119,13 +121,16 @@ class Router:
 
     # -> (resp, len)
     def append_data_chunk(self, chunk_id, offset,
-                          d : bytes, last_chunk : bool):
+                          d : bytes, last: bool):
         if not self.endpoint:
             return Response(500, "router no rcpt")
-        r = self.endpoint.append_data_chunk(
-            chunk_id, offset+self.received_len, d, last_chunk)
-        print(r[0], r[1])
-        return r
+        # XXX this manipulation of len/offset only works because the
+        # received header is added first, I think this doesn't work
+        # correctly if stuff gets added later
+        resp,len = self.endpoint.append_data_chunk(  
+          chunk_id, offset + self.data_offset, d, last)
+        print(resp, len)
+        return resp, len - self.data_offset
 
     # -> resp
     def get_transaction_status(self):

@@ -8,7 +8,7 @@ from smtp_service import service
 
 port = int(sys.argv[1])
 
-gsuite = lambda _: SmtpEndpoint('localhost', 2025) #'aspmx.l.google.com', 25)
+gsuite = lambda _: SmtpEndpoint('aspmx.l.google.com', 25, resolve_mx=True)
 
 local_addrs = AddressPolicy(
     [ PlusAddr('bucy', gsuite),
@@ -22,4 +22,4 @@ local_domain_router = lambda: Router(local_domains)
 #archive = FileSink()
 #mirror = Mirror(archive, router)
 
-service(local_domain_router, port=port)
+service(local_domain_router, hostname="tachygraph.gloop.org", port=port)

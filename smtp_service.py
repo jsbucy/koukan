@@ -59,7 +59,7 @@ class SmtpHandler:
             return data_resp.to_smtp_resp()
         chunk_resp,result_len = session.endpoint.append_data_chunk(
             chunk_id, offset=0,
-            d=envelope.content, last_chunk=True)
+            d=envelope.content, last=True)
         if chunk_resp.err():
             return chunk_resp.to_smtp_resp()
         elif result_len < len(envelope.content):
@@ -67,11 +67,11 @@ class SmtpHandler:
         return session.endpoint.get_transaction_status().to_smtp_resp()
 
 
-def service(endpoint, port=9025):
+def service(endpoint, hostname="localhost", port=9025):
     logging.basicConfig(level=logging.DEBUG)
 
     from aiosmtpd.controller import Controller
     controller = Controller(SmtpHandler(endpoint),
-                            hostname="localhost", port=port)
+                            hostname=hostname, port=port)
     controller.start()
     time.sleep(1000000)
