@@ -1,5 +1,7 @@
 import spf
 
+from response import Response
+
 from typing import List
 
 # for using spf as an IP allowlist: return an error greeting for IPs that
@@ -26,8 +28,8 @@ class SpfEndpoint:
         self.endpoint_factory = endpoint_factory
 
     def check(self, host):
-        for host in self.allowlist:
-            if host == host:
+        for h in self.allowlist:
+            if host == h:
                 return True
         for domain in self.domains:
             (result, code, desc) = spf.check(i=host, s=domain, h='')
@@ -38,7 +40,7 @@ class SpfEndpoint:
 
     def on_connect(self, remote_host, local_host):
         if not self.check(remote_host[0]):
-            return (None, (550, 'relaying denied'))
+            return Response(550, 'relaying denied')
         self.next = self.endpoint_factory()
         return self.next.on_connect(remote_host, local_host)
 
