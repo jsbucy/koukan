@@ -1,3 +1,4 @@
+from aiosmtpd.smtp import SMTP
 from aiosmtpd.controller import Controller
 import asyncio
 import time
@@ -67,12 +68,28 @@ class SmtpHandler:
         return session.endpoint.get_transaction_status().to_smtp_resp()
 
 
-def service(endpoint, hostname="localhost", port=9025):
+class ControllerTls(Controller):
+    def __init__(self, handler, host, port, ssl_context):
+        self.tls_controller_context = ssl_context
+        super(Controller, self).__init__(handler, hostname=host, port=port)
+
+    def factory(self):
+        return SMTP(self.handler, require_starttls=True,
+                    tls_context=self.tls_controller_context)
+
+
+def service(endpoint, hostname="localhost", port=9025, cert=None, key=None):
     # DEBUG logs message contents!
     logging.basicConfig(level=logging.INFO)
 
-    from aiosmtpd.controller import Controller
-    controller = Controller(SmtpHandler(endpoint),
-                            hostname=hostname, port=port)
+    if cert is None or key is None:
+        ssl_context = None
+    else:
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(cert, key)
+
+    controller = ControllerTls(SmtpHandler(endpoint),
+                               hostname, port, ssl_context)
     controller.start()
-    time.sleep(1000000)
+    while True:
+        time.sleep(60)  # or wait for signal
