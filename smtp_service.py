@@ -1,5 +1,7 @@
 from aiosmtpd.smtp import SMTP
 from aiosmtpd.controller import Controller
+import ssl
+
 import asyncio
 import time
 import logging
