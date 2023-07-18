@@ -80,7 +80,9 @@ class ControllerTls(Controller):
 
 def service(endpoint, hostname="localhost", port=9025, cert=None, key=None):
     # DEBUG logs message contents!
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(message)s')
+
 
     if cert is None or key is None:
         ssl_context = None
