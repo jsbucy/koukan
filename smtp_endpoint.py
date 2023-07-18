@@ -23,7 +23,19 @@ class SmtpEndpoint:
         self.host = host
         self.port = port
         self.resolve_mx = resolve_mx
-        self.smtp = smtplib.SMTP(host, port)
+
+    def connect(self, host, port):
+        self.smtp = smtplib.SMTP()
+        try:
+            # TODO workaround bug in smtplib py<3.11
+            # https://stackoverflow.com/questions/51768041/python3-smtp-valueerror-server-hostname-cannot-be-an-empty-string-or-start-with
+            # passing the hostname to SMTP() swallows the greeting
+            # on success :/
+            self.smtp._host = host
+            return self.smtp.connect(host, port)
+        except Exception as e:
+            print('SmtpEndpoint.connect', e, host, port)
+            return [400, b'connect error']
 
     def on_connect(self, remote_host, local_host) -> Response:
         # go down the list until we get a good banner
@@ -35,12 +47,13 @@ class SmtpEndpoint:
             for host in mx_resolution.resolve(self.host):
                 print(host)
                 resp = Response.from_smtp(
-                    self.smtp.connect(host=self.host, port=self.port))
+                    self.connect(host=host, port=self.port))
                 if resp.ok():
                     return resp
+            return Response(400, 'smtp_endpoint all MX failed')
         else:
             return Response.from_smtp(
-                self.smtp.connect(host=self.host, port=self.port))
+                self.connect(host=self.host, port=self.port))
 
 
     def on_ehlo(self, hostname) -> Tuple[Response, Optional[Esmtp]]:
