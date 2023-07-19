@@ -1,6 +1,8 @@
 
 from address import domain_from_address
 
+from response import Response
+
 # really Mx policy, construct an endpoint for the dest domain with the
 # provided factory
 class DestDomainPolicy:
@@ -11,9 +13,11 @@ class DestDomainPolicy:
     def endpoint_for_rcpt(self, rcpt):
         d = domain_from_address(rcpt)
         if d is None:
-            return None
-        return self.endpoint_factory(d)
+            return None, Response(550, 'DestDomainPolicy bad address')
+        return self.endpoint_factory(d), Response()
 
     def check_rcpt(self, rcpt0, rcpt):
-        # XXX case?
-        return domain_from_address(rcpt0) == domain_from_address(rcpt)
+        if domain_from_address(rcpt0) != domain_from_address(rcpt):
+            return Response(452, 'too many recipients --'
+                            'DestDomainPolicy.check_rcpt')
+        return Response()

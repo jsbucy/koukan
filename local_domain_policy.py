@@ -1,6 +1,8 @@
 
 from address import domain_from_address
 
+from response import Response
+
 class LocalDomainPolicy:
     def __init__(self, local_domains, endpoint_factory):
         self.local_domains = local_domains
@@ -10,14 +12,16 @@ class LocalDomainPolicy:
     def endpoint_for_rcpt(self, rcpt):
         d = domain_from_address(rcpt)
         if d is None:
-            return None
+            return None, Response(550, 'LocalDomainPolicy bad address')
         if not self.match_domain(d):
-            return None
-        return self.endpoint_factory(d)
+            return None, Response(550, 'LocalDomainPolicy unknown domain')
+        return self.endpoint_factory(d), Response()
 
     def check_rcpt(self, rcpt0, rcpt):
         d = domain_from_address(rcpt)
-        return self.match_domain(d)
+        if not self.match_domain(d):
+            return Response(550, 'LocalDomainPolicy unknown domain')
+        return Response()
 
     def match_domain(self, domain):
         for ld in self.local_domains:

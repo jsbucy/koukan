@@ -3,6 +3,8 @@ from address import domain_from_address
 
 from email import _header_value_parser
 
+from response import Response
+
 class PlusAddr:
     def __init__(self, base, endpoint_factory):
         self.base = base.lower()
@@ -29,15 +31,20 @@ class AddressPolicy:
         self.patterns = patterns
 
     # called on the first recipient in the transaction
-    def endpoint_for_rcpt(self, rcpt) -> "Endpoint":
+    def endpoint_for_rcpt(self, rcpt) -> "Endpoint", Response:
         p = self.match_rcpt(rcpt)
-        if p:
-            return p.endpoint(rcpt)
-        return None
+        if p is None:
+            None, Response(550, 'AddressPolicy unknown address')
+        return p.endpoint(rcpt), Response()
 
-    def check_rcpt(self, rcpt0, rcpt) -> bool:
+    def check_rcpt(self, rcpt0, rcpt) -> Response:
         p = self.match_rcpt(rcpt)
-        return p and p == self.match_rcpt(rcpt0)
+        if p is None:
+            Response(550, 'AddressPolicy unknown address')
+        if p != self.match_rcpt(rcpt0):
+            Response(452, 'too many recipients -- '
+                           'AddressPolicy check_rcpt')
+        return Response()
 
     def match_rcpt(self, rcpt):
         for p in self.patterns:

@@ -29,14 +29,11 @@ class Router:
 
     def setup_endpoint(self, rcpt):
         if self.endpoint:
-            if not self.policy.check_rcpt(self.rcpt0, rcpt):
-                return Response(
-                    452, 'too many recipients (router policy check_rcpt)')
-            return Response()
+            return self.policy.check_rcpt(self.rcpt0, rcpt)
 
-        self.endpoint = self.policy.endpoint_for_rcpt(rcpt)
-        if not self.endpoint:
-            return Response(550, 'router unknown address')
+        self.endpoint, resp = self.policy.endpoint_for_rcpt(rcpt)
+        if resp.err():
+            return resp
         self.rcpt0 = rcpt
         resp = self.endpoint.on_connect(None, None)
         if resp.err(): return resp
