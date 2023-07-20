@@ -1,7 +1,6 @@
 from response import Response, Esmtp
 
 class PrintEndpoint:
-    chunk_id = None
     def __init__(self):
         pass
 
@@ -22,32 +21,25 @@ class PrintEndpoint:
                           forward_path = []):
         print('start_transaction ', reverse_path, ' ',
               esmtp_options, ' ', forward_path)
-        if forward_path:
-            self.chunk_id = 0
-        return Response(), [Response() for _ in forward_path]
+        rcpt_status = [Response() for _ in forward_path] if forward_path else []
+        return Response(), rcpt_status
 
     # -> resp
     def add_rcpt(self, forward_path, esmtp_options=None):
         print('add_rcpt ', forward_path, ' ', esmtp_options)
-        self.chunk_id = 0
         return Response()
 
     # -> (resp, chunk_id)
     def append_data(self, last : bool, chunk_id : int, d : bytes = None):
-        self.chunk_id += 1
         print('append_data ', last, ' ', chunk_id)
-        return(Response(), str(self.chunk_id))
+        print(d)
+        return Response()
 
-    # dotstuff: 1 or more times until eof
-    # bdat: one or more per bdat
-    # data uri: once per PUT
-    # precondition: offset is <= the current end
-    #   i.e. overlap is ok but cannot create holes
     # -> (resp, len)
     def append_data_chunk(self, chunk_id : int, offset : int, d : bytes,
-                          last_chunk : bool):
-        assert(chunk_id == str(self.chunk_id))
-        print('append_data_chunk ', chunk_id, ' ', ' ', offset, ' ', last_chunk)
+                          last : bool):
+        print('append_data_chunk ', chunk_id, ' ', ' ', offset, ' ', last)
+        print(d)
         return Response(200, 'append data chunk ok'), offset + len(d)
 
 
