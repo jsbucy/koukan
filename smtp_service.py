@@ -13,6 +13,9 @@ from typing import Tuple
 
 from response import ok_resp, to_smtp_resp
 
+from smtp_auth import Authenticator
+
+
 class SmtpHandler:
     def __init__(self, endpoint_factory):
         self.endpoint_factory = endpoint_factory
@@ -33,6 +36,10 @@ class SmtpHandler:
         session.host_name = hostname
         # TODO esmtp
         return responses
+
+    # XXX
+    async def handle_RSET(self, server, session, envelope):
+        pass
 
     async def handle_MAIL(
             self, server, session, envelope, address, options):
@@ -71,29 +78,33 @@ class SmtpHandler:
 
 
 class ControllerTls(Controller):
-    def __init__(self, handler, host, port, ssl_context):
+    def __init__(self, handler, host, port, ssl_context, auth):
         self.tls_controller_context = ssl_context
-        super(Controller, self).__init__(handler, hostname=host, port=port)
+        self.auth = auth
+        super(Controller, self).__init__(
+            handler, hostname=host, port=port)
 
     def factory(self):
         return SMTP(self.handler, require_starttls=True,
-                    tls_context=self.tls_controller_context)
+                    tls_context=self.tls_controller_context,
+                    authenticator=self.auth)
 
 
-def service(endpoint, hostname="localhost", port=9025, cert=None, key=None):
+def service(endpoint, hostname="localhost", port=9025, cert=None, key=None,
+            auth_secrets_path=None):
     # DEBUG logs message contents!
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(message)s')
-
 
     if cert is None or key is None:
         ssl_context = None
     else:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
-
+    auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
     controller = ControllerTls(SmtpHandler(endpoint),
-                               hostname, port, ssl_context)
+                               hostname, port, ssl_context,
+                               auth)
     controller.start()
     while True:
         time.sleep(60)  # or wait for signal
