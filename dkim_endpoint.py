@@ -5,7 +5,7 @@ from response import Response, Esmtp
 
 from typing import Optional, Tuple
 
-class Endpoint:
+class DkimEndpoint:
     chunk_id = None
 
     def __init__(self, domain, selector, privkey, next):
@@ -27,9 +27,10 @@ class Endpoint:
         self.ok_resp = False
         resp, rcpt_status = self.next.start_transaction(
             reverse_path, esmtp_options, forward_path)
-        for r in rcpt_status:
-            if r.ok():
-                self.ok_resp = True
+        if rcpt_status:
+            for r in rcpt_status:
+                if r.ok():
+                    self.ok_resp = True
         return resp, rcpt_status
 
     def add_rcpt(self, forward_path, esmtp_options=None) -> Response:
@@ -66,29 +67,26 @@ class Endpoint:
             return (Response(500, 'DkimEndpoint.append_data_chunk: hole'),
                     len(self.data))
         self.current_chunk += d[offset - len(self.current_chunk):]
-        current_chunk_len = len(self.current_chunk)
-        if last:
+        if not last:
+            return Response(), len(self.current_chunk)
+        if not self.last_chunk:
             self.data += self.current_chunk
             self.current_chunk = None
-        if last and self.last_chunk:
-            sig = dkim.sign(self.data, self.selector, self.domain, self.privkey,
-                            include_headers=['From', 'Date', 'Message-ID'])
+            return Response(), len(self.current_chunk)
+        
+        sig = dkim.sign(self.data, self.selector, self.domain, self.privkey,
+                        include_headers=['From', 'Date', 'Message-ID'])
 
-            # identity=None, canonicalize=('relaxed', 'simple'),
-            # signature_algorithm='rsa-sha256', include_headers=None,
-            # length=False, logger=None, linesep='\r\n', tlsrpt=False)
+        # identity=None, canonicalize=('relaxed', 'simple'),
+        # signature_algorithm='rsa-sha256', include_headers=None,
+        # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
-            resp = self.next.append_data(chunk_id=0, d=sig, last=False)
-            if resp.err(): return resp
-            resp = self.next.append_data(chunk_id=1, last=True)
-            if resp.err(): return resp
-            data_len = 0
-            while data_len < len(self.data):
-                resp, data_len = self.next.append_data_chunk(
-                    chunk_id=1, offset=0, d=self.data[data_len:], last=True)
-                if resp.err():
-                    return resp
-            return Response()
+        resp = self.next.append_data(chunk_id=0, d=sig, last=False)
+        if resp.err(): return resp
+        resp = self.next.append_data(chunk_id=1, last=True)
+        if resp.err(): return resp
+        return self.next.append_data_chunk(
+            chunk_id=1, offset=0, d=self.data[data_len:], last=True)
 
 
     def get_transaction_status(self) -> Response:
