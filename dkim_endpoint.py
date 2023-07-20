@@ -66,16 +66,20 @@ class DkimEndpoint:
             print('hole', offset, len(self.data))
             return (Response(500, 'DkimEndpoint.append_data_chunk: hole'),
                     len(self.data))
-        self.current_chunk += d[offset - len(self.current_chunk):]
+        current_chunk_len = len(self.current_chunk)
+        self.current_chunk += d[offset - current_chunk_len:]
         if not last:
             return Response(), len(self.current_chunk)
+        self.data += self.current_chunk
+        self.current_chunk = None
+
         if not self.last_chunk:
-            self.data += self.current_chunk
-            self.current_chunk = None
-            return Response(), len(self.current_chunk)
-        
+            return Response(), current_chunk_len
+
+        assert(isinstance(self.data, bytes))
+
         sig = dkim.sign(self.data, self.selector, self.domain, self.privkey,
-                        include_headers=['From', 'Date', 'Message-ID'])
+                        include_headers=[b'From', b'Date', b'Message-ID'])
 
         # identity=None, canonicalize=('relaxed', 'simple'),
         # signature_algorithm='rsa-sha256', include_headers=None,
@@ -86,7 +90,7 @@ class DkimEndpoint:
         resp = self.next.append_data(chunk_id=1, last=True)
         if resp.err(): return resp
         return self.next.append_data_chunk(
-            chunk_id=1, offset=0, d=self.data[data_len:], last=True)
+            chunk_id=1, offset=0, d=self.data, last=True)
 
 
     def get_transaction_status(self) -> Response:

@@ -109,7 +109,7 @@ class Router:
             self.received = True
 
         # we inserted an extra append_data() at the beginning for received
-        return self.endpoint.append_data(last, chunk_id + 1)
+        return self.endpoint.append_data(last, chunk_id + 1, d)
 
     # -> (resp, len)
     def append_data_chunk(self, chunk_id, offset,
