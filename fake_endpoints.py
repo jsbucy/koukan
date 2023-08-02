@@ -4,51 +4,22 @@ class PrintEndpoint:
     def __init__(self):
         pass
 
-    # return session id, greeting
-    # -> (cx_id, resp)
-    def on_connect(self, remote_host, local_host):
-        print('on_connect ', remote_host, ' ', local_host)
-        return Response()
+    def start(self,
+              local_host, remote_host,
+              mail_from, transaction_esmtp,
+              rcpt_to, rcpt_esmtp):
 
-    # return esmtp
-    def on_ehlo(self, hostname):
-        print('on_ehlo ', hostname)
-        return Response(), Esmtp()
+        print('PrintEndpoint.start_transaction ', mail_from, ' ',
+              transaction_esmtp, ' ', rcpt_to, ' ', rcpt_esmtp)
+        return Response(250)
 
-    # -> (resp, rcpt_status)
-    def start_transaction(self,
-                          reverse_path, esmtp_options=None,
-                          forward_path = []):
-        print('start_transaction ', reverse_path, ' ',
-              esmtp_options, ' ', forward_path)
-        rcpt_status = [Response() for _ in forward_path] if forward_path else []
-        return Response(), rcpt_status
+    def append_data(self, last, d=None, blob_id=None):
+        print('PrintEndpoint.append_data ', last, ' ')
+        if blob_id:
+            print('blob ', blob_id)
+        else:
+            print(d)
+        return Response(), None
 
-    # -> resp
-    def add_rcpt(self, forward_path, esmtp_options=None):
-        print('add_rcpt ', forward_path, ' ', esmtp_options)
-        return Response()
-
-    # -> (resp, chunk_id)
-    def append_data(self, last : bool, chunk_id : int, d : bytes = None):
-        print('append_data ', last, ' ', chunk_id)
-        print(d)
-        return Response()
-
-    # -> (resp, len)
-    def append_data_chunk(self, chunk_id : int, offset : int, d : bytes,
-                          last : bool):
-        print('append_data_chunk ', chunk_id, ' ', ' ', offset, ' ', last)
-        print(d)
-        return Response(200, 'append data chunk ok'), offset + len(d)
-
-
-    # return final result
-    def get_transaction_status(self):
-        print('get_transaction_status ')
+    def get_status(self):
         return Response(250, 'message successfully injected')
-
-
-    # does this need to have another hook to get the final status
-    # since rest may need to GET that after the fact? Otherwise it
-    # needs a separate cache for that.

@@ -5,7 +5,9 @@ def ok_smtp_code(code):
     return code >= 200 and code <= 299
 
 class Esmtp:
-    pass
+    # from smtplib.SMTP.esmtp_features
+    def __init__(self, esmtp : Dict[str,str] = None):
+        self.esmtp = esmtp
 
 class Response:
     code : int
@@ -25,6 +27,12 @@ class Response:
         return ok_smtp_code(self.code)
     def err(self):
         return not self.ok()
+
+    def perm(self):
+        return self.code >= 500 and self.code <= 599
+
+    def temp(self):
+        return self.code >= 400 and self.code <= 499
 
     def to_json(self) -> Dict:
         return {'code': self.code, 'message': self.message}

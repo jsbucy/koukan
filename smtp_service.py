@@ -17,64 +17,82 @@ from smtp_auth import Authenticator
 
 
 class SmtpHandler:
-    def __init__(self, endpoint_factory):
+    def __init__(self, endpoint_factory, msa):
         self.endpoint_factory = endpoint_factory
+        self.msa = msa
 
-    async def handle_EHLO(
-            self, server, session, envelope, hostname, responses):
-        # TODO no hook for connect, can override SMTP.connection_made()
-        if not hasattr(session, "connection"):
-            session.endpoint = self.endpoint_factory()
-            greeting = session.endpoint.on_connect(session.peer, None)
-            if greeting.err():
-                return [greeting.to_smtp_resp()]
-        connection = session.endpoint
-        ehlo_resp, esmtp = connection.on_ehlo(hostname)
-        if ehlo_resp.err():
-            return [ehlo_resp.to_smtp_resp()]
+    # XXX the Endpoint stack is sync, this should spawn threads?
 
-        session.host_name = hostname
-        # TODO esmtp
-        return responses
-
-    # XXX
     async def handle_RSET(self, server, session, envelope):
-        pass
+        envelope.transactions = []
+        return b'250 ok'
 
     async def handle_MAIL(
             self, server, session, envelope, address, options):
-        connection = session.endpoint
-        resp, _ = connection.start_transaction(
-            address, options, forward_path=[])
-        if resp.ok():
-            envelope.mail_from = address
-            envelope.mail_options.extend(options)
-        print(resp)
-        return resp.to_smtp_resp()
+        envelope.transactions = []
+        envelope.mail_from = address
+        envelope.mail_options.extend(options)
+        return b'250 MAIL ok'
 
 
     async def handle_RCPT(
             self, server, session, envelope, address, rcpt_options):
-        resp = session.endpoint.add_rcpt(address, rcpt_options)
+        transaction = self.endpoint_factory()
+        resp = transaction.start(
+            None, None,
+            envelope.mail_from, envelope.mail_options,
+            address, rcpt_options)
         if resp.ok():
+            envelope.transactions.append(transaction)
             envelope.rcpt_tos.append(address)
+
         return resp.to_smtp_resp()
 
     async def handle_DATA(self, server, session, envelope):
-        # no hook for data chunks but could override handler in SMTP
-        # object to get at it
+        # have all recipients
 
-        data_resp = session.endpoint.append_data(last=True, chunk_id=0)
-        if data_resp.err():
-            return data_resp.to_smtp_resp()
-        chunk_resp,result_len = session.endpoint.append_data_chunk(
-            chunk_id=0, offset=0,
+        resp, blob_id = envelope.transactions[0].append_data(
             d=envelope.content, last=True)
-        if chunk_resp.err():
-            return chunk_resp.to_smtp_resp()
-        elif result_len < len(envelope.content):
-            return Resposne(400, "didn't put all data")
-        return session.endpoint.get_transaction_status().to_smtp_resp()
+        for t in envelope.transactions[1:]:
+            if blob_id:
+                resp,_ = t.append_data(d=None, blob_id=blob_id, last=True)
+            else:
+                resp,_ = t.append_data(d=envelope.content, blob_id=None, last=True)
+
+        # submission is fire&forget
+        #if self.msa:
+        #    for t in envelope.transactions:
+        #        t.set_durable(bounce=True)
+        #    return b'250 smtp gw submission accepted'
+
+        status = [ None for _ in envelope.transactions ]
+        for i in range(0,31):
+            for i,t in enumerate(envelope.transactions):
+                if not status[i]:
+                    if i < 30:
+                        status[i] = t.get_status()
+                    else:
+                        status[i] = Response(400, 'smtp gw transaction timeout')
+            if None not in status:
+                break
+            time.sleep(10)
+
+        # we don't want to time out here in the common case and leave
+        # the operation running since the client will probably retry =
+        # dupes? waiting is typically endpoint unreachable or
+        # contention? need to propagate a timeout downstream?
+
+        # if every transaction has the same status, return that
+        s0 = status[i]
+        for s in status[1:]:
+            if s0.code/100 != s.code/100:
+                break
+        else:
+            return s0.to_smtp_resp()
+
+        for t in envelope.transactions:
+            t.set_durable(bounce=True)
+        return b'250 smtp gw accepted'
 
 
 class ControllerTls(Controller):
@@ -85,26 +103,25 @@ class ControllerTls(Controller):
             handler, hostname=host, port=port)
 
     def factory(self):
-        return SMTP(self.handler, require_starttls=True,
+        return SMTP(self.handler, #require_starttls=True,
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth)
 
 
-def service(endpoint, hostname="localhost", port=9025, cert=None, key=None,
+def service(endpoint, msa,
+            hostname="localhost", port=9025, cert=None, key=None,
             auth_secrets_path=None):
     # DEBUG logs message contents!
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
 
-    if cert is None or key is None:
-        ssl_context = None
-    else:
+    if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
+    else:
+        ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    controller = ControllerTls(SmtpHandler(endpoint),
+    controller = ControllerTls(SmtpHandler(endpoint, msa),
                                hostname, port, ssl_context,
                                auth)
     controller.start()
-    while True:
-        time.sleep(60)  # or wait for signal
