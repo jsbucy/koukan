@@ -11,8 +11,9 @@ class SmtpEndpoint:
     data : bytes = None
     final_status : Response
 
-    def __init__(self):
-        pass
+    def __init__(self, ehlo_hostname):
+        # TODO this should come from the rest transaction -> start()
+        self.ehlo_hostname = ehlo_hostname
 
     def connect(self, host, port):
         self.smtp = smtplib.SMTP()
@@ -36,7 +37,7 @@ class SmtpEndpoint:
             self.connect(host=remote_host[0], port=remote_host[1]))
         if resp.err(): return resp
 
-        resp = Response.from_smtp(self.smtp.ehlo('fixme.ehlo.hostname'))
+        resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
         if resp.err(): return resp
 
         if 'starttls' in self.smtp.esmtp_features:

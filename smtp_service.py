@@ -17,9 +17,10 @@ from smtp_auth import Authenticator
 
 
 class SmtpHandler:
-    def __init__(self, endpoint_factory, msa):
+    def __init__(self, endpoint_factory, msa, max_rcpt):
         self.endpoint_factory = endpoint_factory
         self.msa = msa
+        self.max_rcpt = max_rcpt
 
     # XXX the Endpoint stack is sync, this should spawn threads?
 
@@ -37,6 +38,11 @@ class SmtpHandler:
 
     async def handle_RCPT(
             self, server, session, envelope, address, rcpt_options):
+        # TODO multi-rcpt doesn't completely work until durable retry
+        # is implemented in the router
+        if self.max_rcpt and (len(envelope.rcpt_tos) > self.max_rcpt):
+            return '452-4.5.3 too many recipients'
+
         transaction = self.endpoint_factory()
         resp = transaction.start(
             None, None,
@@ -110,7 +116,7 @@ class ControllerTls(Controller):
 
 def service(endpoint, msa,
             hostname="localhost", port=9025, cert=None, key=None,
-            auth_secrets_path=None):
+            auth_secrets_path=None, max_rcpt=None):
     # DEBUG logs message contents!
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
@@ -121,7 +127,7 @@ def service(endpoint, msa,
     else:
         ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    controller = ControllerTls(SmtpHandler(endpoint, msa),
+    controller = ControllerTls(SmtpHandler(endpoint, msa, max_rcpt),
                                hostname, port, ssl_context,
                                auth)
     controller.start()
