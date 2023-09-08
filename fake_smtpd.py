@@ -24,10 +24,21 @@ class InMemoryHandler:
         return '250 ok'
 
     async def handle_RCPT(self, server, session, envelope, address, rcpt_options) -> str:
+        if address.startswith('rcpttemp@'):
+            return b'450 rcpt temp'
+        elif address.startswith('rcptperm@'):
+            return b'550 rcpt perm'
         envelope.rcpt_tos.append(address)
         return '250 OK'
 
     async def handle_DATA(self, server, session, envelope) -> str:
+        if len(envelope.rcpt_tos) == 1:
+            address = envelope.rcpt_tos[0]
+            if address.startswith('datatemp@'):
+                return b'450 data temp'
+            elif address.startswith('dataperm@'):
+                return b'550 data perm'
+
         print('proxy data ', session.proxy_data)
         print('Message from %s' % envelope.mail_from)
         print('Message for %s' % envelope.rcpt_tos)

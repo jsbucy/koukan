@@ -3,13 +3,16 @@ from typing import Dict, List, Optional, Tuple
 
 import smtplib
 
+from blob import Blob
+
 from response import Response, Esmtp
 
 # rest or smtp services call upon a single instance of this
 class SmtpEndpoint:
     smtp : smtplib.SMTP
     data : bytes = None
-    final_status : Response
+    start_resp : Response = None
+    final_status : Response = None
 
     def __init__(self, ehlo_hostname):
         # TODO this should come from the rest transaction -> start()
@@ -55,19 +58,12 @@ class SmtpEndpoint:
 
         return Response.from_smtp(self.smtp.rcpt(rcpt_to))
 
-
-    def append_data(self, last : bool, d : bytes = None, blob_id=None):
-        print('SmtpEndpoint.append_data last=',
-              last, "d=", d is None, "blob_id=", blob_id is None)
-        self.data += d
+    def append_data(self, last : bool, blob : Blob):
+        print('SmtpEndpoint.append_data last=', last, "len=", blob.len())
+        self.data += blob.contents()
         if not last:
-            return Response(), None
+            return Response()
 
         self.final_status = Response.from_smtp(self.smtp.data(self.data))
         print(self.final_status)
-        return Response(), None
-
-    def get_status(self):
-        print('SmtpEndpoint.get_transaction_status')
         return self.final_status
-

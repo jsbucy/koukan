@@ -2,6 +2,7 @@
 import dkim
 
 from response import Response, Esmtp
+from blob import Blob
 
 from typing import Any, Optional, Tuple
 
@@ -28,16 +29,11 @@ class DkimEndpoint:
             self.data = bytes()
         return resp
 
-    def append_data(self, last : bool,
-                    d : Optional[bytes] = None,
-                    blob_id : Optional[Any] = None):
-        # TODO it would be pretty easy for this to accept blob_ids
-        # though dkimpy wants to get the entire message as a single
-        # bytes value, you would have to bring the whole thing into
-        # memory here but at least only for the (very short) duration
-        # of the signing operation and could propagate them on out the
-        # back
-        self.data += d
+    def append_data(self, last : bool, blob : Blob):
+        # TODO dkimpy wants to get the entire message as a single
+        # bytes value, a better interface for this would be to push
+        # chunks into it, I don't think that would be a huge change
+        self.data += blob.contents()
         if not last:
             return Response()
 
@@ -48,7 +44,9 @@ class DkimEndpoint:
         # signature_algorithm='rsa-sha256', include_headers=None,
         # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
-        return self.next.append_data(d=(sig + self.data), last=True)
+        resp = self.next.append_data(last=False, blob=InlineBlob(sig))
+        if resp.err: return resp
+        return self.next.append_data(last=True, blob=blob)
 
 
     def get_status(self) -> Response:

@@ -6,7 +6,7 @@ import asyncio
 import time
 import logging
 
-import requests
+from blob import InlineBlob
 
 from typing import Optional
 from typing import Tuple
@@ -17,7 +17,7 @@ from smtp_auth import Authenticator
 
 
 class SmtpHandler:
-    def __init__(self, endpoint_factory, msa, max_rcpt):
+    def __init__(self, endpoint_factory, msa, max_rcpt=None):
         self.endpoint_factory = endpoint_factory
         self.msa = msa
         self.max_rcpt = max_rcpt
@@ -33,72 +33,117 @@ class SmtpHandler:
         envelope.transactions = []
         envelope.mail_from = address
         envelope.mail_options.extend(options)
+        session.total_rcpt_wait = 0
         return b'250 MAIL ok'
 
+
+    def start(rresp, trans, local, remote,
+              mail_from, transaction_esmtp,
+              rcpt, rcpt_esmtp):
+        logging.info('SmtpHandler.start')
+        rresp[0] = trans.start(local, remote, mail_from, transaction_esmtp,
+                               rcpt, rcpt_esmtp)
+        logging.info('SmtpHandler.start done %s', rresp[0])
 
     async def handle_RCPT(
             self, server, session, envelope, address, rcpt_options):
         # TODO multi-rcpt doesn't completely work until durable retry
         # is implemented in the router
         if self.max_rcpt and (len(envelope.rcpt_tos) > self.max_rcpt):
-            return '452-4.5.3 too many recipients'
+            return b'452-4.5.3 too many recipients'
 
         transaction = self.endpoint_factory()
-        resp = transaction.start(
-            None, None,
-            envelope.mail_from, envelope.mail_options,
-            address, rcpt_options)
-        if resp.ok():
-            envelope.transactions.append(transaction)
-            envelope.rcpt_tos.append(address)
+        start_time = time.time()
 
-        return resp.to_smtp_resp()
+        rresp = [None]
+        fut = self.loop.run_in_executor(
+            None, lambda: SmtpHandler.start(rresp, transaction,
+                None, None,
+                envelope.mail_from, envelope.mail_options,
+                address, rcpt_options))
+
+        # msa wait for a total of 30s across all rcpts
+        #   maybe msa shouldn't wait at all, if you want first-class outbox,
+        #   use the first-class api, msa could be coming from device
+        #   on intermittent mobile connection
+        # mx wait for 30s for each rcpt
+        if self.msa:
+          if session.total_rcpt_wait < 30:
+            timeout = 1
+          else:
+            timeout = 0
+        else:  # mx
+            timeout = 30
+        logging.info('rcpt start_response')
+        done, pending = await asyncio.wait([fut], timeout=timeout)
+        if pending and not self.msa:
+            return b'400 upstream rcpt timeout'
+        resp = rresp[0]
+        logging.info('rcpt start_response done %s', resp)
+        session.total_rcpt_wait += max(time.time() - start_time, 0)
+
+        if resp and ((not self.msa and resp.err()) or
+            (self.msa and resp.perm())):
+            return resp.to_smtp_resp()
+
+        envelope.transactions.append(transaction)
+        envelope.rcpt_tos.append(address)
+
+        return '250 RCPT ok'
+
+    def append_data(resp, i, trans, last, blob):
+        resp[i] = trans.append_data(last, blob)
+        logging.info('append_data %d %s', i, resp[i])
 
     async def handle_DATA(self, server, session, envelope):
         # have all recipients
 
-        resp, blob_id = envelope.transactions[0].append_data(
-            d=envelope.content, last=True)
-        for t in envelope.transactions[1:]:
-            if blob_id:
-                resp,_ = t.append_data(d=None, blob_id=blob_id, last=True)
-            else:
-                resp,_ = t.append_data(d=envelope.content, blob_id=None, last=True)
+        status = [ None ] * len(envelope.transactions)
 
-        # submission is fire&forget
-        #if self.msa:
-        #    for t in envelope.transactions:
-        #        t.set_durable(bounce=True)
-        #    return b'250 smtp gw submission accepted'
+        blob = InlineBlob(envelope.content)
 
-        status = [ None for _ in envelope.transactions ]
-        for i in range(0,31):
-            for i,t in enumerate(envelope.transactions):
-                if not status[i]:
-                    if i < 30:
-                        status[i] = t.get_status()
-                    else:
-                        status[i] = Response(400, 'smtp gw transaction timeout')
-            if None not in status:
-                break
-            time.sleep(10)
+        # TODO cf inflight waiting in rest endpoint code
+        futures = []
+        for i,t in enumerate(envelope.transactions):
+            futures.append(self.loop.run_in_executor(
+                None, lambda: SmtpHandler.append_data(
+                    status, i, t, last=True, blob=blob)))
 
-        # we don't want to time out here in the common case and leave
-        # the operation running since the client will probably retry =
-        # dupes? waiting is typically endpoint unreachable or
-        # contention? need to propagate a timeout downstream?
-
-        # if every transaction has the same status, return that
-        s0 = status[i]
-        for s in status[1:]:
-            if s0.code/100 != s.code/100:
-                break
+        timeout = None
+        if self.msa:
+            timeout = 5
         else:
-            return s0.to_smtp_resp()
+            timeout = 300
+
+        done, pending = await asyncio.wait(futures, timeout=timeout,
+                                           return_when=asyncio.ALL_COMPLETED)
+
+        if self.msa and pending:
+            for t in envelope.transactions:
+                t.set_durable()
+            return b'250 smtp gw submission accepted upstream timeout will retry'
+
+        logging.info('handle_DATA %s', status)
+        if len(pending) == len(envelope.transactions):
+            # TODO: abort transactions
+            return Response(400, 'all upstream transactions timed out')
+        # if every transaction has the same status, return that
+        s0 = status[0]
+        for s in status[1:]:
+            if (s0 is None) != (s is None): break
+            elif s0.code/100 != s.code/100: break
+        else:
+            if s0.ok():
+                return b'250 smtp gw accepted upstream sync success'
+            elif self.msa and s0.temp():
+                pass
+                #return b'250 smtp gw submission accepted upstream temp will retry'
+            else:
+                return s0.to_smtp_resp()
 
         for t in envelope.transactions:
-            t.set_durable(bounce=True)
-        return b'250 smtp gw accepted'
+            t.set_durable()
+        return b'250 smtp gw accepted async'
 
 
 class ControllerTls(Controller):
@@ -127,7 +172,9 @@ def service(endpoint, msa,
     else:
         ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    controller = ControllerTls(SmtpHandler(endpoint, msa, max_rcpt),
+    handler = SmtpHandler(endpoint, msa, max_rcpt)
+    controller = ControllerTls(handler,
                                hostname, port, ssl_context,
                                auth)
+    handler.loop = controller.loop
     controller.start()

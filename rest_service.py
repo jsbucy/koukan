@@ -7,6 +7,14 @@ from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
 from blobs import Blob, BlobStorage
+from blob import InlineBlob
+from tags import Tag
+
+from executor import Executor
+
+from threading import Lock, Condition
+
+import logging
 
 from typing import Any, Dict, Optional, List
 from typing import Callable, Tuple
@@ -16,7 +24,50 @@ class Transaction:
     chunk_id : int = None
     last : bool = False
     endpoint : Any
+    start_resp : Response = None
     final_status : Response = None
+    start_inflight = False
+    final_inflight = False
+
+    lock : Lock
+    cv : Condition
+
+    def __init__(self):
+        self.lock = Lock()
+        self.cv = Condition(self.lock)
+
+    def start(self, local_host, remote_host,
+              mail_from, transaction_esmtp,
+              rcpt_to, rcpt_esmtp):
+        with self.lock:
+            self.start_inflight = True
+        try:
+            resp = self.endpoint.start(
+                local_host, remote_host,
+                mail_from, transaction_esmtp,
+                rcpt_to, rcpt_esmtp)
+        finally:
+            with self.lock:
+                self.start_inflight = False
+        logging.info('rest service transaction start %s', resp)
+        with self.lock:
+            self.start_resp = resp
+            self.cv.notify()
+
+    def append_data(self, last : bool, blob : Blob):
+        if last:
+            with self.lock:
+                self.final_inflight = True
+        try:
+            resp = self.endpoint.append_data(last, blob)
+        finally:
+            if last:
+                with self.lock:
+                    self.final_inflight = False
+        if last: # XXX?
+            with self.lock:
+                self.final_status = resp
+                self.cv.notify()
 
 class RestResources:
     # real implementation uses secrets.token_urlsafe()
@@ -35,18 +86,20 @@ class RestResources:
         return self.transaction[id] if id in self.transaction else None
 
 
-def create_app(endpoints : Callable[[str], "Endpoint"],
+def create_app(endpoints : Callable[[str], ["Endpoint", int]],
+               executor : Executor,
                blobs : BlobStorage):
     app = Flask(__name__)
 
     resources = RestResources()
+
 
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> Response:
         print(request, request.headers)
 
         t = Transaction()
-        t.endpoint = endpoints(request.headers['host'])
+        t.endpoint, tag, msa = endpoints(request.headers['host'])
 
         req_json = request.get_json()
         local_host = req_json.get('local_host', None)
@@ -57,12 +110,10 @@ def create_app(endpoints : Callable[[str], "Endpoint"],
         # local_host/remote_host ~
         # http x-forwarded-host/-for?
 
-        resp = t.endpoint.start(
+        executor.enqueue(tag, lambda: t.start(
             local_host, remote_host,
             mail_from, transaction_esmtp=None,
-            rcpt_to=rcpt_to, rcpt_esmtp=None)
-        if resp.err():
-            return {'final_status': resp.to_json()}
+            rcpt_to=rcpt_to, rcpt_esmtp=None))
 
         resources.add_transaction(t)
         json_out = {
@@ -75,14 +126,28 @@ def create_app(endpoints : Callable[[str], "Endpoint"],
                methods=['GET'])
     def get_transaction(transaction_id) -> Response:
         t = resources.get_transaction(transaction_id)
-        if t.final_status is None:
-            t.final_status = t.endpoint.get_status()
+        if not t:
+            r = Response()
+            r.status_code = 404
+            return r
+        json_out = {}
 
-            # if 'wait_final_status' in request.args
-            #   if not tx.final_status_event.wait(...)
-            #     # 504 gateway timeout
+        # TODO: this currently waits for 5s if inflight which isn't
+        # great in terms of busy-waiting but still pretty short
+        # relative to a http timeout
 
-        json_out = { 'final_status': t.final_status.to_json() }
+        with t.lock:
+            if t.start_inflight or t.final_inflight:
+                t.cv.wait_for(
+                    lambda: not t.start_inflight and not t.final_inflight,
+                    5)
+
+        if t.start_resp:
+            json_out['start_response'] = t.start_resp.to_json()
+
+        if t.final_status:
+            json_out['final_status'] = t.final_status.to_json()
+
         return jsonify(json_out)
 
 
@@ -106,28 +171,34 @@ def create_app(endpoints : Callable[[str], "Endpoint"],
 
         t.chunk_id = chunk_id
         t.last = last
-        d : bytes = None
         if 'd' in req_json:
-            d = req_json['d'].encode('utf-8')
-            resp, blob_id = t.endpoint.append_data(d=d, blob_id=None, last=last)
-            print(resp)
-            return resp.to_json()
+            d : bytes = req_json['d'].encode('utf-8')
+            executor.enqueue(Tag.DATA,
+                             lambda: t.append_data(last, InlineBlob(d)))
+            return jsonify({})
+
+        blob_done_cb = lambda: executor.enqueue(
+            Tag.DATA, lambda blob: t.endpoint.append_data(last, blob))
 
         if 'uri' in req_json and req_json['uri'] is not None:
             blob_id = req_json['uri'].removeprefix('/blob/')
-            if blobs.add_waiter(
-                    blob_id,
-                    lambda blob_id, blob_len: t.endpoint.append_data(
-                        d=None, blob_id=blob_id, last=last)):
+            if blobs.add_waiter(blob_id, blob_done_cb):
                 return jsonify({})
         print('append_data no uri')
-        blob_id = blobs.create(
-            lambda blob_id, blob_len: t.endpoint.append_data(
-                d=None, blob_id=blob_id, last=last))
+        blob_id = blobs.create(blob_done_cb)
         print('append_data new blob id', blob_id)
 
         resp_json = { 'uri': '/blob/' + blob_id }
         return jsonify(resp_json)
+
+    @app.route('/transactions/<transaction_id>/smtpMode',
+               methods=['POST'])
+    def smtp_mode(transaction_id):
+        # XXX this should block until the transaction has received the
+        # last data chunk
+        t = resources.get_transaction(transaction_id)
+        t.endpoint.set_durable()
+        return Response()
 
 
     @app.route('/blob/<blob_id>', methods=['PUT'])

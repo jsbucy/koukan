@@ -3,12 +3,15 @@ from response import Response, Esmtp
 
 from typing import Callable, Dict, Optional, Tuple
 
+from blob import Blob, InlineBlob
+
 import smtp_endpoint
 import email.utils
 
 class RoutingPolicy:
     # called on the first recipient in the transaction
 
+    # really Transaction
     # this calls Endpoint.on_connect() before return, returned
     # Endpoint is ready for start_transaction()
     # -> Endpoint, dest host, Response
@@ -17,7 +20,6 @@ class RoutingPolicy:
 
 
 class Router:
-    final_status : Optional[Response] = None
     endpoint = None
     received_ascii : bytes = None
 
@@ -43,21 +45,11 @@ class Router:
             mail_from, transaction_esmtp,
             rcpt_to, rcpt_esmtp)
 
-    def append_data(self, last : bool, d=None, blob_id=None):
+    def append_data(self, last : bool, blob : Blob):
         if self.received_ascii:
-            if d is not None:
-                d = self.received_ascii + d
-            else:
-                resp = self.endpoint.append_data(
-                    last=False, d=received_ascii)
-                if resp.err():
-                    return resp, None
+            resp = self.endpoint.append_data(
+                last=False, blob=InlineBlob(self.received_ascii))
+            if resp.err():
+                return resp
             self.received_ascii = None
-
-        return self.endpoint.append_data(last, d, blob_id)
-
-
-    def get_status(self):
-        if self.final_status is None:
-            self.final_status = self.endpoint.get_status()
-        return self.final_status
+        return self.endpoint.append_data(last, blob)
