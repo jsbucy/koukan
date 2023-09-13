@@ -34,7 +34,7 @@ class BlobStorage:
             return blob_len
         blob.d += d[offset - blob_len:]
         if last:
-            blob.b = InlineBlob(blob.d)
+            blob.b = InlineBlob(blob.d, id)
             blob.d = None
             for cb in blob.waiters:
                 cb(blob.b)

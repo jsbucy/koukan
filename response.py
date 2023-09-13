@@ -13,6 +13,11 @@ class Response:
     code : int
     message : str
 
+    INTERNAL=600
+
+    def Internal(msg):
+        return Response(Response.INTERNAL, msg)
+
     def __init__(self, code=200, str="ok"):
         self.code = code
         self.message = str
@@ -25,6 +30,10 @@ class Response:
 
     def ok(self):
         return ok_smtp_code(self.code)
+
+    def internal(self):
+        return self.code == Response.INTERNAL
+
     def err(self):
         return not self.ok()
 
@@ -41,6 +50,7 @@ class Response:
         return Response(d['code'], d['message'])
 
     def to_smtp_resp(self) -> bytes:
+        assert(not self.internal())
         return ('%d ' % self.code).encode('utf-8') + self.message.encode('utf-8')
 
 

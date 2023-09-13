@@ -24,8 +24,7 @@ class BlobIdMap:
             if id not in self.id_map:
                 self.id_map[id] = None
                 return None
-            while self.id_map[id] is None:
-                self.cv.wait()
+            self.cv.wait_for(lambda: self.id_map[id] is not None)
             return self.id_map[id]
 
     def finalize(self, id, id2):
@@ -57,6 +56,8 @@ class RouterTransaction:
         self.durable = False
         self.storage_id = None
 
+        self.appended_action = False
+
     def start(self,
               local_host, remote_host,
               mail_from, transaction_esmtp,
@@ -78,39 +79,55 @@ class RouterTransaction:
     def append_data(self,
                     last : bool,
                     blob : Blob) -> Response:
-        logging.info('RouterTransaction.append_data')
-        # rest client should not normally send in this case but maybe
-        # they timed out receiving the previous response
-        if self.next_start_resp.perm():
+        logging.info('RouterTransaction.append_data %s %d', last, blob.len())
+        # msa may have timed out start transaction and will eventually
+        # detach this
+        if self.next_start_resp and self.next_start_resp.perm():
             return Response(500, "upstream start transaction perm")
-        if not self.msa and self.next_start_resp.temp():
+        if not self.msa and (self.next_start_resp is None or
+                             self.next_start_resp.temp()):
             return Response(400, "upstream start transaction failed temp mx")
 
         self.blobs.append(blob)
         if last:
             with self.lock:
+                logging.info('have last blob %s', self.rcpt_to)
                 self.have_last_blob = True
                 self.last_inflight = True
                 self.cv.notify()
 
+        if self.next_start_resp is None or self.next_start_resp.err():
+            # XXX or self.final_resp is not None??
+            # this is only for msa which is going to set_durable/detach
+            # mx was a precondition failure (above)
+            return Response()
+
+
         resp = None
         try:
             resp = self.next.append_data(last, blob)
-        finally:
-            logging.info('RouterTransaction.append_data_body done %s %s',
-                         last, resp)
-            if last:
-                self.next_final_resp = resp
-                with self.lock:
-                    logging.info('durable %s', self.durable)
-                    if self.durable:
-                        self.cv.wait_for(lambda: self.storage_id is not None)
-                        logging.info('storage_id %s', self.storage_id)
-                        self.append_action()
+        except:
+            resp = Response.Internal('RouterTransaction.append_data exception')
+
+        logging.info('RouterTransaction.append_data_body done %s %s',
+                     last, resp)
+        if last:
+            self.next_final_resp = resp
+            with self.lock:
+                logging.info('durable %s', self.durable)
+                if self.durable:
+                    # XXX this hangs forever if the write failed
+                    self.cv.wait_for(lambda: self.storage_id is not None)
+                    logging.info('storage_id %s', self.storage_id)
+                    self.append_action()
 
         return resp
 
     def append_action(self):
+        # XXX hack
+        if self.appended_action: return
+
+        self.appended_action = True
         # XXX dedupe with router_service
         action = Action.TEMP_FAIL
         resp = self.next_final_resp
@@ -119,36 +136,46 @@ class RouterTransaction:
                 action = Action.DELIVERED
             elif resp.perm():
                 # permfail/bounce
-                action = Action.BOUNCE
+                action = Action.PERM_FAIL
         self.storage.append_transaction_actions(self.storage_id, action)
 
     def abort(self):
         pass
 
     def set_durable(self):
+        logging.info('RouterTransaction.set_durable')
         assert(not self.durable)
         with self.lock:
             self.durable = True
             self.cv.notify()
         with self.lock:
-            self.cv.wait_for(lambda: self.have_last_blob is not None)
+            logging.info('RouterTransaction.set_durable %s have last blob %s',
+                         self.rcpt_to, self.have_last_blob)
+            self.cv.wait_for(lambda: self.have_last_blob)
 
         transaction_writer = self.storage.get_transaction_writer()
-        transaction_writer.start(
+        if not transaction_writer.start(
             self.local_host, self.remote_host,
             self.mail_from, self.transaction_esmtp,
-            self.rcpt_to, self.rcpt_esmtp, self.host, self.last_inflight)
+            self.rcpt_to, self.rcpt_esmtp, self.host, self.last_inflight):
+            return None
+
+        # XXX errs?
         for blob in self.blobs:
-            if blob.id:
+            if blob.id():
                 self.append_blob(transaction_writer, blob)
             else:
                 transaction_writer.append_data(blob.contents())
+
+        # XXX err?
         transaction_writer.finalize()
 
+        logging.info('RouterTransaction.set_durable %s', transaction_writer.id)
         with self.lock:
             self.storage_id = transaction_writer.id
+            self.cv.notify()
 
-        # last may have already finished before set_durable() was
+        # append_data last may have already finished before set_durable() was
         # called, write the action here
         if self.next_final_resp is not None:
             self.append_action()
@@ -156,11 +183,14 @@ class RouterTransaction:
         return transaction_writer.id
 
     def append_blob(self, transaction_writer, blob):
-        if (db_blob := self.blob_id_map.lookup_or_insert(blob.id)) is None:
+        assert(blob.id() is not None)
+        db_blob = self.blob_id_map.lookup_or_insert(blob.id())
+        logging.info('RouterTransaction.append_blob %s %s', blob.id(), db_blob)
+        if db_blob is None:
             blob_writer = self.storage.get_blob_writer()
             db_blob = blob_writer.start()
             blob_writer.append_data(blob.contents())
             blob_writer.finalize()
-            self.blob_id_map.finalize(blob.id, db_blob)
+            self.blob_id_map.finalize(blob.id(), db_blob)
         assert(transaction_writer.append_blob(db_blob) ==
                transaction_writer.APPEND_BLOB_OK)

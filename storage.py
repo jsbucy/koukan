@@ -1,5 +1,7 @@
 from typing import Optional
 
+from threading import Lock
+
 import sqlite3
 import json
 import time
@@ -41,56 +43,64 @@ class TransactionWriter:
         # need a belt+suspenders check that someone else isn't
         # interleaving writes in Transaction/BlobContent with the same
         # id?
-        cursor = self.parent.db.cursor()
-        status = Status.INFLIGHT if inflight else Status.WAITING
-        cursor.execute('INSERT INTO Transactions (json, creation, status) '
-                       'VALUES (?, ?, ?)',
-                       (json.dumps(trans_json), int(time.time()), status))
-        cursor.execute(
-            'INSERT INTO TransactionActions '
-            '(transaction_id, action_id, time, action) '
-            'VALUES (?,?,?,?)',
-            (cursor.lastrowid, 0, int(time.time()), Action.INSERT))
-        self.parent.db.commit()
-        self.id = cursor.lastrowid
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            status = Status.INFLIGHT if inflight else Status.WAITING
+            cursor.execute('INSERT INTO Transactions (json, creation, status) '
+                           'VALUES (?, ?, ?)',
+                           (json.dumps(trans_json), int(time.time()), status))
+            self.id = cursor.lastrowid
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES (?,?,?,?)',
+                (self.id, 0, int(time.time()), Action.INSERT))
+            # XXX need to catch exceptions and db.rollback()? (throughout)
+            self.parent.db.commit()
+        return True
 
     def append_data(self, d : bytes):
-        cursor = self.parent.db.cursor()
-
-        cursor.execute(
-            'INSERT INTO TransactionContent (transaction_id, offset, inline) '
-            'VALUES (?, ?, ?)',
-            (self.id, self.offset, d))
-        self.parent.db.commit()
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute(
+                'INSERT INTO TransactionContent '
+                '(transaction_id, offset, inline) '
+                'VALUES (?, ?, ?)',
+                (self.id, self.offset, d))
+            self.parent.db.commit()
         self.offset += len(d)
 
     APPEND_BLOB_OK = 0
     APPEND_BLOB_UNKNOWN = 1
 
     def append_blob(self, blob_id : str) -> int:
-        cursor = self.parent.db.cursor()
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute(
+                'SELECT length FROM Blob WHERE id = ? AND length IS NOT NULL',
+                (blob_id,))
+            row = cursor.fetchone()
+            if not row: return TransactionWriter.APPEND_BLOB_UNKNOWN
+            (blob_len,) = row
 
-        cursor.execute(
-            'SELECT length FROM Blob WHERE id = ? AND length IS NOT NULL',
-            (blob_id,))
-        row = cursor.fetchone()
-        if not row: return TransactionWriter.APPEND_BLOB_UNKNOWN
-        (blob_len,) = row
-
-        cursor.execute(
-            'INSERT INTO TransactionContent (transaction_id, offset, blob_id) '
-            'VALUES (?, ?, ?)',
-            (self.id, self.offset, blob_id))
-        self.parent.db.commit()
+            cursor.execute(
+                'INSERT INTO TransactionContent '
+                '(transaction_id, offset, blob_id) '
+                'VALUES (?, ?, ?)',
+                (self.id, self.offset, blob_id))
+            self.parent.db.commit()
 
         self.offset += blob_len
         return TransactionWriter.APPEND_BLOB_OK
 
     def finalize(self):
-        cursor = self.parent.db.cursor()
-        cursor.execute('UPDATE Transactions SET last_update = ? WHERE id = ?',
-                       (int(time.time()), self.id))
-        self.parent.db.commit()
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute('UPDATE Transactions SET last_update = ? '
+                           'WHERE id = ?',
+                           (int(time.time()), self.id))
+            self.parent.db.commit()
+        return True
 
 
 class TransactionReader:
@@ -149,10 +159,11 @@ class BlobWriter:
         self.offset = 0
 
     def start(self):
-        cursor = self.parent.db.cursor()
-        cursor.execute('INSERT INTO Blob (length) VALUES (NULL)')
-        self.parent.db.commit()
-        self.id = cursor.lastrowid
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute('INSERT INTO Blob (length) VALUES (NULL)')
+            self.parent.db.commit()
+            self.id = cursor.lastrowid
         return self.id
 
     CHUNK_SIZE = 1048576
@@ -160,22 +171,26 @@ class BlobWriter:
     # Note: as of python 3.11 sqlite.Connection.blobopen() returns a
     # file-like object blob reader handle so this may be less necessary
     def append_data(self, d : bytes):
-        cursor = self.parent.db.cursor()
-        dd = d
-        while dd:
-            cursor.execute(
-                'INSERT INTO BlobContent (id, offset, content) VALUES (?,?,?)',
-                (self.id, self.offset, dd[0:self.CHUNK_SIZE]))
-            dd = dd[self.CHUNK_SIZE:]
-        self.parent.db.commit()
-        self.offset += len(d)
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            dd = d
+            while dd:
+                cursor.execute(
+                    'INSERT INTO BlobContent (id, offset, content) '
+                    'VALUES (?,?,?)',
+                    (self.id, self.offset, dd[0:self.CHUNK_SIZE]))
+                dd = dd[self.CHUNK_SIZE:]
+            self.parent.db.commit()
+            self.offset += len(d)
 
     def finalize(self):
-        cursor = self.parent.db.cursor()
-        cursor.execute(
-            'UPDATE BLOB SET length = ?, last_update = ? WHERE ID = ?',
-            (self.offset, int(time.time()), self.id))
-        self.parent.db.commit()
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute(
+                'UPDATE BLOB SET length = ?, last_update = ? WHERE ID = ?',
+                (self.offset, int(time.time()), self.id))
+            self.parent.db.commit()
+        return True
 
 
 class BlobReader:
@@ -212,7 +227,8 @@ class BlobReader:
 
 class Storage:
     def __init__(self):
-        pass
+        self.db = None
+        self.db_write_lock = Lock()
 
     def get_inmemory_for_test():
         with open("init_storage.sql", "r") as f:
@@ -255,7 +271,8 @@ class Storage:
 
     def load_one(self):
         cursor = self.db.cursor()
-        cursor.execute('SELECT id from Transactions WHERE status = ? LIMIT 1',
+        cursor.execute('SELECT id from Transactions WHERE status = ?'
+                       ' AND last_update IS NOT NULL LIMIT 1',
                        (Status.WAITING,))
         row = cursor.fetchone()
         if not row: return None
@@ -292,6 +309,8 @@ class Storage:
         cursor = self.db.cursor()
         cursor.execute('SELECT MAX(action_id) FROM TransactionActions '
                        'WHERE transaction_id = ?', (id,))
+        # TODO: this should do optimistic concurrency control:
+        # make sure that this action_id was our own previous load
         row = cursor.fetchone()
         action_id = 0
         if row is not None and row[0] is not None:

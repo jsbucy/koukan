@@ -80,8 +80,7 @@ class Service:
         ### outbound
         outbound_mx = lambda: RestEndpoint(
             gw_base_url, http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025),
-            sync=True)
+            static_remote_host=('127.0.0.1', 3025))
         mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
         next = mx_resolution
 
@@ -120,6 +119,7 @@ class Service:
 
     MAX_RETRY = 3 * 86400
     def handle(self, reader):
+        # TODO need to wire this into rest service resources
         # TODO move most/all of this into RouterTransaction?
         transaction,tag,msa = self.get_transaction(reader.host)
         print("handle", reader.id, reader.mail_from, reader.rcpt_to)
@@ -137,9 +137,9 @@ class Service:
         action = None
         if resp.ok():
             action = Action.DELIVERED
-        elif (time.time() - reader.creation) > self.MAX_RETRY:
+        elif resp.perm() or (time.time() - reader.creation) > self.MAX_RETRY:
             # permfail/bounce
-            action = Action.BOUNCE
+            action = Action.PERM_FAIL
         else:
             action = Action.TEMP_FAIL
 

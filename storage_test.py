@@ -1,45 +1,62 @@
 
 from storage import Storage, Action
 
-s = Storage()
-s.connect(db=Storage.get_inmemory_for_test())
+import unittest
 
-writer = s.get_transaction_writer()
-writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host')
-writer.append_data('abc')
-writer.append_data('xyz')
-print(writer.append_blob('blob_id'))
+class StorageTest(unittest.TestCase):
 
-blob_writer = s.get_blob_writer()
-print(blob_writer.start())
-blob_writer.append_data('blob1')
-blob_writer.append_data('blob2')
-blob_writer.finalize()
+    def setUp(self):
+        self.s = Storage()
+        self.s.connect(db=Storage.get_inmemory_for_test())
 
-print(writer.append_blob('blob_id'))
-writer.append_data('qrs')
+    def test_basic(self):
+        writer = self.s.get_transaction_writer()
+        writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host', False)
+        writer.append_data('abc')
+        writer.append_data('xyz')
+        self.assertEqual(writer.append_blob('blob_id'),
+                         writer.APPEND_BLOB_UNKNOWN)
 
-writer.finalize()
+        blob_writer = self.s.get_blob_writer()
+        self.assertIsNotNone(blob_writer.start())
+        blob_writer.append_data('blob1')
+        blob_writer.append_data('blob2')
+        self.assertTrue(blob_writer.finalize())
 
-reader = s.load_one()
-print(reader.id)
-print(reader.mail_from, reader.rcpt_to)
-while d := reader.read_content():
-    print(d)
+        self.assertEqual(writer.append_blob(blob_writer.id),
+                         writer.APPEND_BLOB_OK)
+        writer.append_data('qrs')
 
-r2 = s.load_one()
-assert(r2 is None)
+        self.assertTrue(writer.finalize())
 
-s.append_transaction_actions(reader.id, Action.TEMP_FAIL)
+        reader = self.s.load_one()
+        self.assertEqual(reader.id, writer.id)
+        expected_content = [
+            'abc',
+            'xyz',
+            'blob1',
+            'blob2',
+            'qrs'
+        ]
+        for i,c in enumerate(expected_content):
+            d = reader.read_content()
+            self.assertIsNotNone(d)
+            self.assertEqual(c, d)
 
-r2 = s.load_one()
-assert(r2 is not None)
-print(r2.id)
+        self.assertIsNone(self.s.load_one())
 
-s.append_transaction_actions(r2.id, Action.DELIVERED)
+        self.s.append_transaction_actions(reader.id, Action.TEMP_FAIL)
 
-r2 = s.load_one()
-assert(r2 is None)
+        r2 = self.s.load_one()
+        self.assertEqual(r2.id, writer.id)
 
-for l in s.db.iterdump():
-    print(l)
+        self.s.append_transaction_actions(r2.id, Action.DELIVERED)
+
+        self.assertIsNone(self.s.load_one())
+
+# for l in s.db.iterdump():
+#     print(l)
+
+
+if __name__ == '__main__':
+    unittest.main()
