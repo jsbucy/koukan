@@ -17,7 +17,7 @@ class BlobStorage:
     def __init__(self):
         pass
 
-    def create(self, on_done : Callable[[Blob],None]):  #-> id
+    def create(self, on_done : Callable[[Blob],None]) -> int:
         b = InflightBlob()
         b.d = bytes()
         b.waiters = [on_done]
@@ -26,15 +26,16 @@ class BlobStorage:
         self.blobs[id] = b
         return id
 
-    def append(self, id, offset : int, d : bytes, last) -> int:
-        assert(id in self.blobs)
+    def append(self, id : int, offset : int, d : bytes, last) -> Optional[int]:
+        if id not in self.blobs:
+            return None
         blob = self.blobs[id]
         blob_len = len(blob.d)
         if offset > blob_len:
             return blob_len
         blob.d += d[offset - blob_len:]
         if last:
-            blob.b = InlineBlob(blob.d, id)
+            blob.b = InlineBlob(blob.d, str(id))
             blob.d = None
             for cb in blob.waiters:
                 cb(blob.b)

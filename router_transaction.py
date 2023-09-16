@@ -58,6 +58,13 @@ class RouterTransaction:
 
         self.appended_action = False
 
+        self.local_host = None
+        self.remote_host = None
+        self.mail_from = None
+        self.transaction_esmtp = None
+        self.rcpt_to = None
+        self.rcpt_esmtp = None
+
     def start(self,
               local_host, remote_host,
               mail_from, transaction_esmtp,
@@ -143,6 +150,7 @@ class RouterTransaction:
         pass
 
     def set_durable(self):
+        # XXX should this noop if the upstream transaction already succeeded?
         logging.info('RouterTransaction.set_durable')
         assert(not self.durable)
         with self.lock:
@@ -160,15 +168,15 @@ class RouterTransaction:
             self.rcpt_to, self.rcpt_esmtp, self.host, self.last_inflight):
             return None
 
+        # XXX err?
+        transaction_writer.finalize()
+
         # XXX errs?
         for blob in self.blobs:
             if blob.id():
                 self.append_blob(transaction_writer, blob)
             else:
                 transaction_writer.append_data(blob.contents())
-
-        # XXX err?
-        transaction_writer.finalize()
 
         logging.info('RouterTransaction.set_durable %s', transaction_writer.id)
         with self.lock:

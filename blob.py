@@ -12,7 +12,7 @@ class Blob:
         return None
 
 class InlineBlob(Blob):
-    def __init__(self, d : bytes, id=None):
+    def __init__(self, d : bytes, id : Optional[str] = None):
         self.d = d
         self.blob_id = id
 

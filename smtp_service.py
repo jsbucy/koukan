@@ -128,6 +128,9 @@ class SmtpHandler:
 
         timeout = None
         if self.msa:
+            # msa swallows rcpt temp failures to retry, we won't get
+            # as far as trying the data for those so don't wait for it
+            # here
             if not envelope.msa_async:
                 timeout = MSA_DATA_WAIT
         else:  # mx
@@ -151,7 +154,6 @@ class SmtpHandler:
                     if major != same_major:
                         same_major = None
                 status.append(s)
-            s0 = status[0]
 
         if self.msa:
             if not envelope.msa_async:
@@ -167,7 +169,8 @@ class SmtpHandler:
             futures.append(self.loop.run_in_executor(
                 None, partial(lambda i, t:
                               SmtpHandler.set_durable(rresp, i, t), i, t)))
-        done, pending = await asyncio.wait(
+        #done, pending =
+        await asyncio.wait(
             futures, timeout=5, return_when=asyncio.ALL_COMPLETED)
         if any(map(lambda r: r is None or r.err(), rresp)):
             return b'400 set_durable timeout'

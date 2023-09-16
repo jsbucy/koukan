@@ -38,6 +38,9 @@ class Service:
 
         self.blob_id_map = BlobIdMap()
         self.storage = Storage()
+        self.blobs = None
+        self.local_domain_router = None
+        self.dest_domain_router = None
 
     def main(self):
         rest_port = int(sys.argv[1])
@@ -66,8 +69,7 @@ class Service:
         # AddressPolicy passes the rcpt to the endpoint factory
         outbound_host = lambda _: RestEndpoint(
             gw_base_url, http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025),
-            sync=True)  #'aspmx.l.google.com')
+            static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
 
         local_addrs = AddressPolicy(
             [ PrefixAddr('u', delimiter='+', endpoint_factory=outbound_host),
@@ -115,7 +117,7 @@ class Service:
             return self.local_domain_router(), Tag.MX, False
         elif host == 'outbound-gw':
             return self.dest_domain_router(), Tag.MSA, True
-        return None
+        return None, None, None
 
     MAX_RETRY = 3 * 86400
     def handle(self, reader):

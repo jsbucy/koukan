@@ -114,19 +114,20 @@ class RestEndpoint:
                                   json=req_json,
                                   headers={'host': self.http_host},
                                   timeout=TIMEOUT_DATA)
-        logging.info('RestEndpoint.append_data POST resp %s', rest_resp.json())
+        resp_json = get_resp_json(rest_resp)
+        logging.info('RestEndpoint.append_data POST resp %s', resp_json)
         # XXX http ok (and below)
-        if rest_resp.status_code > 299 or 'final_status' in rest_resp.json():
-            if 'final_status' in rest_resp.json():
-                return Response.from_json(rest_resp.json()['final_status'])
+        if rest_resp.status_code > 299 or 'final_status' in resp_json:
+            if 'final_status' in resp_json:
+                return Response.from_json(resp_json['final_status'])
 
             return Response(400, 'RestEndpoint.append_data POST failed')
 
-        if 'uri' not in rest_resp.json():
+        if 'uri' not in resp_json:
             return Response(400, 'RestEndpoint.append_data endpoint didn\'t'
                             ' return uri')
 
-        uri = rest_resp.json()['uri']
+        uri = resp_json['uri']
         logging.info('RestEndpoint.append_data via uri %s', uri)
 
         offset = 0
@@ -188,7 +189,8 @@ class RestEndpoint:
     def get_status(self, timeout):
         if self.final_status: return self.final_status
         resp = self.get_json(timeout, 'final_status')
-        if not resp: return None
+        if not resp:
+            return Response(400, 'RestEndpoint.get_status timeout')
         self.final_status = resp
         return self.final_status
 
@@ -223,6 +225,7 @@ class RestEndpoint:
     def wait_status(self):
         pass
 
+    # XXX add synchronization to block until we have sent all the data?
     # only for smtp gw -> router
     def set_durable(self):
         if not self.transaction_url:

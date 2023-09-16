@@ -37,12 +37,6 @@ class TransactionWriter:
             'rcpt_esmtp': rcpt_esmtp,
             'host': host,
         }
-        # TODO:
-        # not sure if Transaction/BlobWriter should be a single db transaction
-        # sqlite3 doesn't support concurrent writes?
-        # need a belt+suspenders check that someone else isn't
-        # interleaving writes in Transaction/BlobContent with the same
-        # id?
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             status = Status.INFLIGHT if inflight else Status.WAITING
@@ -62,6 +56,7 @@ class TransactionWriter:
     def append_data(self, d : bytes):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
+            # TODO: check max(offset) == self.offset?
             cursor.execute(
                 'INSERT INTO TransactionContent '
                 '(transaction_id, offset, inline) '
@@ -83,6 +78,7 @@ class TransactionWriter:
             if not row: return TransactionWriter.APPEND_BLOB_UNKNOWN
             (blob_len,) = row
 
+            # TODO: check max(offset) == self.offset?
             cursor.execute(
                 'INSERT INTO TransactionContent '
                 '(transaction_id, offset, blob_id) '
@@ -175,6 +171,7 @@ class BlobWriter:
             cursor = self.parent.db.cursor()
             dd = d
             while dd:
+                # TODO: check max(offset) == self.offset?
                 cursor.execute(
                     'INSERT INTO BlobContent (id, offset, content) '
                     'VALUES (?,?,?)',
@@ -270,67 +267,69 @@ class Storage:
         return TransactionReader(self)
 
     def load_one(self):
-        cursor = self.db.cursor()
-        cursor.execute('SELECT id from Transactions WHERE status = ?'
-                       ' AND last_update IS NOT NULL LIMIT 1',
-                       (Status.WAITING,))
-        row = cursor.fetchone()
-        if not row: return None
-        id = row[0]
+        with self.db_write_lock:
+            cursor = self.db.cursor()
+            cursor.execute('SELECT id from Transactions WHERE status = ?'
+                           ' AND last_update IS NOT NULL LIMIT 1',
+                           (Status.WAITING,))
+            row = cursor.fetchone()
+            if not row: return None
+            id = row[0]
 
-        cursor.execute('SELECT action_id,action from TransactionActions '
-                       'WHERE transaction_id = ? '
-                       'ORDER BY action_id DESC LIMIT 3',
-                       (id,))
-        action_id = None
-        loads = 0
-        for row in cursor:
-            if action_id is None:
-                action_id = row[0] + 1
-            if row[1] == Action.LOAD:
-                loads += 1
-        if action_id is None: action_id = 0
-        # TODO: if the last n consecutive actions are all loads, this may
-        # be crashing the system -> quarantine
-        cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
-                       (Status.INFLIGHT, id))
-        cursor.execute(
-            'INSERT INTO TransactionActions '
-            '(transaction_id, action_id, time, action) '
-            'VALUES (?,?,?,?)',
-            (id, action_id, int(time.time()), Action.LOAD))
-        self.db.commit()
-        reader = self.get_transaction_reader()
-        assert(reader.start(id))
-        return reader
+            cursor.execute('SELECT action_id,action from TransactionActions '
+                           'WHERE transaction_id = ? '
+                           'ORDER BY action_id DESC LIMIT 3',
+                           (id,))
+            action_id = None
+            loads = 0
+            for row in cursor:
+                if action_id is None:
+                    action_id = row[0] + 1
+                    if row[1] == Action.LOAD:
+                        loads += 1
+            if action_id is None: action_id = 0
+            # TODO: if the last n consecutive actions are all loads, this may
+            # be crashing the system -> quarantine
+            cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
+                           (Status.INFLIGHT, id))
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES (?,?,?,?)',
+                (id, action_id, int(time.time()), Action.LOAD))
+            self.db.commit()
+            reader = self.get_transaction_reader()
+            assert(reader.start(id))
+            return reader
 
     # appends a TransactionAttempts record and marks Transaction done
     def append_transaction_actions(self, id, action):
-        cursor = self.db.cursor()
-        cursor.execute('SELECT MAX(action_id) FROM TransactionActions '
-                       'WHERE transaction_id = ?', (id,))
-        # TODO: this should do optimistic concurrency control:
-        # make sure that this action_id was our own previous load
-        row = cursor.fetchone()
-        action_id = 0
-        if row is not None and row[0] is not None:
-            action_id = row[0] + 1
-        now = int(time.time())
-        status = None
-        if action == Action.DELIVERED or action == Action.PERM_FAIL:
-            status = Status.DONE
-        elif action == Action.TEMP_FAIL:
-            status = Status.WAITING
-        cursor.execute(
-            'UPDATE Transactions SET status = ?, last_update = ? '
-            'WHERE id = ?',
-            (status, now, id))
-        cursor.execute(
-            'INSERT INTO TransactionActions '
-            '(transaction_id, action_id, time, action) '
-            'VALUES (?,?,?,?)',
-            (id, action_id, now, action))
-        self.db.commit()
+        with self.db_write_lock:
+            cursor = self.db.cursor()
+            cursor.execute('SELECT MAX(action_id) FROM TransactionActions '
+                           'WHERE transaction_id = ?', (id,))
+            # TODO: this should do optimistic concurrency control:
+            # make sure that this action_id was our own previous load
+            row = cursor.fetchone()
+            action_id = 0
+            if row is not None and row[0] is not None:
+                action_id = row[0] + 1
+            now = int(time.time())
+            status = None
+            if action == Action.DELIVERED or action == Action.PERM_FAIL:
+                status = Status.DONE
+            elif action == Action.TEMP_FAIL:
+                status = Status.WAITING
+                cursor.execute(
+                    'UPDATE Transactions SET status = ?, last_update = ? '
+                    'WHERE id = ?',
+                    (status, now, id))
+                cursor.execute(
+                    'INSERT INTO TransactionActions '
+                    '(transaction_id, action_id, time, action) '
+                    'VALUES (?,?,?,?)',
+                    (id, action_id, now, action))
+            self.db.commit()
 
 # forward path
 # set_durable() will typically be concurrent with a transaction?

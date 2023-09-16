@@ -15,7 +15,7 @@ class Response:
 
     INTERNAL=600
 
-    def Internal(msg):
+    def Internal(msg : str):
         return Response(Response.INTERNAL, msg)
 
     def __init__(self, code=200, str="ok"):

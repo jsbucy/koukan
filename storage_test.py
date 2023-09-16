@@ -12,20 +12,20 @@ class StorageTest(unittest.TestCase):
     def test_basic(self):
         writer = self.s.get_transaction_writer()
         writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host', False)
-        writer.append_data('abc')
-        writer.append_data('xyz')
+        writer.append_data(b'abc')
+        writer.append_data(b'xyz')
         self.assertEqual(writer.append_blob('blob_id'),
                          writer.APPEND_BLOB_UNKNOWN)
 
         blob_writer = self.s.get_blob_writer()
         self.assertIsNotNone(blob_writer.start())
-        blob_writer.append_data('blob1')
-        blob_writer.append_data('blob2')
+        blob_writer.append_data(b'blob1')
+        blob_writer.append_data(b'blob2')
         self.assertTrue(blob_writer.finalize())
 
         self.assertEqual(writer.append_blob(blob_writer.id),
                          writer.APPEND_BLOB_OK)
-        writer.append_data('qrs')
+        writer.append_data(b'qrs')
 
         self.assertTrue(writer.finalize())
 

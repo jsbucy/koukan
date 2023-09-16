@@ -23,7 +23,7 @@ class Router:
     endpoint = None
     received_ascii : bytes = None
 
-    def __init__(self, policy : Callable[[str], Tuple["Endpoint", Response]]):
+    def __init__(self, policy): # : Callable[[str], Tuple["Endpoint", Response]]):
         self.policy = policy
         self.ehlo = "fixme.ehlo"
 
