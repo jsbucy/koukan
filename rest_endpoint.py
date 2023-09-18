@@ -66,7 +66,8 @@ class RestEndpoint:
 
         return self.start_response(TIMEOUT_START)
 
-    def append_data(self, last : bool, blob : Blob) -> Response:
+    def append_data(self, last : bool, blob : Blob,
+                    mx_multi_rcpt=None) -> Response:
         if not self.transaction_url:
             return Response.Internal(
                 'RestEndpoint.append_data no transaction_url')
@@ -80,6 +81,7 @@ class RestEndpoint:
         req_json = {
             'chunk_id': chunk_id,
             'last': last }
+        if mx_multi_rcpt: req_json['mx_multi_rcpt'] = True
 
         if blob.len() < MAX_INLINE:
             uri = False

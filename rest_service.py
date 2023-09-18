@@ -112,7 +112,7 @@ class Transaction:
         assert(isinstance(req_json['chunk_id'], int))
         chunk_id : int = req_json['chunk_id']
         last : bool = req_json['last']
-
+        mx_multi_rcpt = 'mx_multi_rcpt' in req_json and req_json['mx_multi_rcpt']
         if self.final_status:
             return jsonify({'final_status': self.final_status.to_json()})
 
@@ -122,6 +122,8 @@ class Transaction:
 
         if self.last and last:
             return Response(status=400, response=['bad last after last'])
+
+        if mx_multi_rcpt: self.endpoint.set_mx_multi_rcpt()
 
         self.chunk_id = chunk_id
         self.last = last

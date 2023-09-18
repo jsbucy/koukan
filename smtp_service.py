@@ -100,10 +100,10 @@ class SmtpHandler:
 
         return '250 RCPT ok'
 
-    def append_data(resp, i, trans, last, blob):
+    def append_data(resp, i, trans, last, blob, mx_multi_rcpt):
         logging.info('SmtpHandler.append_data %d last=%s len=%d',
                      i, last, blob.len())
-        resp[i] = trans.append_data(last, blob)
+        resp[i] = trans.append_data(last, blob, mx_multi_rcpt=mx_multi_rcpt)
         logging.info('SmtpHandler.append_data %d %s', i, resp[i])
 
     def set_durable(rresp, i, trans):
@@ -117,14 +117,18 @@ class SmtpHandler:
 
         blob = InlineBlob(envelope.content)
 
+        mx_multi_rcpt = (not self.msa) and (len(envelope.transactions) > 1)
+
         # TODO cf inflight waiting in rest endpoint code
         futures = []
         for i,t in enumerate(envelope.transactions):
             logging.info('SmtpHandler.handle_DATA dispatch append %d', i)
             futures.append(self.loop.run_in_executor(
-                None, partial(lambda i, t: SmtpHandler.append_data(
-                    sstatus, i, t, last=True, blob=blob),
-                              i, t)))
+                None, partial(
+                    lambda i, t: SmtpHandler.append_data(
+                        sstatus, i, t, last=True, blob=blob,
+                        mx_multi_rcpt=mx_multi_rcpt),
+                    i, t)))
 
         timeout = None
         if self.msa:

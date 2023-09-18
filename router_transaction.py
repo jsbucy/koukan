@@ -37,14 +37,17 @@ class BlobIdMap:
 
 class RouterTransaction:
     executor : Executor
-    blobs : List[Blob] = []
-    blob_upstream_queue : List[Blob] = []
+    blobs : List[Blob]
+    blob_upstream_queue : List[Blob]
     upstream_start_inflight = False
     upstream_append_inflight = False
+    mx_multi_rcpt = False
 
     def __init__(self, executor, storage, blob_id_map : BlobIdMap,
                  blob_storage, next, host, msa, tag):
         self.executor = executor
+        self.blobs = []
+        self.blob_upstream_queue = []
         self.storage = storage
         self.blob_id_map = blob_id_map
         self.blob_storage = blob_storage
@@ -104,6 +107,9 @@ class RouterTransaction:
             self.upstream_start_inflight = False
             self.cv.notify_all()
 
+    def set_mx_multi_rcpt(self):
+        self.mx_multi_rcpt = True
+
     def get_start_result(self, timeout=1) -> Optional[Response]:
         with self.lock:
             if self.upstream_start_inflight:
@@ -120,21 +126,30 @@ class RouterTransaction:
     def append_data(self,
                     last : bool,
                     blob : Blob) -> Optional[Response]:
+        logging.info('RouterTransaction.append_data %s %d', last, blob.len())
         with self.lock:
+           if self.next_final_resp:
+               return self.next_final_resp
+           # XXX the definitive logic for reporting upstream errors is
+           # in append_blob_upstream, the commented-out code (below)
+           # is redundant?
            if self.next_final_resp:
                return self.next_final_resp
            # XXX we enforce these invariants in rest service, this can
            # just assert?
-           if self.msa:
-               if self.next_start_resp.perm():
-                   return Response(400, "upstream start transaction perm msa")
-           else:  # mx
-               # XXX for multi-rcpt mx, keep going on errs since we
-               # don't know whether it's ultimately going to
-               # set_durable and need the the payload to generate the bounce
-               if self.next_start_resp.err():
-                   return Response(
-                       400, "upstream start transaction failed mx")
+           # if self.msa:
+           #     if self.next_start_resp.perm():
+           #         return Response(400, "upstream start transaction perm msa")
+           # elif not self.mx_multi_rcpt:  # mx single rcpt
+           #     if self.next_start_resp.err():
+           #         return Response(
+           #             400, "upstream start transaction failed mx")
+           # else:  # mx_multi_rcpt
+           #     # for multi-rcpt mx, keep going on errs since we
+           #     # don't know whether it's ultimately going to
+           #     # set_durable and need the the payload to generate
+           #     # the bounce
+           #     pass
 
            self.blobs.append(blob)
            self.blob_upstream_queue.append(blob)
@@ -146,19 +161,21 @@ class RouterTransaction:
 
     def append_upstream(self):
         while True:
+            last = False
             with self.lock:
+                logging.info('RouterTransaction.append_upstream %d %s', len(self.blob_upstream_queue), self.have_last_blob)
                 if not self.blob_upstream_queue:
                     inflight = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
-            last = (len(self.blob_upstream_queue) == 0) and self.have_last_blob
+                last = (len(self.blob_upstream_queue) == 0) and self.have_last_blob
             self.append_blob_upstream(last, blob)
 
 
     def append_blob_upstream(self,
                              last : bool,
                              blob : Blob) -> Response:
-        logging.info('RouterTransaction.append_data %s %d', last, blob.len())
+        logging.info('RouterTransaction.append_blob_upstream %s %d', last, blob.len())
 
         if last:
                 logging.info('have last blob %s', self.rcpt_to)
@@ -178,9 +195,17 @@ class RouterTransaction:
         if self.msa:
             if resp.perm():
                 final_resp = resp
-        else:  # mx
+        elif not self.mx_multi_rcpt:
             if resp.err():
                 final_resp = resp
+        else:  # mx single rcpt
+            # for multi-rcpt mx, keep going on errs since we
+            # don't know whether it's ultimately going to
+            # set_durable and need the the payload to generate
+            # the bounce
+            if last and resp.err():
+                final_resp = resp
+
         if final_resp:
             with self.lock:
                 self.next_final_resp = final_resp
