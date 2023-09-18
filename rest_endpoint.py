@@ -217,7 +217,7 @@ class RestEndpoint:
                 not (resp_json := get_resp_json(rest_resp)) or
                 field not in resp_json or not resp_json[field]):
                 # cf rest service get_transaction()
-                if delta < 5: time.sleep(5 - delta)  # XXX min deadline_left
+                if delta < 1: time.sleep(1 - delta)  # XXX min deadline_left
                 continue
             return Response.from_json(resp_json[field])
         return None

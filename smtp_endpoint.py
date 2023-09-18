@@ -62,8 +62,13 @@ class SmtpEndpoint:
         print('SmtpEndpoint.append_data last=', last, "len=", blob.len())
         self.data += blob.contents()
         if not last:
-            return Response()
+            return None
 
         self.final_status = Response.from_smtp(self.smtp.data(self.data))
         print(self.final_status)
         return self.final_status
+
+    def get_start_result(self, timeout=None):
+        return None
+    def get_final_status(self, timeout=None):
+        return None  # XXX this is always sync

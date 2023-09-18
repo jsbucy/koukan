@@ -7,9 +7,10 @@ import json
 import time
 
 class Status:
-    WAITING = 0
-    INFLIGHT = 1
-    DONE = 2
+    INSERT = 0  # uncommitted
+    WAITING = 1
+    INFLIGHT = 2
+    DONE = 3
 
 class Action:
     INSERT = 0
@@ -19,6 +20,8 @@ class Action:
     PERM_FAIL = 4
 
 class TransactionWriter:
+    initial_status = None
+
     def __init__(self, storage):
         self.parent = storage
         self.id = None
@@ -27,7 +30,8 @@ class TransactionWriter:
     def start(self, local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp,
-              host, inflight : bool):
+              host, status):
+        self.initial_status = status
         trans_json = {
             'local_host': local_host,
             'remote_host': remote_host,
@@ -39,10 +43,10 @@ class TransactionWriter:
         }
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            status = Status.INFLIGHT if inflight else Status.WAITING
             cursor.execute('INSERT INTO Transactions (json, creation, status) '
                            'VALUES (?, ?, ?)',
-                           (json.dumps(trans_json), int(time.time()), status))
+                           (json.dumps(trans_json), int(time.time()),
+                            Status.INSERT))
             self.id = cursor.lastrowid
             cursor.execute(
                 'INSERT INTO TransactionActions '
@@ -72,6 +76,12 @@ class TransactionWriter:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
+                'SELECT status From Transactions WHERE id = ?',
+                (self.id,))
+            row = cursor.fetchone()
+            assert(row is not None and row[0] is Status.INSERT)
+
+            cursor.execute(
                 'SELECT length FROM Blob WHERE id = ? AND length IS NOT NULL',
                 (blob_id,))
             row = cursor.fetchone()
@@ -92,9 +102,10 @@ class TransactionWriter:
     def finalize(self):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            cursor.execute('UPDATE Transactions SET last_update = ? '
-                           'WHERE id = ?',
-                           (int(time.time()), self.id))
+            cursor.execute(
+                'UPDATE Transactions SET last_update = ?, status = ? '
+                'WHERE id = ?',
+                (int(time.time()), self.initial_status, self.id))
             self.parent.db.commit()
         return True
 
@@ -320,15 +331,15 @@ class Storage:
                 status = Status.DONE
             elif action == Action.TEMP_FAIL:
                 status = Status.WAITING
-                cursor.execute(
-                    'UPDATE Transactions SET status = ?, last_update = ? '
-                    'WHERE id = ?',
-                    (status, now, id))
-                cursor.execute(
-                    'INSERT INTO TransactionActions '
-                    '(transaction_id, action_id, time, action) '
-                    'VALUES (?,?,?,?)',
-                    (id, action_id, now, action))
+            cursor.execute(
+                'UPDATE Transactions SET status = ?, last_update = ? '
+                'WHERE id = ?',
+                (status, now, id))
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES (?,?,?,?)',
+                (id, action_id, now, action))
             self.db.commit()
 
 # forward path

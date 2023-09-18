@@ -52,7 +52,7 @@ executor = Executor(10, {
 
 def endpoints(host):
     if host == 'outbound':
-        return SmtpEndpoint(ehlo_hostname=ehlo_host), Tag.MX, False
+        return SmtpEndpoint(ehlo_hostname=ehlo_host), False # msa
     else:
         return None
 

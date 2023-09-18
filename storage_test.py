@@ -1,5 +1,5 @@
 
-from storage import Storage, Action
+from storage import Storage, Action, Status
 
 import unittest
 
@@ -11,7 +11,7 @@ class StorageTest(unittest.TestCase):
 
     def test_basic(self):
         writer = self.s.get_transaction_writer()
-        writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host', False)
+        writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host', Status.WAITING)
         writer.append_data(b'abc')
         writer.append_data(b'xyz')
         self.assertEqual(writer.append_blob('blob_id'),
@@ -32,11 +32,11 @@ class StorageTest(unittest.TestCase):
         reader = self.s.load_one()
         self.assertEqual(reader.id, writer.id)
         expected_content = [
-            'abc',
-            'xyz',
-            'blob1',
-            'blob2',
-            'qrs'
+            b'abc',
+            b'xyz',
+            b'blob1',
+            b'blob2',
+            b'qrs'
         ]
         for i,c in enumerate(expected_content):
             d = reader.read_content()

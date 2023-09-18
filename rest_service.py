@@ -19,18 +19,19 @@ import logging
 from typing import Any, Dict, Optional, List
 from typing import Callable, Tuple
 
+import response
+MailResponse = response.Response
+
 class Transaction:
     id : str
     msa : bool
-    executor_tag : int
     chunk_id : int = None
     last : bool = False
     endpoint : Any
-    start_resp : Response = None
+    start_resp : MailResponse = None
     # response from the last append or the first one that yielded an error
-    final_status : Response = None
+    final_status : MailResponse = None
     start_inflight = False
-    final_inflight = False
 
     local_host = None
     remote_host = None
@@ -42,15 +43,14 @@ class Transaction:
     lock : Lock
     cv : Condition
 
-    def __init__(self, executor : Executor, endpoints, blobs):
+    def __init__(self, executor : Executor, endpoints, blob_storage):
         self.lock = Lock()
         self.cv = Condition(self.lock)
-        self.executor = executor
         self.endpoints = endpoints
-        self.blobs = blobs
+        self.blob_storage = blob_storage
 
     def init(self, http_host, req_json) -> Optional[Response]:
-        self.endpoint, self.executor_tag, self.msa = self.endpoints(http_host)
+        self.endpoint, self.msa = self.endpoints(http_host)
         if not self.endpoint:
             return Response(status=404, response=['unknown host'])
 
@@ -66,50 +66,33 @@ class Transaction:
         # great in terms of busy-waiting but still pretty short
         # relative to a http timeout
 
-        with self.lock:
-            if self.start_inflight or self.final_inflight:
-                self.cv.wait_for(
-                    lambda: not self.start_inflight and not self.final_inflight,
-                    1)
-
         # mx always waits for start resp
         # msa waits for start resp err within short timeout and then detaches
 
         json_out = {}
         # xxx this is the wrong way to surface this?
+        if not self.start_resp:
+            self.start_resp = self.endpoint.get_start_result()
         if self.start_resp:
             json_out['start_response'] = self.start_resp.to_json()
 
+        if not self.final_status:
+            self.final_status = self.endpoint.get_final_status(
+                timeout = 1 if self.last else 0)
         if self.final_status:
             json_out['final_status'] = self.final_status.to_json()
 
         return jsonify(json_out)
 
     def start(self):
-        with self.lock:
-            self.start_inflight = True
-        self.executor.enqueue(self.executor_tag, lambda: self.start_upstream())
-
-    def start_upstream(self):
-        try:
-            resp = self.endpoint.start(
-                self.local_host, self.remote_host,
-                self.mail_from, self.transaction_esmtp,
-                self.rcpt_to, self.rcpt_esmtp)
-        finally:
-            with self.lock:
-                self.start_inflight = False
-        logging.info('%s rest service transaction start %s', self.id, resp)
-        with self.lock:
-            self.start_resp = resp
-            # XXX can drop this since we explicitly verify in append_data() now?
-            # mx must wait for start resp but msa could have detached and
-            # it failed by the time the client sent the data
-            if (self.msa and resp.perm()) or (not self.msa and resp.err()):
-                self.final_status = resp
-            self.cv.notify()
+        # xxx sync in gateway/SmtpEndpoint, async in router
+        self.start_resp = self.endpoint.start(
+            self.local_host, self.remote_host,
+            self.mail_from, self.transaction_esmtp,
+            self.rcpt_to, self.rcpt_esmtp)
 
     def append_data(self, req_json):
+        # XXX do this here or in RouterTransaction?
         if self.msa:
             if self.start_resp is not None and self.start_resp.perm():
                 return Response(
@@ -125,18 +108,6 @@ class Transaction:
                 return Response(
                     status=400,
                     response=['failed precondition: mx start upstream err'])
-            # if single-recipient and any append error
-            # if multi-recipient and append perm (same as msa)
-            #   ick if one of the other transactions doesn't permfail,
-            #   need to accept+bounce this, need to accept enough to
-            #   emit the bounce?
-
-            #   this is so tricky and a pretty small optimization in
-            #   the grand scheme of things esp. since the payload is
-            #   supposed to be shared with the other transactions,
-            #   RouterTransaction should stop sending upstream in this
-            #   case but keep consuming the payload for the bounce or
-            #   whatever
 
         assert(isinstance(req_json['chunk_id'], int))
         chunk_id : int = req_json['chunk_id']
@@ -160,10 +131,8 @@ class Transaction:
             logging.info('rest service %s append_data inline %d',
                          self.id, len(req_json['d']))
             d : bytes = req_json['d'].encode('utf-8')
-            resp = self.append_upstream(last, InlineBlob(d))
+            self.append_blob_upstream(last, InlineBlob(d))
             resp_json = {}
-            if resp.err():
-                resp_json['final_status'] = resp.to_json()
             return jsonify(resp_json)
 
         # (long) data via separate PUT
@@ -180,14 +149,13 @@ class Transaction:
         # back to the transaction final_result and subsequent append
         # will be failed precondition
 
-        blob_done_cb = lambda blob: self.executor.enqueue(
-            Tag.DATA, lambda: self.append_upstream(last, blob))
+        blob_done_cb = lambda blob: self.append_blob_upstream(last, blob)
 
         if 'uri' in req_json and req_json['uri'] is not None:
             blob_id = req_json['uri'].removeprefix('/blob/')
-            if self.blobs.add_waiter(blob_id, blob_done_cb):
+            if self.blob_storage.add_waiter(blob_id, blob_done_cb):
                 return jsonify({})
-        blob_id = self.blobs.create(blob_done_cb)
+        blob_id = self.blob_storage.create(blob_done_cb)
 
         resp_json = { 'uri': '/blob/' + str(blob_id) }
         rest_resp = jsonify(resp_json)
@@ -195,7 +163,7 @@ class Transaction:
         return rest_resp
 
 
-    def append_upstream(self, last : bool, blob : Blob):
+    def append_blob_upstream(self, last : bool, blob : Blob):
         logging.info('%s rest service Transaction.append_data %s %d',
                      self.id, last, blob.len())
 
@@ -205,26 +173,22 @@ class Transaction:
                          'already has final_status', self.id)
             return self.final_status  # XXX internal/failed_precondition?
 
-        if last:
-            with self.lock:
-                self.final_inflight = True
         resp = None
         try:
             resp = self.endpoint.append_data(last, blob)
         except:
-            resp = Response.Internal('rest transaction append_data exception')
+            resp = MailResponse.Internal(
+                'rest transaction append_data exception')
         logging.info('%s rest service Transaction.append_data %s',
                      self.id, resp)
         with self.lock:
             if last:
-                self.final_inflight = False
                 self.last = True
-            if last or resp.err():
+            if resp is not None:
                 self.final_status = resp
             self.cv.notify()
         return resp
 
-    # this is always sync so not queued on executor
     def set_durable(self):
         if not self.last:
             return Response(
@@ -257,7 +221,7 @@ class RestResources:
 
 
 def create_app(
-        endpoints : Callable[[str], Tuple[Any, int, bool]],  # any~endpoint
+        endpoints : Callable[[str], Tuple[Any, bool]],  # endpoint, msa
         executor : Executor,
         blobs : BlobStorage):
     app = Flask(__name__)

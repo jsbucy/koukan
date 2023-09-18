@@ -67,16 +67,21 @@ class Service:
         ### inbound
 
         # AddressPolicy passes the rcpt to the endpoint factory
-        outbound_host = lambda _: RestEndpoint(
+        # outbound_host = lambda _: RestEndpoint(
+        #     gw_base_url, http_host='outbound',
+        #     static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
+        # local_addrs = AddressPolicy(
+        #     [ PrefixAddr('u', delimiter='+', endpoint_factory=outbound_host),
+        #       PrefixAddr('v', delimiter='+', endpoint_factory=outbound_host),
+        #      ])
+        # local_addr_router = lambda: Router(local_addrs)
+        #local_domains = LocalDomainPolicy({'d': local_addr_router})
+
+        outbound_host = lambda: RestEndpoint(
             gw_base_url, http_host='outbound',
             static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
 
-        local_addrs = AddressPolicy(
-            [ PrefixAddr('u', delimiter='+', endpoint_factory=outbound_host),
-              PrefixAddr('v', delimiter='+', endpoint_factory=outbound_host),
-             ])
-        local_addr_router = lambda: Router(local_addrs)
-        local_domains = LocalDomainPolicy({'d': local_addr_router})
+        local_domains = LocalDomainPolicy({'d': outbound_host})
         self.local_domain_router = lambda: Router(local_domains)
 
         ### outbound
@@ -109,7 +114,8 @@ class Service:
     def get_router_transaction(self, host):
         next, tag, msa = self.get_transaction(host)
         return RouterTransaction(
-            self.storage, self.blob_id_map, self.blobs, next, host, msa), tag, msa
+            self.executor, self.storage, self.blob_id_map, self.blobs,
+            next, host, msa, tag), msa
 
     # -> Transaction, Tag, is-msa
     def get_transaction(self, host):
