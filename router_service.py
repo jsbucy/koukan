@@ -1,5 +1,5 @@
 
-from typing import Dict
+from typing import Dict, Tuple, Any
 
 import rest_service
 import gunicorn_main
@@ -28,6 +28,23 @@ from mx_resolution_endpoint import MxResolutionEndpoint
 import sys
 from executor import Executor
 
+import json
+
+import pysmtpgw_config
+
+class Config:
+    def __init__(self, filename=None):
+        js = {}
+        if filename:
+            config_json_file = open(filename, "r")
+            self.js = json.load(config_json_file)
+
+    def get_str(self, k):
+        return self.js.get(k, None)
+    def get_int(self, k):
+        return int(self.js[k]) if k in self.js else None
+
+
 class Service:
     def __init__(self):
         self.executor = Executor(10, {
@@ -39,26 +56,31 @@ class Service:
         self.blob_id_map = BlobIdMap()
         self.storage = Storage()
         self.blobs = None
-        self.local_domain_router = None
-        self.dest_domain_router = None
+        # -> Endpoint, msa?
+        self.endpoints : Dict[str,Tuple[Any, bool]] = {}
+        self.config = None
+        self.wiring = None
 
     def main(self):
-        rest_port = int(sys.argv[1])
-        gateway_port = int(sys.argv[2])
-        cert = sys.argv[3]
-        key = sys.argv[4]
-        dkim_key = sys.argv[5]
-        dkim_domain = sys.argv[6].encode('ascii')
-        dkim_selector = sys.argv[7].encode('ascii')
-        db_filename = sys.argv[8]
+        self.config = Config(filename=sys.argv[1])
 
+        self.wiring = pysmtpgw_config.Config(self.config)
+
+        # rest_port = int(sys.argv[1])
+        # gateway_port = int(sys.argv[2])
+        # cert = sys.argv[3]
+        # key = sys.argv[4]
+        # dkim_key = sys.argv[5]
+        # dkim_domain = sys.argv[6].encode('ascii')
+        # dkim_selector = sys.argv[7].encode('ascii')
+        # db_filename = sys.argv[8]
+
+        db_filename = self.config.get_str('db_filename')
         if not db_filename:
             print("*** using in-memory/non-durable storage")
             self.storage.connect(db=Storage.get_inmemory_for_test())
         else:
             self.storage.connect(filename=db_filename)
-
-        gw_base_url = 'http://localhost:%d/' % gateway_port
 
 
         self.blobs = BlobStorage()
@@ -77,27 +99,27 @@ class Service:
         # local_addr_router = lambda: Router(local_addrs)
         #local_domains = LocalDomainPolicy({'d': local_addr_router})
 
-        outbound_host = lambda: RestEndpoint(
-            gw_base_url, http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
+        # outbound_host = lambda: RestEndpoint(
+        #     gw_base_url, http_host='outbound',
+        #     static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
 
-        local_domains = LocalDomainPolicy({'d': outbound_host})
-        self.local_domain_router = lambda: Router(local_domains)
+        # local_domains = LocalDomainPolicy({'d': outbound_host})
+        # self.local_domain_router = lambda: Router(local_domains)
 
-        ### outbound
-        outbound_mx = lambda: RestEndpoint(
-            gw_base_url, http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025))
-        mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
-        next = mx_resolution
+        # ### outbound
+        # outbound_mx = lambda: RestEndpoint(
+        #     gw_base_url, http_host='outbound',
+        #     static_remote_host=('127.0.0.1', 3025))
+        # mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
+        # next = mx_resolution
 
-        if dkim_key:
-            print('enabled dkim signing', dkim_key)
-            next = lambda: DkimEndpoint(dkim_domain, dkim_selector, dkim_key,
-                                        mx_resolution())
+        # if dkim_key:
+        #     print('enabled dkim signing', dkim_key)
+        #     next = lambda: DkimEndpoint(dkim_domain, dkim_selector, dkim_key,
+        #                                 mx_resolution())
 
-        dest_domain_policy = DestDomainPolicy(next)
-        self.dest_domain_router = lambda: Router(dest_domain_policy)
+        # dest_domain_policy = DestDomainPolicy(next)
+        # self.dest_domain_router = lambda: Router(dest_domain_policy)
 
         self.dequeue_thread = Thread(target = lambda: self.load(),
                                      daemon=True)
@@ -106,7 +128,9 @@ class Service:
         # top-level: http host -> endpoint
 
         gunicorn_main.run(
-            'localhost', rest_port, cert, key,
+            'localhost', self.config.get_int('rest_port'),
+            self.config.get_str('cert'),
+            self.config.get_str('key'),
             rest_service.create_app(
                 lambda host: self.get_router_transaction(host),
                 self.executor, self.blobs))
@@ -119,11 +143,10 @@ class Service:
 
     # -> Transaction, Tag, is-msa
     def get_transaction(self, host):
-        if host == 'inbound-gw':
-            return self.local_domain_router(), Tag.MX, False
-        elif host == 'outbound-gw':
-            return self.dest_domain_router(), Tag.MSA, True
-        return None, None, None
+        endpoint, msa = self.wiring.get_endpoint(host)
+        if not endpoint: return None, None, None
+        tag = Tag.MSA if msa else Tag.MX
+        return endpoint, tag, msa
 
     MAX_RETRY = 3 * 86400
     def handle(self, reader):

@@ -1,0 +1,8 @@
+{
+    "rest_port": 8000,
+    "gw_base_url": "http://localhost:8001",
+    "dkim_key": "dkim.key",
+    "dkim_domain": "sandbox.gloop.org",
+    "dkim_selector": "tachygraph20230720",
+    "db_filename": "storage.sqlite3"
+}

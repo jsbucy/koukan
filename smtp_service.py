@@ -56,8 +56,6 @@ class SmtpHandler:
 
     async def handle_RCPT(
             self, server, session, envelope, address, rcpt_options):
-        # TODO multi-rcpt doesn't completely work until durable retry
-        # is implemented in the router
         if self.max_rcpt and (len(envelope.rcpt_tos) > self.max_rcpt):
             return b'452-4.5.3 too many recipients'
 

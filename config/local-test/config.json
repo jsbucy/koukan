@@ -1,0 +1,5 @@
+{
+    "rest_port": 8000,
+    "gw_base_url": "http://localhost:8001",
+    "db_filename": "storage.sqlite3"
+}

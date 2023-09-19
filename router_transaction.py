@@ -163,22 +163,22 @@ class RouterTransaction:
         while True:
             last = False
             with self.lock:
-                logging.info('RouterTransaction.append_upstream %d %s', len(self.blob_upstream_queue), self.have_last_blob)
+                logging.info('RouterTransaction.append_upstream %d %s',
+                             len(self.blob_upstream_queue), self.have_last_blob)
                 if not self.blob_upstream_queue:
                     inflight = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
-                last = (len(self.blob_upstream_queue) == 0) and self.have_last_blob
+                last = ((len(self.blob_upstream_queue) == 0) and
+                        self.have_last_blob)
             self.append_blob_upstream(last, blob)
 
 
     def append_blob_upstream(self,
                              last : bool,
                              blob : Blob) -> Response:
-        logging.info('RouterTransaction.append_blob_upstream %s %d', last, blob.len())
-
-        if last:
-                logging.info('have last blob %s', self.rcpt_to)
+        logging.info('RouterTransaction.append_blob_upstream %s %d',
+                     last, blob.len())
 
         resp = None
         try:
