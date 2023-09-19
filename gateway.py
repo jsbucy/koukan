@@ -19,6 +19,7 @@ cert = sys.argv[5]
 key = sys.argv[6]
 auth_secrets = sys.argv[7]
 ehlo_host = sys.argv[8]
+listen_host = sys.argv[9]
 
 ### smtp -> rest
 
@@ -27,10 +28,9 @@ router_base_url = 'http://localhost:%d/' % router_port
 inbound_gw_factory = (
     lambda: RestEndpoint(router_base_url, http_host='inbound-gw'))
 
-
 service(inbound_gw_factory, port=mx_port,
         cert=cert, key=key,
-        msa=False)
+        msa=False, hostname=listen_host)
 
 outbound_gw_factory = (
     lambda: RestEndpoint(router_base_url, http_host='outbound-gw'))
@@ -38,7 +38,7 @@ outbound_gw_factory = (
 service(outbound_gw_factory, port=msa_port,
         cert=cert, key=key,
         msa=True,
-        auth_secrets_path=auth_secrets)
+        auth_secrets_path=auth_secrets, hostname=listen_host)
 
 
 ### rest -> smtp
@@ -56,5 +56,5 @@ def endpoints(host):
     else:
         return None
 
-gunicorn_main.run('localhost', rest_port, cert, key,
+gunicorn_main.run(listen_host, rest_port, cert, key,
                   rest_service.create_app(endpoints, executor, blobs))
