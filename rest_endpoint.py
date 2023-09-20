@@ -33,11 +33,15 @@ class RestEndpoint:
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
-    def __init__(self, base_url, http_host, static_remote_host=None):
+    def __init__(self, base_url, http_host, static_remote_host=None,
+                 timeout_start=TIMEOUT_START,
+                 timeout_data=TIMEOUT_DATA):
         self.base_url = base_url
         self.http_host = http_host
         self.static_remote_host = static_remote_host
         self.chunk_id = 0
+        self.timeout_start = timeout_start
+        self.timeout_data = timeout_data
 
     def start(self,
               local_host, remote_host,
@@ -54,7 +58,7 @@ class RestEndpoint:
         rest_resp = requests.post(self.base_url + '/transactions',
                                   json=req_json,
                                   headers={'host': self.http_host},
-                                  timeout=TIMEOUT_START)
+                                  timeout=self.timeout_start)
         print(rest_resp)
         resp_json = get_resp_json(rest_resp)
         # XXX  rest_resp.status_code or 'start_response' in resp_json
@@ -64,7 +68,7 @@ class RestEndpoint:
 
         self.transaction_url = self.base_url + resp_json['url']
 
-        return self.start_response(TIMEOUT_START)
+        return self.start_response(self.timeout_start)
 
     def append_data(self, last : bool, blob : Blob,
                     mx_multi_rcpt=None) -> Response:
@@ -94,12 +98,12 @@ class RestEndpoint:
                 rest_resp = requests.post(self.transaction_url + '/appendData',
                                           json=req_json,
                                           headers={'host': self.http_host},
-                                          timeout=TIMEOUT_DATA)
+                                          timeout=self.timeout_data)
                 # XXX rest_resp.status_code or
                 #   'final_status' in rest_resp.json()
                 logging.info('RestEndpoint.append_data inline %s', rest_resp)
                 if not last: return Response()
-                return self.get_status(TIMEOUT_DATA)
+                return self.get_status(self.timeout_data)
 
         # xxx internal -> external blob id map
 
@@ -115,7 +119,7 @@ class RestEndpoint:
         rest_resp = requests.post(self.transaction_url + '/appendData',
                                   json=req_json,
                                   headers={'host': self.http_host},
-                                  timeout=TIMEOUT_DATA)
+                                  timeout=self.timeout_data)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.append_data POST resp %s', resp_json)
         # XXX http ok (and below)
@@ -144,7 +148,7 @@ class RestEndpoint:
 
         logging.info('RestEndpoint.append_data %s %d %s', last, offset, resp)
         if not last: return resp
-        return self.get_status(TIMEOUT_DATA)
+        return self.get_status(self.timeout_data)
 
 
     # -> (resp, len)
@@ -160,7 +164,7 @@ class RestEndpoint:
         headers['host'] = self.http_host
         rest_resp = requests.put(
             self.base_url + chunk_uri, headers=headers, data=d,
-            timeout=TIMEOUT_DATA)
+            timeout=self.timeout_data)
         logging.info('RestEndpoint.append_data_chunk %s', rest_resp)
         # Most(all?) errors on blob put here means temp
         # transaction final status
@@ -237,7 +241,7 @@ class RestEndpoint:
         rest_resp = requests.post(self.transaction_url + '/smtpMode',
                                   json={},
                                   headers={'host': self.http_host},
-                                  timeout=TIMEOUT_DATA)
+                                  timeout=self.timeout_data)
         if rest_resp.status_code > 299:
             return Response(400, "RestEndpoint.set_durable")
 

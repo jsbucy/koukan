@@ -56,5 +56,5 @@ def endpoints(host):
     else:
         return None
 
-gunicorn_main.run(listen_host, rest_port, cert, key,
-                  rest_service.create_app(endpoints, executor, blobs))
+gunicorn_main.run('localhost', rest_port, cert=None, key=None,
+                  app=rest_service.create_app(endpoints, executor, blobs))

@@ -2,7 +2,7 @@
 import dkim
 
 from response import Response, Esmtp
-from blob import Blob
+from blob import Blob, InlineBlob
 
 from typing import Any, Optional, Tuple
 
@@ -15,6 +15,7 @@ class DkimEndpoint:
         self.selector = selector
         self.privkey = f.read()
         self.next = next
+        self.blobs = []
 
     def start(self,
               local_host, remote_host,
@@ -29,25 +30,34 @@ class DkimEndpoint:
             self.data = bytes()
         return resp
 
-    def append_data(self, last : bool, blob : Blob):
+    def sign(self):
+        data = b''
+        for blob in self.blobs:
+            data += blob.contents()
         # TODO dkimpy wants to get the entire message as a single
         # bytes value, a better interface for this would be to push
         # chunks into it, I don't think that would be a huge change
-        self.data += blob.contents()
-        if not last:
-            return Response()
-
-        sig = dkim.sign(self.data, self.selector, self.domain, self.privkey,
-                        include_headers=[b'From', b'Date', b'Message-ID'])
 
         # identity=None, canonicalize=('relaxed', 'simple'),
         # signature_algorithm='rsa-sha256', include_headers=None,
         # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
-        resp = self.next.append_data(last=False, blob=InlineBlob(sig))
-        if resp.err: return resp
-        return self.next.append_data(last=True, blob=blob)
+        return dkim.sign(data, self.selector, self.domain, self.privkey,
+                        include_headers=[b'From', b'Date', b'Message-ID'])
+        
 
+    def append_data(self, last : bool, blob : Blob):
+        self.blobs.append(blob)
+        if not last:
+            return Response()
+        sig = self.sign()
+
+        blobs = [ InlineBlob(sig) ] + self.blobs
+        for i,blob in enumerate(blobs):
+            last = (i == len(blobs)-1)
+            resp = self.next.append_data(last=last, blob=blob)
+            if resp.err() or last: return resp
+            
 
     def get_status(self) -> Response:
         return self.next.get_status()

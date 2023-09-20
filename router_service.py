@@ -178,12 +178,12 @@ class Service:
 
     def load(self):
         while True:
-            print("dequeue")
+            logging.info("dequeue")
             reader = self.storage.load_one()
             if reader:
                 self.executor.enqueue(Tag.LOAD, lambda: self.handle(reader))
             else:
-                print("dequeue idle")
+                logging.info("dequeue idle")
                 time.sleep(10)
 
 if __name__ == '__main__':

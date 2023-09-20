@@ -7,6 +7,8 @@ from blob import Blob
 
 from response import Response, Esmtp
 
+import logging
+
 # rest or smtp services call upon a single instance of this
 class SmtpEndpoint:
     smtp : smtplib.SMTP
@@ -36,6 +38,7 @@ class SmtpEndpoint:
               local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp=None):
+        logging.info('SmtpEndpoint.start %s', remote_host)
         resp = Response.from_smtp(
             self.connect(host=remote_host[0], port=remote_host[1]))
         if resp.err(): return resp
@@ -48,7 +51,7 @@ class SmtpEndpoint:
             # and throws on tls negotiation failure?
             starttls_resp = Response.from_smtp(self.smtp.starttls())
             if starttls_resp.err(): return starttls_resp
-            ehlo_resp = Response.from_smtp(self.smtp.ehlo(hostname))
+            ehlo_resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
             if ehlo_resp.err(): return ehlo_resp
 
         resp = Response.from_smtp(self.smtp.mail(mail_from))

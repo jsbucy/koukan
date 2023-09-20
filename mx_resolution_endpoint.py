@@ -6,6 +6,8 @@ import mx_resolution
 
 from blob import Blob
 
+import logging
+
 class MxResolutionEndpoint:
     def __init__(self, transaction_factory : Callable[[], "Endpoint"]):
         self.transaction_factory = transaction_factory
@@ -15,14 +17,17 @@ class MxResolutionEndpoint:
     # -> (resp, rcpt_status)
     def start(
             self,
-            local_host, remote_host,
+            local_host, remote_host_port,
             mail_from, transaction_esmtp=None, rcpt_to = None, rcpt_esmtp=None
             ) -> Tuple[Response,List[Tuple[str, Any]]]:
 
-        for host in mx_resolution.resolve(remote_host[0]):
+        (remote_host, remote_port) = remote_host_port
+        logging.info('MxResoultionEndpoint.start %s', remote_host)
+        for host in mx_resolution.resolve(remote_host):
+            logging.info('MxResoultionEndpoint.start mx %s', host)
             self.next = self.transaction_factory()
             resp = self.next.start(
-                local_host, host, mail_from, transaction_esmtp,
+                local_host, (host, remote_port), mail_from, transaction_esmtp,
                 rcpt_to, rcpt_esmtp)
             if not resp.temp():
                 return resp
