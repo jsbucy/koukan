@@ -66,15 +66,6 @@ class Service:
 
         self.wiring = pysmtpgw_config.Config(self.config)
 
-        # rest_port = int(sys.argv[1])
-        # gateway_port = int(sys.argv[2])
-        # cert = sys.argv[3]
-        # key = sys.argv[4]
-        # dkim_key = sys.argv[5]
-        # dkim_domain = sys.argv[6].encode('ascii')
-        # dkim_selector = sys.argv[7].encode('ascii')
-        # db_filename = sys.argv[8]
-
         db_filename = self.config.get_str('db_filename')
         if not db_filename:
             print("*** using in-memory/non-durable storage")
@@ -84,42 +75,6 @@ class Service:
 
 
         self.blobs = BlobStorage()
-
-
-        ### inbound
-
-        # AddressPolicy passes the rcpt to the endpoint factory
-        # outbound_host = lambda _: RestEndpoint(
-        #     gw_base_url, http_host='outbound',
-        #     static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
-        # local_addrs = AddressPolicy(
-        #     [ PrefixAddr('u', delimiter='+', endpoint_factory=outbound_host),
-        #       PrefixAddr('v', delimiter='+', endpoint_factory=outbound_host),
-        #      ])
-        # local_addr_router = lambda: Router(local_addrs)
-        #local_domains = LocalDomainPolicy({'d': local_addr_router})
-
-        # outbound_host = lambda: RestEndpoint(
-        #     gw_base_url, http_host='outbound',
-        #     static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
-
-        # local_domains = LocalDomainPolicy({'d': outbound_host})
-        # self.local_domain_router = lambda: Router(local_domains)
-
-        # ### outbound
-        # outbound_mx = lambda: RestEndpoint(
-        #     gw_base_url, http_host='outbound',
-        #     static_remote_host=('127.0.0.1', 3025))
-        # mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
-        # next = mx_resolution
-
-        # if dkim_key:
-        #     print('enabled dkim signing', dkim_key)
-        #     next = lambda: DkimEndpoint(dkim_domain, dkim_selector, dkim_key,
-        #                                 mx_resolution())
-
-        # dest_domain_policy = DestDomainPolicy(next)
-        # self.dest_domain_router = lambda: Router(dest_domain_policy)
 
         self.dequeue_thread = Thread(target = lambda: self.load(),
                                      daemon=True)
@@ -148,33 +103,10 @@ class Service:
         tag = Tag.MSA if msa else Tag.MX
         return endpoint, tag, msa
 
-    MAX_RETRY = 3 * 86400
     def handle(self, reader):
         # TODO need to wire this into rest service resources
-        # TODO move most/all of this into RouterTransaction?
-        transaction,tag,msa = self.get_transaction(reader.host)
-        print("handle", reader.id, reader.mail_from, reader.rcpt_to)
-        resp = transaction.start(reader.local_host, reader.remote_host,
-                                 reader.mail_from, reader.transaction_esmtp,
-                                 reader.rcpt_to, reader.rcpt_esmtp)
-        print("handle start resp", reader.id, resp)
-        if resp.ok():
-            while d := reader.read_content():
-                resp = transaction.append_data(last=False, blob=InlineBlob(d))
-                if resp.err(): break
-            if not resp.err():
-                resp = transaction.append_data(last=True, blob=InlineBlob(b''))
-
-        action = None
-        if resp.ok():
-            action = Action.DELIVERED
-        elif resp.perm() or (time.time() - reader.creation) > self.MAX_RETRY:
-            # permfail/bounce
-            action = Action.PERM_FAIL
-        else:
-            action = Action.TEMP_FAIL
-
-        self.storage.append_transaction_actions(reader.id, action)
+        transaction, msa = self.get_router_transaction(reader.host)
+        transaction.load(reader)
 
     def load(self):
         while True:

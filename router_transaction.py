@@ -1,14 +1,16 @@
 
 from typing import Any, List, Optional
 from threading import Condition, Lock
-from storage import Action, Status
+from storage import Action, Status, TransactionReader
 
 from tags import Tag
 
 from response import Response
 
-from blob import Blob
+from blob import Blob, InlineBlob
 from executor import Executor
+
+import time
 
 import logging
 
@@ -34,6 +36,7 @@ class BlobIdMap:
             self.id_map[id] = id2
             self.cv.notify_all()
 
+MAX_RETRY = 3 * 86400
 
 class RouterTransaction:
     executor : Executor
@@ -65,6 +68,8 @@ class RouterTransaction:
 
         self.appended_action = False
 
+        self.recovered = False
+
         self.local_host = None
         self.remote_host = None
         self.mail_from = None
@@ -72,7 +77,7 @@ class RouterTransaction:
         self.rcpt_to = None
         self.rcpt_esmtp = None
 
-    def start(self,
+    def _start(self,
               local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
@@ -84,14 +89,70 @@ class RouterTransaction:
         self.rcpt_to = rcpt_to
         self.rcpt_esmtp = rcpt_esmtp
         self.upstream_start_inflight = True
+
+    def start(self,
+              local_host, remote_host,
+              mail_from, transaction_esmtp,
+              rcpt_to, rcpt_esmtp):
+        self._start(local_host, remote_host,
+                    mail_from, transaction_esmtp,
+                    rcpt_to, rcpt_esmtp)
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
 
-    def start_upstream(self):
+    def load(self, reader : TransactionReader):
+        logging.info("RouterTransaction.load %s %s %s",
+                     reader.id, reader.mail_from, reader.rcpt_to)
+        self.recovered = True
+        self.msa = False
+        try:
+            self._start(
+                reader.local_host, reader.remote_host,
+                reader.mail_from, reader.transaction_esmtp,
+                reader.rcpt_to, reader.rcpt_esmtp)
+            resp = self._start_upstream()
+            logging.info("RouterTransaction.load start resp %s %s",
+                         reader.id, resp)
+            if resp.ok():
+                dd = []
+                last = False
+                while not last:
+                    while len(dd) < 2:
+                        d = reader.read_content()
+                        if not d: break
+                        dd.append(d)
+                    if not dd:
+                        break
+                    d = dd.pop(0)
+                    last = (len(dd) == 0)
+                    # XXX db blob reader is-a Blob
+                    resp = self._append_blob_upstream(
+                        last=last, blob=InlineBlob(d))
+                    if resp.err(): break
+        except:
+            resp = Response.Internal('RouterTransaction.load exception')
+
+        action = None
+        if resp.ok():
+            action = Action.DELIVERED
+        elif resp.perm() or (time.time() - reader.creation) > MAX_RETRY:
+            # permfail/bounce
+            action = Action.PERM_FAIL
+        else:
+            action = Action.TEMP_FAIL
+
+        self.storage.append_transaction_actions(reader.id, action)
+
+
+    def _start_upstream(self):
         resp = self.next.start(
             self.local_host, self.remote_host,
             self.mail_from, self.transaction_esmtp,
             self.rcpt_to, self.rcpt_esmtp)
-        logging.info('RouterTransaction.start_body %s', self.next_start_resp)
+        logging.info('RouterTransaction._start_upstream %s', resp)
+        return resp
+
+    def start_upstream(self):
+        resp = self._start_upstream()
 
         start_resp = None
         if resp is not None and resp.ok():
@@ -173,21 +234,23 @@ class RouterTransaction:
                         self.have_last_blob)
             self.append_blob_upstream(last, blob)
 
+    def _append_blob_upstream(self, last, blob):
+        logging.info('RouterTransaction._append_blob_upstream %s %d',
+                     last, blob.len())
+        try:
+            resp = self.next.append_data(last, blob)
+        except:
+            resp = Response.Internal(
+                'RouterTransaction._append_blob_upstream exception')
+
+        logging.info('RouterTransaction._append_blob_upstream done %s %s',
+                     last, resp)
+        return resp
 
     def append_blob_upstream(self,
                              last : bool,
                              blob : Blob) -> Response:
-        logging.info('RouterTransaction.append_blob_upstream %s %d',
-                     last, blob.len())
-
-        resp = None
-        try:
-            resp = self.next.append_data(last, blob)
-        except:
-            resp = Response.Internal('RouterTransaction.append_data exception')
-
-        logging.info('RouterTransaction.append_blob_upstream done %s %s',
-                     last, resp)
+        resp = self._append_blob_upstream(last, blob)
 
         final_resp = None
         if last and resp.ok():
