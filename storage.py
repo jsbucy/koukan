@@ -1,5 +1,6 @@
 from typing import Optional
 
+from blob import Blob, InlineBlob
 from threading import Lock
 
 import sqlite3
@@ -103,9 +104,10 @@ class TransactionWriter:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
-                'UPDATE Transactions SET last_update = ?, status = ? '
+                'UPDATE Transactions '
+                'SET last_update = ?, status = ?, length = ? '
                 'WHERE id = ?',
-                (int(time.time()), self.initial_status, self.id))
+                (int(time.time()), self.initial_status, self.offset, self.id))
             self.parent.db.commit()
         return True
 
@@ -115,16 +117,17 @@ class TransactionReader:
         self.parent = storage
         self.offset = 0
         self.blob_reader = None
+        self.length = None
 
     def start(self, id):
         self.id = id
         cursor = self.parent.db.cursor()
-        cursor.execute('SELECT creation,json FROM Transactions '
+        cursor.execute('SELECT creation,json,length FROM Transactions '
                        'WHERE id = ? AND last_update IS NOT NULL',
                        (id, ))
         row = cursor.fetchone()
         if not row: return False
-        (self.creation, json_str) = row
+        (self.creation, json_str, self.length) = row
         trans_json = json.loads(json_str)
         self.local_host = trans_json['local_host']
         self.remote_host = trans_json['remote_host']
@@ -135,29 +138,19 @@ class TransactionReader:
         self.host = trans_json['host']
         return True
 
-    def read_content(self) -> Optional[bytes]:
-        while True:
-            if self.blob_reader:
-                content = self.blob_reader.read_content()
-                if content:
-                    self.offset += len(content)
-                    return content
-
-            cursor = self.parent.db.cursor()
-            cursor.execute('SELECT inline,blob_id FROM TransactionContent '
-                           'WHERE transaction_id = ? AND offset = ?',
-                           (self.id, self.offset))
-            row = cursor.fetchone()
-            if not row: return None
-            (inline, blob_id) = row
-            if inline:
-                self.offset += len(inline)
-                return inline
-            if blob_id:
-                self.blob_reader = self.parent.get_blob_reader()
-                # XXX err
-                assert(self.blob_reader.start(blob_id) is not None)
-
+    def read_content(self, offset) -> Blob:
+        cursor = self.parent.db.cursor()
+        cursor.execute('SELECT inline,blob_id FROM TransactionContent '
+                       'WHERE transaction_id = ? AND offset = ?',
+                       (self.id, offset))
+        row = cursor.fetchone()
+        if not row: return None
+        (inline, blob_id) = row
+        if inline:
+            return InlineBlob(inline)
+        r = self.parent.get_blob_reader()
+        r.start(blob_id)
+        return r
 
 class BlobWriter:
     def __init__(self, storage):
@@ -201,11 +194,14 @@ class BlobWriter:
         return True
 
 
-class BlobReader:
+class BlobReader(Blob):
     def __init__(self, storage):
         self.parent = storage
         self.blob_id = None
-        self.offset = 0
+        self.length = None
+
+    def len(self): return self.length
+    # XXX Blob.id?
 
     def start(self, id):
         self.blob_id = id
@@ -216,22 +212,24 @@ class BlobReader:
         row = cursor.fetchone()
         if not row:
             return None
-        return row[0]
+        self.length = row[0]
+        return self.length
 
-
-    def read_content(self) -> Optional[bytes]:
+    def read_content(self, offset) -> Optional[bytes]:
         cursor = self.parent.db.cursor()
         cursor.execute('SELECT content FROM BlobContent '
                        'WHERE id = ? AND offset = ?',
-                       (self.blob_id, self.offset))
+                       (self.blob_id, offset))
         row = cursor.fetchone()
-        if not row:
-            self.blob_id = None
-            return None
-        (content,) = row
-        self.offset += len(content)
-        return content
+        if not row: return None
+        return row[0]
 
+    def contents(self):
+        dd = bytes()
+        while len(dd) < self.length:
+            dd += self.read_content(len(dd))
+        assert(len(dd) == self.length)
+        return dd
 
 class Storage:
     def __init__(self):

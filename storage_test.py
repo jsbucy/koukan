@@ -11,7 +11,9 @@ class StorageTest(unittest.TestCase):
 
     def test_basic(self):
         writer = self.s.get_transaction_writer()
-        writer.start('local_host', 'remote_host', 'alice', None, 'bob', None, 'host', Status.WAITING)
+        writer.start('local_host', 'remote_host',
+                     'alice', None,
+                     'bob', None, 'host', Status.WAITING)
         writer.append_data(b'abc')
         writer.append_data(b'xyz')
         self.assertEqual(writer.append_blob('blob_id'),
@@ -31,17 +33,19 @@ class StorageTest(unittest.TestCase):
 
         reader = self.s.load_one()
         self.assertEqual(reader.id, writer.id)
+        self.assertEqual(reader.length, writer.offset)
         expected_content = [
             b'abc',
             b'xyz',
-            b'blob1',
-            b'blob2',
+            b'blob1blob2',
             b'qrs'
         ]
+        offset = 0
         for i,c in enumerate(expected_content):
-            d = reader.read_content()
-            self.assertIsNotNone(d)
-            self.assertEqual(c, d)
+            blob = reader.read_content(offset)
+            self.assertIsNotNone(blob)
+            self.assertEqual(c, blob.contents())
+            offset += blob.len()
 
         self.assertIsNone(self.s.load_one())
 

@@ -10,6 +10,7 @@ CREATE TABLE Transactions (
 
   status int,  -- 0: waiting, 1: inflight, 2: done
   pid int,  -- if status == inflight
+  length int,
 
   creation int,
   last_update int  -- unix secs, null until finalized

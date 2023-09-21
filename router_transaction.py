@@ -113,20 +113,12 @@ class RouterTransaction:
             logging.info("RouterTransaction.load start resp %s %s",
                          reader.id, resp)
             if resp.ok():
-                dd = []
-                last = False
-                while not last:
-                    while len(dd) < 2:
-                        d = reader.read_content()
-                        if not d: break
-                        dd.append(d)
-                    if not dd:
-                        break
-                    d = dd.pop(0)
-                    last = (len(dd) == 0)
-                    # XXX db blob reader is-a Blob
-                    resp = self._append_blob_upstream(
-                        last=last, blob=InlineBlob(d))
+                offset = 0
+                while offset < reader.length:
+                    blob = reader.read_content(offset)
+                    offset += blob.len()
+                    last = offset == reader.length
+                    resp = self._append_blob_upstream(last=last, blob=blob)
                     if resp.err(): break
         except:
             resp = Response.Internal('RouterTransaction.load exception')
@@ -303,6 +295,7 @@ class RouterTransaction:
 
     def set_durable(self):
         # XXX should this noop if the upstream transaction already succeeded?
+        # skip persisting the payload so you can still query the status?
         logging.info('RouterTransaction.set_durable')
         assert(self.have_last_blob)
 
@@ -313,7 +306,8 @@ class RouterTransaction:
         if self.next_final_resp:
             status = Status.DONE
         with self.lock:
-            if self.have_last_blob and self.upstream_append_inflight: status = Status.INFLIGHT
+            if self.have_last_blob and self.upstream_append_inflight:
+                status = Status.INFLIGHT
 
         if not transaction_writer.start(
             self.local_host, self.remote_host,
