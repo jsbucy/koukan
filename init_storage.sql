@@ -2,6 +2,13 @@ PRAGMA foreign_keys = ON;  -- XXX on every connection
 PRAGMA journal_mode=WAL;
 PRAGMA auto_vacuum=2;  -- incremental
 
+CREATE TABLE Sessions (
+  id INTEGER PRIMARY KEY,
+  pid int,
+  pid_create int,
+  UNIQUE(pid, pid_create)
+);
+
 -- XXX this should probably be named something like SendRequests instead?
 CREATE TABLE Transactions (
   id INTEGER PRIMARY KEY,  -- autoincrement?
@@ -9,11 +16,16 @@ CREATE TABLE Transactions (
   json text,
 
   status int,  -- 0: waiting, 1: inflight, 2: done
-  pid int,  -- if status == inflight
   length int,
 
+  inflight_session_id int,
+
   creation int,
-  last_update int  -- unix secs, null until finalized
+  last_update int,  -- unix secs, null until finalized
+
+  FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
+    ON UPDATE CASCADE  -- xxx moot?
+    ON DELETE SET NULL
 );
 
 CREATE TABLE TransactionContent (

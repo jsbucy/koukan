@@ -2,10 +2,12 @@
 from storage import Storage, Action, Status
 
 import unittest
+import logging
 
 class StorageTest(unittest.TestCase):
 
     def setUp(self):
+        logging.basicConfig(level=logging.DEBUG)
         self.s = Storage()
         self.s.connect(db=Storage.get_inmemory_for_test())
 
@@ -58,8 +60,14 @@ class StorageTest(unittest.TestCase):
 
         self.assertIsNone(self.s.load_one())
 
-# for l in s.db.iterdump():
-#     print(l)
+    def test_recovery(self):
+        with open('storage_test_recovery.sql', 'r') as f:
+            self.s.db.cursor().executescript(f.read())
+        self.s.recover()
+        for l in self.s.db.iterdump():
+            print(l)
+        reader = self.s.load_one()
+        self.assertEqual(reader.id, 1)
 
 
 if __name__ == '__main__':

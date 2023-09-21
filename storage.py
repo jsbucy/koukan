@@ -3,9 +3,13 @@ from typing import Optional
 from blob import Blob, InlineBlob
 from threading import Lock
 
+import psutil
+
 import sqlite3
 import json
 import time
+
+import logging
 
 class Status:
     INSERT = 0  # uncommitted
@@ -15,7 +19,8 @@ class Status:
 
 class Action:
     INSERT = 0
-    LOAD = 1
+    LOAD = 1  # WAITING -> INFLIGHT
+    RECOVER = 5  # INFLIGHT w/stale session -> WAITING
     DELIVERED = 2
     TEMP_FAIL = 3
     PERM_FAIL = 4
@@ -44,10 +49,13 @@ class TransactionWriter:
         }
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            cursor.execute('INSERT INTO Transactions (json, creation, status) '
-                           'VALUES (?, ?, ?)',
-                           (json.dumps(trans_json), int(time.time()),
-                            Status.INSERT))
+            session_id = self.session_id if status == Status.INFLIGHT else None
+            cursor.execute(
+                'INSERT INTO Transactions '
+                '  (inflight_session_id, json, creation, status) '
+                'VALUES (?, ?, ?, ?)',
+                (session_id, json.dumps(trans_json), int(time.time()),
+                 Status.INSERT))
             self.id = cursor.lastrowid
             cursor.execute(
                 'INSERT INTO TransactionActions '
@@ -129,13 +137,10 @@ class TransactionReader:
         if not row: return False
         (self.creation, json_str, self.length) = row
         trans_json = json.loads(json_str)
-        self.local_host = trans_json['local_host']
-        self.remote_host = trans_json['remote_host']
-        self.mail_from = trans_json['mail_from']
-        self.transaction_esmtp = trans_json['transaction_esmtp']
-        self.rcpt_to = trans_json['rcpt_to']
-        self.rcpt_esmtp = trans_json['rcpt_esmtp']
-        self.host = trans_json['host']
+        for a in ['local_host', 'remote_host', 'mail_from', 'transaction_esmtp',
+                  'rcpt_to', 'rcpt_esmtp', 'host']:
+            self.__setattr__(a, trans_json.get(a, None))
+
         return True
 
     def read_content(self, offset) -> Blob:
@@ -245,9 +250,6 @@ class Storage:
     def open_db(filename):
         return sqlite3.connect(filename, check_same_thread=False)
 
-    # TODO lease breaking
-    # set inflight back to waiting if pid invalid, etc.
-
     def connect(self, filename=None, db=None):
         if db:
             self.db = db
@@ -263,6 +265,61 @@ class Storage:
         # NORMAL=1 not durable after power loss
         cursor.execute("PRAGMA synchronous=2")
         cursor.execute("PRAGMA auto_vacuum=2")
+
+        # for the moment, we only evict sessions that the pid no
+        # longer exists but as this evolves, we might also
+        # periodically check that our own session hasn't been evicted
+        proc_self = psutil.Process()
+        cursor.execute('INSERT INTO Sessions (pid, pid_create) VALUES (?,?)',
+                       (proc_self.pid, int(proc_self.create_time())))
+        self.db.commit()
+        self.session_id = cursor.lastrowid
+        self.recover()
+
+    def recover(self):
+        cursor = self.db.cursor()
+        cursor.execute('SELECT id, pid, pid_create FROM Sessions')
+        for row in cursor:
+            (id, pid, pid_create) = row
+            if not Storage.check_pid(pid, pid_create):
+                logging.info('deleting stale session %s %s %s',
+                             id, pid, pid_create)
+                cursor.execute('DELETE FROM Sessions WHERE id = ?', (id,))
+                self.db.commit()
+
+        logging.info('recover transactions')
+        cursor.execute('SELECT id FROM Transactions '
+                       'WHERE status = ? AND inflight_session_id is NULL',
+                       (Status.INFLIGHT,))
+
+        recovered = 0
+        for row in cursor:
+            (id,) = row
+            logging.debug('Storage.recover orphaned transaction %d', id)
+            cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
+                           (id, Status.WAITING))
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES ('
+                '  ?,'
+                '  (SELECT MAX(action_id) FROM TransactionActions '
+                '   WHERE transaction_id = ?) + 1,'
+                '  ?,?)',
+                (id, id, int(time.time()), Action.RECOVER))
+            recovered += 1
+        logging.info('Storage.recover recovered %s transactions', recovered)
+        self.db.commit()
+
+    def check_pid(pid, pid_create):
+        try:
+            proc = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return False
+        if int(proc.create_time()) != pid_create:
+            return False
+        return True
+
 
     def get_transaction_writer(self) -> TransactionWriter:
         return TransactionWriter(self)
@@ -285,27 +342,22 @@ class Storage:
             if not row: return None
             id = row[0]
 
-            cursor.execute('SELECT action_id,action from TransactionActions '
-                           'WHERE transaction_id = ? '
-                           'ORDER BY action_id DESC LIMIT 3',
-                           (id,))
-            action_id = None
-            loads = 0
-            for row in cursor:
-                if action_id is None:
-                    action_id = row[0] + 1
-                    if row[1] == Action.LOAD:
-                        loads += 1
-            if action_id is None: action_id = 0
-            # TODO: if the last n consecutive actions are all loads, this may
-            # be crashing the system -> quarantine
-            cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
-                           (Status.INFLIGHT, id))
+            # TODO: if the last n consecutive actions are all
+            # load/recover, this transaction may be crashing the system ->
+            # quarantine
+            cursor.execute(
+                'UPDATE Transactions SET inflight_session_id = ?, status = ? '
+                'WHERE id = ?',
+                (self.session_id, Status.INFLIGHT, id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
-                'VALUES (?,?,?,?)',
-                (id, action_id, int(time.time()), Action.LOAD))
+                'VALUES ('
+                '  ?,'
+                '  (SELECT MAX(action_id) FROM TransactionActions'
+                '   WHERE transaction_id = ?) + 1,'
+                '  ?,?)',
+                (id, id, int(time.time()), Action.LOAD))
             self.db.commit()
             reader = self.get_transaction_reader()
             assert(reader.start(id))
@@ -315,8 +367,6 @@ class Storage:
     def append_transaction_actions(self, id, action):
         with self.db_write_lock:
             cursor = self.db.cursor()
-            cursor.execute('SELECT MAX(action_id) FROM TransactionActions '
-                           'WHERE transaction_id = ?', (id,))
             # TODO: this should do optimistic concurrency control:
             # make sure that this action_id was our own previous load
             row = cursor.fetchone()
@@ -330,14 +380,19 @@ class Storage:
             elif action == Action.TEMP_FAIL:
                 status = Status.WAITING
             cursor.execute(
-                'UPDATE Transactions SET status = ?, last_update = ? '
+                'UPDATE Transactions '
+                'SET status = ?, last_update = ?, inflight_session_id = NULL '
                 'WHERE id = ?',
                 (status, now, id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
-                'VALUES (?,?,?,?)',
-                (id, action_id, now, action))
+                'VALUES ('
+                '  ?,'
+                '  (SELECT MAX(action_id) FROM TransactionActions '
+                '   WHERE transaction_id = ?) + 1,'
+                '  ?,?)',
+                (id, id, now, action))
             self.db.commit()
 
 # forward path
