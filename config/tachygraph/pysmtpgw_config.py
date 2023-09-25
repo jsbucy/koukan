@@ -15,19 +15,22 @@ TIMEOUT_START=30
 TIMEOUT_DATA=60
 
 class Config:
-    def __init__(self, config):
+    def __init__(self, config, rest_blob_id_map=None):
         self.config = config
+        self.rest_blob_id_map = rest_blob_id_map
 
     def inbound(self):
         aspmx = lambda _: RestEndpoint(
             self.config.get_str('gw_base_url'), http_host='outbound',
             static_remote_host=('aspmx.l.google.com', 25),
-            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA)
+            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA,
+            blob_id_map=self.rest_blob_id_map)
 
         sink = lambda: RestEndpoint(
             self.config.get_str('gw_base_url'), http_host='outbound',
             static_remote_host=('sink.gloop.org', 25),
-            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA)
+            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA,
+            blob_id_map=self.rest_blob_id_map)
 
         sandbox_addrs = AddressPolicy([
             PrefixAddr('bucy', delimiter='+', endpoint_factory=aspmx),
@@ -43,7 +46,8 @@ class Config:
     def outbound(self):
         outbound_mx = lambda: RestEndpoint(
             self.config.get_str('gw_base_url'), http_host='outbound',
-            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA)
+            timeout_start=TIMEOUT_START, timeout_data=TIMEOUT_DATA,
+            blob_id_map=self.rest_blob_id_map)
         mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
         next = mx_resolution
 

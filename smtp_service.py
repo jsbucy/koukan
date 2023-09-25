@@ -10,8 +10,8 @@ from functools import partial
 
 from blob import InlineBlob
 
-from typing import Optional
-from typing import Tuple
+from typing import Optional, List, Tuple
+
 
 from response import ok_resp, to_smtp_resp
 
@@ -30,7 +30,7 @@ class SmtpHandler:
         self.msa = msa
         self.max_rcpt = max_rcpt
 
-    # XXX the Endpoint stack is sync, this should spawn threads?
+        self.next_blob_id = 0
 
     async def handle_RSET(self, server, session, envelope):
         envelope.transactions = []
@@ -46,7 +46,7 @@ class SmtpHandler:
         return b'250 MAIL ok'
 
 
-    def start(rresp, trans, local, remote,
+    def start(self, rresp : List[Optional[Response]], trans, local, remote,
               mail_from, transaction_esmtp,
               rcpt, rcpt_esmtp):
         logging.info('SmtpHandler.start')
@@ -62,9 +62,9 @@ class SmtpHandler:
         transaction = self.endpoint_factory()
         start_time = time.monotonic()
 
-        rresp = [None]
-        fut = self.loop.run_in_executor(
-            None, lambda: SmtpHandler.start(rresp, transaction,
+        rresp : List[Optional[Response]] = [None]
+        fut = server.loop.run_in_executor(
+            None, lambda: self.start(rresp, transaction,
                 None, None,
                 envelope.mail_from, envelope.mail_options,
                 address, rcpt_options))
@@ -98,14 +98,19 @@ class SmtpHandler:
 
         return '250 RCPT ok'
 
-    def append_data(resp, i, trans, last, blob, mx_multi_rcpt):
+    def append_data(self, resp, i, trans, last, blob, mx_multi_rcpt):
         logging.info('SmtpHandler.append_data %d last=%s len=%d',
                      i, last, blob.len())
         resp[i] = trans.append_data(last, blob, mx_multi_rcpt=mx_multi_rcpt)
         logging.info('SmtpHandler.append_data %d %s', i, resp[i])
 
-    def set_durable(rresp, i, trans):
+    def set_durable(self, rresp, i, trans):
         rresp[i] = trans.set_durable()
+
+    def get_blob_id(self):
+        id = 'gw_blob_%d' % self.next_blob_id
+        self.next_blob_id += 1
+        return id
 
     async def handle_DATA(self, server, session, envelope):
         # framework enforces this
@@ -113,7 +118,7 @@ class SmtpHandler:
 
         sstatus = [ None ] * len(envelope.transactions)
 
-        blob = InlineBlob(envelope.content)
+        blob = InlineBlob(envelope.content, id=self.get_blob_id())
 
         mx_multi_rcpt = (not self.msa) and (len(envelope.transactions) > 1)
 
@@ -121,9 +126,9 @@ class SmtpHandler:
         futures = []
         for i,t in enumerate(envelope.transactions):
             logging.info('SmtpHandler.handle_DATA dispatch append %d', i)
-            futures.append(self.loop.run_in_executor(
+            futures.append(server.loop.run_in_executor(
                 None, partial(
-                    lambda i, t: SmtpHandler.append_data(
+                    lambda i, t: self.append_data(
                         sstatus, i, t, last=True, blob=blob,
                         mx_multi_rcpt=mx_multi_rcpt),
                     i, t)))
@@ -160,6 +165,7 @@ class SmtpHandler:
         if self.msa:
             if not envelope.msa_async:
                 if same_major == 2 or same_major == 5:
+                    assert(s0 is not None)
                     return s0.to_smtp_resp()
         else:  # mx
             if same_major is not None:
@@ -168,9 +174,9 @@ class SmtpHandler:
         rresp = [None] * len(envelope.transactions)
         futures = []
         for i,t in enumerate(envelope.transactions):
-            futures.append(self.loop.run_in_executor(
+            futures.append(server.loop.run_in_executor(
                 None, partial(lambda i, t:
-                              SmtpHandler.set_durable(rresp, i, t), i, t)))
+                              self.set_durable(rresp, i, t), i, t)))
         #done, pending =
         await asyncio.wait(
             futures, timeout=5, return_when=asyncio.ALL_COMPLETED)

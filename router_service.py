@@ -10,7 +10,7 @@ from blob import InlineBlob
 from local_domain_policy import LocalDomainPolicy
 from dest_domain_policy import DestDomainPolicy
 from router import Router
-from rest_endpoint import RestEndpoint
+from rest_endpoint import RestEndpoint, BlobIdMap as RestBlobIdMap
 from dkim_endpoint import DkimEndpoint
 
 from router_transaction import RouterTransaction, BlobIdMap
@@ -30,7 +30,7 @@ from executor import Executor
 
 import json
 
-import pysmtpgw_config
+from pysmtpgw_config import Config as Wiring
 
 class Config:
     def __init__(self, filename=None):
@@ -56,15 +56,17 @@ class Service:
         self.blob_id_map = BlobIdMap()
         self.storage = Storage()
         self.blobs = None
-        # -> Endpoint, msa?
-        self.endpoints : Dict[str,Tuple[Any, bool]] = {}
+
         self.config = None
         self.wiring = None
+
+        self.rest_blob_id_map = RestBlobIdMap()
 
     def main(self):
         self.config = Config(filename=sys.argv[1])
 
-        self.wiring = pysmtpgw_config.Config(self.config)
+        self.wiring = Wiring(self.config,
+                             rest_blob_id_map=self.rest_blob_id_map)
 
         db_filename = self.config.get_str('db_filename')
         if not db_filename:

@@ -2,10 +2,11 @@ import requests
 import time
 
 from werkzeug.datastructures import ContentRange
-
 import werkzeug.http
 
 from typing import Tuple, Optional
+
+from threading import Lock, Condition
 
 from response import Response, Esmtp
 
@@ -26,22 +27,52 @@ def get_resp_json(resp):
     except Exception:
         return None
 
+# TODO dedupe with implementation in RouterTransaction?
+class BlobIdMap:
+    def __init__(self):
+        self.map = {}
+        self.lock = Lock()
+        self.cv = Condition(self.lock)
+
+    def lookup_or_insert(self, host, blob_id):
+        key = (host, blob_id)
+        with self.lock:
+            if key not in self.map:
+                logging.info('BlobIdMap.lookup_or_insert inserted %s %s',
+                             host, blob_id)
+                self.map[key] = None
+                return None
+            logging.info('BlobIdMap.lookup_or_insert waiting for %s %s',
+                         host, blob_id)
+            self.cv.wait_for(lambda: self.map[key] is not None)
+            return self.map[key]
+
+    def finalize(self, host, blob_id, ext_blob_id):
+        key = (host, blob_id)
+        with self.lock:
+            self.map[key] = ext_blob_id
+            self.cv.notify_all()
+
 class RestEndpoint:
     start_resp : Optional[Response] = None
     final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
+    blob_id_map : BlobIdMap = None
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
-    def __init__(self, base_url, http_host, static_remote_host=None,
+    def __init__(self,
+                 base_url, http_host, static_remote_host=None,
                  timeout_start=TIMEOUT_START,
-                 timeout_data=TIMEOUT_DATA):
+                 timeout_data=TIMEOUT_DATA,
+                 blob_id_map = None):
         self.base_url = base_url
         self.http_host = http_host
         self.static_remote_host = static_remote_host
         self.chunk_id = 0
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
+        self.blob_id_map = blob_id_map
 
     def start(self,
               local_host, remote_host,
@@ -105,16 +136,10 @@ class RestEndpoint:
                 if not last: return Response()
                 return self.get_status(self.timeout_data)
 
-        # xxx internal -> external blob id map
-
-        # TODO at a minimum, this needs to wait if start transaction
-        # is inflight to get the url, etc.
-
-        # TODO inflight waiter list thing on this: if we get an
-        # internal blob id and we have another inflight request for
-        # the same one, wait for that to share the upstream blob id
-        # we have basically the same thing in the router transaction
-        # -> storage code
+        ext_id = None
+        if blob.id() and self.blob_id_map:
+            ext_id = self.blob_id_map.lookup_or_insert(self.base_url, blob.id())
+            req_json['uri'] = ext_id
 
         rest_resp = requests.post(self.transaction_url + '/appendData',
                                   json=req_json,
@@ -129,24 +154,34 @@ class RestEndpoint:
 
             return Response(400, 'RestEndpoint.append_data POST failed')
 
-        if 'uri' not in resp_json:
+        if 'uri' not in req_json and 'uri' not in resp_json:
             return Response(400, 'RestEndpoint.append_data endpoint didn\'t'
                             ' return uri')
 
-        uri = resp_json['uri']
-        logging.info('RestEndpoint.append_data via uri %s', uri)
+        if 'uri' not in resp_json:
+            logging.info('RestEndpoint.append_data reused blob %s -> %s',
+                         blob.id(), ext_id)
+        else:
+            # i.e. we didn't already have ext_id or server didn't accept
+            uri = resp_json['uri']
+            logging.info('RestEndpoint.append_data via uri %s', uri)
 
-        offset = 0
-        while offset < blob.len():
-            resp,offset = self.append_data_chunk(
-                uri, offset=offset,
-                d=blob.contents()[offset:offset+CHUNK_SIZE], last=True)
-            if resp.err():
-                self.final_status = (
-                    Response(400, 'RestEndpoint.append_data blob put error'))
-                return resp
+            offset = 0
+            while offset < blob.len():
+                resp,offset = self.append_data_chunk(
+                    uri, offset=offset,
+                    d=blob.contents()[offset:offset+CHUNK_SIZE], last=True)
+                if resp.err():
+                    self.final_status = (
+                        Response(400,
+                                 'RestEndpoint.append_data blob put error'))
+                    return resp
+            logging.info('RestEndpoint.append_data %s %d %s',
+                         last, offset, resp)
+            if blob.id() and self.blob_id_map:
+                self.blob_id_map.finalize(
+                    self.base_url, blob.id(), resp_json['uri'])
 
-        logging.info('RestEndpoint.append_data %s %d %s', last, offset, resp)
         if not last: return resp
         return self.get_status(self.timeout_data)
 

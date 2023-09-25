@@ -206,7 +206,9 @@ class BlobReader(Blob):
         self.length = None
 
     def len(self): return self.length
-    # XXX Blob.id?
+
+    def id(self):
+        return 'storage_%s' % self.blob_id
 
     def start(self, id):
         self.blob_id = id

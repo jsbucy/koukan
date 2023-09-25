@@ -11,15 +11,18 @@ from mx_resolution_endpoint import MxResolutionEndpoint
 import logging
 
 class Config:
-    def __init__(self, config):
+    def __init__(self, config, rest_blob_id_map=None):
         self.config = config
+        self.rest_blob_id_map = rest_blob_id_map
 
     def inbound(self):
         # AddressPolicy passes the rcpt to the endpoint factory
 
         outbound_host = lambda: RestEndpoint(
             self.config.get_str('gw_base_url'), http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025))  #'aspmx.l.google.com')
+            static_remote_host=('127.0.0.1', 3025),
+            blob_id_map=self.rest_blob_id_map)
+
 
         local_domains = LocalDomainPolicy({'d': outbound_host})
         return Router(local_domains), False
@@ -28,7 +31,8 @@ class Config:
         ### outbound
         outbound_mx = lambda: RestEndpoint(
             self.config.get_str('gw_base_url'), http_host='outbound',
-            static_remote_host=('127.0.0.1', 3025))
+            static_remote_host=('127.0.0.1', 3025),
+            blob_id_map=self.rest_blob_id_map)
         mx_resolution = lambda: MxResolutionEndpoint(outbound_mx)
         next = mx_resolution
 

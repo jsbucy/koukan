@@ -1,6 +1,6 @@
 import sys
 
-from rest_endpoint import RestEndpoint
+from rest_endpoint import RestEndpoint, BlobIdMap
 from smtp_endpoint import SmtpEndpoint
 
 from executor import Executor
@@ -23,10 +23,13 @@ listen_host = sys.argv[9]
 
 ### smtp -> rest
 
+blob_id_map = BlobIdMap()
+
 router_base_url = 'http://localhost:%d/' % router_port
 
 inbound_gw_factory = (
-    lambda: RestEndpoint(router_base_url, http_host='inbound-gw'))
+    lambda: RestEndpoint(router_base_url, http_host='inbound-gw',
+                         blob_id_map=blob_id_map))
 
 service(inbound_gw_factory, port=mx_port,
         cert=cert, key=key,

@@ -14,6 +14,7 @@ import time
 
 import logging
 
+# TODO dedupe w/RestEndpoint impl of this?
 class BlobIdMap:
     def __init__(self):
         self.id_map = {}
