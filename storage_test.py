@@ -12,10 +12,12 @@ class StorageTest(unittest.TestCase):
         self.s.connect(db=Storage.get_inmemory_for_test())
 
     def test_basic(self):
-        writer = self.s.get_transaction_writer()
-        writer.start('local_host', 'remote_host',
-                     'alice', None,
-                     'bob', None, 'host', Status.WAITING)
+        writer = self.s.get_transaction_cursor()
+        writer.create('xyz')
+        writer.write_envelope(
+            'local_host', 'remote_host',
+            'alice', None,
+            'bob', None, 'host')
         writer.append_data(b'abc')
         writer.append_data(b'xyz')
         self.assertEqual(writer.append_blob('blob_id'),
@@ -31,9 +33,14 @@ class StorageTest(unittest.TestCase):
                          writer.APPEND_BLOB_OK)
         writer.append_data(b'qrs')
 
-        self.assertTrue(writer.finalize())
+        self.assertTrue(writer.finalize_payload(Status.WAITING))
+        writer.append_action(Action.TEMP_FAIL)
+
+        for l in self.s.db.iterdump():
+            print(l)
 
         reader = self.s.load_one()
+        self.assertIsNotNone(reader)
         self.assertEqual(reader.id, writer.id)
         self.assertEqual(reader.length, writer.offset)
         expected_content = [
@@ -44,6 +51,7 @@ class StorageTest(unittest.TestCase):
         ]
         offset = 0
         for i,c in enumerate(expected_content):
+            logging.info('%d', offset)
             blob = reader.read_content(offset)
             self.assertIsNotNone(blob)
             self.assertEqual(c, blob.contents())
@@ -51,12 +59,13 @@ class StorageTest(unittest.TestCase):
 
         self.assertIsNone(self.s.load_one())
 
-        self.s.append_transaction_actions(reader.id, Action.TEMP_FAIL)
+        reader.append_action(Action.TEMP_FAIL)
 
         r2 = self.s.load_one()
+        self.assertIsNotNone(r2)
         self.assertEqual(r2.id, writer.id)
 
-        self.s.append_transaction_actions(r2.id, Action.DELIVERED)
+        r2.append_action(Action.DELIVERED)
 
         self.assertIsNone(self.s.load_one())
 
@@ -67,7 +76,25 @@ class StorageTest(unittest.TestCase):
         for l in self.s.db.iterdump():
             print(l)
         reader = self.s.load_one()
-        self.assertEqual(reader.id, 1)
+        self.assertIsNotNone(reader)
+        self.assertEqual(reader.id, 12345)
+        self.assertEqual(reader.mail_from, 'alice@example.com')
+
+    def test_non_durable(self):
+        writer = self.s.get_transaction_cursor()
+        writer.create('xyz')
+        writer.write_envelope(
+            'local_host', 'remote_host',
+            'alice', None,
+            'bob', None, 'host')
+        writer.append_action(Action.TEMP_FAIL)
+
+        reader = self.s.get_transaction_cursor()
+        self.assertTrue(reader.load(writer.id))
+        self.assertEqual(reader.status, Status.ONESHOT_DONE)
+
+        reader = self.s.load_one()
+        self.assertIsNone(reader)
 
 
 if __name__ == '__main__':

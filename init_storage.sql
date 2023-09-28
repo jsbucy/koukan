@@ -12,10 +12,12 @@ CREATE TABLE Sessions (
 -- XXX this should probably be named something like SendRequests instead?
 CREATE TABLE Transactions (
   id INTEGER PRIMARY KEY,  -- autoincrement?
+  rest_id text UNIQUE,
+
   -- tag/queue/service/host
   json text,
 
-  status int,  -- 0: waiting, 1: inflight, 2: done
+  status int,
   length int,
 
   inflight_session_id int,
@@ -27,6 +29,8 @@ CREATE TABLE Transactions (
     ON UPDATE CASCADE  -- xxx moot?
     ON DELETE SET NULL
 );
+
+CREATE INDEX TxRestId on Transactions (rest_id);
 
 CREATE TABLE TransactionContent (
   transaction_id int,
@@ -78,7 +82,11 @@ gc:
 step 1:  delete expired transactions
 DELETE FROM Transactions WHERE now - last_update > ttl
 step 2: delete blobs
-DELETE FROM BlobFiles WHERE id in (SELECT id from Blob LEFT JOIN (SELECT DISTINCT blob_id as trans_blob_id FROM TransactionContent)
+DELETE FROM Blob WHERE id in (
+SELECT id from Blob LEFT JOIN (SELECT DISTINCT blob_id as trans_blob_id FROM TransactionContent)
 WHERE trans_blob_id = NULL);
+
+also drop old INSERT status, etc.
+
 PRAGMA incremental_vacuum;
 */

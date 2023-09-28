@@ -53,6 +53,7 @@ class Transaction:
         self.endpoint, self.msa = self.endpoints(http_host)
         if not self.endpoint:
             return Response(status=404, response=['unknown host'])
+        self.id = self.endpoint.generate_rest_id()
 
         self.local_host = req_json.get('local_host', None)
         self.remote_host = req_json.get('remote_host', None)
@@ -85,7 +86,6 @@ class Transaction:
         return jsonify(json_out)
 
     def start(self):
-        # xxx sync in gateway/SmtpEndpoint, async in router
         self.start_resp = self.endpoint.start(
             self.local_host, self.remote_host,
             self.mail_from, self.transaction_esmtp,
@@ -205,22 +205,16 @@ class Transaction:
 
 # TODO need some integration with storage so these IDs can be stable
 class RestResources:
-    # real implementation uses secrets.token_urlsafe()
-    next_id = 0
-
     # current transaction id on each endpoint
     transaction : Dict[str, Transaction] = {}
 
-    def add_transaction(self, t : Transaction) -> str:
-        id = "t%d" % self.next_id
-        self.next_id += 1
-        t.id = id
-        self.transaction[id] = t
-        return id
+    def add_transaction(self, t : Transaction):
+        # XXX locking?
+        assert(t.id not in self.transaction)
+        self.transaction[t.id] = t
 
     def get_transaction(self, id : str) -> Optional[Transaction]:
-        return self.transaction[id] if id in self.transaction else None
-
+        return self.transaction.get(id, None)
 
 def create_app(
         endpoints : Callable[[str], Tuple[Any, bool]],  # endpoint, msa

@@ -16,6 +16,7 @@ class Status:
     WAITING = 1
     INFLIGHT = 2
     DONE = 3
+    ONESHOT_DONE = 4
 
 class Action:
     INSERT = 0
@@ -25,19 +26,64 @@ class Action:
     TEMP_FAIL = 3
     PERM_FAIL = 4
 
-class TransactionWriter:
-    initial_status = None
+# TransactionCursor:
+# sync success/permfail (single mx temp) -> oneshot
+#   create
+#   write envelope
+#   append action(resp)
+#     status ONESHOT_DONE
+#     action DELIVERED | PERM_FAIL
+
+# durable (msa tempfail, multi-mx mixed)
+#   create
+#   write envelope
+#   append blob
+#   append action
+#     status DONE | WAITING
+#     action DELIVERED | TEMP_FAIL | PERM_FAIL
+
+# retry
+#   load
+#   read blobs
+#   append action
+
+class TransactionCursor:
+    # XXX need a transaction/request object or something
+    FIELDS = ['local_host', 'remote_host', 'mail_from', 'transaction_esmtp',
+              'rcpt_to', 'rcpt_esmtp', 'host']
+    local_host = None
+    remote_host = None
+    mail_from = None
+    transaction_esmtp = None
+    rcpt_to = None
+    rcpt_esmtp = None
+    host = None
+    id = None
+    status = None
+    length = None
+    offset = None
 
     def __init__(self, storage):
         self.parent = storage
         self.id = None
-        self.offset = 0
 
-    def start(self, local_host, remote_host,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp,
-              host, status):
-        self.initial_status = status
+    def create(self, rest_id):
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute(
+                'INSERT INTO Transactions '
+                '  (rest_id, inflight_session_id, creation, status) '
+                'VALUES (?, ?, ?, ?)',
+                (rest_id, self.parent.session_id, int(time.time()),
+                 Status.INSERT))
+            self.parent.db.commit()
+            self.id = cursor.lastrowid
+
+    def write_envelope(self,
+              local_host : str, remote_host : str,
+              mail_from : str, transaction_esmtp,
+              rcpt_to : str, rcpt_esmtp,
+              host : str):
         trans_json = {
             'local_host': local_host,
             'remote_host': remote_host,
@@ -49,14 +95,9 @@ class TransactionWriter:
         }
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            session_id = self.session_id if status == Status.INFLIGHT else None
             cursor.execute(
-                'INSERT INTO Transactions '
-                '  (inflight_session_id, json, creation, status) '
-                'VALUES (?, ?, ?, ?)',
-                (session_id, json.dumps(trans_json), int(time.time()),
-                 Status.INSERT))
-            self.id = cursor.lastrowid
+                'UPDATE Transactions SET json = ? WHERE id = ?',
+                (json.dumps(trans_json), self.id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
@@ -67,6 +108,9 @@ class TransactionWriter:
         return True
 
     def append_data(self, d : bytes):
+        if self.offset is None:
+            self.offset = 0
+
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             # TODO: check max(offset) == self.offset?
@@ -82,19 +126,23 @@ class TransactionWriter:
     APPEND_BLOB_UNKNOWN = 1
 
     def append_blob(self, blob_id : str) -> int:
+        if self.offset is None:
+            self.offset = 0
+
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
                 'SELECT status From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            assert(row is not None and row[0] is Status.INSERT)
+            assert(row is not None and
+                   (row[0] == Status.INSERT or row[0] == Status.ONESHOT_DONE))
 
             cursor.execute(
                 'SELECT length FROM Blob WHERE id = ? AND length IS NOT NULL',
                 (blob_id,))
             row = cursor.fetchone()
-            if not row: return TransactionWriter.APPEND_BLOB_UNKNOWN
+            if not row: return TransactionCursor.APPEND_BLOB_UNKNOWN
             (blob_len,) = row
 
             # TODO: check max(offset) == self.offset?
@@ -104,46 +152,26 @@ class TransactionWriter:
                 'VALUES (?, ?, ?)',
                 (self.id, self.offset, blob_id))
             self.parent.db.commit()
-
         self.offset += blob_len
-        return TransactionWriter.APPEND_BLOB_OK
-
-    def finalize(self):
-        with self.parent.db_write_lock:
-            cursor = self.parent.db.cursor()
-            cursor.execute(
-                'UPDATE Transactions '
-                'SET last_update = ?, status = ?, length = ? '
-                'WHERE id = ?',
-                (int(time.time()), self.initial_status, self.offset, self.id))
-            self.parent.db.commit()
-        return True
+        return TransactionCursor.APPEND_BLOB_OK
 
 
-class TransactionReader:
-    def __init__(self, storage):
-        self.parent = storage
-        self.offset = 0
-        self.blob_reader = None
-        self.length = None
 
-    def start(self, id):
+    def load(self, id : int):
         self.id = id
         cursor = self.parent.db.cursor()
-        cursor.execute('SELECT creation,json,length FROM Transactions '
-                       'WHERE id = ? AND last_update IS NOT NULL',
-                       (id, ))
+        cursor.execute('SELECT creation,json,length,status FROM Transactions '
+                       'WHERE id = ?', (id,))
         row = cursor.fetchone()
         if not row: return False
-        (self.creation, json_str, self.length) = row
+        (self.creation, json_str, self.length, self.status) = row
         trans_json = json.loads(json_str)
-        for a in ['local_host', 'remote_host', 'mail_from', 'transaction_esmtp',
-                  'rcpt_to', 'rcpt_esmtp', 'host']:
+        for a in TransactionCursor.FIELDS:
             self.__setattr__(a, trans_json.get(a, None))
 
         return True
 
-    def read_content(self, offset) -> Blob:
+    def read_content(self, offset) -> Optional[Blob]:
         cursor = self.parent.db.cursor()
         cursor.execute('SELECT inline,blob_id FROM TransactionContent '
                        'WHERE transaction_id = ? AND offset = ?',
@@ -156,6 +184,51 @@ class TransactionReader:
         r = self.parent.get_blob_reader()
         r.start(blob_id)
         return r
+
+    def finalize_payload(self, status):
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute(
+                'UPDATE Transactions '
+                'SET last_update = ?, status = ?, length = ? '
+                'WHERE id = ?',
+                (int(time.time()), status, self.offset, self.id))
+            self.parent.db.commit()
+        return True
+
+
+    # appends a TransactionAttempts record and marks Transaction done
+    def append_action(self, action):
+        now = int(time.time())
+        logging.info('TransactionCursor.append_action %d %d %d %s %s',
+                     now, self.id, action, self.offset, self.length)
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            status = None
+
+            if self.offset is None and self.length is None:
+                status = Status.ONESHOT_DONE
+            elif action == Action.DELIVERED or action == Action.PERM_FAIL:
+                status = Status.DONE
+            elif action == Action.TEMP_FAIL:
+                status = Status.WAITING
+            cursor.execute(
+                'UPDATE Transactions '
+                'SET status = ?, last_update = ?, '
+                '  inflight_session_id = NULL '
+                'WHERE id = ?',
+                (status, now, self.id))
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES ('
+                '  ?,'
+                '  (SELECT MAX(action_id) FROM TransactionActions '
+                '   WHERE transaction_id = ?) + 1,'
+                '  ?,?)',
+                (self.id, self.id, now, action))
+            self.parent.db.commit()
+
 
 class BlobWriter:
     def __init__(self, storage):
@@ -239,6 +312,8 @@ class BlobReader(Blob):
         return dd
 
 class Storage:
+    session_id = None
+
     def __init__(self):
         self.db = None
         self.db_write_lock = Lock()
@@ -249,7 +324,8 @@ class Storage:
             db.cursor().executescript(f.read())
             return db
 
-    def open_db(filename):
+    @staticmethod
+    def open_db(filename : str):
         return sqlite3.connect(filename, check_same_thread=False)
 
     def connect(self, filename=None, db=None):
@@ -297,9 +373,9 @@ class Storage:
         recovered = 0
         for row in cursor:
             (id,) = row
-            logging.debug('Storage.recover orphaned transaction %d', id)
+            logging.info('Storage.recover orphaned transaction %d', id)
             cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
-                           (id, Status.WAITING))
+                           (Status.WAITING, id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
@@ -313,6 +389,9 @@ class Storage:
         logging.info('Storage.recover recovered %s transactions', recovered)
         self.db.commit()
 
+        # could probably DELETE FROM Transactions WHERE status = Status.INSERT
+
+    @staticmethod
     def check_pid(pid, pid_create):
         try:
             proc = psutil.Process(pid)
@@ -322,26 +401,24 @@ class Storage:
             return False
         return True
 
-
-    def get_transaction_writer(self) -> TransactionWriter:
-        return TransactionWriter(self)
-
     def get_blob_writer(self) -> BlobWriter:
         return BlobWriter(self)
     def get_blob_reader(self) -> BlobReader:
         return BlobReader(self)
 
-    def get_transaction_reader(self) -> TransactionReader:
-        return TransactionReader(self)
+    def get_transaction_cursor(self) -> TransactionCursor:
+        return TransactionCursor(self)
 
-    def load_one(self):
+    def load_one(self, min_age=0):
         with self.db_write_lock:
             cursor = self.db.cursor()
+            max_recent = int(time.time()) - min_age
             cursor.execute('SELECT id from Transactions WHERE status = ?'
-                           ' AND last_update IS NOT NULL LIMIT 1',
-                           (Status.WAITING,))
+                           ' AND last_update <= ? LIMIT 1',
+                           (Status.WAITING, max_recent))
             row = cursor.fetchone()
-            if not row: return None
+            if not row:
+                return None
             id = row[0]
 
             # TODO: if the last n consecutive actions are all
@@ -361,41 +438,10 @@ class Storage:
                 '  ?,?)',
                 (id, id, int(time.time()), Action.LOAD))
             self.db.commit()
-            reader = self.get_transaction_reader()
-            assert(reader.start(id))
-            return reader
+            tx = self.get_transaction_cursor()
+            assert(tx.load(id))
+            return tx
 
-    # appends a TransactionAttempts record and marks Transaction done
-    def append_transaction_actions(self, id, action):
-        with self.db_write_lock:
-            cursor = self.db.cursor()
-            # TODO: this should do optimistic concurrency control:
-            # make sure that this action_id was our own previous load
-            row = cursor.fetchone()
-            action_id = 0
-            if row is not None and row[0] is not None:
-                action_id = row[0] + 1
-            now = int(time.time())
-            status = None
-            if action == Action.DELIVERED or action == Action.PERM_FAIL:
-                status = Status.DONE
-            elif action == Action.TEMP_FAIL:
-                status = Status.WAITING
-            cursor.execute(
-                'UPDATE Transactions '
-                'SET status = ?, last_update = ?, inflight_session_id = NULL '
-                'WHERE id = ?',
-                (status, now, id))
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action) '
-                'VALUES ('
-                '  ?,'
-                '  (SELECT MAX(action_id) FROM TransactionActions '
-                '   WHERE transaction_id = ?) + 1,'
-                '  ?,?)',
-                (id, id, now, action))
-            self.db.commit()
 
 # forward path
 # set_durable() will typically be concurrent with a transaction?

@@ -105,17 +105,18 @@ class Service:
         tag = Tag.MSA if msa else Tag.MX
         return endpoint, tag, msa
 
-    def handle(self, reader):
+    def handle(self, storage_tx):
         # TODO need to wire this into rest service resources
-        transaction, msa = self.get_router_transaction(reader.host)
-        transaction.load(reader)
+        transaction, msa = self.get_router_transaction(storage_tx.host)
+        transaction.load(storage_tx)
 
     def load(self):
         while True:
             logging.info("dequeue")
-            reader = self.storage.load_one()
-            if reader:
-                self.executor.enqueue(Tag.LOAD, lambda: self.handle(reader))
+            storage_tx = self.storage.load_one(min_age=10)
+            if storage_tx:
+                logging.info("dequeued %d", storage_tx.id)
+                self.executor.enqueue(Tag.LOAD, lambda: self.handle(storage_tx))
             else:
                 logging.info("dequeue idle")
                 time.sleep(10)
