@@ -112,7 +112,8 @@ class Transaction:
         assert(isinstance(req_json['chunk_id'], int))
         chunk_id : int = req_json['chunk_id']
         last : bool = req_json['last']
-        mx_multi_rcpt = 'mx_multi_rcpt' in req_json and req_json['mx_multi_rcpt']
+        mx_multi_rcpt = ('mx_multi_rcpt' in req_json and
+                         req_json['mx_multi_rcpt'])
         if self.final_status:
             return jsonify({'final_status': self.final_status.to_json()})
 

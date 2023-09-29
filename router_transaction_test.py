@@ -125,8 +125,8 @@ class RouterTransactionTest(unittest.TestCase):
                   StorageStatus.ONESHOT_DONE,
                   StorageStatus.ONESHOT_DONE)
     def test_msa_fast_temp(self):
-        self.fast(True, False, Response(code=400), None,
-                  StorageStatus.INSERT,
+        self.fast(True, False, Response(code=400), 400,
+                  StorageStatus.ONESHOT_DONE,
                   StorageStatus.WAITING)
     def test_msa_fast_perm(self):
         self.fast(True, False, Response(code=500), 500,

@@ -89,6 +89,7 @@ class SmtpHandler:
                 return resp.to_smtp_resp()
             elif resp.temp():
                 envelope.msa_async = True
+                # '250 msa rcpt upstream temp continue'
         else:  # mx
             if resp.err():
                 return resp.to_smtp_resp()
@@ -105,6 +106,7 @@ class SmtpHandler:
         logging.info('SmtpHandler.append_data %d %s', i, resp[i])
 
     def set_durable(self, rresp, i, trans):
+        logging.info('SmtpHandler.set_durable %d', i)
         rresp[i] = trans.set_durable()
 
     def get_blob_id(self):
@@ -153,6 +155,7 @@ class SmtpHandler:
             for i,s in enumerate(sstatus):
                 if s is None:
                     s = Response(400, 'upstream data timeout')
+                logging.info(s)
                 major = s.code/100
                 if i == 0:
                     s0 = s
@@ -161,7 +164,7 @@ class SmtpHandler:
                     if major != same_major:
                         same_major = None
                 status.append(s)
-
+        logging.info('same_major %s', same_major)
         if self.msa:
             if not envelope.msa_async:
                 if same_major == 2 or same_major == 5:

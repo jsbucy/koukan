@@ -169,17 +169,18 @@ class RouterTransaction:
         return resp
 
     def start_upstream(self):
-        resp = self._start_upstream()
+        start_resp = self._start_upstream()
 
-        start_resp = None
-        if resp is not None and resp.ok():
-           start_resp = resp
-        if self.msa:
-            if resp.perm():
-                start_resp = resp
-        else:  # mx
-            if resp.err():
-                start_resp = resp
+        # TODO cf append_blob_upstream()
+        # start_resp = None
+        # if resp is not None and resp.ok():
+        #    start_resp = resp
+        # if self.msa:
+        #     if resp.perm():
+        #         start_resp = resp
+        # else:  # mx
+        #     if resp.err():
+        #         start_resp = resp
         with self.lock:
             if start_resp: self.next_start_resp = start_resp
             self.upstream_start_inflight = False
@@ -286,19 +287,22 @@ class RouterTransaction:
         # - smtp gw should have the logic e.g. msa swallows start
         #   error -> rcpt 200 but mx doesn't
         # - absence of previous errors still a precondion here
-        if self.msa:
-            if resp.perm():
-                final_resp = resp
-        elif not self.mx_multi_rcpt:  # mx single rcpt
-            if resp.err():
-                final_resp = resp
-        else:  # mx multi rcpt
-            # for multi-rcpt mx, keep going on errs since we
-            # don't know whether it's ultimately going to
-            # set_durable and need the the payload to generate
-            # the bounce
-            if last and resp.err():
-                final_resp = resp
+        # if self.msa:
+        #     if resp.perm():
+        #         final_resp = resp
+        # elif not self.mx_multi_rcpt:  # mx single rcpt
+        #     if resp.err():
+        #         final_resp = resp
+        # else:  # mx multi rcpt
+        #     # for multi-rcpt mx, keep going on errs since we
+        #     # don't know whether it's ultimately going to
+        #     # set_durable and need the the payload to generate
+        #     # the bounce
+        #     if last and resp.err():
+        #         final_resp = resp
+
+        if last:
+            final_resp = resp
 
         # make the status durable before possibly surfacing to clients/rest
         if last:
