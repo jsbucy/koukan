@@ -9,6 +9,22 @@ from response import Response, Esmtp
 
 import logging
 
+import psutil
+
+
+class Factory:
+    def __init__(self):
+        # only the router sends to this
+        proc_self = psutil.Process()
+        self.rest_id_base = '%s.%s.' % (
+            proc_self.pid, int(proc_self.create_time()))
+        self.rest_id_next = 0
+
+    def new(self, ehlo_hostname):
+        rest_id = self.rest_id_base + str(self.rest_id_next)
+        self.rest_id_next += 1
+        return SmtpEndpoint(rest_id, ehlo_hostname)
+
 # rest or smtp services call upon a single instance of this
 class SmtpEndpoint:
     smtp : smtplib.SMTP
@@ -16,9 +32,14 @@ class SmtpEndpoint:
     start_resp : Response = None
     final_status : Response = None
 
-    def __init__(self, ehlo_hostname):
+    def __init__(self, rest_id, ehlo_hostname):
+        self.rest_id = rest_id
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
+
+    def generate_rest_id(self):
+        return self.rest_id
+
 
     def connect(self, host, port):
         self.smtp = smtplib.SMTP()

@@ -90,7 +90,7 @@ class Service:
             self.config.get_str('key'),
             rest_service.create_app(
                 lambda host: self.get_router_transaction(host),
-                self.executor, self.blobs))
+                self.blobs))
 
     def get_router_transaction(self, host):
         next, tag, msa = self.get_transaction(host)

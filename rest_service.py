@@ -10,8 +10,6 @@ from blobs import Blob, BlobStorage
 from blob import InlineBlob
 from tags import Tag
 
-from executor import Executor
-
 from threading import Lock, Condition
 
 import logging
@@ -43,7 +41,7 @@ class Transaction:
     lock : Lock
     cv : Condition
 
-    def __init__(self, executor : Executor, endpoints, blob_storage):
+    def __init__(self, endpoints, blob_storage):
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.endpoints = endpoints
@@ -219,7 +217,6 @@ class RestResources:
 
 def create_app(
         endpoints : Callable[[str], Tuple[Any, bool]],  # endpoint, msa
-        executor : Executor,
         blobs : BlobStorage):
     app = Flask(__name__)
 
@@ -230,7 +227,7 @@ def create_app(
     def start_transaction() -> Response:
         print(request, request.headers)
 
-        t = Transaction(executor, endpoints, blobs)
+        t = Transaction(endpoints, blobs)
         if not request.is_json:
             return Response(status=400, response=['not json'])
         resp = t.init(request.headers['host'], request.get_json())
