@@ -206,38 +206,20 @@ class RouterTransaction:
     def append_data(self,
                     last : bool,
                     blob : Blob) -> Optional[Response]:
+        # We don't early-return yet even on an upstream perm error
+        # because it could be part of a multi-rcpt smtp transaction
+        # with mixed results that requires accept&bounce. We bail in
+        # append_upstream after we have buffered the payload.
         logging.info('RouterTransaction.append_data %s %d', last, blob.len())
         with self.lock:
-           if self.next_final_resp:
-               return self.next_final_resp
-           # XXX the definitive logic for reporting upstream errors is
-           # in append_blob_upstream, the commented-out code (below)
-           # is redundant?
-           if self.next_final_resp:
-               return self.next_final_resp
-           # XXX we enforce these invariants in rest service, this can
-           # just assert?
-           # if self.msa:
-           #     if self.next_start_resp.perm():
-           #         return Response(400, "upstream start transaction perm msa")
-           # elif not self.mx_multi_rcpt:  # mx single rcpt
-           #     if self.next_start_resp.err():
-           #         return Response(
-           #             400, "upstream start transaction failed mx")
-           # else:  # mx_multi_rcpt
-           #     # for multi-rcpt mx, keep going on errs since we
-           #     # don't know whether it's ultimately going to
-           #     # set_durable and need the the payload to generate
-           #     # the bounce
-           #     pass
+            self.blobs.append(blob)
+            if last: self.have_last_blob = True
 
-           self.blobs.append(blob)
-           self.blob_upstream_queue.append(blob)
-           if last: self.have_last_blob = True
-           if not self.upstream_append_inflight:
-               self.inflight = True
-               self.upstream_append_inflight = True  # XXX redundant?
-               self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
+            self.blob_upstream_queue.append(blob)
+            if not self.upstream_append_inflight:
+                self.inflight = True
+                self.upstream_append_inflight = True  # XXX redundant?
+                self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
         return None  # async
 
     def append_upstream(self):
@@ -246,69 +228,38 @@ class RouterTransaction:
             with self.lock:
                 logging.info('RouterTransaction.append_upstream %d %s',
                              len(self.blob_upstream_queue), self.have_last_blob)
-                if not self.blob_upstream_queue:
+                # bail here if the transaction has already failed,
+                # this is a precondition of the upstream append and is
+                # synchronous here
+                if self.next_final_resp or not self.blob_upstream_queue:
                     self.inflight = False
                     self.upstream_append_inflight = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
-                last = ((len(self.blob_upstream_queue) == 0) and
-                        self.have_last_blob)
+                last = (self.have_last_blob and not self.blob_upstream_queue)
             self.append_blob_upstream(last, blob)
-
-    def _append_blob_upstream(self, last, blob):
-        logging.info('RouterTransaction._append_blob_upstream %s %d',
-                     last, blob.len())
-        try:
-           resp = self.next.append_data(last, blob)
-           assert(resp is not None)
-        except:
-           resp = Response.Internal(
-               'RouterTransaction._append_blob_upstream exception')
-
-        logging.info('RouterTransaction._append_blob_upstream done %s %s',
-                     last, resp)
-        return resp
 
     def append_blob_upstream(self,
                              last : bool,
                              blob : Blob) -> Response:
-        # we early returned in append_data() if there was already an
-        # upstream response
-        resp = self._append_blob_upstream(last, blob)
+        logging.info('RouterTransaction.append_blob_upstream %s %d',
+                     last, blob.len())
+        resp = self.next.append_data(last, blob)
+        logging.info('RouterTransaction.append_blob_upstream done %s %s',
+                     last, resp)
 
         final_resp = None
-        if last and resp.ok():
-            # XXX possibly internal endpoints should return None for
-            # non-last appends?
-            final_resp = resp
-        # TODO continuing to refine my understanding of this
-        # - RouterTransaction should transparently propagate upstream
-        #   errors rather than this convoluted logic
-        # - smtp gw should have the logic e.g. msa swallows start
-        #   error -> rcpt 200 but mx doesn't
-        # - absence of previous errors still a precondion here
-        # if self.msa:
-        #     if resp.perm():
-        #         final_resp = resp
-        # elif not self.mx_multi_rcpt:  # mx single rcpt
-        #     if resp.err():
-        #         final_resp = resp
-        # else:  # mx multi rcpt
-        #     # for multi-rcpt mx, keep going on errs since we
-        #     # don't know whether it's ultimately going to
-        #     # set_durable and need the the payload to generate
-        #     # the bounce
-        #     if last and resp.err():
-        #         final_resp = resp
 
-        if last:
+        # Don't propagate success append results prior to the last since they
+        # don't denote the final status of the transaction.
+        # XXX possibly internal endpoints should return None for
+        # non-last appends?
+        if last or resp.err():
             final_resp = resp
 
-        # make the status durable before possibly surfacing to clients/rest
-        if last:
+            # make the status durable before possibly surfacing to clients/rest
             self.maybe_append_action(final_resp)
 
-        if final_resp:
             with self.lock:
                 self.next_final_resp = final_resp
                 self.cv.notify_all()
@@ -360,8 +311,6 @@ class RouterTransaction:
                 else:
                     self.storage_tx.append_data(blob.contents())
 
-            # XXX all this really does that append_transaction_actions()
-            # doesn't is set the length
             self.storage_tx.finalize_payload(status)
 
         # append_data last may have already finished before set_durable() was

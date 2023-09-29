@@ -50,7 +50,8 @@ class FakeEndpoint:
 
 class RouterTransactionTest(unittest.TestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(message)s')
 
         self.storage = Storage()
         self.storage.connect(db=Storage.get_inmemory_for_test())
@@ -95,8 +96,12 @@ class RouterTransactionTest(unittest.TestCase):
             tx.set_mx_multi_rcpt()
 
         tx.append_data(last=True, blob=InlineBlob(b'hello'))
-        self.assertIsNone(tx.get_final_status())
+        # we expect the result to be none so don't wait for it to be non-none
+        self.assertIsNone(tx.get_final_status(timeout=0))
+
         endpoint.set_final_resp(append_response)
+        # this may need to wait to give the append running in another
+        # thread time to finish
         resp = tx.get_final_status(timeout=1)
         if expected_response_code is not None:
             self.assertIsNotNone(resp)
