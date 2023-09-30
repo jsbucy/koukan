@@ -3,7 +3,7 @@ from router_transaction import RouterTransaction, BlobIdMap
 from blobs import BlobStorage
 from blob import InlineBlob
 
-from storage import Storage, Status as StorageStatus
+from storage import Storage, Status as StorageStatus, Action
 
 from executor import Executor
 
@@ -37,6 +37,7 @@ class FakeEndpoint:
             self.cv.notify_all()
 
     def append_data(self, last, blob) -> Response:
+        logging.info('FakeEndpoint.append_data')
         with self.lock:
             self.cv.wait_for(lambda: self.final_resp is not None)
             return self.final_resp
@@ -69,13 +70,21 @@ class RouterTransactionTest(unittest.TestCase):
     # set_durable()
     # set_mx_multi_rcpt()
 
+    def check_storage(self, id, exp_status, exp_action):
+        storage_tx = self.storage.get_transaction_cursor()
+        storage_tx.load(id)
+        self.assertEqual(exp_status, storage_tx.status)
+        actions = storage_tx.load_last_action(1)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0][1], exp_action)
+
     def fast(self,
              msa : bool,
              multi_mx : bool,
+             start_response : Response,
              append_response : Response,
-             expected_response_code : Optional[int],
-             expected_storage_status,
-             status_after_durable):
+             expected_storage_status, action,
+             status_after_durable, action_after_durable):
         endpoint = FakeEndpoint()
         tx = RouterTransaction(
             self.executor, self.storage, self.blob_id_map, self.blobs,
@@ -87,31 +96,34 @@ class RouterTransactionTest(unittest.TestCase):
                  'alice@example.com', None,
                  'bob@example.com', None)
         self.assertIsNone(tx.get_start_result(timeout=0))
-        endpoint.set_start_resp(Response())
+        endpoint.set_start_resp(start_response)
         resp = tx.get_start_result(timeout=1)
         self.assertIsNotNone(resp)
-        self.assertTrue(resp.ok())
+        #self.assertTrue(resp.ok())
+        self.assertEqual(resp.code, start_response.code)
 
         if multi_mx:
             tx.set_mx_multi_rcpt()
 
-        tx.append_data(last=True, blob=InlineBlob(b'hello'))
-        # we expect the result to be none so don't wait for it to be non-none
-        self.assertIsNone(tx.get_final_status(timeout=0))
-
-        endpoint.set_final_resp(append_response)
-        # this may need to wait to give the append running in another
-        # thread time to finish
-        resp = tx.get_final_status(timeout=1)
-        if expected_response_code is not None:
+        if start_response.ok() or (msa and start_response.temp()):
+            tx.append_data(last=True, blob=InlineBlob(b'hello'))
+        resp = tx.get_final_status(timeout=0)
+        if msa and start_response.err():
             self.assertIsNotNone(resp)
-            self.assertEqual(resp.code, expected_response_code)
+            self.assertEqual(resp.code, start_response.code)
         else:
             self.assertIsNone(resp)
 
-        storage_tx = self.storage.get_transaction_cursor()
-        self.assertTrue(storage_tx.load(tx.storage_id))
-        self.assertEqual(storage_tx.status, expected_storage_status)
+        if append_response is not None:
+            endpoint.set_final_resp(append_response)
+
+            # this may need to wait to give the append running in another
+            # thread time to finish
+            resp = tx.get_final_status(timeout=1)
+            self.assertIsNotNone(resp)
+            self.assertEqual(resp.code, append_response.code)
+
+        self.check_storage(tx.storage_id, expected_storage_status, action)
 
         if status_after_durable is None: return
 
@@ -120,57 +132,149 @@ class RouterTransactionTest(unittest.TestCase):
         #for l in self.storage.db.iterdump():
         #    print(l)
 
-        storage_tx = self.storage.get_transaction_cursor()
-        self.assertTrue(storage_tx.load(tx.storage_id))
-        self.assertEqual(storage_tx.status, status_after_durable)
+        self.check_storage(tx.storage_id, status_after_durable,
+                           action_after_durable)
+
 
 
     def test_msa_fast_success(self):
-        self.fast(True, False, Response(), 200,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.ONESHOT_DONE)
-    def test_msa_fast_temp(self):
-        self.fast(True, False, Response(code=400), 400,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.WAITING)
+        self.fast(True, False,
+                  Response(),
+                  Response(),
+                  StorageStatus.ONESHOT_DONE, Action.DELIVERED,
+                  StorageStatus.ONESHOT_DONE, Action.DELIVERED)
+
+    def test_msa_fast_start_temp(self):
+        self.fast(True, False,
+                  Response(code=400),
+                  None,
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.TEMP_FAIL)
+
+    def test_msa_fast_append_temp(self):
+        self.fast(True, False,
+                  Response(),
+                  Response(code=400),
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.TEMP_FAIL)
+
     def test_msa_fast_perm(self):
-        self.fast(True, False, Response(code=500), 500,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.ONESHOT_DONE)
+        self.fast(True, False,
+                  Response(),
+                  Response(code=500),
+                  StorageStatus.ONESHOT_DONE, Action.PERM_FAIL,
+                  StorageStatus.ONESHOT_DONE, Action.PERM_FAIL)
+
 
     # single-mx is always oneshot, never durable
     def test_mx_single_fast_success(self):
-        self.fast(False, False, Response(), 200,
-                  StorageStatus.ONESHOT_DONE,
-                  None)
+        self.fast(False, False, Response(), Response(),
+                  StorageStatus.ONESHOT_DONE, Action.DELIVERED,
+                  None, None)
     def test_mx_single_fast_temp(self):
-        self.fast(False, False, Response(code=400), 400,
-                  StorageStatus.ONESHOT_DONE,
-                  None)
+        self.fast(False, False, Response(), Response(code=400),
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  None, None)
     def test_mx_single_fast_perm(self):
-        self.fast(False, False, Response(code=500), 500,
-                  StorageStatus.ONESHOT_DONE,
-                  None)
+        self.fast(False, False, Response(), Response(code=500),
+                  StorageStatus.ONESHOT_DONE, Action.PERM_FAIL,
+                  None, None)
 
     # multi-mx (from smtp gw only) is durable if the results were mixed
     def test_mx_multi_fast_success(self):
-        self.fast(False, True, Response(), 200,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.ONESHOT_DONE)
+        self.fast(False, True, Response(), Response(),
+                  StorageStatus.ONESHOT_DONE, Action.DELIVERED,
+                  StorageStatus.ONESHOT_DONE, Action.DELIVERED)
     def test_mx_multi_fast_temp(self):
-        self.fast(False, True, Response(code=400), 400,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.WAITING)
+        self.fast(False, True, Response(), Response(code=400),
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.TEMP_FAIL)
     def test_mx_multi_fast_perm(self):
-        self.fast(False, True, Response(code=500), 500,
-                  StorageStatus.ONESHOT_DONE,
-                  StorageStatus.ONESHOT_DONE)
+        self.fast(False, True, Response(), Response(code=500),
+                  StorageStatus.ONESHOT_DONE, Action.PERM_FAIL,
+                  StorageStatus.ONESHOT_DONE, Action.PERM_FAIL)
 
     # more scenarios:
     # append concurrent with slow upstream start
     #   msa only (always a precondition for mx)
     # set_durable concurrent with slow upstream start/append
     #   msa or multi mx (single mx always oneshot)
+
+
+    def recover(self, id, start_resp, append_resp, exp_status, exp_action):
+        storage_tx = self.storage.get_transaction_cursor()
+        self.assertTrue(storage_tx.load(id))
+        self.assertEqual(storage_tx.status, StorageStatus.WAITING)
+
+        recovery_endpoint = FakeEndpoint()
+        recovery_endpoint.set_start_resp(start_resp)
+        if append_resp is not None:
+            recovery_endpoint.set_final_resp(append_resp)
+        recovery_tx = RouterTransaction(
+            self.executor, self.storage, self.blob_id_map, self.blobs,
+            next=recovery_endpoint,
+            host='host', msa=True, tag=0)
+
+        recovery_tx.load(storage_tx)
+
+        self.check_storage(id, exp_status, exp_action)
+
+    def recovery(self, expectations):
+        endpoint = FakeEndpoint()
+        tx = RouterTransaction(
+            self.executor, self.storage, self.blob_id_map, self.blobs,
+            next=endpoint,
+            host='host', msa=True, tag=0)
+        tx.generate_rest_id()
+        logging.info('%d %s', tx.storage_id, tx.rest_id)
+        tx.start('local_host', 'remote_host',
+                 'alice@example.com', None,
+                 'bob@example.com', None)
+        self.assertIsNone(tx.get_start_result(timeout=0))
+        endpoint.set_start_resp(Response())
+        resp = tx.get_start_result(timeout=1)
+        self.assertIsNotNone(resp)
+        self.assertTrue(resp.ok())
+
+        tx.append_data(last=True, blob=InlineBlob(b'hello'))
+        # we expect the result to be none so don't wait for it to be non-none
+        self.assertIsNone(tx.get_final_status(timeout=0))
+
+        endpoint.set_final_resp(Response(code=400))
+        # this may need to wait to give the append running in another
+        # thread time to finish
+        resp = tx.get_final_status(timeout=1)
+        self.assertEqual(400, resp.code)
+
+        tx.set_durable()
+
+        for (start_resp, append_resp, status, action) in expectations:
+            self.recover(tx.storage_id, start_resp, append_resp, status, action)
+
+
+    # start_resp, data_resp, exp_status, exp_action
+
+    def test_recovery_temp_success(self):
+        expectations = [
+        (Response(code=400), None, StorageStatus.WAITING, Action.TEMP_FAIL),
+        (Response(), Response(code=400), StorageStatus.WAITING,
+         Action.TEMP_FAIL),
+        (Response(), Response(), StorageStatus.DONE, Action.DELIVERED)]
+        self.recovery(expectations)
+
+    def test_recovery_start_perm(self):
+        expectations = [
+        (Response(code=500), None, StorageStatus.DONE, Action.PERM_FAIL),
+        ]
+        self.recovery(expectations)
+
+    def test_recovery_append_perm(self):
+        expectations = [
+        (Response(), Response(code=500), StorageStatus.DONE, Action.PERM_FAIL),
+        ]
+        self.recovery(expectations)
+
+
 
 if __name__ == '__main__':
     unittest.main()

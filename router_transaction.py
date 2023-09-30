@@ -123,68 +123,54 @@ class RouterTransaction:
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
 
     def load(self, storage_tx : TransactionCursor):
-        logging.info("RouterTransaction.load %s %s %s",
-                     storage_tx.id, storage_tx.mail_from, storage_tx.rcpt_to)
+        logging.info("RouterTransaction.load id=%s from=%s to=%s length=%d",
+                     storage_tx.id, storage_tx.mail_from, storage_tx.rcpt_to,
+                     storage_tx.length)
+        self.rest_id = storage_tx.rest_id
         self.storage_tx = storage_tx
+        self.storage_id = storage_tx.id
         self.recovered = True
         self.msa = False
-        try:
-            self._start(
-                storage_tx.local_host, storage_tx.remote_host,
-                storage_tx.mail_from, storage_tx.transaction_esmtp,
-                storage_tx.rcpt_to, storage_tx.rcpt_esmtp)
-            resp = self._start_upstream()
-            logging.info("RouterTransaction.load start resp %s %s",
-                         storage_tx.id, resp)
-            if resp.ok():
-                offset = 0
-                while offset < storage_tx.length:
-                    blob = storage_tx.read_content(offset)
-                    assert(blob is not None)
-                    offset += blob.len()
-                    last = offset == storage_tx.length
-                    resp = self._append_blob_upstream(last=last, blob=blob)
-                    if resp.err(): break
-        except:
-            resp = Response.Internal('RouterTransaction.load exception')
+        self._start(
+            storage_tx.local_host, storage_tx.remote_host,
+            storage_tx.mail_from, storage_tx.transaction_esmtp,
+            storage_tx.rcpt_to, storage_tx.rcpt_esmtp)
+        resp = self.start_upstream()
+        logging.info("RouterTransaction.load start resp %s %s",
+                     storage_tx.id, resp)
+        if resp.err(): return
 
-        action = None
-        if resp.ok():
-            action = Action.DELIVERED
-        elif resp.perm() or (time.time() - storage_tx.creation) > MAX_RETRY:
-            # permfail/bounce
-            action = Action.PERM_FAIL
-        else:
-            action = Action.TEMP_FAIL
-
-        self.storage_tx.append_action(action)
+        offset = 0
+        while offset < storage_tx.length:
+            blob = storage_tx.read_content(offset)
+            assert(blob is not None)
+            offset += blob.len()
+            last = offset == storage_tx.length
+            resp = self.append_blob_upstream(last=last, blob=blob)
+            if resp.err(): break
 
 
-    def _start_upstream(self):
+    def start_upstream(self):
         resp = self.next.start(
             self.local_host, self.remote_host,
             self.mail_from, self.transaction_esmtp,
             self.rcpt_to, self.rcpt_esmtp)
-        logging.info('RouterTransaction._start_upstream %s', resp)
-        return resp
+        logging.info('RouterTransaction.start_upstream %s', resp)
 
-    def start_upstream(self):
-        start_resp = self._start_upstream()
+        # a perm error to upstream start is always final
+        # mx and recovery transactions cannot continue after any start failure
+        final = resp.perm() or ((self.recovered or not self.msa) and resp.err())
+        if final:
+            self.maybe_append_action(resp)
 
-        # TODO cf append_blob_upstream()
-        # start_resp = None
-        # if resp is not None and resp.ok():
-        #    start_resp = resp
-        # if self.msa:
-        #     if resp.perm():
-        #         start_resp = resp
-        # else:  # mx
-        #     if resp.err():
-        #         start_resp = resp
         with self.lock:
-            if start_resp: self.next_start_resp = start_resp
+            if final:
+                self.next_final_resp = resp
+            self.next_start_resp = resp
             self.upstream_start_inflight = False
             self.cv.notify_all()
+
+        return resp
 
     def set_mx_multi_rcpt(self):
         self.mx_multi_rcpt = True
@@ -220,6 +206,18 @@ class RouterTransaction:
                 self.inflight = True
                 self.upstream_append_inflight = True  # XXX redundant?
                 self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
+
+            # this didn't propagate in start_upstream() so the submission
+            # could continue
+            # smtp gw always sets durable for msa and basically
+            # ignores 400 rest transaction status, that means the
+            # upstream transaction failed, not the
+            # submission. Submission failure would be denoted by an
+            # http 500?
+            if last and self.msa and self.next_start_resp.temp():
+                self.next_final_resp = self.next_start_resp
+                self.maybe_append_action(self.next_final_resp)
+
         return None  # async
 
     def append_upstream(self):
@@ -228,10 +226,15 @@ class RouterTransaction:
             with self.lock:
                 logging.info('RouterTransaction.append_upstream %d %s',
                              len(self.blob_upstream_queue), self.have_last_blob)
-                # bail here if the transaction has already failed,
-                # this is a precondition of the upstream append and is
-                # synchronous here
-                if self.next_final_resp or not self.blob_upstream_queue:
+                # bail here if the upstream transaction has already
+                # failed this is a precondition of the
+                # upstream append and is synchronous here
+                # note: downstream msa transactions can continue after
+                # start temp but not upstream
+                if (self.next_start_resp.err() or (
+                    self.next_final_resp is not None and
+                    self.next_final_resp.err()) or
+                    not self.blob_upstream_queue):
                     self.inflight = False
                     self.upstream_append_inflight = False
                     return
@@ -269,7 +272,8 @@ class RouterTransaction:
     # append(last) finishing upstream or set_durable() can happen in
     # either order
     def maybe_append_action(self, next_final_resp):
-        logging.info('RouterTransaction.maybe_append_action %s', self.rest_id)
+        logging.info('RouterTransaction.maybe_append_action %s %s appended=%s',
+                     self.rest_id, next_final_resp, self.appended_action)
         if self.appended_action: return
         assert(self.storage_id)
         if next_final_resp is None: return
@@ -292,11 +296,12 @@ class RouterTransaction:
         assert(self.storage_id)
 
         status = Status.WAITING
-        if self.next_final_resp and (
-                self.next_final_resp.ok() or self.next_final_resp.perm()):
-            status = Status.DONE
+        if self.next_final_resp:
+            if self.next_final_resp.ok() or self.next_final_resp.perm():
+                status = Status.DONE
+            # else temp, leave it WAITING
         # xxx msa upstream_start_inflight?
-        if self.have_last_blob and self.upstream_append_inflight:
+        elif self.have_last_blob and self.upstream_append_inflight:
             status = Status.INFLIGHT
 
         logging.info('RouterTransaction.set_durable status=%d %s',

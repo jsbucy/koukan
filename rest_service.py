@@ -39,11 +39,8 @@ class Transaction:
     rcpt_esmtp = None
 
     lock : Lock
-    cv : Condition
 
     def __init__(self, endpoints, blob_storage):
-        self.lock = Lock()
-        self.cv = Condition(self.lock)
         self.endpoints = endpoints
         self.blob_storage = blob_storage
 
@@ -182,12 +179,12 @@ class Transaction:
                 'rest transaction append_data exception')
         logging.info('%s rest service Transaction.append_data %s',
                      self.id, resp)
-        with self.lock:
-            if last:
-                self.last = True
-            if resp is not None:
-                self.final_status = resp
-            self.cv.notify()
+
+        if last:
+            self.last = True
+        if resp is not None:
+            self.final_status = resp
+
         return resp
 
     def set_durable(self):

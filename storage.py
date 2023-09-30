@@ -160,16 +160,29 @@ class TransactionCursor:
     def load(self, id : int):
         self.id = id
         cursor = self.parent.db.cursor()
-        cursor.execute('SELECT creation,json,length,status FROM Transactions '
+        cursor.execute('SELECT rest_id,creation,json,length,status '
+                       'FROM Transactions '
                        'WHERE id = ?', (id,))
         row = cursor.fetchone()
         if not row: return False
-        (self.creation, json_str, self.length, self.status) = row
+        (self.rest_id, self.creation, json_str, self.length, self.status) = row
         trans_json = json.loads(json_str)
         for a in TransactionCursor.FIELDS:
             self.__setattr__(a, trans_json.get(a, None))
 
         return True
+
+    def load_last_action(self, num_actions):
+        cursor = self.parent.db.cursor()
+        cursor.execute('SELECT time, action '
+                       'FROM TransactionActions '
+                       'WHERE transaction_id = ? '
+                       'ORDER BY action_id DESC LIMIT ?',
+                       (self.id, num_actions))
+        out = []
+        for row in cursor:
+            out.append((row[0], row[1]))
+        return out
 
     def read_content(self, offset) -> Optional[Blob]:
         cursor = self.parent.db.cursor()
@@ -200,7 +213,8 @@ class TransactionCursor:
     # appends a TransactionAttempts record and marks Transaction done
     def append_action(self, action):
         now = int(time.time())
-        logging.info('TransactionCursor.append_action %d %d %d %s %s',
+        logging.info('TransactionCursor.append_action '
+                     'now=%d id=%d action=%d offset=%s length=%s',
                      now, self.id, action, self.offset, self.length)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
