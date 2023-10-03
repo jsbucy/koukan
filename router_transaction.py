@@ -160,6 +160,7 @@ class RouterTransaction:
         # a perm error to upstream start is always final
         # mx and recovery transactions cannot continue after any start failure
         final = resp.perm() or ((self.recovered or not self.msa) and resp.err())
+        logging.info('%s', final)
         if final:
             self.maybe_append_action(resp)
 
@@ -192,10 +193,22 @@ class RouterTransaction:
     def append_data(self,
                     last : bool,
                     blob : Blob) -> Optional[Response]:
-        # We don't early-return yet even on an upstream perm error
-        # because it could be part of a multi-rcpt smtp transaction
-        # with mixed results that requires accept&bounce. We bail in
-        # append_upstream after we have buffered the payload.
+        # msa is sync on perm start errors, mx is sync on all start
+        # errors. Start errors propagate to next_final_resp but we do want to
+        # continue after some append errors (below)
+        if (self.msa and self.next_start_resp.perm()) or (
+                not self.msa and self.next_start_resp.err()):
+            return self.next_start_resp
+
+        # Only single-rcpt mx is sync on all upstream
+        # errors. Otherwise, it could be part of a multi-rcpt smtp
+        # transaction that will go on to set_durable. In that case, we
+        # continue here to buffer the payload and bail in append_upstream().
+
+        if (not self.msa and not self.mx_multi_rcpt and
+            self.next_final_resp is not None):
+            return self.next_final_resp
+
         logging.info('RouterTransaction.append_data %s %d', last, blob.len())
         with self.lock:
             self.blobs.append(blob)
@@ -207,16 +220,17 @@ class RouterTransaction:
                 self.upstream_append_inflight = True  # XXX redundant?
                 self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
 
-            # this didn't propagate in start_upstream() so the submission
-            # could continue
-            # smtp gw always sets durable for msa and basically
-            # ignores 400 rest transaction status, that means the
-            # upstream transaction failed, not the
-            # submission. Submission failure would be denoted by an
-            # http 500?
+            # An upstream start-transaction failure didn't propagate
+            # in start_upstream() so the submission could continue.
+
+            # XXX is this the right presentation? Was the idea that
+            # the transaction not having an overall result was a
+            # precondition for append? Maybe we just say msa is
+            # allowed to do that?
             if last and self.msa and self.next_start_resp.temp():
                 self.next_final_resp = self.next_start_resp
                 self.maybe_append_action(self.next_final_resp)
+                return self.next_final_resp
 
         return None  # async
 
@@ -226,11 +240,11 @@ class RouterTransaction:
             with self.lock:
                 logging.info('RouterTransaction.append_upstream %d %s',
                              len(self.blob_upstream_queue), self.have_last_blob)
-                # bail here if the upstream transaction has already
-                # failed this is a precondition of the
-                # upstream append and is synchronous here
-                # note: downstream msa transactions can continue after
-                # start temp but not upstream
+                # Bail here if the upstream transaction has already
+                # failed. This is a precondition of the upstream
+                # append and is synchronous here.
+                # note: some downstream transactions (msa, multi-mx)
+                # can continue after start temp but not upstream
                 if (self.next_start_resp.err() or (
                     self.next_final_resp is not None and
                     self.next_final_resp.err()) or
@@ -251,20 +265,16 @@ class RouterTransaction:
         logging.info('RouterTransaction.append_blob_upstream done %s %s',
                      last, resp)
 
-        final_resp = None
-
         # Don't propagate success append results prior to the last since they
         # don't denote the final status of the transaction.
         # XXX possibly internal endpoints should return None for
         # non-last appends?
         if last or resp.err():
-            final_resp = resp
-
             # make the status durable before possibly surfacing to clients/rest
-            self.maybe_append_action(final_resp)
+            self.maybe_append_action(resp)
 
             with self.lock:
-                self.next_final_resp = final_resp
+                self.next_final_resp = resp
                 self.cv.notify_all()
 
         return resp

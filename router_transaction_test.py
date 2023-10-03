@@ -99,22 +99,31 @@ class RouterTransactionTest(unittest.TestCase):
         endpoint.set_start_resp(start_response)
         resp = tx.get_start_result(timeout=1)
         self.assertIsNotNone(resp)
-        #self.assertTrue(resp.ok())
         self.assertEqual(resp.code, start_response.code)
 
         if multi_mx:
             tx.set_mx_multi_rcpt()
 
-        if start_response.ok() or (msa and start_response.temp()):
-            tx.append_data(last=True, blob=InlineBlob(b'hello'))
-        resp = tx.get_final_status(timeout=0)
-        if msa and start_response.err():
-            self.assertIsNotNone(resp)
-            self.assertEqual(resp.code, start_response.code)
+        resp = tx.append_data(last=True, blob=InlineBlob(b'hello'))
+        async_resp = tx.get_final_status(timeout=0)
+        logging.info('s=%s as=%s', resp, async_resp)
+        self.assertEqual(resp is None, async_resp is None)
+        if msa:
+            if start_response.ok():
+                self.assertIsNone(resp)
+            elif start_response.err():
+                # temp propagates at the end after we've buffered the data
+                self.assertIsNotNone(resp)
+                self.assertEqual(resp.code, start_response.code)
         else:
-            self.assertIsNone(resp)
+            # mx start is always sync
+            if start_response.err():
+                self.assertIsNotNone(resp)
+                self.assertEqual(resp.code, start_response.code)
 
-        if append_response is not None:
+        # we only do the upstream append if the transaction
+        # hasn't already failed
+        if resp is None and append_response is not None:
             endpoint.set_final_resp(append_response)
 
             # this may need to wait to give the append running in another
@@ -171,10 +180,15 @@ class RouterTransactionTest(unittest.TestCase):
         self.fast(False, False, Response(), Response(),
                   StorageStatus.ONESHOT_DONE, Action.DELIVERED,
                   None, None)
-    def test_mx_single_fast_temp(self):
+    def test_mx_single_fast_start_temp(self):
+        self.fast(False, False, Response(code=400), Response(),
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  None, None)
+    def test_mx_single_fast_append_temp(self):
         self.fast(False, False, Response(), Response(code=400),
                   StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
                   None, None)
+
     def test_mx_single_fast_perm(self):
         self.fast(False, False, Response(), Response(code=500),
                   StorageStatus.ONESHOT_DONE, Action.PERM_FAIL,
@@ -185,10 +199,16 @@ class RouterTransactionTest(unittest.TestCase):
         self.fast(False, True, Response(), Response(),
                   StorageStatus.ONESHOT_DONE, Action.DELIVERED,
                   StorageStatus.ONESHOT_DONE, Action.DELIVERED)
-    def test_mx_multi_fast_temp(self):
+    # mx (single and multi) never continues after upstream start err
+    def test_mx_multi_fast_start_temp(self):
+        self.fast(False, True, Response(code=400), None,
+                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  None, None)
+    def test_mx_multi_fast_append_temp(self):
         self.fast(False, True, Response(), Response(code=400),
                   StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
                   StorageStatus.WAITING, Action.TEMP_FAIL)
+
     def test_mx_multi_fast_perm(self):
         self.fast(False, True, Response(), Response(code=500),
                   StorageStatus.ONESHOT_DONE, Action.PERM_FAIL,
