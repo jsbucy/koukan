@@ -38,7 +38,8 @@ class SmtpGateway:
                             blob_id_map=self.blob_id_map)
 
     def msa_rest_factory(self):
-        return RestEndpoint(self.router_base_url, http_host='outbound-gw')
+        return RestEndpoint(self.router_base_url, http_host='outbound-gw',
+                            msa=True)
 
     def smtp_endpoint_factory(self, host):
         if host == 'outbound':

@@ -157,17 +157,18 @@ class RouterTransaction:
             self.rcpt_to, self.rcpt_esmtp)
         logging.info('RouterTransaction.start_upstream %s', resp)
 
-        # a perm error to upstream start is always final
-        # mx and recovery transactions cannot continue after any start failure
-        final = resp.perm() or ((self.recovered or not self.msa) and resp.err())
-        logging.info('%s', final)
-        if final:
+        # any upstream start transaction error ends the upstream
+        # transaction but the downstream transaction may be able to continue
+        if resp.err():
             self.maybe_append_action(resp)
 
+        # xxx msa is allowed to buffer the payload concurrently with
+        # upstream start, may need to start append upstream here
+
         with self.lock:
-            if final:
-                self.next_final_resp = resp
             self.next_start_resp = resp
+            if resp.err():
+                self.next_final_resp = resp
             self.upstream_start_inflight = False
             self.cv.notify_all()
 
@@ -193,44 +194,44 @@ class RouterTransaction:
     def append_data(self,
                     last : bool,
                     blob : Blob) -> Optional[Response]:
-        # msa is sync on perm start errors, mx is sync on all start
-        # errors. Start errors propagate to next_final_resp but we do want to
-        # continue after some append errors (below)
-        if (self.msa and self.next_start_resp.perm()) or (
-                not self.msa and self.next_start_resp.err()):
-            return self.next_start_resp
-
-        # Only single-rcpt mx is sync on all upstream
-        # errors. Otherwise, it could be part of a multi-rcpt smtp
-        # transaction that will go on to set_durable. In that case, we
-        # continue here to buffer the payload and bail in append_upstream().
-
-        if (not self.msa and not self.mx_multi_rcpt and
-            self.next_final_resp is not None):
-            return self.next_final_resp
-
         logging.info('RouterTransaction.append_data %s %d', last, blob.len())
+
+        # XXX rest service errors out on these conditions so this can
+        # just assert? Note the rest code doesn't currently propagate
+        # start errors to final like this does.
+
+        # Any upstream start-transaction error always terminates the
+        # upstream transaction which propagates to next_final_resp but
+        # the downstream transaction can continue for msa.
+        if self.msa:
+            # msa can continue as long as upstream hasn't permfailed
+            # (start transaction errors propagate to next_final_resp)
+            if self.next_final_resp is not None and self.next_final_resp.perm():
+                return self.next_final_resp
+        else:
+            # mx can only continue if upstream start has succeeded
+            if self.next_start_resp is None or self.next_start_resp.err():
+                return self.next_start_resp
+
+            # Single-rcpt mx is sync on all upstream errors. A
+            # transaction fanned out of a multi-rcpt smtp transaction
+            # may have mixed results and need accept&bounce
+            # semantics/set_durable. In that case, we continue here to
+            # buffer the payload and bail in append_upstream().
+            if not self.mx_multi_rcpt and self.next_final_resp is not None:
+                return self.next_final_resp
+
         with self.lock:
             self.blobs.append(blob)
             if last: self.have_last_blob = True
 
             self.blob_upstream_queue.append(blob)
+            # XXX this shouldn't detach append_upstream if upstream
+            # start transaction is still inflight
             if not self.upstream_append_inflight:
                 self.inflight = True
                 self.upstream_append_inflight = True  # XXX redundant?
                 self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
-
-            # An upstream start-transaction failure didn't propagate
-            # in start_upstream() so the submission could continue.
-
-            # XXX is this the right presentation? Was the idea that
-            # the transaction not having an overall result was a
-            # precondition for append? Maybe we just say msa is
-            # allowed to do that?
-            if last and self.msa and self.next_start_resp.temp():
-                self.next_final_resp = self.next_start_resp
-                self.maybe_append_action(self.next_final_resp)
-                return self.next_final_resp
 
         return None  # async
 
@@ -269,11 +270,11 @@ class RouterTransaction:
         # don't denote the final status of the transaction.
         # XXX possibly internal endpoints should return None for
         # non-last appends?
-        if last or resp.err():
-            # make the status durable before possibly surfacing to clients/rest
-            self.maybe_append_action(resp)
-
-            with self.lock:
+        with self.lock:
+            if self.next_final_resp is None and (last or resp.err()):
+                # make the status durable before possibly surfacing to
+                # clients/rest
+                self.maybe_append_action(resp)
                 self.next_final_resp = resp
                 self.cv.notify_all()
 
@@ -302,6 +303,8 @@ class RouterTransaction:
 
     def set_durable(self):
         logging.info('RouterTransaction.set_durable')
+        # the downstream transaction must have sent the last append
+        # but the upstream may still be inflight
         assert(self.have_last_blob)
         assert(self.storage_id)
 

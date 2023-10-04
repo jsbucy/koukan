@@ -33,6 +33,7 @@ class BlobIdMap:
         self.map = {}
         self.lock = Lock()
         self.cv = Condition(self.lock)
+        self.appended_last = False
 
     def lookup_or_insert(self, host, blob_id):
         key = (host, blob_id)
@@ -65,7 +66,8 @@ class RestEndpoint:
                  base_url, http_host, static_remote_host=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 blob_id_map = None):
+                 blob_id_map = None,
+                 msa = False):
         self.base_url = base_url
         self.http_host = http_host
         self.static_remote_host = static_remote_host
@@ -73,6 +75,9 @@ class RestEndpoint:
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
         self.blob_id_map = blob_id_map
+        self.msa = msa
+        self.lock = Lock()
+        self.cv = Condition(self.lock)
 
     def start(self,
               local_host, remote_host,
@@ -97,19 +102,25 @@ class RestEndpoint:
             return Response.Internal(
                 'RestEndpoint.start internal error (no json)')
 
-        self.transaction_url = self.base_url + resp_json['url']
+        with self.lock:
+            self.transaction_url = self.base_url + resp_json['url']
+            self.cv.notify_all()
 
         return self.start_response(self.timeout_start)
 
     def append_data(self, last : bool, blob : Blob,
                     mx_multi_rcpt=None) -> Response:
-        if not self.transaction_url:
-            return Response.Internal(
-                'RestEndpoint.append_data no transaction_url')
+        if self.msa:
+            assert(self.start_resp is None or not self.start_resp.perm())
+        else:
+            assert(self.start_resp is not None and self.start_resp.ok() and
+                   self.final_status is None)
+        # TODO revisit whether we should explicitly split waiting for
+        # the post vs polling the json for the result in this api
+        with self.lock:
+            self.cv.wait_for(lambda: self.transaction_url is not None)
+
         logging.info('RestEndpoint.append_data %s %d', last, blob.len())
-        if self.final_status:
-            return Response(500, 'RestEndpoint.append_data transaction '
-                            'already failed')
 
         chunk_id = self.chunk_id
         self.chunk_id += 1
@@ -133,7 +144,12 @@ class RestEndpoint:
                 # XXX rest_resp.status_code or
                 #   'final_status' in rest_resp.json()
                 logging.info('RestEndpoint.append_data inline %s', rest_resp)
-                if not last: return Response()
+                if not last:
+                    return Response()
+                else:
+                    with self.lock:
+                        self.appended_last = True
+                        self.cv.notify_all()
                 return self.get_status(self.timeout_data)
 
         ext_id = None
@@ -182,7 +198,13 @@ class RestEndpoint:
                 self.blob_id_map.finalize(
                     self.base_url, blob.id(), resp_json['uri'])
 
-        if not last: return resp
+        if not last:
+            return resp
+        else:
+            with self.lock:
+                self.appended_last = True
+                self.cv.notify_all()
+
         return self.get_status(self.timeout_data)
 
 
@@ -221,6 +243,7 @@ class RestEndpoint:
 
     def start_response(self, timeout):
         if self.start_resp: return self.start_resp
+        # TODO inflight waiter list thing?
         resp = self.get_json(timeout, 'start_response')
         if not resp:
             return Response(400, 'RestEndpoint.start_response timeout')
@@ -229,6 +252,7 @@ class RestEndpoint:
 
     def get_status(self, timeout):
         if self.final_status: return self.final_status
+        # TODO inflight waiter list thing?
         resp = self.get_json(timeout, 'final_status')
         if not resp:
             return Response(400, 'RestEndpoint.get_status timeout')
@@ -266,18 +290,20 @@ class RestEndpoint:
     def wait_status(self):
         pass
 
-    # XXX add synchronization to block until we have sent all the data?
-    # only for smtp gw -> router
     def set_durable(self):
-        if not self.transaction_url:
-            return Response.Internal(
-                'RestEndpoint.set_durable no transaction_url')
+        # TODO revisit whether we should explicitly split waiting for
+        # the post vs polling the json for the result in this api
+        with self.lock:
+            self.cv.wait_for(
+                lambda:
+                self.transaction_url is not None and self.appended_last)
 
         rest_resp = requests.post(self.transaction_url + '/smtpMode',
                                   json={},
                                   headers={'host': self.http_host},
                                   timeout=self.timeout_data)
         if rest_resp.status_code > 299:
+            logging.info('RestEndpoint.set_durable %s', rest_resp)
             return Response(400, "RestEndpoint.set_durable")
 
         return Response()

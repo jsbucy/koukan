@@ -37,6 +37,7 @@ class Transaction:
     transaction_esmtp = None
     rcpt_to = None
     rcpt_esmtp = None
+    mx_multi_rcpt = False
 
     lock : Lock
 
@@ -87,30 +88,32 @@ class Transaction:
             self.rcpt_to, self.rcpt_esmtp)
 
     def append_data(self, req_json):
-        # XXX do this here or in RouterTransaction?
+        assert(isinstance(req_json['chunk_id'], int))
+        chunk_id : int = req_json['chunk_id']
+        last : bool = req_json['last']
+        if chunk_id == 0:
+            self.mx_multi_rcpt = bool(req_json.get('mx_multi_rcpt', False))
+
+        # XXX do this here or in RouterTransaction? Note the router
+        # transaction code propagates start errors to final and this
+        # currently doesn't.
         if self.msa:
             if self.start_resp is not None and self.start_resp.perm():
                 return Response(
                     status=400,
                     response=['failed precondition: msa start upstream perm'])
-            # if previous append perm
-        else:  # mx
-            if self.start_inflight:
+            if self.final_status is not None and self.final_status.perm():
                 return Response(
                     status=400,
-                    response=['failed precondition: mx start inflight'])
+                    response=['failed precondition: msa append upstream perm'])
+        else:  # mx
             if self.start_resp is None or self.start_resp.err():
                 return Response(
                     status=400,
                     response=['failed precondition: mx start upstream err'])
+            if not self.mx_multi_rcpt and self.final_status is not None:
+                return jsonify({'final_status': self.final_status.to_json()})
 
-        assert(isinstance(req_json['chunk_id'], int))
-        chunk_id : int = req_json['chunk_id']
-        last : bool = req_json['last']
-        mx_multi_rcpt = ('mx_multi_rcpt' in req_json and
-                         req_json['mx_multi_rcpt'])
-        if self.final_status:
-            return jsonify({'final_status': self.final_status.to_json()})
 
         if self.chunk_id == chunk_id:  # noop
             # XXX this needs to just return the previous response
@@ -119,7 +122,8 @@ class Transaction:
         if self.last and last:
             return Response(status=400, response=['bad last after last'])
 
-        if mx_multi_rcpt: self.endpoint.set_mx_multi_rcpt()
+        if self.mx_multi_rcpt:
+            self.endpoint.set_mx_multi_rcpt()
 
         self.chunk_id = chunk_id
         self.last = last
@@ -164,12 +168,9 @@ class Transaction:
     def append_blob_upstream(self, last : bool, blob : Blob):
         logging.info('%s rest service Transaction.append_data %s %d',
                      self.id, last, blob.len())
-
-        if self.final_status:
-            logging.info('%s rest service Transaction.append_data '
-                         'precondition: '
-                         'already has final_status', self.id)
-            return self.final_status  # XXX internal/failed_precondition?
+        # XXX put back a precondition check here similar to that at
+        # the beginning of append_data() that the upstream transaction
+        # hasn't already failed
 
         resp = None
         try:
@@ -189,14 +190,17 @@ class Transaction:
 
     def set_durable(self):
         if not self.last:
-            return Response(
+            rest_resp = Response(
                 status=400,
-                response='RouterTransaction.smtp_mode set_durable: have not '
-                'received last append_data')
+                response=['RouterTransaction.smtp_mode set_durable: have not '
+                          'received last append_data'])
         if self.endpoint.set_durable() is None:
-            return Response(status=500,
-                            response='RouterTransaction.smtp_mode set_durable')
-        return Response()
+            rest_resp = Response(
+                status=500,
+                response=['RouterTransaction.smtp_mode set_durable'])
+        rest_resp = Response()
+        logging.info('rest service Transaction.set_durable %s', rest_resp)
+        return rest_resp
 
 
 # TODO need some integration with storage so these IDs can be stable
@@ -262,15 +266,21 @@ def create_app(
             return Response(status=400, response=['not json'])
         logging.info("rest service append_data %s %s %s",
                      request, request.headers, request.get_json())
-        return t.append_data(request.get_json())
+        rest_resp = t.append_data(request.get_json())
+        logging.info('rest service append_data %s', rest_resp)
+        return rest_resp
 
     @app.route('/transactions/<transaction_id>/smtpMode',
                methods=['POST'])
     def smtp_mode(transaction_id):
+        logging.info("rest service smtp_mode %s %s",
+                     request, request.headers)
         t = resources.get_transaction(transaction_id)
         if t is None:
             return Response(status=404, response=['transaction not found'])
-        return t.set_durable()
+        rest_resp = t.set_durable()
+        logging.info("rest service smtp_mode %s", rest_resp)
+        return rest_resp
 
     @app.route('/blob/<blob_id>', methods=['PUT'])
     def append_data_chunk(blob_id) -> Response:

@@ -9,12 +9,15 @@ import smtplib
 import logging
 import unittest
 
+import time
+
 from response import Response
 
 class FakeRestEndpoint:
     def __init__(self):
         self.rcpt = None
         self.durable = None
+        self.last = False
 
     def start(self, local, remote, mail_from, transaction_esmtp,
               rcpt, rcpt_esmtp):
@@ -26,6 +29,10 @@ class FakeRestEndpoint:
         return Response()
 
     def append_data(self, last, blob, mx_multi_rcpt):
+        logging.info('FakeRestEndpoint.append_data')
+        assert(not(self.last))
+        if last:
+            self.last = True
         if self.rcpt.startswith('datatemp'):
             return Response(code=400)
         elif self.rcpt.startswith('dataperm'):
@@ -33,6 +40,12 @@ class FakeRestEndpoint:
         return Response()
 
     def set_durable(self):
+        # TODO for the time being, set_durable being called
+        # before/concurrently with append (which returns
+        # instantaneously) *in this test* is a bug even though the api
+        # allows it. Revisit when we add testing for slow/timeout
+        # upstream.
+        assert(self.last)
         self.durable = True
         return Response()
 
@@ -93,6 +106,11 @@ class SmtpServiceTest(unittest.TestCase):
         self.trans([('bob', 250),
                     ('bob2', 250)],
                    200)
+
+    def test_msa_rcpt_temp(self):
+        self.trans([('rcpttemp', 250)],
+                   250,
+                   durable=True)
 
     def test_msa_rcpt_perm(self):
         self.trans([('rcptperm', 500)],
@@ -156,4 +174,6 @@ class SmtpServiceTest(unittest.TestCase):
                    durable=True)
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(message)s')
     unittest.main()

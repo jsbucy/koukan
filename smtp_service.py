@@ -88,6 +88,7 @@ class SmtpHandler:
             if resp.perm():
                 return resp.to_smtp_resp()
             elif resp.temp():
+                logging.info('msa_async')
                 envelope.msa_async = True
                 # '250 msa rcpt upstream temp continue'
         else:  # mx
@@ -107,7 +108,9 @@ class SmtpHandler:
 
     def set_durable(self, rresp, i, trans):
         logging.info('SmtpHandler.set_durable %d', i)
-        rresp[i] = trans.set_durable()
+        r = trans.set_durable()
+        logging.info('SmtpHandler.set_durable %d %s', i, r)
+        rresp[i] = r
 
     def get_blob_id(self):
         id = 'gw_blob_%d' % self.next_blob_id
@@ -135,16 +138,15 @@ class SmtpHandler:
                         mx_multi_rcpt=mx_multi_rcpt),
                     i, t)))
 
+        # xxx pass this timeout to RestEndpoint.append_data
         timeout = None
         if self.msa:
-            # msa swallows rcpt temp failures to retry, we won't get
-            # as far as trying the data for those so don't wait for it
-            # here
-            if not envelope.msa_async:
-                timeout = MSA_DATA_WAIT
+            # if rcpt already tempfailed (self.msa_async), that
+            # propagates to json final transaction status so the get
+            # for that after the last append will return immediately.
+            timeout = MSA_DATA_WAIT
         else:  # mx
             timeout = MX_DATA_WAIT
-        # xxx pass this timeout to RestEndpoint.append_data
         s0 = status = None
         same_major = None
         if timeout is not None:
@@ -156,7 +158,7 @@ class SmtpHandler:
                 if s is None:
                     s = Response(400, 'upstream data timeout')
                 logging.info(s)
-                major = s.code/100
+                major = int(s.code/100)
                 if i == 0:
                     s0 = s
                     same_major = major
@@ -184,7 +186,7 @@ class SmtpHandler:
         await asyncio.wait(
             futures, timeout=5, return_when=asyncio.ALL_COMPLETED)
         if any(map(lambda r: r is None or r.err(), rresp)):
-            return b'400 set_durable timeout'
+            return b'400 set_durable timeout/err'
         return b'250 smtp gw accepted async'
 
 

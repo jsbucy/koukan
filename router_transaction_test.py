@@ -82,7 +82,7 @@ class RouterTransactionTest(unittest.TestCase):
              msa : bool,
              multi_mx : bool,
              start_response : Response,
-             append_response : Response,
+             append_response : Optional[Response],
              expected_storage_status, action,
              status_after_durable, action_after_durable):
         endpoint = FakeEndpoint()
@@ -107,19 +107,24 @@ class RouterTransactionTest(unittest.TestCase):
         resp = tx.append_data(last=True, blob=InlineBlob(b'hello'))
         async_resp = tx.get_final_status(timeout=0)
         logging.info('s=%s as=%s', resp, async_resp)
-        self.assertEqual(resp is None, async_resp is None)
         if msa:
             if start_response.ok():
                 self.assertIsNone(resp)
-            elif start_response.err():
-                # temp propagates at the end after we've buffered the data
+            elif start_response.temp():
+                self.assertIsNone(resp)
+                self.assertIsNotNone(async_resp)
+                self.assertEqual(async_resp.code, start_response.code)
+            elif start_response.perm():
                 self.assertIsNotNone(resp)
                 self.assertEqual(resp.code, start_response.code)
         else:
+            self.assertEqual(resp is None, async_resp is None)
             # mx start is always sync
             if start_response.err():
                 self.assertIsNotNone(resp)
                 self.assertEqual(resp.code, start_response.code)
+            else:
+                self.assertIsNone(resp)
 
         # we only do the upstream append if the transaction
         # hasn't already failed
