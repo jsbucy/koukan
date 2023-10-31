@@ -13,6 +13,14 @@ import gunicorn_main
 
 import logging
 
+class EndpointFactory:
+    def __init__(self, parent):
+        self.parent = parent
+    def create(self, host):
+        return self.parent.smtp_endpoint_factory(host)
+    def get(self, rest_id):
+        return None
+
 class SmtpGateway:
     def __init__(self):
         self.rest_port = int(sys.argv[1])
@@ -32,6 +40,8 @@ class SmtpGateway:
 
         self.blobs = BlobStorage()
         self.smtp_factory = SmtpFactory()
+
+        self.endpoint_factory = EndpointFactory(self)
 
     def mx_rest_factory(self):
         return RestEndpoint(self.router_base_url, http_host='inbound-gw',
@@ -63,7 +73,7 @@ class SmtpGateway:
         gunicorn_main.run(
             'localhost', self.rest_port, cert=None, key=None,
             app=rest_service.create_app(
-                lambda host: self.smtp_endpoint_factory(host), self.blobs))
+                self.endpoint_factory, self.blobs))
 
 
 if __name__ == '__main__':

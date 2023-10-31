@@ -3,10 +3,10 @@ from typing import Optional
 # eventually file-like object (read-only)
 class Blob:
     def contents(self) -> bytes:
-        pass
+        raise NotImplementedError
 
     def len(self) -> int:
-        pass
+        raise NotImplementedError
 
     def id(self) -> Optional[str]:
         return None

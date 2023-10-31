@@ -1,13 +1,15 @@
-from typing import Dict
-from typing import Tuple
+from typing import Dict, Optional, Tuple
+
 
 def ok_smtp_code(code):
     return code >= 200 and code <= 299
 
+
 class Esmtp:
     # from smtplib.SMTP.esmtp_features
-    def __init__(self, esmtp : Dict[str,str] = None):
+    def __init__(self, esmtp : Optional[Dict[str,str]] = None):
         self.esmtp = esmtp
+
 
 class Response:
     code : int
@@ -15,6 +17,7 @@ class Response:
 
     INTERNAL=600
 
+    @staticmethod
     def Internal(msg : str):
         return Response(Response.INTERNAL, msg)
 
@@ -25,6 +28,7 @@ class Response:
     def __str__(self):
         return '%d %s' % (self.code, self.message)
 
+    @staticmethod
     def from_smtp(t : Tuple[int, bytes]) -> "Response":
         return Response(t[0], t[1].decode('utf-8'))
 
@@ -46,6 +50,7 @@ class Response:
     def to_json(self) -> Dict:
         return {'code': self.code, 'message': self.message}
 
+    @staticmethod
     def from_json(d : Dict) -> "Response":
         return Response(d['code'], d['message'])
 

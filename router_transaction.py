@@ -295,7 +295,12 @@ class RouterTransaction:
         elif next_final_resp.perm():
             # permfail/bounce
             action = Action.PERM_FAIL
-        self.storage_tx.append_action(action)
+        # XXX MAX_RETRY
+
+        # TODO when upgrading temp to perm (e.g. after max retry), may
+        # want to distinguish the internal perm result from the
+        # upstream temp result
+        self.storage_tx.append_action(action, next_final_resp)
         self.appended_action = True
 
     def abort(self):

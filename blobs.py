@@ -7,7 +7,7 @@ class InflightBlob:
     d : bytes
     b : InlineBlob
     # pass blob id and len on done
-    waiters : List[Callable[[str, int], None]]
+    waiters : List[Callable[[Blob], None]]
 
 # TODO needs ttl/gc
 class BlobStorage:
@@ -17,7 +17,7 @@ class BlobStorage:
     def __init__(self):
         pass
 
-    def create(self, on_done : Callable[[Blob],None]) -> int:
+    def create(self, on_done : Callable[[Blob],None]) -> str:
         b = InflightBlob()
         b.d = bytes()
         b.waiters = [on_done]
@@ -26,7 +26,7 @@ class BlobStorage:
         self.blobs[id] = b
         return id
 
-    def append(self, id : int, offset : int, d : bytes, last) -> Optional[int]:
+    def append(self, id : str, offset : int, d : bytes, last) -> Optional[int]:
         if id not in self.blobs:
             return None
         blob = self.blobs[id]
@@ -41,7 +41,7 @@ class BlobStorage:
                 cb(blob.b)
         return blob.b.len()
 
-    def get(self, id) -> Blob:
+    def get(self, id) -> Optional[Blob]:
         if not id in self.blobs or not self.blobs[id].b:
             return None
         return self.blobs[id].b

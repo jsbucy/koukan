@@ -15,7 +15,10 @@ TIMEOUT_START=30
 TIMEOUT_DATA=60
 
 class Config:
-    def __init__(self, config, rest_blob_id_map=None):
+    def __init__(self):
+        pass
+
+    def setup(self, config, rest_blob_id_map=None):
         self.config = config
         self.rest_blob_id_map = rest_blob_id_map
 

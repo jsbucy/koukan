@@ -53,6 +53,8 @@ CREATE TABLE TransactionActions (
   time int,
   action int,
 
+  response_json text,
+
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
     ON UPDATE CASCADE
     ON DELETE CASCADE,

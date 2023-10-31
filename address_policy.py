@@ -5,7 +5,7 @@ from email import _header_value_parser
 
 from response import Response
 
-from typing import Tuple
+from typing import Any,Optional,Tuple
 
 class PrefixAddr:
     def __init__(self, base, delimiter, endpoint_factory):
@@ -34,7 +34,8 @@ class AddressPolicy:
         self.patterns = patterns
 
     # called on the first recipient in the transaction
-    def endpoint_for_rcpt(self, rcpt) -> Tuple["Endpoint", Response]:
+    # -> (Endpoint, host, resp)
+    def endpoint_for_rcpt(self, rcpt) -> Tuple[Any, Optional[Tuple[str, int]], Optional[Response]]:
         p = self.match_rcpt(rcpt)
         if p is None:
             return None, None, Response(550, 'AddressPolicy unknown address')

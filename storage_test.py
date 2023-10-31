@@ -1,6 +1,8 @@
 
 from storage import Storage, Action, Status
 
+from response import Response
+
 import unittest
 import logging
 
@@ -34,7 +36,7 @@ class StorageTest(unittest.TestCase):
         writer.append_data(b'qrs')
 
         self.assertTrue(writer.finalize_payload(Status.WAITING))
-        writer.append_action(Action.TEMP_FAIL)
+        writer.append_action(Action.TEMP_FAIL, Response(400))
 
         for l in self.s.db.iterdump():
             print(l)
@@ -59,15 +61,29 @@ class StorageTest(unittest.TestCase):
 
         self.assertIsNone(self.s.load_one())
 
-        reader.append_action(Action.TEMP_FAIL)
+        reader.append_action(Action.TEMP_FAIL, Response(456))
 
         r2 = self.s.load_one()
         self.assertIsNotNone(r2)
         self.assertEqual(r2.id, writer.id)
 
-        r2.append_action(Action.DELIVERED)
+        r2.append_action(Action.DELIVERED, Response(234))
 
         self.assertIsNone(self.s.load_one())
+
+        r3 = self.s.get_transaction_cursor()
+        r3.load(writer.id)
+        actions = r3.load_last_action(3)
+        self.assertEqual(Action.DELIVERED, actions[0][1])
+        resp = actions[0][2]
+        self.assertIsNotNone(resp)
+        self.assertEqual(234, resp.code)
+        self.assertEqual(Action.LOAD, actions[1][1])
+        self.assertIsNone(actions[1][2])
+        self.assertEqual(Action.TEMP_FAIL, actions[2][1])
+        resp = actions[2][2]
+        self.assertIsNotNone(resp)
+        self.assertEqual(456, resp.code)
 
     def test_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
@@ -87,7 +103,7 @@ class StorageTest(unittest.TestCase):
             'local_host', 'remote_host',
             'alice', None,
             'bob', None, 'host')
-        writer.append_action(Action.TEMP_FAIL)
+        writer.append_action(Action.TEMP_FAIL, Response(400))
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))

@@ -9,7 +9,7 @@ from blob import Blob
 import logging
 
 class MxResolutionEndpoint:
-    def __init__(self, transaction_factory : Callable[[], "Endpoint"]):
+    def __init__(self, transaction_factory : Callable[[], Any]):  # Endpoint
         self.transaction_factory = transaction_factory
         self.next = None
 
@@ -19,7 +19,7 @@ class MxResolutionEndpoint:
             self,
             local_host, remote_host_port,
             mail_from, transaction_esmtp=None, rcpt_to = None, rcpt_esmtp=None
-            ) -> Tuple[Response,List[Tuple[str, Any]]]:
+            ) -> Response:
 
         (remote_host, remote_port) = remote_host_port
         logging.info('MxResoultionEndpoint.start %s', remote_host)

@@ -62,14 +62,19 @@ class RestEndpoint:
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
+    # pass base_url/http_host or transaction_url
     def __init__(self,
-                 base_url, http_host, static_remote_host=None,
+                 base_url=None,
+                 http_host=None,
+                 transaction_url=None,
+                 static_remote_host=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
                  blob_id_map = None,
                  msa = False):
         self.base_url = base_url
         self.http_host = http_host
+        self.transaction_url = transaction_url
         self.static_remote_host = static_remote_host
         self.chunk_id = 0
         self.timeout_start = timeout_start
@@ -259,11 +264,27 @@ class RestEndpoint:
         self.final_status = resp
         return self.final_status
 
+    def resp_from_rest_resp(self, rest_resp, field):
+        if rest_resp.status_code >= 500:
+            return None
+        if not (resp_json := get_resp_json(rest_resp)):
+            return None
+        if field not in resp_json or not resp_json[field]:
+            return None
+        return Response.from_json(resp_json[field])
+
     # block until transaction json contains field and is non-null or timeout
     def get_json(self, timeout, field):
-        deadline = time.monotonic() + timeout
-        while (now := time.monotonic()) < deadline:
+        now = time.monotonic()
+        deadline = now + timeout
+        delta = 1
+        while now <= deadline:
             deadline_left = deadline - now
+            # retry at most once per second
+            if delta < 1:
+                if deadline_left < 1:
+                    break
+                time.sleep(min(1 - delta, deadline_left))
             logging.info('RestEndpoint.get_json')
             start = time.monotonic()
             # XXX throws on timeout
@@ -273,18 +294,15 @@ class RestEndpoint:
                                      timeout=deadline_left)
             logging.info('RestEndpoint.get_json done %s', rest_resp)
             delta = time.monotonic() - start
+            assert(delta >= 0)
             if rest_resp.status_code >= 400 and rest_resp.status_code < 500:
                 return Response(400, 'RestEndpoint.start_response GET '
                                 'failed')
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.get_json %s', resp_json)
-            if (rest_resp.status_code >= 500 or
-                not (resp_json := get_resp_json(rest_resp)) or
-                field not in resp_json or not resp_json[field]):
-                # cf rest service get_transaction()
-                if delta < 1: time.sleep(1 - delta)  # XXX min deadline_left
-                continue
-            return Response.from_json(resp_json[field])
+            if (resp := self.resp_from_rest_resp(rest_resp, field)) is not None:
+                return resp
+            now = time.monotonic()
         return None
 
     def wait_status(self):

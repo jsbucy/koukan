@@ -41,12 +41,13 @@ class Transaction:
 
     lock : Lock
 
-    def __init__(self, endpoints, blob_storage):
-        self.endpoints = endpoints
+    def __init__(self, endpoint, msa, blob_storage, rest_resources):
+        self.endpoint = endpoint
+        self.msa = msa
         self.blob_storage = blob_storage
+        self.rest_resources = rest_resources
 
-    def init(self, http_host, req_json) -> Optional[Response]:
-        self.endpoint, self.msa = self.endpoints(http_host)
+    def init(self, req_json) -> Optional[Response]:
         if not self.endpoint:
             return Response(status=404, response=['unknown host'])
         self.id = self.endpoint.generate_rest_id()
@@ -119,6 +120,8 @@ class Transaction:
             # XXX this needs to just return the previous response
             return Response(status=400, response=['dupe appendData'])
 
+        # XXX shouldn't this verify chunk_id == self.chunk_id + 1?
+
         if self.last and last:
             return Response(status=400, response=['bad last after last'])
 
@@ -183,6 +186,7 @@ class Transaction:
 
         if last:
             self.last = True
+
         if resp is not None:
             self.final_status = resp
 
@@ -194,6 +198,11 @@ class Transaction:
                 status=400,
                 response=['RouterTransaction.smtp_mode set_durable: have not '
                           'received last append_data'])
+
+        # this is where we "detach" the operation so
+        # subsequent rest calls go through to the router
+        self.rest_resources.remove_transaction(self.id)
+
         if self.endpoint.set_durable() is None:
             rest_resp = Response(
                 status=500,
@@ -216,22 +225,32 @@ class RestResources:
     def get_transaction(self, id : str) -> Optional[Transaction]:
         return self.transaction.get(id, None)
 
+    def remove_transaction(self, id):
+        if id in self.transaction:
+            del self.transaction[id]
+
+#class EndpointFactory:
+#    def create(self, host) -> Endpoint, bool:  # msa
+#        pass
+#    def get(self, rest_id) -> Endpoint:
+#        pass
+
+
 def create_app(
-        endpoints : Callable[[str], Tuple[Any, bool]],  # endpoint, msa
+        endpoint_factory,
         blobs : BlobStorage):
     app = Flask(__name__)
 
     resources = RestResources()
 
-
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> Response:
         print(request, request.headers)
-
-        t = Transaction(endpoints, blobs)
+        endpoint, msa = endpoint_factory.create(request.headers['host'])
+        t = Transaction(endpoint, msa, blobs, resources)
         if not request.is_json:
             return Response(status=400, response=['not json'])
-        resp = t.init(request.headers['host'], request.get_json())
+        resp = t.init(request.get_json())
         if resp is not None: return resp
 
         # local_host/remote_host ~
@@ -250,11 +269,14 @@ def create_app(
                methods=['GET'])
     def get_transaction(transaction_id) -> Response:
         t = resources.get_transaction(transaction_id)
-        if not t:
+        if t is None:
+            e = endpoint_factory.get(transaction_id)
+            assert(e is not None)
+            # oneshot
+            t = Transaction(e, False, None, None)  # msa, blobs, resources xxx?
+        if t is None:
             return Response(status=404, response=['transaction not found'])
-
         return t.get()
-
 
     @app.route('/transactions/<transaction_id>/appendData',
                methods=['POST'])
@@ -275,6 +297,9 @@ def create_app(
     def smtp_mode(transaction_id):
         logging.info("rest service smtp_mode %s %s",
                      request, request.headers)
+        # TODO this should take a parameter in the json whether or not
+        # to emit a bounce. smtp gw wants this; first-class rest
+        # clients that are willing to poll the lro may not.
         t = resources.get_transaction(transaction_id)
         if t is None:
             return Response(status=404, response=['transaction not found'])

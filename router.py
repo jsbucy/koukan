@@ -1,7 +1,7 @@
 
 from response import Response, Esmtp
 
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from blob import Blob, InlineBlob
 
@@ -15,8 +15,11 @@ class RoutingPolicy:
     # this calls Endpoint.on_connect() before return, returned
     # Endpoint is ready for start_transaction()
     # -> Endpoint, dest host, Response
-    def endpoint_for_rcpt(self, rcpt):
-        pass
+    # returns one of endpoint and possibly dest_host or response which
+    # is probably a not-found error
+    def endpoint_for_rcpt(self, rcpt) -> Tuple[
+            Any, Optional[Tuple[str, int]], Optional[Response]]:
+        raise NotImplementedError
 
 
 class Router:
