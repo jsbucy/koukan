@@ -52,9 +52,10 @@ class RouterTransaction:
     mx_multi_rcpt = False
     rest_id = None
     storage_tx : Optional[TransactionCursor] = None
+    done_cb = None
 
     def __init__(self, executor, storage, blob_id_map : BlobIdMap,
-                 blob_storage, next, host, msa, tag):
+                 blob_storage, next, host, msa, tag, storage_tx=None):
         self.executor = executor
         self.blobs = []
         self.blob_upstream_queue = []
@@ -84,11 +85,18 @@ class RouterTransaction:
         self.rcpt_to = None
         self.rcpt_esmtp = None
 
-    def generate_rest_id(self):
+        if storage_tx is not None:
+            self.storage_tx = storage_tx
+            self.rest_id = storage_tx.rest_id
+            self.storage_id = storage_tx.id
+
+    def generate_rest_id(self, done_cb=None):
+        assert(self.storage_tx is None)
         self.rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         self.storage_tx = self.storage.get_transaction_cursor()
         self.storage_tx.create(self.rest_id)
         self.storage_id = self.storage_tx.id
+        self.done_cb = done_cb
         return self.rest_id
 
     def _start(self,
@@ -122,13 +130,12 @@ class RouterTransaction:
                     rcpt_to, rcpt_esmtp)
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
 
-    def load(self, storage_tx : TransactionCursor):
+    def load(self):
+        assert(self.storage_tx)
+        storage_tx = self.storage_tx
         logging.info("RouterTransaction.load id=%s from=%s to=%s length=%d",
                      storage_tx.id, storage_tx.mail_from, storage_tx.rcpt_to,
                      storage_tx.length)
-        self.rest_id = storage_tx.rest_id
-        self.storage_tx = storage_tx
-        self.storage_id = storage_tx.id
         self.recovered = True
         self.msa = False
         self._start(
@@ -162,15 +169,18 @@ class RouterTransaction:
         if resp.err():
             self.maybe_append_action(resp)
 
-        # xxx msa is allowed to buffer the payload concurrently with
-        # upstream start, may need to start append upstream here
-
         with self.lock:
             self.next_start_resp = resp
             if resp.err():
                 self.next_final_resp = resp
+
             self.upstream_start_inflight = False
             self.cv.notify_all()
+
+            if not resp.err():
+                # rest msa could have buffered an upstream append
+                # concurrent with upstream start so send that upstream now
+                self.maybe_start_append_upstream_locked()
 
         return resp
 
@@ -191,27 +201,19 @@ class RouterTransaction:
                                  timeout=timeout)
             return self.next_final_resp
 
-    def append_data(self,
-                    last : bool,
-                    blob : Blob) -> Optional[Response]:
-        logging.info('RouterTransaction.append_data %s %d', last, blob.len())
-
-        # XXX rest service errors out on these conditions so this can
-        # just assert? Note the rest code doesn't currently propagate
-        # start errors to final like this does.
-
-        # Any upstream start-transaction error always terminates the
-        # upstream transaction which propagates to next_final_resp but
-        # the downstream transaction can continue for msa.
+    # The rest api enforces the preconditions; a precondition failure
+    # here is a bug so it asserts. Returns an error response if not ok
+    # to append, None otherwise.
+    def append_ok(self) -> Optional[Response]:
         if self.msa:
             # msa can continue as long as upstream hasn't permfailed
             # (start transaction errors propagate to next_final_resp)
             if self.next_final_resp is not None and self.next_final_resp.perm():
                 return self.next_final_resp
         else:
-            # mx can only continue if upstream start has succeeded
-            if self.next_start_resp is None or self.next_start_resp.err():
-                return self.next_start_resp
+            # precondition: mx can only append if upstream start has succeeded
+            assert(self.next_start_resp is not None)
+            assert(not self.next_start_resp.err())
 
             # Single-rcpt mx is sync on all upstream errors. A
             # transaction fanned out of a multi-rcpt smtp transaction
@@ -221,19 +223,34 @@ class RouterTransaction:
             if not self.mx_multi_rcpt and self.next_final_resp is not None:
                 return self.next_final_resp
 
+        return None
+
+    def append_data(self,
+                    last : bool,
+                    blob : Blob) -> Optional[Response]:
+        logging.info('RouterTransaction.append_data %s %d', last, blob.len())
+
+        # Note the rest code doesn't currently propagate start errors
+        # to final like this does.
+
+        resp = self.append_ok()
+        if resp is not None:
+            return resp
+
         with self.lock:
             self.blobs.append(blob)
             if last: self.have_last_blob = True
-
             self.blob_upstream_queue.append(blob)
-            # XXX this shouldn't detach append_upstream if upstream
-            # start transaction is still inflight
-            if not self.upstream_append_inflight:
-                self.inflight = True
-                self.upstream_append_inflight = True  # XXX redundant?
-                self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
+            self.maybe_start_append_upstream_locked()
 
         return None  # async
+
+    def maybe_start_append_upstream_locked(self):
+        if (not self.upstream_start_inflight and
+            not self.upstream_append_inflight and
+            self.blob_upstream_queue):
+            self.upstream_append_inflight = True
+            self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
 
     def append_upstream(self):
         while True:
@@ -246,11 +263,7 @@ class RouterTransaction:
                 # append and is synchronous here.
                 # note: some downstream transactions (msa, multi-mx)
                 # can continue after start temp but not upstream
-                if (self.next_start_resp.err() or (
-                    self.next_final_resp is not None and
-                    self.next_final_resp.err()) or
-                    not self.blob_upstream_queue):
-                    self.inflight = False
+                if self.append_ok() is not None or not self.blob_upstream_queue:
                     self.upstream_append_inflight = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
@@ -301,6 +314,9 @@ class RouterTransaction:
         # want to distinguish the internal perm result from the
         # upstream temp result
         self.storage_tx.append_action(action, next_final_resp)
+
+        if self.done_cb: self.done_cb()
+
         self.appended_action = True
 
     def abort(self):

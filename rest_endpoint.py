@@ -71,7 +71,8 @@ class RestEndpoint:
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
                  blob_id_map = None,
-                 msa = False):
+                 msa = False,
+                 wait_response = True):
         self.base_url = base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
@@ -83,6 +84,7 @@ class RestEndpoint:
         self.msa = msa
         self.lock = Lock()
         self.cv = Condition(self.lock)
+        self.wait_response = wait_response
 
     def start(self,
               local_host, remote_host,
@@ -248,8 +250,9 @@ class RestEndpoint:
 
     def start_response(self, timeout):
         if self.start_resp: return self.start_resp
+        if not self.wait_response: return None
         # TODO inflight waiter list thing?
-        resp = self.get_json(timeout, 'start_response')
+        resp = self.get_json_field(timeout, 'start_response')
         if not resp:
             return Response(400, 'RestEndpoint.start_response timeout')
         self.start_resp = resp
@@ -257,8 +260,9 @@ class RestEndpoint:
 
     def get_status(self, timeout):
         if self.final_status: return self.final_status
+        if not self.wait_response: return None
         # TODO inflight waiter list thing?
-        resp = self.get_json(timeout, 'final_status')
+        resp = self.get_json_field(timeout, 'final_status')
         if not resp:
             return Response(400, 'RestEndpoint.get_status timeout')
         self.final_status = resp
@@ -273,8 +277,14 @@ class RestEndpoint:
             return None
         return Response.from_json(resp_json[field])
 
+    def get_json(self, timeout):
+        rest_resp = requests.get(self.transaction_url,
+                                 headers={'host': self.http_host},
+                                 timeout=timeout)
+        return get_resp_json(rest_resp)
+
     # block until transaction json contains field and is non-null or timeout
-    def get_json(self, timeout, field):
+    def get_json_field(self, timeout, field):
         now = time.monotonic()
         deadline = now + timeout
         delta = 1
@@ -285,7 +295,7 @@ class RestEndpoint:
                 if deadline_left < 1:
                     break
                 time.sleep(min(1 - delta, deadline_left))
-            logging.info('RestEndpoint.get_json')
+            logging.info('RestEndpoint.get_json %f', deadline_left)
             start = time.monotonic()
             # XXX throws on timeout
             # TODO pass the deadline in a header?

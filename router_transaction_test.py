@@ -104,7 +104,8 @@ class RouterTransactionTest(unittest.TestCase):
         if multi_mx:
             tx.set_mx_multi_rcpt()
 
-        resp = tx.append_data(last=True, blob=InlineBlob(b'hello'))
+        if start_response.ok() or msa:
+            resp = tx.append_data(last=True, blob=InlineBlob(b'hello'))
         async_resp = tx.get_final_status(timeout=0)
         logging.info('s=%s as=%s', resp, async_resp)
         if msa:
@@ -220,7 +221,7 @@ class RouterTransactionTest(unittest.TestCase):
                   StorageStatus.ONESHOT_DONE, Action.PERM_FAIL)
 
     # more scenarios:
-    # append concurrent with slow upstream start
+    # append concurrent with inflight upstream start
     #   msa only (always a precondition for mx)
     # set_durable concurrent with slow upstream start/append
     #   msa or multi mx (single mx always oneshot)
@@ -238,9 +239,9 @@ class RouterTransactionTest(unittest.TestCase):
         recovery_tx = RouterTransaction(
             self.executor, self.storage, self.blob_id_map, self.blobs,
             next=recovery_endpoint,
-            host='host', msa=True, tag=0)
+            host='host', msa=True, tag=0, storage_tx=storage_tx)
 
-        recovery_tx.load(storage_tx)
+        recovery_tx.load()
 
         self.check_storage(id, exp_status, exp_action)
 

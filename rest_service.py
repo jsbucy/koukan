@@ -50,7 +50,7 @@ class Transaction:
     def init(self, req_json) -> Optional[Response]:
         if not self.endpoint:
             return Response(status=404, response=['unknown host'])
-        self.id = self.endpoint.generate_rest_id()
+        self.id = self.endpoint.rest_id
 
         self.local_host = req_json.get('local_host', None)
         self.remote_host = req_json.get('remote_host', None)

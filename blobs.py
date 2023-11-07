@@ -6,7 +6,6 @@ from blob import Blob, InlineBlob
 class InflightBlob:
     d : bytes
     b : InlineBlob
-    # pass blob id and len on done
     waiters : List[Callable[[Blob], None]]
 
 # TODO needs ttl/gc

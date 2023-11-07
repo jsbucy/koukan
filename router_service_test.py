@@ -3,7 +3,7 @@ import logging
 
 from router_service import Service, Config
 
-from fake_endpoints import FakeEndpoint
+from fake_endpoints import SyncEndpoint
 
 from rest_endpoint import RestEndpoint
 
@@ -18,6 +18,9 @@ from rest_endpoint import RestEndpoint
 from response import Response
 
 from blob import InlineBlob
+
+import socketserver
+
 
 class Wiring:
     def __init__(self, endpoint):
@@ -37,8 +40,8 @@ class Wiring:
             return None, None
 
 config_json = {
-    "rest_port": 8000,
-    "db_filename": "",
+    'rest_port': None,
+    'db_filename': '',
     'use_gunicorn': False
 }
 
@@ -47,23 +50,28 @@ class RouterServiceTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-        self.endpoint = FakeEndpoint()
+        # find a free port
+        with socketserver.TCPServer(("localhost", 0), None) as s:
+            self.port = s.server_address[1]
+        config_json['rest_port'] = self.port
+        self.router_url = 'http://localhost:%d' % self.port
+        self.endpoint = SyncEndpoint()
         self.service = Service(config=Config(js=config_json))
         wiring = Wiring(self.endpoint)
         self.service_thread = Thread(
             daemon=True,
-            target=lambda: self.service.main(
-                wiring))
+            target=lambda: self.service.main(wiring))
         self.service_thread.start()
 
         # probe for startup
-        self.endpoint.start_response = Response()
+        self.endpoint.set_start_response(Response())
         while True:
             try:
                 rest_endpoint = RestEndpoint(
-                    base_url='http://localhost:8000', http_host='outbound-gw')
+                    base_url=self.router_url,
+                    http_host='outbound-gw')
                 start_resp = rest_endpoint.start(
-                    None, None, 'alice', None, 'bob', None)
+                    None, None, 'probe', None, 'probe', None)
             except:
                 time.sleep(0.1)
             else:
@@ -73,49 +81,63 @@ class RouterServiceTest(unittest.TestCase):
         self.service.wsgi_server.shutdown()
         self.service_thread.join()
 
-    def test_read_atrest(self):
-        logging.info('test_read_atrest')
+    def test_read_routing(self):
+        logging.info('test_read_routing')
 
-        rest_endpoint = RestEndpoint(
-            base_url='http://localhost:8000', http_host='outbound-gw')
+        start_endpoint = RestEndpoint(
+            base_url=self.router_url, http_host='outbound-gw',
+            wait_response=False,
+            msa=True)
 
-        self.endpoint.start_response = Response()
-        self.endpoint.final_response = Response(456, 'upstream temp')
-        start_resp = rest_endpoint.start(None, None, 'alice', None, 'bob', None)
-        self.assertTrue(start_resp.ok())
-        transaction_url = rest_endpoint.transaction_url
-        final_resp = rest_endpoint.append_data(True, InlineBlob(b'hello'))
-        # XXX cf router_service ShimTransaction on what the semantics
-        # of this ought to be
-        self.assertEqual(final_resp.code, 456)
-        self.assertEqual(final_resp.message, 'upstream temp')
-        # NB: a counterintuitive property of this is that the TEMP_FAIL
-        # prior to set_durable results in status ONESHOT_DONE
-        durable_resp = rest_endpoint.set_durable()
-        self.assertTrue(durable_resp.ok())
+        start_resp = start_endpoint.start(None, None, 'alice', None, 'bob', None)
+        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
+        self.assertTrue(start_endpoint.set_durable().ok())
 
-        for i in range(0,5):
-            rest_endpoint = RestEndpoint(
-                transaction_url=transaction_url)
-            status = rest_endpoint.get_status(1)
-            logging.info('pre resp %d %s', i, status)
-            # XXX ick RestEndpoint returns a timeout for the field to
-            # be populated as a 400 here
-            self.assertEqual(status.code, 400)
-            self.assertEqual(status.message,
-                             'RestEndpoint.get_status timeout')
-            time.sleep(0.1)
+        transaction_url = start_endpoint.transaction_url
 
-        self.endpoint.final_response = Response()
-        for i in range(0,20):
-            rest_endpoint = RestEndpoint(
-                transaction_url=transaction_url)
-            status = rest_endpoint.get_status(1)
-            logging.info('post resp %d %s', i, status)
-            if status.ok(): break
-            time.sleep(0.1)
+        read_endpoint = RestEndpoint(
+            base_url=self.router_url, http_host='outbound-gw',
+            transaction_url=transaction_url,
+            wait_response=True)
+
+        # read from initial inflight
+        # xxx rest service blocks on start/final resp whether you want
+        # it to or not
+        resp_json = read_endpoint.get_json(2)
+        logging.info('inflight %s', resp_json)
+        self.assertNotIn('start_response', resp_json)
+        self.assertNotIn('final_status', resp_json)
+
+        # set start response, initial inflight tempfails
+        self.endpoint.set_start_response(Response(456))
+        for i in range(1,3):
+            resp_json = read_endpoint.get_json(1)
+            logging.info('resp %s', resp_json)
+            time.sleep(1)
+            # XXX this is currently non-deterministic depending on
+            # whether you hit the inflight RouterTransaction or read
+            # from storage, response propagation is still in flux
+            if 'start_response' in resp_json:
+                start_resp = Response.from_json(resp_json['start_response'])
+                self.assertEqual(start_resp.code, 456)
+                final_status = Response.from_json(resp_json['final_status'])
+                self.assertEqual(final_status.code, 456)
+            else:
+                self.assertNotIn('final_status', resp_json)
+
+        # upstream success, retry succeeds, propagates down to rest
+        self.endpoint.set_start_response(Response(234))
+        self.endpoint.add_data_response(Response(245))
+        for i in range(1,3):
+            resp_json = read_endpoint.get_json(1)
+            logging.info('resp %s', resp_json)
+            if 'final_status' in resp_json:
+                break
+            time.sleep(1)
         else:
-            self.assertTrue(False)
+            self.fail('expected final_status')
+
+
 
 if __name__ == '__main__':
     unittest.main()

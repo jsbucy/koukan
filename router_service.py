@@ -57,7 +57,8 @@ class EndpointFactory:
     def create(self, host):
         return self.parent.get_router_transaction(host)
     def get(self, rest_id):
-        # TODO need to return inflight?
+        if rest_id in self.parent.inflight:
+            return self.parent.inflight[rest_id]
         shim = ShimTransaction(self.parent)
         if not shim.read(rest_id):
             logging.info('EndpointFactory.get shim read failed')
@@ -77,6 +78,7 @@ class ShimTransaction:
         return self.final_status
 
     def read(self, rest_id):
+        logging.info('ShimTransaction.read %s', rest_id)
         storage_tx = self.parent.storage.get_transaction_cursor()
         if not storage_tx.load(rest_id=rest_id):
             return False
@@ -104,7 +106,13 @@ class ShimTransaction:
         return True
 
 class Service:
+    lock : Lock = None
+    inflight : Dict[str, RouterTransaction] = None
+
     def __init__(self, config=None):
+        self.lock = Lock()
+        self.inflight = {}
+
         self.executor = Executor(10, {
             Tag.LOAD: 1,
             Tag.MX: 3,
@@ -162,11 +170,22 @@ class Service:
                                            flask_app)
             self.wsgi_server.serve_forever()
 
-    def get_router_transaction(self, host):
+    def get_router_transaction(self, host, storage_tx=None):
         next, tag, msa = self.get_transaction(host)
-        return RouterTransaction(
+        done_cb = None
+        tx = RouterTransaction(
             self.executor, self.storage, self.blob_id_map, self.blobs,
-            next, host, msa, tag), msa
+            next, host, msa, tag, storage_tx)
+        if storage_tx is None:
+            tx.generate_rest_id(lambda: self.done(tx))
+        # xxx ttl/gc of these to be provided by rest service?
+        self._add_inflight(tx)
+
+        return tx, msa
+
+    def done(self, tx):
+        logging.info('done %s', tx.rest_id)
+        self._del_inflight(tx)
 
     # -> Transaction, Tag, is-msa
     def get_transaction(self, host):
@@ -177,14 +196,18 @@ class Service:
 
     def handle(self, storage_tx):
         # TODO need to wire this into rest service resources
-        transaction, msa = self.get_router_transaction(storage_tx.host)
-        transaction.load(storage_tx)
+        transaction, msa = self.get_router_transaction(
+            storage_tx.host, storage_tx)
+        transaction.load()
+        self._del_inflight(transaction)
 
     def load(self):
         while True:
             logging.info("dequeue")
             # XXX config, backoff
-            storage_tx = self.storage.load_one(min_age=1)
+            # XXX if min_age is too low, recovery/retry can select a
+            # row that the done_cb hasn't run yet and is still inflight
+            storage_tx = self.storage.load_one(min_age=2)
             if storage_tx:
                 logging.info("dequeued %d", storage_tx.id)
                 self.executor.enqueue(Tag.LOAD, lambda: self.handle(storage_tx))
@@ -192,6 +215,18 @@ class Service:
                 logging.info("dequeue idle")
                 # xxx config
                 time.sleep(1)
+
+    def _add_inflight(self, tx):
+        assert(tx.rest_id)
+        with self.lock:
+            assert(tx.rest_id not in self.inflight)
+            self.inflight[tx.rest_id] = tx
+
+    def _del_inflight(self, tx):
+        assert(tx.rest_id)
+        with self.lock:
+            del self.inflight[tx.rest_id]
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
