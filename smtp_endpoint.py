@@ -31,15 +31,24 @@ class SmtpEndpoint:
     data : bytes = None
     start_resp : Response = None
     final_status : Response = None
+    received_last = False  # xxx rest service endpoint abc
+    blobs_received = -1
+    rest_id = None
 
     def __init__(self, rest_id, ehlo_hostname):
         self.rest_id = rest_id
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
 
-    def generate_rest_id(self):
-        return self.rest_id
-
+    def _shutdown(self):
+        # SmtpEndpoint is a per-request object but we could return
+        # the connection to a cache here
+        if self.smtp:
+            try:
+                self.smtp.quit()
+            except Exception as e:
+                logging.info('SmtpEndpoint.shutdown %s', e)
+            self.smtp = None
 
     def connect(self, host, port):
         self.smtp = smtplib.SMTP()
@@ -51,7 +60,7 @@ class SmtpEndpoint:
             self.smtp._host = host
             return self.smtp.connect(host, port)
         except Exception as e:
-            print('SmtpEndpoint.connect', e, host, port)
+            logging.info('SmtpEndpoint.connect %s %s %d', e, host, port)
             return [400, b'connect error']
 
 
@@ -59,13 +68,17 @@ class SmtpEndpoint:
               local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp=None):
-        logging.info('SmtpEndpoint.start %s', remote_host)
+        logging.info('SmtpEndpoint.start %s %s', self.rest_id, remote_host)
         resp = Response.from_smtp(
             self.connect(host=remote_host[0], port=remote_host[1]))
-        if resp.err(): return resp
+        if resp.err():
+            self._shutdown()
+            return resp
 
         resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
-        if resp.err(): return resp
+        if resp.err():
+            self._shutdown()
+            return resp
 
         if 'starttls' in self.smtp.esmtp_features:
             # this returns the smtp response to the starttls command
@@ -76,23 +89,31 @@ class SmtpEndpoint:
             if ehlo_resp.err(): return ehlo_resp
 
         resp = Response.from_smtp(self.smtp.mail(mail_from))
-        if resp.err(): return resp
+        if resp.err():
+            self._shutdown()
+            return resp
 
         self.data = bytes()
 
-        return Response.from_smtp(self.smtp.rcpt(rcpt_to))
+        self.start_resp = Response.from_smtp(self.smtp.rcpt(rcpt_to))
+        return self.start_resp
 
     def append_data(self, last : bool, blob : Blob):
-        print('SmtpEndpoint.append_data last=', last, "len=", blob.len())
+        logging.info('SmtpEndpoint.append_data last=%s len=%d',
+                     last, blob.len())
         self.data += blob.contents()
+        self.blobs_received += 1
         if not last:
             return None
+        else:
+            self.received_last = True
 
         self.final_status = Response.from_smtp(self.smtp.data(self.data))
-        print(self.final_status)
+        logging.info(self.final_status)
+        self._shutdown()
         return self.final_status
 
     def get_start_result(self, timeout=None):
-        return None
+        return self.start_resp
     def get_final_status(self, timeout=None):
-        return None  # XXX this is always sync
+        return self.final_status

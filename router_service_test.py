@@ -51,7 +51,7 @@ class RouterServiceTest(unittest.TestCase):
                             format='%(asctime)s %(message)s')
 
         # find a free port
-        with socketserver.TCPServer(("localhost", 0), None) as s:
+        with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             self.port = s.server_address[1]
         config_json['rest_port'] = self.port
         self.router_url = 'http://localhost:%d' % self.port

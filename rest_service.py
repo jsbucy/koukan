@@ -17,124 +17,76 @@ import logging
 from typing import Any, Dict, Optional, List
 from typing import Callable, Tuple
 
-import response
-MailResponse = response.Response
+from response import Response as MailResponse
 
-class Transaction:
-    id : str
-    msa : bool
-    chunk_id : int = None
-    last : bool = False
+class RestRequestHandler:
+    rest_id : str
     endpoint : Any
-    start_resp : MailResponse = None
-    # response from the last append or the first one that yielded an error
-    final_status : MailResponse = None
-    start_inflight = False
 
-    local_host = None
-    remote_host = None
-    mail_from = None
-    transaction_esmtp = None
-    rcpt_to = None
-    rcpt_esmtp = None
-    mx_multi_rcpt = False
-
-    lock : Lock
-
-    def __init__(self, endpoint, msa, blob_storage, rest_resources):
+    def __init__(self, endpoint, blob_storage):
         self.endpoint = endpoint
-        self.msa = msa
+        self.rest_id = endpoint.rest_id
         self.blob_storage = blob_storage
-        self.rest_resources = rest_resources
 
-    def init(self, req_json) -> Optional[Response]:
-        if not self.endpoint:
-            return Response(status=404, response=['unknown host'])
-        self.id = self.endpoint.rest_id
-
-        self.local_host = req_json.get('local_host', None)
-        self.remote_host = req_json.get('remote_host', None)
-        self.mail_from = req_json.get('mail_from', None)
-        self.rcpt_to = req_json.get('rcpt_to', None)
-
-        return None
+    def start(self, req_json) -> Optional[Response]:
+        return self.endpoint.start(
+            local_host = req_json.get('local_host', None),
+            remote_host = req_json.get('remote_host', None),
+            mail_from = req_json.get('mail_from', None),
+            transaction_esmtp = None,  # XXX
+            rcpt_to = req_json.get('rcpt_to', None),
+            rcpt_esmtp = None)
 
     def get(self):
-        # TODO: this currently waits for 1s if inflight which isn't
-        # great in terms of busy-waiting but still pretty short
-        # relative to a http timeout
+        # TODO: the upstream code currently waits for 1s if inflight
+        # which isn't great in terms of busy-waiting but still pretty
+        # short relative to a http timeout
 
         # mx always waits for start resp
-        # msa waits for start resp err within short timeout and then detaches
+        # msa waits for start resp (perm) err within short timeout and
+        # then detaches
 
         json_out = {}
         # xxx this is the wrong way to surface this?
-        if not self.start_resp:
-            self.start_resp = self.endpoint.get_start_result()
-        if self.start_resp:
-            json_out['start_response'] = self.start_resp.to_json()
+        start_resp = self.endpoint.get_start_result()
+        if start_resp is not None:
+            json_out['start_response'] = start_resp.to_json()
 
-        if not self.final_status:
-            self.final_status = self.endpoint.get_final_status(
-                timeout = 1 if self.last else 0)
-        if self.final_status:
-            json_out['final_status'] = self.final_status.to_json()
+        final_status = self.endpoint.get_final_status(
+            timeout = 1 if self.endpoint.received_last else 0)
+        if final_status is not None:
+            json_out['final_status'] = final_status.to_json()
 
         return jsonify(json_out)
 
-    def start(self):
-        self.start_resp = self.endpoint.start(
-            self.local_host, self.remote_host,
-            self.mail_from, self.transaction_esmtp,
-            self.rcpt_to, self.rcpt_esmtp)
 
     def append_data(self, req_json):
         assert(isinstance(req_json['chunk_id'], int))
         chunk_id : int = req_json['chunk_id']
         last : bool = req_json['last']
+        mx_multi_rcpt = False
         if chunk_id == 0:
-            self.mx_multi_rcpt = bool(req_json.get('mx_multi_rcpt', False))
+            mx_multi_rcpt = bool(req_json.get('mx_multi_rcpt', False))
 
-        # XXX do this here or in RouterTransaction? Note the router
-        # transaction code propagates start errors to final and this
-        # currently doesn't.
-        if self.msa:
-            if self.start_resp is not None and self.start_resp.perm():
-                return Response(
-                    status=400,
-                    response=['failed precondition: msa start upstream perm'])
-            if self.final_status is not None and self.final_status.perm():
-                return Response(
-                    status=400,
-                    response=['failed precondition: msa append upstream perm'])
-        else:  # mx
-            if self.start_resp is None or self.start_resp.err():
-                return Response(
-                    status=400,
-                    response=['failed precondition: mx start upstream err'])
-            if not self.mx_multi_rcpt and self.final_status is not None:
-                return jsonify({'final_status': self.final_status.to_json()})
-
-
-        if self.chunk_id == chunk_id:  # noop
+        if self.endpoint.blobs_received == chunk_id:  # noop
             # XXX this needs to just return the previous response
             return Response(status=400, response=['dupe appendData'])
 
-        # XXX shouldn't this verify chunk_id == self.chunk_id + 1?
+        if chunk_id != self.endpoint.blobs_received + 1:
+            return Response(status=400,
+                            response=['bad blob num %d %d',
+                                      chunk_id, self.endpoint.blobs_received])
 
-        if self.last and last:
+        if self.endpoint.received_last and last:
             return Response(status=400, response=['bad last after last'])
 
-        if self.mx_multi_rcpt:
+        if mx_multi_rcpt:
             self.endpoint.set_mx_multi_rcpt()
-
-        self.chunk_id = chunk_id
-        self.last = last
 
         # (short) data inline in request
         if 'd' in req_json:
             logging.info('rest service %s append_data inline %d',
-                         self.id, len(req_json['d']))
+                         self.rest_id, len(req_json['d']))
             d : bytes = req_json['d'].encode('utf-8')
             self.append_blob_upstream(last, InlineBlob(d))
             resp_json = {}
@@ -164,13 +116,13 @@ class Transaction:
 
         resp_json = { 'uri': '/blob/' + str(blob_id) }
         rest_resp = jsonify(resp_json)
-        logging.info('rest service %s %s', self.id, resp_json)
+        logging.info('rest service %s %s', self.rest_id, resp_json)
         return rest_resp
 
 
     def append_blob_upstream(self, last : bool, blob : Blob):
-        logging.info('%s rest service Transaction.append_data %s %d',
-                     self.id, last, blob.len())
+        logging.info('%s rest service RestRequestHandler.append_data %s %d',
+                     self.rest_id, last, blob.len())
         # XXX put back a precondition check here similar to that at
         # the beginning of append_data() that the upstream transaction
         # hasn't already failed
@@ -181,8 +133,8 @@ class Transaction:
         except:
             resp = MailResponse.Internal(
                 'rest transaction append_data exception')
-        logging.info('%s rest service Transaction.append_data %s',
-                     self.id, resp)
+        logging.info('%s rest service RestRequestHandler.append_data %s',
+                     self.rest_id, resp)
 
         if last:
             self.last = True
@@ -193,15 +145,11 @@ class Transaction:
         return resp
 
     def set_durable(self):
-        if not self.last:
+        if not self.endpoint.received_last:
             rest_resp = Response(
                 status=400,
                 response=['RouterTransaction.smtp_mode set_durable: have not '
                           'received last append_data'])
-
-        # this is where we "detach" the operation so
-        # subsequent rest calls go through to the router
-        self.rest_resources.remove_transaction(self.id)
 
         if self.endpoint.set_durable() is None:
             rest_resp = Response(
@@ -212,22 +160,6 @@ class Transaction:
         return rest_resp
 
 
-# TODO need some integration with storage so these IDs can be stable
-class RestResources:
-    # current transaction id on each endpoint
-    transaction : Dict[str, Transaction] = {}
-
-    def add_transaction(self, t : Transaction):
-        # XXX locking?
-        assert(t.id not in self.transaction)
-        self.transaction[t.id] = t
-
-    def get_transaction(self, id : str) -> Optional[Transaction]:
-        return self.transaction.get(id, None)
-
-    def remove_transaction(self, id):
-        if id in self.transaction:
-            del self.transaction[id]
 
 #class EndpointFactory:
 #    def create(self, host) -> Endpoint, bool:  # msa
@@ -241,54 +173,47 @@ def create_app(
         blobs : BlobStorage):
     app = Flask(__name__)
 
-    resources = RestResources()
-
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> Response:
         print(request, request.headers)
         endpoint, msa = endpoint_factory.create(request.headers['host'])
-        t = Transaction(endpoint, msa, blobs, resources)
         if not request.is_json:
             return Response(status=400, response=['not json'])
-        resp = t.init(request.get_json())
-        if resp is not None: return resp
-
-        # local_host/remote_host ~
-        # http x-forwarded-host/-for?
-
-        resources.add_transaction(t)
-        t.start()
+        handler = RestRequestHandler(endpoint, blobs)
+        resp = handler.start(request.get_json())
 
         json_out = {
-            'url': '/transactions/' + t.id
+            'url': '/transactions/' + handler.rest_id
         }
+        # xxx this could be sync success or something like a syntax error
+        if resp is not None:
+            json_out['start_response'] = resp.to_json()
 
         return jsonify(json_out)
 
     @app.route('/transactions/<transaction_id>',
                methods=['GET'])
     def get_transaction(transaction_id) -> Response:
-        t = resources.get_transaction(transaction_id)
-        if t is None:
-            e = endpoint_factory.get(transaction_id)
-            assert(e is not None)
-            # oneshot
-            t = Transaction(e, False, None, None)  # msa, blobs, resources xxx?
+        t = endpoint_factory.get(transaction_id)
         if t is None:
             return Response(status=404, response=['transaction not found'])
-        return t.get()
+        handler = RestRequestHandler(t, None)  # msa, blobs
+        return handler.get()
 
     @app.route('/transactions/<transaction_id>/appendData',
                methods=['POST'])
     def append_data(transaction_id):
-        t = resources.get_transaction(transaction_id)
-        if t is None:
-            return Response(status=404, response=['transaction not found'])
         if not request.is_json:
             return Response(status=400, response=['not json'])
+
+        t = endpoint_factory.get(transaction_id)
+        if t is None:
+            return Response(status=404, response=['transaction not found'])
+        handler = RestRequestHandler(t, blobs)
+
         logging.info("rest service append_data %s %s %s",
                      request, request.headers, request.get_json())
-        rest_resp = t.append_data(request.get_json())
+        rest_resp = handler.append_data(request.get_json())
         logging.info('rest service append_data %s', rest_resp)
         return rest_resp
 
@@ -300,10 +225,11 @@ def create_app(
         # TODO this should take a parameter in the json whether or not
         # to emit a bounce. smtp gw wants this; first-class rest
         # clients that are willing to poll the lro may not.
-        t = resources.get_transaction(transaction_id)
+        t = endpoint_factory.get(transaction_id)
         if t is None:
             return Response(status=404, response=['transaction not found'])
-        rest_resp = t.set_durable()
+        handler = RestRequestHandler(t, blobs)
+        rest_resp = handler.set_durable()
         logging.info("rest service smtp_mode %s", rest_resp)
         return rest_resp
 

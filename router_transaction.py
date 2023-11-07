@@ -45,6 +45,7 @@ MAX_RETRY = 3 * 86400
 
 class RouterTransaction:
     executor : Executor
+    blobs_received = -1
     blobs : List[Blob]
     blob_upstream_queue : List[Blob]
     upstream_start_inflight = False
@@ -71,7 +72,7 @@ class RouterTransaction:
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
-        self.have_last_blob = False
+        self.received_last = False
         self.storage_id = None
 
         self.appended_action = False
@@ -115,7 +116,7 @@ class RouterTransaction:
     def start(self,
               local_host, remote_host,
               mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
+              rcpt_to, rcpt_esmtp) -> Optional[Response]:
         assert(self.rest_id)
         assert(rcpt_to)
         if not self.storage_tx.write_envelope(
@@ -129,6 +130,7 @@ class RouterTransaction:
                     mail_from, transaction_esmtp,
                     rcpt_to, rcpt_esmtp)
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
+        return None
 
     def load(self):
         assert(self.storage_tx)
@@ -196,7 +198,7 @@ class RouterTransaction:
 
     def get_final_status(self, timeout=1):
         with self.lock:
-            if self.have_last_blob and self.upstream_append_inflight:
+            if self.received_last and self.upstream_append_inflight:
                 self.cv.wait_for(lambda: self.next_final_resp is not None,
                                  timeout=timeout)
             return self.next_final_resp
@@ -238,8 +240,9 @@ class RouterTransaction:
             return resp
 
         with self.lock:
+            self.blobs_received += 1
             self.blobs.append(blob)
-            if last: self.have_last_blob = True
+            if last: self.received_last = True
             self.blob_upstream_queue.append(blob)
             self.maybe_start_append_upstream_locked()
 
@@ -257,7 +260,7 @@ class RouterTransaction:
             last = False
             with self.lock:
                 logging.info('RouterTransaction.append_upstream %d %s',
-                             len(self.blob_upstream_queue), self.have_last_blob)
+                             len(self.blob_upstream_queue), self.received_last)
                 # Bail here if the upstream transaction has already
                 # failed. This is a precondition of the upstream
                 # append and is synchronous here.
@@ -267,7 +270,7 @@ class RouterTransaction:
                     self.upstream_append_inflight = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
-                last = (self.have_last_blob and not self.blob_upstream_queue)
+                last = (self.received_last and not self.blob_upstream_queue)
             self.append_blob_upstream(last, blob)
 
     def append_blob_upstream(self,
@@ -326,7 +329,7 @@ class RouterTransaction:
         logging.info('RouterTransaction.set_durable')
         # the downstream transaction must have sent the last append
         # but the upstream may still be inflight
-        assert(self.have_last_blob)
+        assert(self.received_last)
         assert(self.storage_id)
 
         status = Status.WAITING
@@ -335,7 +338,7 @@ class RouterTransaction:
                 status = Status.DONE
             # else temp, leave it WAITING
         # xxx msa upstream_start_inflight?
-        elif self.have_last_blob and self.upstream_append_inflight:
+        elif self.received_last and self.upstream_append_inflight:
             status = Status.INFLIGHT
 
         logging.info('RouterTransaction.set_durable status=%d %s',

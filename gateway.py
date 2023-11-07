@@ -1,7 +1,7 @@
 import sys
 
 from rest_endpoint import RestEndpoint, BlobIdMap
-from smtp_endpoint import Factory as SmtpFactory
+from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 
 from executor import Executor
 from tags import Tag
@@ -13,13 +13,25 @@ import gunicorn_main
 
 import logging
 
+from typing import Dict
+
+# XXX ttl/gc?
+# TODO merge with similar functionality in router_service if it makes sense
 class EndpointFactory:
+    inflight : Dict[str, SmtpEndpoint]
+
     def __init__(self, parent):
         self.parent = parent
+        self.inflight = {}
+
     def create(self, host):
-        return self.parent.smtp_endpoint_factory(host)
+        endpoint,msa = self.parent.smtp_endpoint_factory(host)
+        logging.info('gateway EndpointFactory.create %s', endpoint.rest_id)
+        self.inflight[endpoint.rest_id] = endpoint
+        return endpoint,msa
+
     def get(self, rest_id):
-        return None
+        return self.inflight.get(rest_id, None)
 
 class SmtpGateway:
     def __init__(self):

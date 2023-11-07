@@ -67,6 +67,9 @@ class EndpointFactory:
 
 # stand-in for RouterTransaction for rest reads of at-rest/stored transactions
 class ShimTransaction:
+    received_last = True  # XXX
+    rest_id = None
+
     def __init__(self, parent):
         self.parent = parent
         self.final_status = None
@@ -79,6 +82,7 @@ class ShimTransaction:
 
     def read(self, rest_id):
         logging.info('ShimTransaction.read %s', rest_id)
+        self.rest_id = rest_id
         storage_tx = self.parent.storage.get_transaction_cursor()
         if not storage_tx.load(rest_id=rest_id):
             return False

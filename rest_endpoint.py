@@ -116,7 +116,7 @@ class RestEndpoint:
         return self.start_response(self.timeout_start)
 
     def append_data(self, last : bool, blob : Blob,
-                    mx_multi_rcpt=None) -> Response:
+                    mx_multi_rcpt=None) -> Optional[Response]:
         if self.msa:
             assert(self.start_resp is None or not self.start_resp.perm())
         else:
@@ -172,6 +172,8 @@ class RestEndpoint:
         logging.info('RestEndpoint.append_data POST resp %s', resp_json)
         # XXX http ok (and below)
         if rest_resp.status_code > 299 or 'final_status' in resp_json:
+            logging.debug('RestEndpoint.append_data POST failed %d %s',
+                          rest_resp.status_code, rest_resp.text)
             if 'final_status' in resp_json:
                 return Response.from_json(resp_json['final_status'])
 
@@ -258,7 +260,7 @@ class RestEndpoint:
         self.start_resp = resp
         return self.start_resp
 
-    def get_status(self, timeout):
+    def get_status(self, timeout) -> Optional[Response]:
         if self.final_status: return self.final_status
         if not self.wait_response: return None
         # TODO inflight waiter list thing?
