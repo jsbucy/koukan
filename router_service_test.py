@@ -42,7 +42,9 @@ class Wiring:
 config_json = {
     'rest_port': None,
     'db_filename': '',
-    'use_gunicorn': False
+    'use_gunicorn': False,
+    'tx_idle_timeout': 1,
+    'tx_idle_gc': 1,
 }
 
 class RouterServiceTest(unittest.TestCase):
@@ -78,12 +80,10 @@ class RouterServiceTest(unittest.TestCase):
                 break
 
     def tearDown(self):
-        self.service.wsgi_server.shutdown()
+        self.service.shutdown()
         self.service_thread.join()
 
     def test_read_routing(self):
-        logging.info('test_read_routing')
-
         start_endpoint = RestEndpoint(
             base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
@@ -138,6 +138,24 @@ class RouterServiceTest(unittest.TestCase):
             self.fail('expected final_status')
 
 
+    def test_idle(self):
+        start_endpoint = RestEndpoint(
+            base_url=self.router_url, http_host='outbound-gw',
+            wait_response=False,
+            msa=True)
+
+        start_resp = start_endpoint.start(None, None, 'alice', None, 'bob', None)
+        for i in range(1,5):
+            resp_json = start_endpoint.get_json(2)
+            logging.info(resp_json)
+            if 'final_status' in resp_json:
+                resp = Response.from_json(resp_json['final_status'])
+                if resp.code == 500 and resp.message == 'cancelled':
+                    break
+            time.sleep(1)
+        else:
+            self.fail('expected cancellation')
+        self.assertTrue(self.endpoint.aborted)
 
 if __name__ == '__main__':
     unittest.main()

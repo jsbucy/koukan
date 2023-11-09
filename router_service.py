@@ -34,22 +34,7 @@ import json
 
 from wsgiref.simple_server import make_server
 
-class Config:
-    js = None
-
-    def __init__(self, filename=None, js=None):
-        if filename:
-            config_json_file = open(filename, "r")
-            self.js = json.load(config_json_file)
-        elif js:
-            self.js = js
-
-    def get_str(self, k):
-        return self.js.get(k, None)
-    def get_int(self, k):
-        return int(self.js[k]) if k in self.js else None
-    def get_bool(self, k):
-        return bool(self.js[k]) if k in self.js else None
+from config import Config
 
 class EndpointFactory:
     def __init__(self, parent):
@@ -112,6 +97,8 @@ class ShimTransaction:
 class Service:
     lock : Lock = None
     inflight : Dict[str, RouterTransaction] = None
+    last_gc = 0
+    stop_dequeue = False
 
     def __init__(self, config=None):
         self.lock = Lock()
@@ -134,6 +121,12 @@ class Service:
         self.rest_blob_id_map = RestBlobIdMap()
 
         self.endpoint_factory = EndpointFactory(self)
+
+    def shutdown(self):
+        if self.wsgi_server:
+            self.wsgi_server.shutdown()
+        self.stop_dequeue = True
+        self.dequeue_thread.join()
 
     def main(self, wiring):
         if self.config is None:
@@ -199,18 +192,21 @@ class Service:
         return endpoint, tag, msa
 
     def handle(self, storage_tx):
-        # TODO need to wire this into rest service resources
         transaction, msa = self.get_router_transaction(
             storage_tx.host, storage_tx)
         transaction.load()
         self._del_inflight(transaction)
 
     def load(self):
-        while True:
+        while not self.stop_dequeue:
             logging.info("dequeue")
+            self._gc_inflight()
             # XXX config, backoff
-            # XXX if min_age is too low, recovery/retry can select a
-            # row that the done_cb hasn't run yet and is still inflight
+
+            # XXX there is a race between RouterTransaction updating
+            # the storage (which makes it selectable here) vs running
+            # the done callback, if min_age is too low, this can clash
+            # with inflight
             storage_tx = self.storage.load_one(min_age=2)
             if storage_tx:
                 logging.info("dequeued %d", storage_tx.id)
@@ -231,6 +227,18 @@ class Service:
         with self.lock:
             del self.inflight[tx.rest_id]
 
+    def _gc_inflight(self):
+        now = time.monotonic()
+        if (now - self.last_gc) < self.config.get_int('tx_idle_gc', 5): return
+        self.last_gc = now
+        with self.lock:
+            dele = []
+            for rest_id, tx in self.inflight.items():
+                tx_idle = now - tx.idle_start if tx.idle_start else 0
+                if tx_idle > self.config.get_int('tx_idle_timeout', 5):
+                    tx.abort()
+                    dele.append(rest_id)
+            for x in dele: del self.inflight[x]
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

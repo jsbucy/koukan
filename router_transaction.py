@@ -55,6 +55,10 @@ class RouterTransaction:
     storage_tx : Optional[TransactionCursor] = None
     done_cb = None
 
+    # if this transaction requires further downstream input to make
+    # progress, when the last update was, for ttl
+    idle_start = None
+
     def __init__(self, executor, storage, blob_id_map : BlobIdMap,
                  blob_storage, next, host, msa, tag, storage_tx=None):
         self.executor = executor
@@ -130,6 +134,7 @@ class RouterTransaction:
                     mail_from, transaction_esmtp,
                     rcpt_to, rcpt_esmtp)
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
+        self.idle_start = time.monotonic()
         return None
 
     def load(self):
@@ -168,10 +173,10 @@ class RouterTransaction:
 
         # any upstream start transaction error ends the upstream
         # transaction but the downstream transaction may be able to continue
-        if resp.err():
-            self.maybe_append_action(resp)
-
         with self.lock:
+            if resp.err():
+                self.maybe_append_action_locked(resp)
+
             self.next_start_resp = resp
             if resp.err():
                 self.next_final_resp = resp
@@ -246,6 +251,11 @@ class RouterTransaction:
             self.blob_upstream_queue.append(blob)
             self.maybe_start_append_upstream_locked()
 
+        if last:
+            self.idle_start = None
+        else:
+            self.idle_start = time.monotonic()
+
         return None  # async
 
     def maybe_start_append_upstream_locked(self):
@@ -290,7 +300,7 @@ class RouterTransaction:
             if self.next_final_resp is None and (last or resp.err()):
                 # make the status durable before possibly surfacing to
                 # clients/rest
-                self.maybe_append_action(resp)
+                self.maybe_append_action_locked(resp)
                 self.next_final_resp = resp
                 self.cv.notify_all()
 
@@ -298,12 +308,13 @@ class RouterTransaction:
 
     # append(last) finishing upstream or set_durable() can happen in
     # either order
-    def maybe_append_action(self, next_final_resp):
+    def maybe_append_action_locked(self, next_final_resp):
         logging.info('RouterTransaction.maybe_append_action %s %s appended=%s',
                      self.rest_id, next_final_resp, self.appended_action)
         if self.appended_action: return
         assert(self.storage_id)
         if next_final_resp is None: return
+        self.appended_action = True
 
         action = Action.TEMP_FAIL
         if next_final_resp.ok():
@@ -320,10 +331,19 @@ class RouterTransaction:
 
         if self.done_cb: self.done_cb()
 
-        self.appended_action = True
 
+    # called by idle gc or rest client can invoke directly
+    # noop if already delivered
+    # writes an abort action
     def abort(self):
-        pass
+        with self.lock:
+            if self.next_final_resp is not None: return
+            if self.appended_action: return
+            self.appended_action = True
+
+        self.storage_tx.append_action(Action.ABORT, Response(500, 'cancelled'))
+        self.next.abort()
+
 
     def set_durable(self):
         logging.info('RouterTransaction.set_durable')
@@ -359,7 +379,8 @@ class RouterTransaction:
         # called, write the action here
         # upstream append may still be inflight, in that case
         # next_final_resp is None, this early returns
-        self.maybe_append_action(self.next_final_resp)
+        with self.lock:
+            self.maybe_append_action_locked(self.next_final_resp)
 
         return self.storage_id
 

@@ -52,11 +52,20 @@ class InMemoryHandler:
         print('End of message')
         return '250 Message accepted for delivery'
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s %(message)s')
+class FakeSmtpd:
+    def __init__(self, port):
+        self.controller = Controller(InMemoryHandler(), hostname="localhost",
+                                     port=port)
+        # proxy_protocol_timeout=30)
 
-from aiosmtpd.controller import Controller
-controller = Controller(InMemoryHandler(), hostname="localhost", port=argv[1])
-# proxy_protocol_timeout=30)
-controller.start()
-time.sleep(1000000)
+    def start(self):
+        self.controller.start()
+    def stop(self):
+        self.controller.stop()
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(message)s')
+    smtpd = FakeSmtpd(argv[1])
+    smtpd.start()
+    time.sleep(1000000)

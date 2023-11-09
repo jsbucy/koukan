@@ -15,36 +15,31 @@ import logging
 
 from typing import Dict
 
-# XXX ttl/gc?
-# TODO merge with similar functionality in router_service if it makes sense
-class EndpointFactory:
-    inflight : Dict[str, SmtpEndpoint]
+from threading import Thread
 
-    def __init__(self, parent):
-        self.parent = parent
-        self.inflight = {}
+import time
 
-    def create(self, host):
-        endpoint,msa = self.parent.smtp_endpoint_factory(host)
-        logging.info('gateway EndpointFactory.create %s', endpoint.rest_id)
-        self.inflight[endpoint.rest_id] = endpoint
-        return endpoint,msa
+from config import Config
 
-    def get(self, rest_id):
-        return self.inflight.get(rest_id, None)
+from wsgiref.simple_server import make_server
+
 
 class SmtpGateway:
-    def __init__(self):
-        self.rest_port = int(sys.argv[1])
-        self.router_port = int(sys.argv[2])
-        self.mx_port = int(sys.argv[3])
-        self.msa_port = int(sys.argv[4])
-        self.cert = sys.argv[5]
-        self.key = sys.argv[6]
-        self.auth_secrets = sys.argv[7]
-        self.ehlo_host = sys.argv[8]
-        self.listen_host = sys.argv[9]
+    inflight : Dict[str, SmtpEndpoint]
+    config = None
+    shutdown_gc = False
 
+    def __init__(self, config):
+        self.config = config
+        self.rest_port = config.get_int('rest_port')
+        self.router_port = config.get_int('router_port')
+        self.mx_port = config.get_int('mx_port')
+        self.msa_port = config.get_int('msa_port')
+        self.cert = config.get_str('cert')
+        self.key = config.get_str('key')
+        self.auth_secrets = config.get_str('auth_secrets')
+        self.ehlo_host = config.get_str('ehlo_host')
+        self.listen_host = config.get_str('listen_host')
 
         self.blob_id_map = BlobIdMap()
 
@@ -53,7 +48,17 @@ class SmtpGateway:
         self.blobs = BlobStorage()
         self.smtp_factory = SmtpFactory()
 
-        self.endpoint_factory = EndpointFactory(self)
+        self.inflight = {}
+
+        self.gc_thread = Thread(target = lambda: self.gc_inflight(),
+                                daemon=True)
+        self.gc_thread.start()
+
+    def shutdown(self):
+        if self.gc_thread:
+            self.shutdown_gc = True
+            self.gc_thread.join()
+            self.gc_thread = None
 
     def mx_rest_factory(self):
         return RestEndpoint(self.router_base_url, http_host='inbound-gw',
@@ -63,12 +68,39 @@ class SmtpGateway:
         return RestEndpoint(self.router_base_url, http_host='outbound-gw',
                             msa=True)
 
-    def smtp_endpoint_factory(self, host):
+    # xxx EndpointFactory abc
+    def create(self, host):
         if host == 'outbound':
-            return self.smtp_factory.new(
-                ehlo_hostname=self.ehlo_host), False # msa
+            endpoint = self.smtp_factory.new(
+                ehlo_hostname=self.ehlo_host)
+            self.inflight[endpoint.rest_id] = endpoint
+            return endpoint, False # msa
         else:
             return None
+
+    def get(self, rest_id):
+        return self.inflight.get(rest_id, None)
+
+    def gc_inflight(self):
+        last_gc = 0
+        while not self.shutdown_gc:
+            now = time.monotonic()
+            delta = now - last_gc
+            tx_idle_gc = self.config.get_int('tx_idle_gc', 5)
+            if delta < tx_idle_gc:
+                time.sleep(tx_idle_gc - delta)
+            last_gc = now
+            dele = []
+            for (rest_id, tx) in self.inflight.items():
+                tx_idle = now - tx.idle_start if tx.idle_start else 0
+                if tx_idle > self.config.get_int('tx_idle_timeout', 5):
+                    logging.info('SmtpGateway.gc_inflight shutdown idle %s',
+                                 tx.rest_id)
+                    tx._shutdown()
+                    dele.append(rest_id)
+            for d in dele:
+                logging.info(d)
+                del self.inflight[d]
 
     def main(self):
         smtp_service(lambda: self.mx_rest_factory(), port=self.mx_port,
@@ -82,14 +114,23 @@ class SmtpGateway:
                      auth_secrets_path=self.auth_secrets,
                      hostname=self.listen_host)
 
-        gunicorn_main.run(
-            'localhost', self.rest_port, cert=None, key=None,
-            app=rest_service.create_app(
-                self.endpoint_factory, self.blobs))
+        flask_app=rest_service.create_app(
+            self,  # xxx EndpointFactory abc
+            self.blobs)
+        if self.config.get_bool('use_gunicorn'):
+            gunicorn_main.run(
+                'localhost', self.rest_port, cert=None, key=None,
+                app=flask_app)
+        else:
+            self.wsgi_server = make_server('localhost',
+                                           self.config.get_int('rest_port'),
+                                           flask_app)
+            self.wsgi_server.serve_forever()
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
-    gw = SmtpGateway()
+    config = Config(filename=sys.argv[1])
+    gw = SmtpGateway(config)
     gw.main()

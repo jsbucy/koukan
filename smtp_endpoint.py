@@ -11,6 +11,9 @@ import logging
 
 import psutil
 
+import time
+
+factory_rest_id_next = 0
 
 class Factory:
     def __init__(self):
@@ -18,11 +21,11 @@ class Factory:
         proc_self = psutil.Process()
         self.rest_id_base = '%s.%s.' % (
             proc_self.pid, int(proc_self.create_time()))
-        self.rest_id_next = 0
 
     def new(self, ehlo_hostname):
-        rest_id = self.rest_id_base + str(self.rest_id_next)
-        self.rest_id_next += 1
+        global factory_rest_id_next
+        rest_id = self.rest_id_base + str(factory_rest_id_next)
+        factory_rest_id_next += 1
         return SmtpEndpoint(rest_id, ehlo_hostname)
 
 # rest or smtp services call upon a single instance of this
@@ -34,6 +37,7 @@ class SmtpEndpoint:
     received_last = False  # xxx rest service endpoint abc
     blobs_received = -1
     rest_id = None
+    idle_start = None
 
     def __init__(self, rest_id, ehlo_hostname):
         self.rest_id = rest_id
@@ -41,14 +45,18 @@ class SmtpEndpoint:
         self.ehlo_hostname = ehlo_hostname
 
     def _shutdown(self):
-        # SmtpEndpoint is a per-request object but we could return
-        # the connection to a cache here
-        if self.smtp:
-            try:
-                self.smtp.quit()
-            except Exception as e:
-                logging.info('SmtpEndpoint.shutdown %s', e)
-            self.smtp = None
+        # SmtpEndpoint is a per-request object but we could return the
+        # connection to a cache here if the previous transaction was
+        # successful
+
+        logging.info('SmtpEndpoint._shutdown %s', self.rest_id)
+        if self.smtp is None: return
+
+        try:
+            self.smtp.quit()
+        except Exception as e:
+            logging.info('SmtpEndpoint._shutdown %s %s', self.rest_id, e)
+        self.smtp = None
 
     def connect(self, host, port):
         self.smtp = smtplib.SMTP()
@@ -68,6 +76,7 @@ class SmtpEndpoint:
               local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp=None):
+        self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.start %s %s', self.rest_id, remote_host)
         resp = Response.from_smtp(
             self.connect(host=remote_host[0], port=remote_host[1]))
@@ -84,9 +93,13 @@ class SmtpEndpoint:
             # this returns the smtp response to the starttls command
             # and throws on tls negotiation failure?
             starttls_resp = Response.from_smtp(self.smtp.starttls())
-            if starttls_resp.err(): return starttls_resp
+            if starttls_resp.err():
+                self._shutdown()
+                return starttls_resp
             ehlo_resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
-            if ehlo_resp.err(): return ehlo_resp
+            if ehlo_resp.err():
+                self._shutdown()
+                return ehlo_resp
 
         resp = Response.from_smtp(self.smtp.mail(mail_from))
         if resp.err():
@@ -96,9 +109,12 @@ class SmtpEndpoint:
         self.data = bytes()
 
         self.start_resp = Response.from_smtp(self.smtp.rcpt(rcpt_to))
+        if self.start_resp.err():
+            self._shutdown()
         return self.start_resp
 
     def append_data(self, last : bool, blob : Blob):
+        self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.append_data last=%s len=%d',
                      last, blob.len())
         self.data += blob.contents()

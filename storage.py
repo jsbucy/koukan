@@ -27,6 +27,7 @@ class Action:
     DELIVERED = 2
     TEMP_FAIL = 3
     PERM_FAIL = 4
+    ABORT = 6
 
 # TransactionCursor:
 # sync success/permfail (single mx temp) -> oneshot
@@ -233,7 +234,9 @@ class TransactionCursor:
 
             if self.offset is None and self.length is None:
                 status = Status.ONESHOT_DONE
-            elif action == Action.DELIVERED or action == Action.PERM_FAIL:
+            elif (action == Action.DELIVERED or
+                  action == Action.PERM_FAIL or
+                  action == Action.ABORT):
                 status = Status.DONE
             elif action == Action.TEMP_FAIL:
                 status = Status.WAITING

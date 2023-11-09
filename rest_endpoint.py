@@ -337,3 +337,7 @@ class RestEndpoint:
             return Response(400, "RestEndpoint.set_durable")
 
         return Response()
+
+    def abort(self):
+        # TODO
+        pass

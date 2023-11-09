@@ -35,3 +35,6 @@ class MxResolutionEndpoint:
 
     def append_data(self, last : bool, blob : Blob) -> Response:
         return self.next.append_data(last, blob)
+
+    def abort(self):
+        if self.next: self.next.abort()

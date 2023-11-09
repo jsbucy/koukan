@@ -56,3 +56,6 @@ class Router:
                 return resp
             self.received_ascii = None
         return self.endpoint.append_data(last, blob)
+
+    def abort(self):
+        if self.endpoint: self.endpoint.abort()

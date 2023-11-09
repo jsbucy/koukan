@@ -57,7 +57,6 @@ class DkimEndpoint:
             last = (i == len(blobs)-1)
             resp = self.next.append_data(last=last, blob=blob)
             if resp.err() or last: return resp
-            
 
-    def get_status(self) -> Response:
-        return self.next.get_status()
+    def abort(self):
+        if self.next: self.next.abort()

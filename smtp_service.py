@@ -32,6 +32,10 @@ class SmtpHandler:
 
         self.next_blob_id = 0
 
+    # TODO would be nice to abort the upstream transaction if the
+    # client goes away, handle_QUIT(), subclass aiosmtpd.smtp.SMTP and
+    # override connection_lost()?
+
     async def handle_RSET(self, server, session, envelope):
         envelope.transactions = []
         return b'250 ok'

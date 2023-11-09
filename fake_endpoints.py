@@ -7,6 +7,7 @@ import logging
 class FakeEndpoint:
     start_response = None
     final_response = None
+    aborted = False
 
     def __init__(self):
         self.local_host = None
@@ -40,9 +41,12 @@ class FakeEndpoint:
             return self.final_response
         return Response()
 
+    def abort(self):
+        self.aborted = True
 
 class SyncEndpoint:
     start_response = None
+    aborted = False
 
     lock : Lock
     cv : Condition
@@ -96,3 +100,6 @@ class SyncEndpoint:
         with self.lock:
             self.cv.wait_for(lambda: bool(self.data_resp))
             return self.data_resp.pop(0)
+
+    def abort(self):
+        self.aborted = True
