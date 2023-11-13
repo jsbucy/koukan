@@ -140,7 +140,9 @@ class RouterTransactionTest(unittest.TestCase):
 
         self.check_storage(tx.storage_id, expected_storage_status, action)
 
-        if status_after_durable is None: return
+        if status_after_durable is None:
+            tx.finalize()
+            return
 
         tx.set_durable()
 
@@ -149,7 +151,7 @@ class RouterTransactionTest(unittest.TestCase):
 
         self.check_storage(tx.storage_id, status_after_durable,
                            action_after_durable)
-
+        tx.finalize()
 
 
     def test_msa_fast_success(self):
@@ -244,6 +246,7 @@ class RouterTransactionTest(unittest.TestCase):
         recovery_tx.load()
 
         self.check_storage(id, exp_status, exp_action)
+        recovery_tx.finalize()
 
     def recovery(self, expectations):
         endpoint = FakeEndpoint()
@@ -273,6 +276,7 @@ class RouterTransactionTest(unittest.TestCase):
         self.assertEqual(400, resp.code)
 
         tx.set_durable()
+        tx.finalize()
 
         for (start_resp, append_resp, status, action) in expectations:
             self.recover(tx.storage_id, start_resp, append_resp, status, action)

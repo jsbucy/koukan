@@ -110,7 +110,8 @@ class RestRequestHandler:
 
         if 'uri' in req_json and req_json['uri'] is not None:
             blob_id = req_json['uri'].removeprefix('/blob/')
-            if self.blob_storage.add_waiter(blob_id, blob_done_cb):
+            if self.blob_storage.add_waiter(
+                    blob_id, self.endpoint, blob_done_cb):
                 return jsonify({})
         blob_id = self.blob_storage.create(blob_done_cb)
 
@@ -146,19 +147,21 @@ class RestRequestHandler:
 
     def set_durable(self):
         if not self.endpoint.received_last:
-            rest_resp = Response(
+            return Response(
                 status=400,
                 response=['RouterTransaction.smtp_mode set_durable: have not '
                           'received last append_data'])
 
-        if self.endpoint.set_durable() is None:
-            rest_resp = Response(
-                status=500,
-                response=['RouterTransaction.smtp_mode set_durable'])
-        rest_resp = Response()
+        resp = self.endpoint.set_durable()
+        if resp.ok():
+            return Response()
+
+        # xxx code
+        rest_resp = Response(
+            status=500,
+            response=['RouterTransaction.smtp_mode set_durable'])
         logging.info('rest service Transaction.set_durable %s', rest_resp)
         return rest_resp
-
 
 
 #class EndpointFactory:

@@ -11,6 +11,9 @@ class Blob:
     def id(self) -> Optional[str]:
         return None
 
+    def unref(self, Any) -> None:
+        return None
+
 class InlineBlob(Blob):
     def __init__(self, d : bytes, id : Optional[str] = None):
         self.d = d

@@ -48,16 +48,19 @@ class RouterTransaction:
     blobs_received = -1
     blobs : List[Blob]
     blob_upstream_queue : List[Blob]
-    upstream_start_inflight = False
-    upstream_append_inflight = False
+
+    # something is running on executor and we can't cancel
+    busy = False
+
     mx_multi_rcpt = False
     rest_id = None
     storage_tx : Optional[TransactionCursor] = None
     done_cb = None
+    finalized = False
 
     # if this transaction requires further downstream input to make
     # progress, when the last update was, for ttl
-    idle_start = None
+    last_update = None
 
     def __init__(self, executor, storage, blob_id_map : BlobIdMap,
                  blob_storage, next, host, msa, tag, storage_tx=None):
@@ -95,6 +98,16 @@ class RouterTransaction:
             self.rest_id = storage_tx.rest_id
             self.storage_id = storage_tx.id
 
+    def __del__(self):
+        logging.debug('RouterTransaction.__del__ %s', self.rest_id)
+        assert(self.finalized)
+
+    # done_cb runs when
+    # 1: downstream calls set_durable
+    # or
+    # 2: downstream appended last and upstream succeeds or permfails such that
+    # set_durable would be a no-op
+    # does not run on abort()
     def generate_rest_id(self, done_cb=None):
         assert(self.storage_tx is None)
         self.rest_id = secrets.token_urlsafe(REST_ID_BYTES)
@@ -109,13 +122,16 @@ class RouterTransaction:
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
         logging.info('RouterTransaction._start %s %s', mail_from, rcpt_to)
+        self.last_update = time.monotonic()
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.transaction_esmtp = transaction_esmtp
         self.rcpt_to = rcpt_to
         self.rcpt_esmtp = rcpt_esmtp
-        self.upstream_start_inflight = True
+        with self.lock:
+            assert(not self.busy)
+            self.busy = True
 
     def start(self,
               local_host, remote_host,
@@ -134,7 +150,6 @@ class RouterTransaction:
                     mail_from, transaction_esmtp,
                     rcpt_to, rcpt_esmtp)
         self.executor.enqueue(self.tag, lambda: self.start_upstream())
-        self.idle_start = time.monotonic()
         return None
 
     def load(self):
@@ -152,7 +167,8 @@ class RouterTransaction:
         resp = self.start_upstream()
         logging.info("RouterTransaction.load start resp %s %s",
                      storage_tx.id, resp)
-        if resp.err(): return
+        if resp is None or resp.err():
+            return
 
         offset = 0
         while offset < storage_tx.length:
@@ -165,6 +181,11 @@ class RouterTransaction:
 
 
     def start_upstream(self):
+        with self.lock:
+            assert(self.busy)
+            if self.next_final_resp is not None:  # i.e. cancelled
+                return
+
         resp = self.next.start(
             self.local_host, self.remote_host,
             self.mail_from, self.transaction_esmtp,
@@ -181,7 +202,8 @@ class RouterTransaction:
             if resp.err():
                 self.next_final_resp = resp
 
-            self.upstream_start_inflight = False
+            assert(self.busy)
+            self.busy = False
             self.cv.notify_all()
 
             if not resp.err():
@@ -196,14 +218,14 @@ class RouterTransaction:
 
     def get_start_result(self, timeout=1) -> Optional[Response]:
         with self.lock:
-            if self.upstream_start_inflight:
+            if self.busy:
                 self.cv.wait_for(lambda: self.next_start_resp is not None,
                                  timeout=timeout)
             return self.next_start_resp
 
     def get_final_status(self, timeout=1):
         with self.lock:
-            if self.received_last and self.upstream_append_inflight:
+            if self.received_last and self.busy:
                 self.cv.wait_for(lambda: self.next_final_resp is not None,
                                  timeout=timeout)
             return self.next_final_resp
@@ -236,10 +258,10 @@ class RouterTransaction:
                     last : bool,
                     blob : Blob) -> Optional[Response]:
         logging.info('RouterTransaction.append_data %s %d', last, blob.len())
+        self.last_update = time.monotonic()
 
         # Note the rest code doesn't currently propagate start errors
         # to final like this does.
-
         resp = self.append_ok()
         if resp is not None:
             return resp
@@ -251,18 +273,13 @@ class RouterTransaction:
             self.blob_upstream_queue.append(blob)
             self.maybe_start_append_upstream_locked()
 
-        if last:
-            self.idle_start = None
-        else:
-            self.idle_start = time.monotonic()
-
         return None  # async
 
     def maybe_start_append_upstream_locked(self):
-        if (not self.upstream_start_inflight and
-            not self.upstream_append_inflight and
+        if (self.next_final_resp is None and  # i.e. cancelled
+            not self.busy and
             self.blob_upstream_queue):
-            self.upstream_append_inflight = True
+            self.busy = True
             self.executor.enqueue(Tag.DATA, lambda: self.append_upstream())
 
     def append_upstream(self):
@@ -271,13 +288,19 @@ class RouterTransaction:
             with self.lock:
                 logging.info('RouterTransaction.append_upstream %d %s',
                              len(self.blob_upstream_queue), self.received_last)
+                if self.next_final_resp is not None:  # i.e. cancelled
+                    assert(self.busy)
+                    self.busy = False
+                    return
+
                 # Bail here if the upstream transaction has already
                 # failed. This is a precondition of the upstream
                 # append and is synchronous here.
                 # note: some downstream transactions (msa, multi-mx)
                 # can continue after start temp but not upstream
                 if self.append_ok() is not None or not self.blob_upstream_queue:
-                    self.upstream_append_inflight = False
+                    assert(self.busy)
+                    self.busy = False
                     return
                 blob = self.blob_upstream_queue.pop(0)
                 last = (self.received_last and not self.blob_upstream_queue)
@@ -311,54 +334,96 @@ class RouterTransaction:
     def maybe_append_action_locked(self, next_final_resp):
         logging.info('RouterTransaction.maybe_append_action %s %s appended=%s',
                      self.rest_id, next_final_resp, self.appended_action)
+        self.last_update = time.monotonic()
+
         if self.appended_action: return
         assert(self.storage_id)
         if next_final_resp is None: return
         self.appended_action = True
 
         action = Action.TEMP_FAIL
+        done_with_payload = False
         if next_final_resp.ok():
             action = Action.DELIVERED
+            done_with_payload = True
         elif next_final_resp.perm():
             # permfail/bounce
             action = Action.PERM_FAIL
-        # XXX MAX_RETRY
+            done_with_payload = True
+
+        # i.e. this will not retry so we don't need to persist the payload
+        if done_with_payload:
+            for blob in self.blobs:
+                blob.unref(self)
+            self.blobs = None
+
+            if self.done_cb:
+                # cb probably calls finalize()
+                cb = self.done_cb
+                self.done_cb = None
+                cb()
+
+        # TODO MAX_RETRY
 
         # TODO when upgrading temp to perm (e.g. after max retry), may
         # want to distinguish the internal perm result from the
         # upstream temp result
         self.storage_tx.append_action(action, next_final_resp)
 
-        if self.done_cb: self.done_cb()
+
+    # returns True if aborted
+    def abort_if_idle(self, idle_timeout, now):
+        if self.recovered: return False
+        with self.lock:
+            if self.busy:
+                return False
+            if (now - self.last_update) < idle_timeout:
+                return False
+
+        self._abort()
+        return True
 
 
-    # called by idle gc or rest client can invoke directly
     # noop if already delivered
     # writes an abort action
     def abort(self):
         with self.lock:
-            if self.next_final_resp is not None: return
-            if self.appended_action: return
+            assert(not self.busy or self.next_final_resp is None)
+            self.cv.wait_for(lambda: not self.busy)
+        self._abort()
+
+    def _abort(self):
+        with self.lock:
+            assert(not self.busy)
+            if self.next_final_resp is None:
+                self.next_final_resp = Response(400, 'cancelled')
+                self.cv.notify_all()
+
+        logging.info('RouterTransaction.abort %s', self.rest_id)
+
+        if not self.appended_action:
+            self.storage_tx.append_action(Action.ABORT, self.next_final_resp)
             self.appended_action = True
 
-        self.storage_tx.append_action(Action.ABORT, Response(500, 'cancelled'))
         self.next.abort()
 
+        if self.done_cb:
+            self.done_cb = None
 
     def set_durable(self):
-        logging.info('RouterTransaction.set_durable')
+        logging.info('RouterTransaction.set_durable %s', self.rest_id)
         # the downstream transaction must have sent the last append
         # but the upstream may still be inflight
         assert(self.received_last)
         assert(self.storage_id)
 
+        # xxx yuck refactor with append_action/storage
         status = Status.WAITING
         if self.next_final_resp:
             if self.next_final_resp.ok() or self.next_final_resp.perm():
                 status = Status.DONE
             # else temp, leave it WAITING
-        # xxx msa upstream_start_inflight?
-        elif self.received_last and self.upstream_append_inflight:
+        elif self.received_last and self.busy:
             status = Status.INFLIGHT
 
         logging.info('RouterTransaction.set_durable status=%d %s',
@@ -375,14 +440,28 @@ class RouterTransaction:
 
             self.storage_tx.finalize_payload(status)
 
-        # append_data last may have already finished before set_durable() was
-        # called, write the action here
-        # upstream append may still be inflight, in that case
-        # next_final_resp is None, this early returns
+        # upstream append_data last may have already finished before
+        # set_durable() was called, write the action here upstream
+        # append may still be inflight, in that case next_final_resp
+        # is None, this early returns
         with self.lock:
             self.maybe_append_action_locked(self.next_final_resp)
 
-        return self.storage_id
+        return Response()
+
+    def finalize(self):
+        logging.info('RouterTransaction.finalize %s', self.rest_id)
+        assert(self.done_cb is None)
+        assert(not self.finalized)
+        assert(self.appended_action)
+
+        if self.blobs:
+            for blob in self.blobs:
+                blob.unref(self)
+            blobs = None
+
+        self.finalized = True
+
 
     def append_blob(self, blob):
         assert(blob.id() is not None)

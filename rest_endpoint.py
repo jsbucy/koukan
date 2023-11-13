@@ -33,7 +33,6 @@ class BlobIdMap:
         self.map = {}
         self.lock = Lock()
         self.cv = Condition(self.lock)
-        self.appended_last = False
 
     def lookup_or_insert(self, host, blob_id):
         key = (host, blob_id)
@@ -59,6 +58,7 @@ class RestEndpoint:
     final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
     blob_id_map : BlobIdMap = None
+    appended_last = False
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
@@ -321,12 +321,13 @@ class RestEndpoint:
         pass
 
     def set_durable(self):
-        # TODO revisit whether we should explicitly split waiting for
-        # the post vs polling the json for the result in this api
+        # XXX appended_last only gets set after the append has
+        # succeeded but this is valid as long as the server has
+        # *received* the append i.e. concurrent with inflight
         with self.lock:
             self.cv.wait_for(
                 lambda:
-                self.transaction_url is not None and self.appended_last)
+                self.transaction_url is not None)  # and self.appended_last)
 
         rest_resp = requests.post(self.transaction_url + '/smtpMode',
                                   json={},

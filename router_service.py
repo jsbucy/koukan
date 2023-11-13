@@ -54,6 +54,7 @@ class EndpointFactory:
 class ShimTransaction:
     received_last = True  # XXX
     rest_id = None
+    done = False
 
     def __init__(self, parent):
         self.parent = parent
@@ -92,7 +93,20 @@ class ShimTransaction:
         else:
             self.final_status = response
 
+        logging.info('ShimTransaction.read %s status=%d action=%d', rest_id, status, action)
+        if status == Status.DONE:
+            self.done = True
+        elif status == Status.ONESHOT_DONE and action != Action.TEMP_FAIL:
+            self.done = True
+
         return True
+
+    def set_durable(self):
+        logging.info('ShimTransaction.set_durable %s done=%s',
+                     self.rest_id, self.done)
+        if self.done:
+            return Response()  # no op
+        return Response(500, 'failed precondition')
 
 class Service:
     lock : Lock = None
@@ -123,10 +137,18 @@ class Service:
         self.endpoint_factory = EndpointFactory(self)
 
     def shutdown(self):
-        if self.wsgi_server:
-            self.wsgi_server.shutdown()
+        logging.info("router_service shutdown()")
         self.stop_dequeue = True
         self.dequeue_thread.join()
+
+        with self.lock:
+            txx = [tx for id,tx in self.inflight.items()]
+            for tx in txx:
+                tx.abort()
+                tx.finalize()
+
+        if self.wsgi_server:
+            self.wsgi_server.shutdown()
 
     def main(self, wiring):
         if self.config is None:
@@ -169,7 +191,6 @@ class Service:
 
     def get_router_transaction(self, host, storage_tx=None):
         next, tag, msa = self.get_transaction(host)
-        done_cb = None
         tx = RouterTransaction(
             self.executor, self.storage, self.blob_id_map, self.blobs,
             next, host, msa, tag, storage_tx)
@@ -183,6 +204,7 @@ class Service:
     def done(self, tx):
         logging.info('done %s', tx.rest_id)
         self._del_inflight(tx)
+        tx.finalize()
 
     # -> Transaction, Tag, is-msa
     def get_transaction(self, host):
@@ -196,10 +218,11 @@ class Service:
             storage_tx.host, storage_tx)
         transaction.load()
         self._del_inflight(transaction)
+        transaction.finalize()
 
     def load(self):
         while not self.stop_dequeue:
-            logging.info("dequeue")
+            logging.info("dequeue %s", self.stop_dequeue)
             self._gc_inflight()
             # XXX config, backoff
 
@@ -207,7 +230,7 @@ class Service:
             # the storage (which makes it selectable here) vs running
             # the done callback, if min_age is too low, this can clash
             # with inflight
-            storage_tx = self.storage.load_one(min_age=2)
+            storage_tx = self.storage.load_one(min_age=5)
             if storage_tx:
                 logging.info("dequeued %d", storage_tx.id)
                 self.executor.enqueue(Tag.LOAD, lambda: self.handle(storage_tx))
@@ -230,15 +253,22 @@ class Service:
     def _gc_inflight(self):
         now = time.monotonic()
         if (now - self.last_gc) < self.config.get_int('tx_idle_gc', 5): return
+        logging.info('router_service _gc_inflight')
         self.last_gc = now
+
+        idle_timeout = self.config.get_int('tx_idle_timeout', 5)
         with self.lock:
             dele = []
             for rest_id, tx in self.inflight.items():
-                tx_idle = now - tx.idle_start if tx.idle_start else 0
-                if tx_idle > self.config.get_int('tx_idle_timeout', 5):
-                    tx.abort()
-                    dele.append(rest_id)
-            for x in dele: del self.inflight[x]
+                aborted = tx.abort_if_idle(idle_timeout, now)
+                if aborted:
+                    dele.append(tx)
+        for tx in dele:
+            # recovered (which are run sync in handle) aren't eligible
+            # for idle gc
+            # rest-initiated have done_cb = _del_inflight()
+            tx.finalize()
+            self._del_inflight(tx)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
