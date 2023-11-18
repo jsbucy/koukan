@@ -18,12 +18,14 @@ CREATE TABLE Transactions (
   json text,
 
   status int,
-  length int,
+  length int NOT NULL,
+  last bool NOT NULL,
 
   inflight_session_id int,
 
   creation int,
   last_update int,  -- unix secs, null until finalized
+  version int NOT NULL,
 
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
     ON UPDATE CASCADE  -- xxx moot?
@@ -34,9 +36,11 @@ CREATE INDEX TxRestId on Transactions (rest_id);
 
 CREATE TABLE TransactionContent (
   transaction_id int,
-  offset int,
+  i int NOT NULL,  -- 0,1,2,3
+
   inline BLOB,
   blob_id text,
+  length int,  -- xxx never read?
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
     ON UPDATE CASCADE
@@ -44,7 +48,7 @@ CREATE TABLE TransactionContent (
 
   FOREIGN KEY(blob_id) REFERENCES Blob(id),
 
-  PRIMARY KEY(transaction_id, offset)
+  PRIMARY KEY(transaction_id, i)
 );
 
 CREATE TABLE TransactionActions (
@@ -62,12 +66,15 @@ CREATE TABLE TransactionActions (
   PRIMARY KEY(transaction_id, action_id)
 );
 
-
 CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
-  length int,  -- null until finalized
-  last_update int  -- unix secs, null until finalized
+  rest_id text UNIQUE,
+  length int,  -- null until we know the overall length
+  -- last bool NOT NULL,
+  last_update int NOT NULL
 );
+
+CREATE INDEX BlobRestId on Blob (rest_id);
 
 -- this should be striped out at the granularity you want to read back
 -- into memory later ~1MiB

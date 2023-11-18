@@ -470,8 +470,7 @@ class RouterTransaction:
         if db_blob is None:
             blob_writer = self.storage.get_blob_writer()
             db_blob = blob_writer.start()
-            blob_writer.append_data(blob.contents())
-            blob_writer.finalize()
+            blob_writer.append_data(blob.contents(), True)
             self.blob_id_map.finalize(blob.id(), db_blob)
-        assert(self.storage_tx.append_blob(db_blob) ==
+        assert(self.storage_tx.append_blob(db_blob, blob.len()) ==
                TransactionCursor.APPEND_BLOB_OK)
