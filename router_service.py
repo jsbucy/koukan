@@ -1,7 +1,8 @@
 
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, Optional
 
 import rest_service
+from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
 
 from address_policy import AddressPolicy, PrefixAddr
@@ -14,7 +15,9 @@ from rest_endpoint import RestEndpoint, BlobIdMap as RestBlobIdMap
 from dkim_endpoint import DkimEndpoint
 
 from router_transaction import RouterTransaction, BlobIdMap
-from storage import Storage, Action, Status
+from storage import Storage, Action, Status, TransactionCursor
+
+from transaction import RestServiceTransactionFactory, cursor_to_endpoint
 
 from response import Response
 
@@ -36,7 +39,7 @@ from wsgiref.simple_server import make_server
 
 from config import Config
 
-class EndpointFactory:
+class RouterTransactionFactory(EndpointFactory):
     def __init__(self, parent):
         self.parent = parent
     def create(self, host):
@@ -46,7 +49,7 @@ class EndpointFactory:
             return self.parent.inflight[rest_id]
         shim = ShimTransaction(self.parent)
         if not shim.read(rest_id):
-            logging.info('EndpointFactory.get shim read failed')
+            logging.info('RouterTransactionFactory.get shim read failed')
             return None
         return shim
 
@@ -114,6 +117,8 @@ class Service:
     last_gc = 0
     stop_dequeue = False
 
+    rest_tx_factory : RestServiceTransactionFactory = None
+
     def __init__(self, config=None):
         self.lock = Lock()
         self.inflight = {}
@@ -134,7 +139,7 @@ class Service:
 
         self.rest_blob_id_map = RestBlobIdMap()
 
-        self.endpoint_factory = EndpointFactory(self)
+        self.endpoint_factory = RouterTransactionFactory(self)
 
     def shutdown(self):
         logging.info("router_service shutdown()")
@@ -174,9 +179,16 @@ class Service:
 
         # top-level: http host -> endpoint
 
-        flask_app = rest_service.create_app(
-            self.endpoint_factory,
-            self.blobs)
+        handler_factory = None
+        if False:
+            self.adapter_factory = RestEndpointAdapterFactory(
+                self.endpoint_factory, self.blobs)
+            handler_factory = self.adapter_factory
+        else:
+            self.rest_tx_factory = RestServiceTransactionFactory(self.storage)
+            handler_factory = self.rest_tx_factory
+
+        flask_app = rest_service.create_app(handler_factory)
         if self.config.get_bool('use_gunicorn'):
             gunicorn_main.run(
                 'localhost', self.config.get_int('rest_port'),
@@ -189,51 +201,77 @@ class Service:
                                            flask_app)
             self.wsgi_server.serve_forever()
 
-    def get_router_transaction(self, host, storage_tx=None):
-        next, tag, msa = self.get_transaction(host)
+    def get_router_transaction(self, host, storage_tx=None
+                               ) -> Optional[RouterTransaction]:
+        logging.info('get_router_transaction %s', host)
+        e = self.get_endpoint(host)
+        if e is None: return None
+        endpoint, tag, msa = e
         tx = RouterTransaction(
             self.executor, self.storage, self.blob_id_map, self.blobs,
-            next, host, msa, tag, storage_tx)
+            endpoint, host, msa, tag, storage_tx)
         if storage_tx is None:
             tx.generate_rest_id(lambda: self.done(tx))
         # xxx ttl/gc of these to be provided by rest service?
         self._add_inflight(tx)
 
-        return tx, msa
+        return tx
 
     def done(self, tx):
         logging.info('done %s', tx.rest_id)
         self._del_inflight(tx)
         tx.finalize()
 
-    # -> Transaction, Tag, is-msa
-    def get_transaction(self, host):
+    # -> Endpoint, Tag, is-msa
+    def get_endpoint(self, host) -> Optional[Tuple[Any, int, bool]]:
         endpoint, msa = self.wiring.get_endpoint(host)
-        if not endpoint: return None, None, None
+        if not endpoint: return None
         tag = Tag.MSA if msa else Tag.MX
         return endpoint, tag, msa
 
     def handle(self, storage_tx):
-        transaction, msa = self.get_router_transaction(
-            storage_tx.host, storage_tx)
+        transaction = self.get_router_transaction(storage_tx.host, storage_tx)
         transaction.load()
         self._del_inflight(transaction)
         transaction.finalize()
 
+    def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
+        cursor_to_endpoint(storage_tx, endpoint)
+
     def load(self):
+        created_id = None
         while not self.stop_dequeue:
             logging.info("dequeue %s", self.stop_dequeue)
-            self._gc_inflight()
-            # XXX config, backoff
+            storage_tx = None
+            if self.rest_tx_factory is not None:
+                if self.storage.wait_created(created_id, timeout=1):
+                    storage_tx = self.storage.load_one()
+                if (storage_tx is not None and
+                    storage_tx.status == Status.INSERT):  # XXX status??
+                    created_id = storage_tx.id
 
+            self._gc_inflight()
+
+            tag = None
+            # XXX config, backoff
             # XXX there is a race between RouterTransaction updating
             # the storage (which makes it selectable here) vs running
             # the done callback, if min_age is too low, this can clash
             # with inflight
-            storage_tx = self.storage.load_one(min_age=5)
+            if storage_tx is None:
+                # XXX this will load INSERT but we probably only want WAITING?
+                storage_tx = self.storage.load_one(min_age=5)
+                tag = Tag.LOAD
             if storage_tx:
                 logging.info("dequeued %d", storage_tx.id)
-                self.executor.enqueue(Tag.LOAD, lambda: self.handle(storage_tx))
+                if self.rest_tx_factory:
+                    endpoint, msa = self.wiring.get_endpoint(storage_tx.host)
+                    assert(endpoint is not None)
+                    tag = Tag.MSA if msa else Tag.MX
+                    self.executor.enqueue(
+                        tag, lambda: self.handle_tx(storage_tx, endpoint))
+                else:
+                    self.executor.enqueue(tag, lambda: self.handle(storage_tx))
             else:
                 logging.info("dequeue idle")
                 # xxx config
@@ -257,6 +295,8 @@ class Service:
         self.last_gc = now
 
         idle_timeout = self.config.get_int('tx_idle_timeout', 5)
+        if self.rest_tx_factory:
+            self.storage.gc_non_durable(idle_timeout)
         with self.lock:
             dele = []
             for rest_id, tx in self.inflight.items():

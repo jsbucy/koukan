@@ -18,13 +18,16 @@ CREATE TABLE Transactions (
   json text,
 
   status int,
-  length int NOT NULL,
-  last bool NOT NULL,
+  -- length int NOT NULL,
+
+  -- append(last=True) has been called, guarantees that TransactionContent
+  -- not growing but not that all blobs are finalized
+  last bool,
 
   inflight_session_id int,
 
   creation int,
-  last_update int,  -- unix secs, null until finalized
+  last_update int,
   version int NOT NULL,
 
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
@@ -70,7 +73,7 @@ CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
   rest_id text UNIQUE,
   length int,  -- null until we know the overall length
-  -- last bool NOT NULL,
+  last bool NOT NULL,  -- True if length is not NULL and max BlobContent ==
   last_update int NOT NULL
 );
 

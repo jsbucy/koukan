@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict
 
 from blob import Blob, InlineBlob
 from threading import Lock, Condition
@@ -18,17 +18,29 @@ class Status:
     WAITING = 1
     INFLIGHT = 2
     DONE = 3
-    ONESHOT_DONE = 4
+    ONESHOT_DONE = 4  # set_durable noop
+    ONESHOT_INFLIGHT = 5
+    ONESHOT_TEMP = 6  # set_durable -> WAITING
 
+# TODO it seems like these fine-grained codes delivered/temp/perm are
+# redundant with the resp, this is a vestige of not originally storing
+# the resp? does anything directly reading the db distinguish those?
+# or do you want it to capture things like upstream temp + max retry
+# -> perm? or maybe that should be an additional action? conceptually
+# that is a separate attempt LOAD, TEMP, LOAD, PERM though in practice
+# the completion logic writes that?
 class Action:
     INSERT = 0
     LOAD = 1  # WAITING -> INFLIGHT
+              # INSERT -> ONESHOT_INFLIGHT
     RECOVER = 5  # INFLIGHT w/stale session -> WAITING
     DELIVERED = 2
     TEMP_FAIL = 3
     PERM_FAIL = 4
     ABORT = 6
-    START = 7
+    START = 7  # inflight -> inflight (no change)
+    SET_DURABLE = 8  # ONESHOT_DONE -> WAITING or
+                     # ONESHOT_INFLIGHT -> INFLIGHT
 
 # TransactionCursor:
 # sync success/permfail (single mx temp) -> oneshot
@@ -55,6 +67,8 @@ class TransactionCursor:
     # XXX need a transaction/request object or something
     FIELDS = ['local_host', 'remote_host', 'mail_from', 'transaction_esmtp',
               'rcpt_to', 'rcpt_esmtp', 'host']
+
+    # json fields
     local_host = None
     remote_host = None
     mail_from = None
@@ -62,6 +76,7 @@ class TransactionCursor:
     rcpt_to = None
     rcpt_esmtp = None
     host = None
+
     id : Optional[int] = None
     status = None
     length = None
@@ -75,18 +90,25 @@ class TransactionCursor:
 
     def create(self, rest_id):
         parent = self.parent
+        now = int(time.time())
         with parent.db_write_lock:
             cursor = parent.db.cursor()
             cursor.execute(
                 'INSERT INTO Transactions '
-                '  (rest_id, inflight_session_id, creation, version, status, '
-                'length, last) '
+                '  (rest_id, inflight_session_id, creation, last_update, version, status, '
+                'last) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (rest_id, parent.session_id, int(time.time()), 0,
-                 Status.INSERT, 0, False))
+                (rest_id, parent.session_id, now, now, 0,
+                 Status.INSERT, False))
             parent.db.commit()
             self.id = cursor.lastrowid
             self.version = 0
+
+            cursor.execute(
+                'INSERT INTO TransactionActions '
+                '(transaction_id, action_id, time, action) '
+                'VALUES (?,?,?,?)',
+                (self.id, 0, int(time.time()), Action.INSERT))
 
         with parent.created_lock:
             assert(parent.created_id is None or
@@ -94,11 +116,15 @@ class TransactionCursor:
             parent.created_id = self.id
             parent.created_cv.notify_all()
 
-    def write_envelope(self,
-              local_host : str, remote_host : str,
-              mail_from : str, transaction_esmtp,
-              rcpt_to : str, rcpt_esmtp,
-              host : str):
+    def write_envelope(
+            self,
+            local_host : Optional[str] = None,
+            remote_host : Optional[str] = None,
+            mail_from : Optional[str] = None,
+            transaction_esmtp : Optional[Dict[str,str]] = None,
+            rcpt_to : Optional[str] = None,
+            rcpt_esmtp  : Optional[Dict[str,str]] = None,
+            host : Optional[str] = None):
         trans_json = {
             'local_host': local_host,
             'remote_host': remote_host,
@@ -120,13 +146,11 @@ class TransactionCursor:
                 'WHERE id = ? AND version = ?',
                 (json.dumps(trans_json), self.version + 1, self.id,
                  self.version))
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action) '
-                'VALUES (?,?,?,?)',
-                (self.id, 0, int(time.time()), Action.INSERT))
+
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
+            assert(cursor.rowcount == 1)
+
             self.version += 1
             logging.info('write_envelope id=%d version=%d',
                          self.id, self.version)
@@ -140,31 +164,35 @@ class TransactionCursor:
     # message. That would allow the key to be the byte offset
     # (allowing pread) instead of the simple index/counter i we're
     # using now.
-    def append_data(self, d : bytes):
+    def append_data(self, d : bytes, last : bool):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
-                'SELECT status,version From Transactions WHERE id = ?',
+                'SELECT status,version,last From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            assert(row is not None and
-                   (row[0] == Status.INSERT or
-                    row[0] == Status.INFLIGHT or
-                    row[0] == Status.ONESHOT_DONE))
-            assert(row[1] == self.version)
-
+            status,version,db_last = row
+            logging.info('append_data status=%d', status)
+            assert(status in [Status.INSERT,
+                              Status.INFLIGHT,  # xxx
+                              Status.ONESHOT_INFLIGHT,
+                              Status.ONESHOT_DONE,
+                              Status.ONESHOT_TEMP])  # e.g. start tempfailed upstream
+            assert(version == self.version)
+            assert(not db_last)
             cursor.execute(
                 'INSERT INTO TransactionContent '
                 '(transaction_id, i, length, inline) '
                 'VALUES (?, ?, ?, ?)',
                 (self.id, self.i, len(d), d))
+            new_version = self.version + 1
             cursor.execute(
-                'UPDATE Transactions SET length = ?, version = ? '
+                'UPDATE Transactions SET version = ?, last = ?'
                 'WHERE id = ? AND version = ?',
-                (self.i + 1, self.version + 1, self.id, self.version))
-
+                (new_version, last, self.id, self.version))
             self.parent.db.commit()
-            self.version += 1
+            assert(cursor.rowcount == 1)
+            self.version = new_version
             self.parent.versions.update(self.id, self.version)
 
         self.i += 1
@@ -172,78 +200,77 @@ class TransactionCursor:
     APPEND_BLOB_OK = 0
     APPEND_BLOB_UNKNOWN = 1
 
-    def append_blob(self, blob_id : str, length : int) -> int:
+    def append_blob(self, blob_rest_id : str, last : bool) -> int:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
-                'SELECT status,version From Transactions WHERE id = ?',
+                'SELECT status,version,last From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            assert(row is not None and
-                   (row[0] in [Status.INSERT, Status.ONESHOT_DONE,
-                               Status.INFLIGHT]))
-            logging.debug('append_blob version id=%d db %d new %d',
-                          self.id, row[1], self.version)
-            assert(row[1] == self.version)
+            status,version,db_last = row
+            assert(status in [Status.INSERT,
+                              Status.ONESHOT_DONE,
+                              Status.INFLIGHT,    # xxx
+                              Status.ONESHOT_INFLIGHT ])
+            logging.debug('append_blob version id=%d db %d new %d status %d '
+                          'db last %s op last %s',
+                          self.id, row[1], self.version, status, db_last, last)
+            assert(version == self.version)
+            assert(not db_last)
             # XXX we may want to append this before the blob is
             # finalized? in which case this isn't known yet.
             cursor.execute(
-                'SELECT length FROM Blob WHERE id = ?',
-                (blob_id,))
+                'SELECT id,length FROM Blob WHERE rest_id = ?',
+                (blob_rest_id,))
             row = cursor.fetchone()
             if not row:
                 return TransactionCursor.APPEND_BLOB_UNKNOWN
-            (blob_len,) = row
+            blob_id,blob_len = row
 
             cursor.execute(
                 'INSERT INTO TransactionContent '
-                '(transaction_id, i, length, blob_id) '
-                'VALUES (?, ?, ?, ?)',
-                (self.id, self.i, length, blob_id))
+                '(transaction_id, i, blob_id) '
+                'VALUES (?, ?, ?)',
+                (self.id, self.i, blob_id))
+            new_version = self.version + 1
             cursor.execute(
-                'UPDATE Transactions SET length = ?, version = ? '
+                'UPDATE Transactions SET version = ?, last = ? '
                 'WHERE id = ? AND version = ?',
-                (self.i + 1, self.version + 1, self.id, self.version))
-
+                (new_version, last, self.id, self.version))
             self.parent.db.commit()
-            self.version += 1
-            self.parent.versions.update(self.id, self.version)
-
-
+            assert(cursor.rowcount == 1)
+        self.version = new_version
+        self.parent.versions.update(self.id, self.version)
         self.i += 1
         return TransactionCursor.APPEND_BLOB_OK
 
-    def load(self, id : Optional[int] = None, rest_id : Optional[str] = None):
-        self.id = id
+    def load(self, db_id : Optional[int] = None,
+             rest_id : Optional[str] = None):
+        assert(db_id is not None or rest_id is not None)
+
         cursor = self.parent.db.cursor()
         where = None
         where_id = None
-        assert(id is not None or rest_id is not None)
-        if id is not None:
+
+        if db_id is not None:
             where = 'WHERE id = ?'
-            where_id = (id,)
+            where_id = (db_id,)
         elif rest_id is not None:
             where = 'WHERE rest_id = ?'
             where_id = (rest_id,)
 
-        cursor.execute('SELECT id,rest_id,creation,json,length,status,version,'
+        cursor.execute('SELECT id,rest_id,creation,json,status,version,'
                        'last '
                        'FROM Transactions ' + where,
                        where_id)
         row = cursor.fetchone()
         if not row:
             return False
-        #if length is None:
-            # select sum(length) from (
-            # select if(Tx.inline is not null, length(tx.inline),
-            #    if(tx.blob_id is not null, blob.length, null)) as length
-            # from TransactionContent left join Blob on TransactionContent.blob_id = Blob.Id)
 
         (self.id, self.rest_id,
-         self.creation, json_str, self.length, self.status, self.version,
+         self.creation, json_str, self.status, self.version,
          self.last) = row
-        assert(id is None or self.id == id)
-        assert(rest_id is None or self.rest_id == rest_id)
+
         trans_json = json.loads(json_str) if json_str else {}
         for a in TransactionCursor.FIELDS:
             self.__setattr__(a, trans_json.get(a, None))
@@ -258,16 +285,15 @@ class TransactionCursor:
 
     def wait(self, timeout=None) -> bool:
         old = self.version
-        cursor = self.parent.db.cursor()
-        cursor.execute('SELECT version from Transactions WHERE id = ?',
-                       (self.id,))
-        row = cursor.fetchone()
-        assert(row is not None and row[0] >= old)
-        if row[0] > old:
-            return self.load(self.id)
+        self.load(self.id)
+        if self.version > old:
+            return True
 
-        if not self.parent.versions.wait(self, timeout): return False
-        return self.load(self.id)
+        if not self.parent.versions.wait(self, timeout):
+            logging.debug('TransactionCursor.wait timed out')
+            return False
+        self.load(self.id)
+        return self.version > old  # xxx assert?
 
     def wait_for(self, fn, timeout=None):
         start = time.monotonic() if timeout is not None else None
@@ -278,7 +304,7 @@ class TransactionCursor:
             if not self.wait(timeout_left): return False
             timeout_left = (timeout - (time.monotonic() - start)
                             if timeout is not None else None)
-        return False
+        asset(not 'unreachable')  #return False
 
     def wait_attr_not_none(self, attr, timeout=None):
         return self.wait_for(
@@ -318,85 +344,147 @@ class TransactionCursor:
         r.start(id=blob_id)
         return r
 
-    def finalize_payload(self, status=None):
-        with self.parent.db_write_lock:
-            cursor = self.parent.db.cursor()
-            cursor.execute('SELECT version from Transactions WHERE id = ?',
-                           (self.id,))
-            row = cursor.fetchone()
-            assert(row[0] == self.version)
-            status_set = ''
-            status_val = ()
-            if status is not None:
-                status_set = ', status = ?'
-                status_val = (status,)
-            cursor.execute(
-                'UPDATE Transactions '
-                'SET last_update = ?, last = ?, version = ? ' + status_set +
-                'WHERE id = ? AND version = ?',
-                (int(time.time()), True, self.version + 1) + status_val +
-                (self.id, self.version))
-            self.parent.db.commit()
-            self.version += 1
-            self.parent.versions.update(self.id, self.version)
-
-        return True
+    def _check_payload_done(self, cursor) -> bool:
+        cursor.execute('SELECT COUNT(*) '
+                       'FROM TransactionContent JOIN Blob '
+                       'ON TransactionContent.blob_id = Blob.id '
+                       'WHERE TransactionContent.transaction_id = ? '
+                       '  AND Blob.last != True',
+                       (self.id,))
+        row = cursor.fetchone()
+        assert(row is not None)
+        return row[0] == 0
 
     # appends a TransactionAttempts record and marks Transaction done
-    def append_action(self, action, response : Response):
+    def append_action(self, action,
+                      response : Optional[Response] = None) -> bool:
         now = int(time.time())
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            status = None
 
-#            if self.offset is None and self.length is None:
-#                status = Status.ONESHOT_DONE
-            if (action == Action.DELIVERED or
-                action == Action.PERM_FAIL or
-                action == Action.ABORT):
-                status = Status.DONE
-            elif action == Action.TEMP_FAIL:
-                status = Status.WAITING
-            elif action == Action.START:
-                status = Status.INFLIGHT
+            cursor.execute(
+                'SELECT status,version from Transactions WHERE id = ?',
+                (self.id,))
+            row = cursor.fetchone()
+            status,version = row
+            logging.debug('append_action db version %d my version %d '
+                          'status=%d action=%d',
+                          version, self.version, status, action)
+            # XXX this is too conservative e.g.
+            # writer may SET_DURABLE while reader is inflight
+            #assert(version == self.version)
+
+            if status == Status.INSERT:
+                if action == Action.SET_DURABLE:
+                    status = Status.WAITING
+                elif action == Action.LOAD:
+                    status = Status.ONESHOT_INFLIGHT
+                elif action == Action.ABORT:
+                    status = Status.DONE
+                else:
+                    assert(not "unexpected status")
+            elif status == Status.ONESHOT_INFLIGHT:
+                if action in [Action.DELIVERED,
+                              Action.PERM_FAIL,
+                              Action.ABORT]:
+                    status = Status.ONESHOT_DONE
+                elif action == Action.TEMP_FAIL:
+                    status = Status.ONESHOT_TEMP
+                elif action == Action.START:
+                    # no change
+                    assert(status in [Status.INFLIGHT, Status.ONESHOT_INFLIGHT])
+                elif action == Action.SET_DURABLE:
+                    status = Status.INFLIGHT
+                else:
+                    assert(not "unexpected status")
+            elif status == Status.ONESHOT_TEMP:
+                if action == Action.SET_DURABLE:
+                    status = Status.WAITING
+                elif action == Action.ABORT:
+                    status = Status.DONE
+                else:
+                    assert(not "unexpected status")
+            elif status == Status.WAITING:
+                assert(action == Action.LOAD)
+            elif status == Status.DONE:
+                # XXX ambiguous, at least 2 possibilities:
+                # 1: tx was aborted
+                # 2: previous set_durable succeeded but resp timed out
+                #    and this is a retry
+                # for the sake of the tests for the time being,
+                # assume #1, probably we need a separate
+                # Status.ABORTED or this needs to read the last action
+                # and error out if it was Action.ABORT
+                return False
+            elif status == Status.ONESHOT_DONE:
+                assert(action == Action.SET_DURABLE)
+            elif status == Status.INFLIGHT:
+                if action in [Action.DELIVERED,
+                              Action.PERM_FAIL,
+                              Action.ABORT]:
+                    status = Status.DONE
+                elif action == Action.START:
+                    pass  # no change
+                elif action == Action.TEMP_FAIL:
+                    status = Status.WAITING
+                else:
+                    assert(not "unexpected status")
+
+            if action == Action.SET_DURABLE:
+                assert(self._check_payload_done(cursor))  # precondition
+
             logging.info('TransactionCursor.append_action '
                          'now=%d id=%d action=%d i=%s length=%s status=%d',
                          now, self.id, action, self.i, self.length, status)
+            new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions '
                 'SET status = ?, last_update = ?, version = ?, '
                 'inflight_session_id = NULL '
                 'WHERE id = ? AND version = ?',
-                (status, now, self.version + 1, self.id, self.version))
+                (status, now, new_version, self.id, version))
+            assert(cursor.rowcount == 1)
+
+            resp_col = ''
+            resp_val = ()
+            resp_bind = ''
+            if response is not None:
+                resp_col = ', response_json'
+                resp_val = (json.dumps(response.to_json()),)
+                resp_bind = ',?'
             cursor.execute(
                 'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action, response_json) '
+                '(transaction_id, action_id, time, action' + resp_col + ') '
                 'VALUES ('
                 '  ?,'
                 '  (SELECT MAX(action_id) FROM TransactionActions '
                 '   WHERE transaction_id = ?) + 1,'
-                '  ?,?,?)',
-                (self.id, self.id, now, action, json.dumps(response.to_json())))
+                '  ?,?' + resp_bind + ')',
+                (self.id, self.id, now, action) + resp_val)
 
             # TODO gc payload on status DONE (still need ONESHOT_DONE?)
             # (or ttl, keep for ~1d after DONE?)
             self.parent.db.commit()
-            self.version += 1
+            self.version = new_version
+            self.parent.versions.update(self.id, self.version)
+            return True
 
 class BlobWriter:
+    id = None
+    offset = 0
+    length = None  # overall length from content-range
+    rest_id = None
+    last = False
+
     def __init__(self, storage):
         self.parent = storage
-        self.id = None
-        self.offset = 0
-        self.length = None  # overall length from content-range
-        self.rest_id = None
 
     def start(self, rest_id):  # xxx create()
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
-                'INSERT INTO Blob (last_update, rest_id) '
-                'VALUES (?, ?)', (int(time.time()), rest_id))
+                'INSERT INTO Blob (last_update, rest_id, last) '
+                'VALUES (?, ?, false)', (int(time.time()), rest_id))
             self.parent.db.commit()
             self.id = cursor.lastrowid
             self.rest_id = rest_id
@@ -430,6 +518,7 @@ class BlobWriter:
                      self.id, self.rest_id, self.offset, len(d), self.length,
                      length)
         assert(self.length is None or (self.length == length))
+        assert(not self.last)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             dd = d
@@ -445,13 +534,16 @@ class BlobWriter:
                 self.offset += len(chunk)
             logging.info('BlobWriter.append_data id=%d length=%s',
                          self.id, length)
+            last = length is not None and self.offset == length
             cursor.execute(
-                'UPDATE Blob SET length = ?, last_update = ? '
+                'UPDATE Blob SET length = ?, last_update = ?, last = ? '
                 'WHERE id = ? AND ((length IS NULL) OR (length = ?))',
-                (length, int(time.time()), self.id, length))
+                (length, int(time.time()), last,
+                 self.id, length))
             assert(cursor.rowcount == 1)
             self.parent.db.commit()
             self.length = length
+            self.last = last
 
         self.parent.blob_versions.update(self.id, self.offset)
         return True
@@ -459,12 +551,13 @@ class BlobWriter:
 
 class BlobReader(Blob):
     blob_id : Optional[int]
+    last = False
+    blob_id = None
+    length = None
+    rest_id = None
 
     def __init__(self, storage):
         self.parent = storage
-        self.blob_id = None
-        self.length = None
-        self.rest_id = None
 
     def len(self):
         return self.length
@@ -483,7 +576,7 @@ class BlobReader(Blob):
         elif rest_id is not None:
             where = 'rest_id = ?'
             where_val = (rest_id,)
-        cursor.execute('SELECT id,rest_id,length FROM Blob WHERE ' + where,
+        cursor.execute('SELECT id,rest_id,length,last FROM Blob WHERE ' + where,
                        where_val)
         row = cursor.fetchone()
         if not row:
@@ -491,6 +584,7 @@ class BlobReader(Blob):
         self.blob_id = row[0]
         self.rest_id = row[1]
         self.length = row[2]
+        self.last = row[3]
         return self.length
 
     def read_content(self, offset) -> Optional[bytes]:
@@ -518,7 +612,12 @@ class BlobReader(Blob):
                 self, self.blob_id, old_len, timeout):
             return False
         self.start(self.blob_id)
-        return self.length > old_len
+        return old_len is None or (self.length > old_len)
+
+    # wait until fully written
+    def wait(self, timeout=None):
+        while not self.last:
+            self.wait_length(timeout)
 
 class Waiter:
     version : int
@@ -542,7 +641,7 @@ class VersionWaiter:
         with self.lock:
             if id not in self.version: return
             waiter = self.version[id]
-            assert(waiter.version <= version)
+            assert(waiter.version is None or (waiter.version <= version))
             waiter.version = version
             self.cv.notify_all()
 
@@ -553,18 +652,19 @@ class VersionWaiter:
 
     def _wait(self, obj : object, id : int, version : int,
               timeout=None) -> bool:
-        logging.debug('_wait id=%d version=%d', id, version)
+        logging.debug('_wait id=%d version=%s', id, version)
         with self.lock:
             if id not in self.version:
                 self.version[id] = Waiter(version)
             waiter = self.version[id]
-            assert(waiter.version >= version)
-            if waiter.version > version:
+            assert(waiter.version is None or (waiter.version >= version))
+            if waiter.version is not None and (waiter.version > version):
                 return True
             waiter.waiters.add(obj)
-            self.cv.wait_for(lambda: waiter.version > version,
-                             timeout=timeout)
-            rv = waiter.version > version
+            self.cv.wait_for(
+                lambda: waiter.version is not None and (version is None or (waiter.version > version)),
+                timeout=timeout)
+            rv = waiter.version is not None and (version is None or (waiter.version > version))
             waiter.waiters.remove(obj)
             if not waiter.waiters:
                 del self.version[id]
@@ -687,7 +787,7 @@ class Storage:
             # TODO this is currently a scan, probably want to bake the
             # next attempt time logic into the previous request completion so
             # you can index on it
-            cursor.execute('SELECT id from Transactions '
+            cursor.execute('SELECT id,status from Transactions '
                            'WHERE status = ? OR '
                            '(status = ? AND last_update <= ?) '
                            'LIMIT 1',
@@ -695,15 +795,22 @@ class Storage:
             row = cursor.fetchone()
             if not row:
                 return None
-            id = row[0]
+            db_id,status = row
+
+            if status == Status.INSERT:
+                new_status = Status.ONESHOT_INFLIGHT
+            elif status == Status.WAITING:
+                new_status = Status.INFLIGHT
 
             # TODO: if the last n consecutive actions are all
             # load/recover, this transaction may be crashing the system ->
             # quarantine
+            # TODO: move to inner TransactionCursor.append_action in db tx
+            # with above select?
             cursor.execute(
                 'UPDATE Transactions SET inflight_session_id = ?, status = ? '
                 'WHERE id = ?',
-                (self.session_id, Status.INFLIGHT, id))
+                (self.session_id, new_status, db_id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
@@ -712,16 +819,43 @@ class Storage:
                 '  (SELECT MAX(action_id) FROM TransactionActions'
                 '   WHERE transaction_id = ?) + 1,'
                 '  ?,?)',
-                (id, id, int(time.time()), Action.LOAD))
+                (db_id, db_id, int(time.time()), Action.LOAD))
             self.db.commit()
             tx = self.get_transaction_cursor()
-            assert(tx.load(id=id))
+            assert(tx.load(db_id=db_id))
             return tx
 
-    def wait_created(self, id, timeout=None):
+
+    # abort non-durable transactions
+    def _gc_non_durable_one(self, min_age):
+        max_recent = int(time.time()) - min_age
+        cursor = self.db.cursor()
+        # XXX refactor with TransactionCursor.append_action so this
+        # can be a single db transaction
+        cursor.execute('SELECT id from Transactions '
+                       'WHERE last_update <= ? AND '
+                       'status IN (?, ?) LIMIT 1',
+                       (max_recent, Status.INSERT, Status.ONESHOT_TEMP))
+        row = cursor.fetchone()
+        if row is None: return False
+
+        tx_cursor = self.get_transaction_cursor()
+        tx_cursor.load(db_id = row[0])
+        tx_cursor.append_action(Action.ABORT)
+
+        return True
+
+    def gc_non_durable(self, min_age):
+        count = 0
+        while True:
+            if not self._gc_non_durable_one(min_age): break
+            count += 1
+        return count
+
+    def wait_created(self, db_id, timeout=None):
         with self.created_lock:
             fn = lambda: self.created_id is not None and (
-                id is None or id > self.created_id)
+                db_id is None or db_id > self.created_id)
             return self.created_cv.wait_for(fn, timeout)
 
 

@@ -9,6 +9,7 @@ from tags import Tag
 from blobs import BlobStorage
 from smtp_service import service as smtp_service
 import rest_service
+from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
 
 import logging
@@ -24,7 +25,7 @@ from config import Config
 from wsgiref.simple_server import make_server
 
 
-class SmtpGateway:
+class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SmtpEndpoint]
     config = None
     shutdown_gc = False
@@ -68,16 +69,17 @@ class SmtpGateway:
         return RestEndpoint(self.router_base_url, http_host='outbound-gw',
                             msa=True)
 
-    # xxx EndpointFactory abc
+    # EndpointFactory
     def create(self, host):
         if host == 'outbound':
             endpoint = self.smtp_factory.new(
                 ehlo_hostname=self.ehlo_host)
             self.inflight[endpoint.rest_id] = endpoint
-            return endpoint, False # msa
+            return endpoint
         else:
             return None
 
+    # EndpointFactory
     def get(self, rest_id):
         return self.inflight.get(rest_id, None)
 
@@ -114,9 +116,9 @@ class SmtpGateway:
                      auth_secrets_path=self.auth_secrets,
                      hostname=self.listen_host)
 
-        flask_app=rest_service.create_app(
-            self,  # xxx EndpointFactory abc
-            self.blobs)
+        self.adapter_factory = RestEndpointAdapterFactory(self, self.blobs)
+
+        flask_app=rest_service.create_app(self.adapter_factory)
         if self.config.get_bool('use_gunicorn'):
             gunicorn_main.run(
                 'localhost', self.rest_port, cert=None, key=None,

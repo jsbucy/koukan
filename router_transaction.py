@@ -146,6 +146,9 @@ class RouterTransaction:
             self.host):
             return None
 
+        # xxx per storage/tx model changes
+        self.storage_tx.append_action(Action.LOAD)
+
         self._start(local_host, remote_host,
                     mail_from, transaction_esmtp,
                     rcpt_to, rcpt_esmtp)
@@ -155,9 +158,8 @@ class RouterTransaction:
     def load(self):
         assert(self.storage_tx)
         storage_tx = self.storage_tx
-        logging.info("RouterTransaction.load id=%s from=%s to=%s length=%d",
-                     storage_tx.id, storage_tx.mail_from, storage_tx.rcpt_to,
-                     storage_tx.length)
+        logging.info("RouterTransaction.load id=%s from=%s to=%s",
+                     storage_tx.id, storage_tx.mail_from, storage_tx.rcpt_to)
         self.recovered = True
         self.msa = False
         self._start(
@@ -170,12 +172,10 @@ class RouterTransaction:
         if resp is None or resp.err():
             return
 
-        offset = 0
-        while offset < storage_tx.length:
-            blob = storage_tx.read_content(offset)
+        for i in range(0,storage_tx.max_i+1):
+            blob = storage_tx.read_content(i)
             assert(blob is not None)
-            offset += blob.len()
-            last = offset == storage_tx.length
+            last = i == storage_tx.max_i
             resp = self.append_blob_upstream(last=last, blob=blob)
             if resp.err(): break
 
@@ -417,28 +417,19 @@ class RouterTransaction:
         assert(self.received_last)
         assert(self.storage_id)
 
-        # xxx yuck refactor with append_action/storage
-        status = Status.WAITING
-        if self.next_final_resp:
-            if self.next_final_resp.ok() or self.next_final_resp.perm():
-                status = Status.DONE
-            # else temp, leave it WAITING
-        elif self.received_last and self.busy:
-            status = Status.INFLIGHT
+        logging.info('RouterTransaction.set_durable resp: %s',
+                     self.next_final_resp)
 
-        logging.info('RouterTransaction.set_durable status=%d %s',
-                     status, self.next_final_resp)
-
-        # don't persist the payload if it already succeeded or permfailed
-        if status != Status.DONE:
-            for blob in self.blobs:
+        if not self.next_final_resp.ok() and not self.next_final_resp.perm():
+            for i,blob in enumerate(self.blobs):
+                last = i == len(self.blobs)-1
                 # XXX errs?
                 if blob.id():
-                    self.append_blob(blob)
+                    self.append_blob(blob, last)
                 else:
-                    self.storage_tx.append_data(blob.contents())
+                    self.storage_tx.append_data(blob.contents(), last)
 
-            self.storage_tx.finalize_payload(status)
+            self.storage_tx.append_action(Action.SET_DURABLE)
 
         # upstream append_data last may have already finished before
         # set_durable() was called, write the action here upstream
@@ -463,7 +454,7 @@ class RouterTransaction:
         self.finalized = True
 
 
-    def append_blob(self, blob):
+    def append_blob(self, blob, last):
         assert(blob.id() is not None)
         db_blob = self.blob_id_map.lookup_or_insert(blob.id())
         logging.info('RouterTransaction.append_blob %s %s', blob.id(), db_blob)
@@ -472,5 +463,5 @@ class RouterTransaction:
             db_blob = blob_writer.start()
             blob_writer.append_data(blob.contents(), True)
             self.blob_id_map.finalize(blob.id(), db_blob)
-        assert(self.storage_tx.append_blob(db_blob, blob.len()) ==
+        assert(self.storage_tx.append_blob(db_blob, last) ==
                TransactionCursor.APPEND_BLOB_OK)

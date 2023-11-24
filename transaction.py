@@ -1,7 +1,7 @@
 
-from typing import Dict,Optional
+from typing import Dict,Optional,Any
 
-from storage import Storage, Action, Status
+from storage import Storage, Action, Status, TransactionCursor, BlobReader
 from response import Response
 from blob import Blob
 
@@ -10,6 +10,7 @@ from flask import Request as FlaskRequest, Response as FlaskResponse, jsonify
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
+from rest_service_handler import Handler, HandlerFactory
 
 import json
 
@@ -18,13 +19,6 @@ import secrets
 import logging
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
-
-# interface to "outer" rest service
-#class TransactionWriterFactory:
-#    def create(self) -> TransactionWriter:
-#        pass
-#    def get(self, rest_id) -> TransactionWriter:
-#        pass
 
 # def dequeue():
 #     created_id = None
@@ -49,51 +43,92 @@ REST_ID_BYTES = 4  # XXX configurable, use more in prod
 #         # 3: unref'd blobs
 #         storage.maybe_gc()
 
-class RestServiceTransaction:
-    def __init__(self, storage, rest_id, cursor):
+class RestServiceTransaction(Handler):
+    http_host : str = None
+
+    def __init__(self, storage,
+                 tx_rest_id=None,
+                 http_host=None,
+                 tx_cursor=None,
+                 blob_rest_id=None,
+                 blob_writer=None):
         self.storage = storage
-        self.rest_id = rest_id
-        self.cursor = cursor
+        self.http_host = http_host
+        self._tx_rest_id = tx_rest_id
+        self.tx_cursor = tx_cursor
+        self.blob_rest_id = blob_rest_id
+        self.blob_writer = blob_writer
 
     @staticmethod
-    def create(storage, req_json):
+    def create_tx(storage, http_host) -> Optional["RestServiceTransaction"]:
+        logging.debug('RestServiceTransaction.create_tx %s', http_host)
+
         cursor = storage.get_transaction_cursor()
         rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         cursor.create(rest_id)
+        return RestServiceTransaction(storage,
+                                      tx_rest_id=rest_id,
+                                      http_host=http_host,
+                                      tx_cursor=cursor)
 
-        cursor.write_envelope(
+    @staticmethod
+    def load_tx(storage, rest_id) -> Optional["RestServiceTransaction"]:
+        cursor = storage.get_transaction_cursor()
+        if not cursor.load(rest_id=rest_id): return None
+        return RestServiceTransaction(
+            storage, tx_rest_id=rest_id, tx_cursor=cursor)
+
+    @staticmethod
+    def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
+        blob_rest_id = blob_uri.removeprefix('/blob/')  # XXX uri prefix
+        blob_writer = storage.get_blob_writer()
+        if blob_writer.load(rest_id=blob_rest_id) is None:
+            return None
+        return RestServiceTransaction(
+            storage, blob_rest_id=blob_rest_id, blob_writer=blob_writer)
+
+    @staticmethod
+    def trim_actions(actions):
+        # these are in descending order
+        for i in range(0, len(actions)):
+            time, action, resp = actions[i]
+            if action == Action.LOAD:
+                return actions[0:(i+1)]
+        return actions
+
+    def tx_rest_id(self): return self._tx_rest_id
+
+    def start(self, req_json) -> FlaskResponse:
+        logging.debug('RestServiceTransaction.start %s', self.http_host)
+        self.tx_cursor.write_envelope(
             local_host = req_json.get('local_host', None),
             remote_host = req_json.get('remote_host', None),
             mail_from = req_json.get('mail_from', None),
             transaction_esmtp = None,
             rcpt_to = req_json.get('rcpt_to', None),
             rcpt_esmtp = None,
-            host = None)  # XXX
+            host = self.http_host)
+        return FlaskResponse()
 
-        return RestServiceTransaction(storage, rest_id, cursor)
 
-    @staticmethod
-    def trim_actions(actions):
-        for i in range(len(actions) - 1, 0, -1):
-            time, action, resp = actions[i]
-            if action == Action.LOAD:
-                actions = actions[i:]
-                break
-
-    def get(self, req_json) -> FlaskResponse:
-        # wait/timeout: only if inflight?
-
+    def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
         # fn is just version+1, i.e. just retry on every write, there
         # shouldn't be that many
         while True:
-            actions = self.cursor.load_last_action(2)
-            RestServiceTransaction.trim_actions(actions)
+            # if status in [Status.INFLIGHT, Status.ONESHOT_INFLIGHT]
+            #   and START or final (temp/perm/delivered/abort) not in actions
+            #  wait
+            # the exact number just needs to be an upper bound on max seq of
+            # LOAD, START, SET_DURABLE, DELIVERED, etc
+            actions = self.tx_cursor.load_last_action(5)
+            actions = RestServiceTransaction.trim_actions(actions)
+            logging.info('RestServiceTransaction.get actions %s', actions)
             if not actions:
-                if not self.cursor.wait():
+                if not self.tx_cursor.wait():
                     return FlaskResponse()
                 continue
             resp_json = {}
-            for timestamp,action,resp in actions:
+            for timestamp,action,resp in reversed(actions):
                 if action == Action.START:
                     resp_json['start_response'] = resp.to_json()
                 elif (action == Action.DELIVERED or
@@ -108,18 +143,12 @@ class RestServiceTransaction:
             return rest_resp
             #return jsonify(resp_json)
 
-    def append_inline(self, d, last)  -> FlaskResponse:
-        self.cursor.append_data(d)
-        if last:
-            self.cursor.finalize_payload()
-        return FlaskResponse()
-
-    def append_blob(self, uri : str) -> FlaskResponse:
-        logging.info('append_blob %s %s', self.rest_id, uri)
+    def append_blob(self, uri : Optional[str], last) -> FlaskResponse:
+        logging.info('append_blob %s %s last=%s', self._tx_rest_id, uri, last)
         if uri:
-            reader = self.storage.get_blob_reader()
-            if reader.start(rest_id=uri):
-                self.cursor.append_blob(uri, None)  # xxx length ignored
+            uri = uri.removeprefix('/blob/')  # XXX uri prefix
+            if (self.tx_cursor.append_blob(uri, last) ==
+                TransactionCursor.APPEND_BLOB_OK):
                 resp_json = {}
                 rest_resp = FlaskResponse()
                 rest_resp.set_data(json.dumps(resp_json))
@@ -129,17 +158,22 @@ class RestServiceTransaction:
         blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         writer = self.storage.get_blob_writer()
         writer.start(blob_rest_id)
-        self.cursor.append_blob(blob_rest_id, None)  # xxx length ignored
-        resp_json = {'uri': blob_rest_id}
+        if (self.tx_cursor.append_blob(blob_rest_id, last) !=
+            TransactionCursor.APPEND_BLOB_OK):
+            return FlaskResponse(500, 'internal error')
+        # XXX move to rest service?
+        resp_json = {'uri': '/blob/' + blob_rest_id}
         rest_resp = FlaskResponse()
         rest_resp.set_data(json.dumps(resp_json))
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    def append(self, req_json) -> FlaskResponse:
+    def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
         # mx enforces that start succeeded, etc.
         # storage enforces preconditions that apply to all transactions:
         #   e.g. tx didn't already fail/abort
+
+        logging.info('RestServiceTransaction.append %s %s', self._tx_rest_id, req_json)
 
         last = False
         if 'last' in req_json:
@@ -152,13 +186,16 @@ class RestServiceTransaction:
             # TODO investigate this further, this may be effectively
             # round-tripping utf8 -> python str -> utf8
             d : bytes = req_json['d'].encode('utf-8')
-            return self.append_inline(d, last)
-        if 'uri' in req_json:
-            uri = req_json['uri']
-            if uri is None or isinstance(uri, str):
-                return self.append_blob(uri)
+            self.tx_cursor.append_data(d, last)
+            return FlaskResponse()  # XXX range?
 
-        return FlaskResponse(status=400)
+        # if 'uri' in req_json:  # xxx this would be a protocol change
+        uri = req_json.get('uri', None)
+        if uri is not None and not isinstance(uri, str):
+            return FlaskResponse(status=400)
+
+        return self.append_blob(uri, last)
+
 
     @staticmethod
     def build_resp(code, msg, writer):
@@ -171,62 +208,91 @@ class RestServiceTransaction:
                 ContentRange('bytes', 0, writer.offset, writer.length))
         return resp
 
-    def put_blob(self, blob_id, request):
-        logging.info('put_blob %s', blob_id)
-        writer = self.storage.get_blob_writer()
-        if writer.load(rest_id=blob_id) is None:
-            return FlaskResponse(status=404)
+    def put_blob(self, request : FlaskRequest):
+        logging.info('put_blob %s', self.blob_rest_id)
         logging.info('put_blob loaded %s off=%d len=%s',
-                     blob_id, writer.offset, writer.length)
+                     self.blob_rest_id, self.blob_writer.offset,
+                     self.blob_writer.length)
+
         range = None
         if 'content-range' not in request.headers:
             logging.info('put_blob content-length=%d (no range)',
                          request.content_length)
             range = ContentRange('bytes', 0, request.content_length,
                                  request.content_length)
+            # being extremely persnickety: we would reject a request
+            # without content-range after a request with it populated
+            # even if it's equivalent/noop but may not be worth
+            # storing that to enforce?
         else:
+            # XXX move to frontline flask PUT handler
             range = werkzeug.http.parse_content_range_header(
                 request.headers.get('content-range'))
             logging.info('put_blob content-range: %s', range)
             if not range or range.units != 'bytes':
                 return RestServiceTransaction.build_resp(
-                    400, 'bad range', writer)
+                    400, 'bad range', self.blob_writer)
+            # not sure if the underlying stack enforces this?
+            if range.stop - range.start != request.content_length:
+                return RestServiceTransaction.build_resp(
+                    400, 'range/length mismatch', self.blob_writer)
 
         offset = range.start
-        if offset > writer.offset:
+        if offset > self.blob_writer.offset:
                 return RestServiceTransaction.build_resp(
-                    400, 'range start past the end', writer)
+                    400, 'range start past the end', self.blob_writer)
         last = range.length is not None and range.stop == range.length
 
-        if writer.length is not None and range.length != writer.length:
+        if (self.blob_writer.length is not None and
+            range.length != self.blob_writer.length):
             return RestServiceTransaction.build_resp(
-                400, 'append or !last after last', writer)
+                400, 'append or !last after last', self.blob_writer)
 
-        if writer.offset >= range.stop:
+        if self.blob_writer.offset >= range.stop:
             return RestServiceTransaction.build_resp(
-                200, 'noop (range)', writer)
+                200, 'noop (range)', self.blob_writer)
 
-        d = request.data[writer.offset - offset:]
+        d = request.data[self.blob_writer.offset - offset:]
         assert(len(d) > 0)
-        writer.append_data(d, range.length)
+        self.blob_writer.append_data(d, range.length)
 
         return RestServiceTransaction.build_resp(
-            200, None, writer)
+            200, None, self.blob_writer)
 
+
+    def abort(self):
+        pass
+
+    def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
+        #if self.tx_cursor.finalize_payload():
+        if self.tx_cursor.append_action(Action.SET_DURABLE):
+            return FlaskResponse()
+        return FlaskResponse(status=400, response=['failed precondition'])
+
+# interface to top-level flask app
+class RestServiceTransactionFactory(HandlerFactory):
+    def __init__(self, storage : Storage):
+        self.storage = storage
+
+    def create_tx(self, http_host) -> Optional[RestServiceTransaction]:
+        return RestServiceTransaction.create_tx(self.storage, http_host)
+
+    def get_tx(self, tx_rest_id) -> Optional[RestServiceTransaction]:
+        return RestServiceTransaction.load_tx(
+            self.storage, tx_rest_id)
+
+    def get_blob(self, blob_rest_id) -> Optional[RestServiceTransaction]:
+        return RestServiceTransaction.load_blob(self.storage, blob_rest_id)
 
 
 def cursor_to_endpoint(cursor, endpoint):
-    #if cursor.has_upstream_tx_url():
-    #    endpoint.set_transaction_url(cursor.upstream_tx_url)
-    #    resp = endpoint.get_status()
-    #    if resp.err():
-    #        endpoint = None
-    #if endpoint is None:
-    #    endpoint = endpoint()
-    #    cursor.set_upstream_rest_id(endpoint.rest_id)
+    logging.debug('cursor_to_endpoint %s', cursor.rest_id)
 
-    cursor.wait_attr_not_none('mail_from')  # or abort
-    cursor.wait_attr_not_none('rcpt_to')  # or abort
+    cursor.wait_attr_not_none('mail_from')  # or timeout/abort
+    cursor.wait_attr_not_none('rcpt_to')
+
+    logging.debug('cursor_to_endpoint %s from=%s to=%s', cursor.rest_id,
+                  cursor.mail_from, cursor.rcpt_to)
 
     resp = endpoint.start(
         cursor.remote_host, cursor.local_host,
@@ -235,24 +301,34 @@ def cursor_to_endpoint(cursor, endpoint):
     # storage has business logic to know start + err resp -> DONE tx?
     cursor.append_action(Action.START, resp)
     if resp.err():
+        if resp.temp():
+            action = Action.TEMP_FAIL
+        elif resp.perm():
+            action = Action.PERM_FAIL
+        cursor.append_action(action, resp)
         return
     i = 0
     last = False
     while not last:
-        cursor.wait_for(lambda: cursor.max_i >= i)  # or abort
+        logging.info('cursor_to_endpoint %s cursor.last=%s max_i=%s',
+                     cursor.rest_id, cursor.last, cursor.max_i)
+        cursor.wait_for(lambda: (cursor.max_i is not None) and
+                        (cursor.max_i >= i))  # or abort
 
-        # TODO somewhere (here or BlobReader) needs to be some code to
-        # wait for blob.last, etc.
         blob = cursor.read_content(i)
 
-        logging.info('cursor_to_endpoint i=%d blob_len=%d '
-                     'cursor.max_i=%d cursor.last=%s',
-                     i, blob.len(), cursor.max_i, cursor.last)
+        # XXX probably move to BlobReader
+        if isinstance(blob, BlobReader):
+            blob.wait()
+
         last = cursor.last and (i == cursor.max_i)
+        logging.info('cursor_to_endpoint %s i=%d blob_len=%d '
+                     'cursor.max_i=%d last=%s',
+                     cursor.rest_id,
+                     i, blob.len(), cursor.max_i, last)
         i += 1
-        logging.info('cursor_to_endpoint last=%s', last)
         resp = endpoint.append_data(last, blob)
-        # blob.unref()
+        logging.info('cursor_to_endpoint %s %s', cursor.rest_id, resp)
 
         if not last:
             # non-last must only return error
@@ -262,14 +338,6 @@ def cursor_to_endpoint(cursor, endpoint):
             assert(resp is not None)
 
         if resp is not None:
-            # XXX it seems like these fine-grained codes are redundant
-            # with the resp, this is a vestige of not originally
-            # storing the resp? does anything directly reading the db
-            # distinguish those? or do you want it to capture things
-            # like upstream temp + max retry -> perm? or maybe that
-            # should be an additional action? conceptually that is
-            # a separate attempt LOAD, TEMP, LOAD, PERM
-            # though in practice the completion logic writes that?
             action = Action.TEMP_FAIL
             if resp.ok():
                 action = Action.DELIVERED

@@ -61,6 +61,9 @@ class RouterTransactionTest(unittest.TestCase):
 
         self.executor = Executor(100, {0: 100})
 
+    def dump_db(self):
+        for l in self.storage.db.iterdump():
+            print(l)
 
     # RouterTransaction api surface to rest is
     # start()
@@ -146,9 +149,6 @@ class RouterTransactionTest(unittest.TestCase):
 
         tx.set_durable()
 
-        #for l in self.storage.db.iterdump():
-        #    print(l)
-
         self.check_storage(tx.storage_id, status_after_durable,
                            action_after_durable)
         tx.finalize()
@@ -165,15 +165,15 @@ class RouterTransactionTest(unittest.TestCase):
         self.fast(True, False,
                   Response(code=400),
                   None,
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
-                  StorageStatus.WAITING, Action.TEMP_FAIL)
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.SET_DURABLE)
 
     def test_msa_fast_append_temp(self):
         self.fast(True, False,
                   Response(),
                   Response(code=400),
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
-                  StorageStatus.WAITING, Action.TEMP_FAIL)
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.SET_DURABLE)
 
     def test_msa_fast_perm(self):
         self.fast(True, False,
@@ -190,11 +190,11 @@ class RouterTransactionTest(unittest.TestCase):
                   None, None)
     def test_mx_single_fast_start_temp(self):
         self.fast(False, False, Response(code=400), Response(),
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
                   None, None)
     def test_mx_single_fast_append_temp(self):
         self.fast(False, False, Response(), Response(code=400),
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
                   None, None)
 
     def test_mx_single_fast_perm(self):
@@ -210,12 +210,12 @@ class RouterTransactionTest(unittest.TestCase):
     # mx (single and multi) never continues after upstream start err
     def test_mx_multi_fast_start_temp(self):
         self.fast(False, True, Response(code=400), None,
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
                   None, None)
     def test_mx_multi_fast_append_temp(self):
         self.fast(False, True, Response(), Response(code=400),
-                  StorageStatus.ONESHOT_DONE, Action.TEMP_FAIL,
-                  StorageStatus.WAITING, Action.TEMP_FAIL)
+                  StorageStatus.ONESHOT_TEMP, Action.TEMP_FAIL,
+                  StorageStatus.WAITING, Action.SET_DURABLE)
 
     def test_mx_multi_fast_perm(self):
         self.fast(False, True, Response(), Response(code=500),
@@ -230,9 +230,9 @@ class RouterTransactionTest(unittest.TestCase):
 
 
     def recover(self, id, start_resp, append_resp, exp_status, exp_action):
-        storage_tx = self.storage.get_transaction_cursor()
-        self.assertTrue(storage_tx.load(id))
-        self.assertEqual(storage_tx.status, StorageStatus.WAITING)
+        storage_tx = self.storage.load_one()
+        self.assertEqual(storage_tx.id, id)
+        self.assertEqual(storage_tx.status, StorageStatus.INFLIGHT)
 
         recovery_endpoint = FakeEndpoint()
         recovery_endpoint.set_start_resp(start_resp)
@@ -277,6 +277,7 @@ class RouterTransactionTest(unittest.TestCase):
 
         tx.set_durable()
         tx.finalize()
+        #self.dump_db()
 
         for (start_resp, append_resp, status, action) in expectations:
             self.recover(tx.storage_id, start_resp, append_resp, status, action)

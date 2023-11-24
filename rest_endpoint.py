@@ -169,15 +169,15 @@ class RestEndpoint:
                                   headers={'host': self.http_host},
                                   timeout=self.timeout_data)
         resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint.append_data POST resp %s', resp_json)
+        logging.info('RestEndpoint.append_data POST resp %s %s',
+                     rest_resp, resp_json)
         # XXX http ok (and below)
-        if rest_resp.status_code > 299 or 'final_status' in resp_json:
-            logging.debug('RestEndpoint.append_data POST failed %d %s',
-                          rest_resp.status_code, rest_resp.text)
-            if 'final_status' in resp_json:
-                return Response.from_json(resp_json['final_status'])
-
-            return Response(400, 'RestEndpoint.append_data POST failed')
+        if rest_resp.status_code > 299:
+            return Response(400, 'RestEndpoint.append_data POST failed: http')
+        if resp_json is None:
+            return Response(400, 'RestEndpoint.append_data POST failed: no json')
+        if 'final_status' in resp_json:
+            return Response.from_json(resp_json['final_status'])
 
         if 'uri' not in req_json and 'uri' not in resp_json:
             return Response(400, 'RestEndpoint.append_data endpoint didn\'t'

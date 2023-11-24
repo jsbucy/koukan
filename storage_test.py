@@ -13,7 +13,8 @@ import logging
 class StorageTest(unittest.TestCase):
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(message)s')
         self.s = Storage()
         self.s.connect(db=Storage.get_inmemory_for_test())
 
@@ -22,38 +23,38 @@ class StorageTest(unittest.TestCase):
             print(l)
 
     def test_basic(self):
-        writer = self.s.get_transaction_cursor()
-        writer.create('tx_rest_id')
-        logging.info('version %d', writer.version)
-        writer.write_envelope(
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id')
+        logging.info('version %d', tx_writer.version)
+        tx_writer.write_envelope(
             'local_host', 'remote_host',
             'alice', None,
             'bob', None, 'host')
-        writer.append_data(b'abc')
-        writer.append_data(b'xyz')
-        self.assertEqual(writer.append_blob('blob_id', 1),
-                         writer.APPEND_BLOB_UNKNOWN)
+        tx_writer.append_data(b'abc', last=False)
+        tx_writer.append_data(b'xyz', last=False)
+        self.assertEqual(tx_writer.append_blob('blob_id', last=False),
+                         tx_writer.APPEND_BLOB_UNKNOWN)
 
         blob_writer = self.s.get_blob_writer()
         self.assertIsNotNone(blob_writer.start('blob_rest_id'))
-        blob_writer.append_data(b'blob1', False)
-        blob_writer.append_data(b'blob2', True)
+        blob_writer.append_data(b'blob1')
+        blob_writer.append_data(b'blob2', 10)
 
-        self.assertEqual(writer.append_blob(blob_writer.id, blob_writer.offset),
-                         writer.APPEND_BLOB_OK)
-        writer.append_data(b'qrs')
+        self.assertEqual(tx_writer.append_blob('blob_rest_id', last=False),
+                         tx_writer.APPEND_BLOB_OK)
+        tx_writer.append_data(b'qrs', last=True)
 
-        self.assertTrue(writer.finalize_payload(Status.WAITING))
-        self.dump_db()
+        self.assertTrue(tx_writer.append_action(Action.SET_DURABLE))
+        #self.dump_db()
 
-        writer.append_action(Action.TEMP_FAIL, Response(400))
+        reader = self.s.load_one()
+        self.assertIsNotNone(reader)
 
+        tx_writer.append_action(Action.TEMP_FAIL, Response(456))
 
-#        reader = self.s.load_one()
-#        self.assertIsNotNone(reader)
         reader = self.s.get_transaction_cursor()
-        reader.load(id=writer.id)
-        self.assertEqual(reader.id, writer.id)
+        reader.load(db_id=tx_writer.id)
+        self.assertEqual(reader.id, tx_writer.id)
         # xxx self.assertEqual(reader.length, 23)
         self.assertTrue(reader.last)
         self.assertEqual(reader.max_i, 3)
@@ -70,20 +71,16 @@ class StorageTest(unittest.TestCase):
             self.assertIsNotNone(blob)
             self.assertEqual(c, blob.contents())
 
-        #self.assertIsNone(self.s.load_one())
-
-        reader.append_action(Action.TEMP_FAIL, Response(456))
-
         r2 = self.s.load_one()
         self.assertIsNotNone(r2)
-        self.assertEqual(r2.id, writer.id)
+        self.assertEqual(r2.id, tx_writer.id)
 
         r2.append_action(Action.DELIVERED, Response(234))
 
         self.assertIsNone(self.s.load_one())
 
         r3 = self.s.get_transaction_cursor()
-        r3.load(writer.id)
+        r3.load(tx_writer.id)
         actions = r3.load_last_action(3)
         self.assertEqual(Action.DELIVERED, actions[0][1])
         resp = actions[0][2]
@@ -103,7 +100,7 @@ class StorageTest(unittest.TestCase):
         # self.dump_db()
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(12, reader.length)
+        #self.assertEqual(12, reader.length)
         self.assertEqual(reader.id, 12345)
         self.assertEqual(reader.mail_from, 'alice@example.com')
         self.assertEqual(reader.i, 0)
@@ -115,14 +112,29 @@ class StorageTest(unittest.TestCase):
             'local_host', 'remote_host',
             'alice', None,
             'bob', None, 'host')
+
+        reader = self.s.load_one()
+        self.assertIsNotNone(reader)
+        self.assertEqual(reader.status, Status.ONESHOT_INFLIGHT)
+
         writer.append_action(Action.TEMP_FAIL, Response(400))
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))
-        self.assertEqual(reader.status, Status.ONESHOT_DONE)
+        #self.dump_db()
+        self.assertEqual(reader.status, Status.ONESHOT_TEMP)
 
         reader = self.s.load_one()
         self.assertIsNone(reader)
+
+    def test_gc_non_durable(self):
+        writer = self.s.get_transaction_cursor()
+        writer.create('xyz')
+        writer.write_envelope(
+            'local_host', 'remote_host',
+            'alice', None,
+            'bob', None, 'host')
+        self.assertEqual(self.s.gc_non_durable(min_age = 0), 1)
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()
@@ -145,6 +157,7 @@ class StorageTest(unittest.TestCase):
 
     @staticmethod
     def wait_for(reader, rv, fn):
+        logging.info('test wait')
         rv[0] = reader.wait_for(fn, 5)
 
     @staticmethod
@@ -177,15 +190,15 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(reader.mail_from, 'alice')
         self.assertEqual(reader.rcpt_to, 'bob')
 
-        self.assertEqual(reader.length, 0)
-        self.assertFalse(reader.wait_for(lambda: reader.length > 0, timeout=0.1))
+        fn = lambda: (reader.max_i is not None)   #and (reader.max_i > 0)
+        self.assertFalse(reader.wait_for(fn, timeout=0.1))
 
         rv = [None]
-        t = Thread(target =
-                   lambda: StorageTest.wait_for(reader, rv, lambda: reader.length > 0))
+        t = Thread(target = lambda: StorageTest.wait_for(reader, rv, fn))
         t.start()
-        time.sleep(0.1)
-        writer.append_data(b'hello, world!')
+        time.sleep(1)
+        logging.info('test append')
+        writer.append_data(b'hello, world!', last=True)
         t.join()
 
         self.assertTrue(rv[0])
@@ -227,7 +240,7 @@ class StorageTest(unittest.TestCase):
         t.start()
         time.sleep(0.1)
 
-        writer.append_data(b'xyz', True)
+        writer.append_data(b'xyz', 3)
 
         t.join(timeout=5)
         self.assertFalse(t.is_alive())
