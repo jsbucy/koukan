@@ -149,17 +149,12 @@ class RestEndpointAdapter(Handler):
 
         return resp
 
-    def put_blob(self, request : FlaskRequest) -> FlaskResponse:
+    def put_blob(self, request : FlaskRequest, range : ContentRange,
+                 range_in_headers : bool) -> FlaskResponse:
         offset = 0
         last = True
-        if 'content-range' in request.headers:
-            range = werkzeug.http.parse_content_range_header(
-                request.headers.get('content-range'))
-            if not range or range.units != 'bytes':
-                return FlaskResponse(status=400, response=['bad range'])
-            offset = range.start
-            last = range.length is not None and range.stop == range.length
-
+        offset = range.start
+        last = range.length is not None and range.stop == range.length
         result_len = self.blob_storage.append(
             self.blob_rest_id, offset, request.data, last)
         if result_len is None:

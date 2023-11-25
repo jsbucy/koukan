@@ -83,7 +83,8 @@ class TransactionTest(unittest.TestCase):
         #self.dump_db()
         blob_tx = RestServiceTransaction.load_blob(self.storage, blob_uri)
         self.assertIsNotNone(blob_tx)
-        rest_resp = blob_tx.put_blob(put_req)
+        range = ContentRange('bytes', 0, len(d), len(d))
+        rest_resp = blob_tx.put_blob(put_req, range, True)
         logging.info('%d %s', rest_resp.status_code, str(rest_resp.data))
         self.assertEqual(rest_resp.status_code, 200)
 
@@ -122,12 +123,11 @@ class TransactionTest(unittest.TestCase):
             expected_http_code=None, expected_resp_content=None,
             expected_length=None, expected_last=None):
         range = ContentRange('bytes', offset, offset + len(d), overall)
-        put_req = FlaskRequest(
-            WSGIEnvironment({'HTTP_CONTENT_RANGE': range.to_header()}))
+        put_req = FlaskRequest(WSGIEnvironment())
         put_req.method = 'PUT'
         put_req.data = d
         put_req.content_length = len(put_req.data)
-        rest_resp = blob_tx.put_blob(put_req)
+        rest_resp = blob_tx.put_blob(put_req, range, True)
         logging.info('put off=%d code=%d resp=%s range: %s', offset,
                      rest_resp.status_code, rest_resp.data,
                      rest_resp.content_range)
@@ -175,23 +175,8 @@ class TransactionTest(unittest.TestCase):
         self.assertIn('uri', resp_json)
         blob_uri = resp_json['uri']
 
-
-
         # bad uri
         self.assertIsNone(RestServiceTransaction.load_blob(self.storage, 'xyz'))
-
-        # invalid content-range header
-        # XXX move this check to frontline flask handler?
-        put_req = FlaskRequest(
-            WSGIEnvironment({'HTTP_CONTENT_RANGE': 'quux'}))
-        put_req.method = 'PUT'
-        put_req.data = 'deadbeef'
-        put_req.content_length = len(put_req.data)
-        blob_tx = RestServiceTransaction.load_blob(self.storage, blob_uri)
-        self.assertIsNotNone(blob_tx)
-        rest_resp = blob_tx.put_blob(put_req)
-        self.assertEqual(rest_resp.status_code, 400)
-        self.assertEqual(rest_resp.data, b'bad range')
 
         blob_tx = RestServiceTransaction.load_blob(self.storage, blob_uri)
         d = b'deadbeef'
@@ -332,6 +317,8 @@ class TransactionTest(unittest.TestCase):
         else:
             self.fail('no start result')
 
+        self.assertEqual(endpoint.mail_from, 'alice')
+        self.assertEqual(endpoint.rcpt_to, 'bob')
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
@@ -354,10 +341,12 @@ class TransactionTest(unittest.TestCase):
             put_req = FlaskRequest(WSGIEnvironment())
             put_req.method = 'PUT'
             b = d[i:i+1]
+            self.assertEqual(len(b), 1)
             put_req.data = b
-            put_req.content_length = len(b)
+            put_req.content_length = 1
 
-            put_resp = blob_tx.put_blob(put_req)
+            put_resp = blob_tx.put_blob(
+                put_req, ContentRange('bytes', i, i+1, len(d)), True)
             self.assertEqual(200, put_resp.status_code)
 
         endpoint.add_data_response(Response(245))
@@ -376,14 +365,17 @@ class TransactionTest(unittest.TestCase):
                 resp = Response.from_json(resp_json['final_status'])
                 self.assertEqual(245, resp.code)
                 break
-            time.sleep(0.2)
+            time.sleep(0.5)
         else:
             self.fail('no final result')
 
         t.join(timeout=1)
         self.assertFalse(t.is_alive())
 
-        #self.dump_db()
+        self.assertEqual(len(endpoint.blobs), 2)
+        self.assertEqual(endpoint.blobs[0].contents(), b'hello, ')
+        self.assertEqual(endpoint.blobs[1].contents(), b'world!')
+        self.assertTrue(endpoint.last)
 
 
 if __name__ == '__main__':

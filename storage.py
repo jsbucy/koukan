@@ -341,7 +341,7 @@ class TransactionCursor:
         if inline:
             return InlineBlob(inline)
         r = self.parent.get_blob_reader()
-        r.start(id=blob_id)
+        r.start(db_id=blob_id)
         return r
 
     def _check_payload_done(self, cursor) -> bool:
@@ -510,10 +510,12 @@ class BlobWriter:
 
     CHUNK_SIZE = 1048576
 
+    # This verifies that noone else wrote to BlobContent since load()
     # Note: as of python 3.11 sqlite.Connection.blobopen() returns a
-    # file-like object blob reader handle so this may be less necessary
+    # file-like object blob reader handle so striping out the data may
+    # be less necessary
     def append_data(self, d : bytes, length=None):
-        logging.info('BlobWriter.append %d %s off=%d d.len=%d length=%s '
+        logging.info('BlobWriter.append_data %d %s off=%d d.len=%d length=%s '
                      'new length=%s',
                      self.id, self.rest_id, self.offset, len(d), self.length,
                      length)
@@ -524,6 +526,16 @@ class BlobWriter:
             dd = d
             while dd:
                 chunk = dd[0:self.CHUNK_SIZE]
+                cursor.execute('SELECT offset + LENGTH(content) '
+                               'FROM BlobContent WHERE id = ? '
+                               'ORDER BY offset DESC LIMIT 1',
+                               (self.id,))
+                row = cursor.fetchone()
+                if self.offset == 0:
+                    assert(row is None)
+                else:
+                    assert(row[0] == self.offset)
+
                 cursor.execute(
                     'INSERT INTO BlobContent (id, offset, content) '
                     'VALUES (?,?,?)',
@@ -555,6 +567,7 @@ class BlobReader(Blob):
     blob_id = None
     length = None
     rest_id = None
+    offset : Optional[int] = None  # max offset in BlobContent
 
     def __init__(self, storage):
         self.parent = storage
@@ -565,14 +578,14 @@ class BlobReader(Blob):
     def id(self):
         return 'storage_%s' % self.blob_id
 
-    def start(self, id = None, rest_id = None):  # xxx load()
-        self.blob_id = id
+    def start(self, db_id = None, rest_id = None):  # xxx load()
+        self.blob_id = db_id
         cursor = self.parent.db.cursor()
         where = ''
         where_val = ()
         if id is not None:
             where = 'id = ?'
-            where_val = (id,)
+            where_val = (db_id,)
         elif rest_id is not None:
             where = 'rest_id = ?'
             where_val = (rest_id,)
@@ -581,14 +594,25 @@ class BlobReader(Blob):
         row = cursor.fetchone()
         if not row:
             return None
+
         self.blob_id = row[0]
         self.rest_id = row[1]
         self.length = row[2]
         self.last = row[3]
+
+        cursor.execute('SELECT offset '
+                       'FROM BlobContent WHERE id = ? '
+                       'ORDER BY offset DESC LIMIT 1',
+                       (self.blob_id,))
+        row = cursor.fetchone()
+        self.offset = row[0] if row is not None else None
+
         return self.length
 
+    # xxx clean this up, should probably just read sequentially per
+    # self.offset?
     def read_content(self, offset) -> Optional[bytes]:
-        # xxx precondition offset/self.length?
+        if offset is None: return None
 
         # TODO inflight waiter list thing
         cursor = self.parent.db.cursor()
@@ -607,7 +631,7 @@ class BlobReader(Blob):
         return dd
 
     def wait_length(self, timeout):
-        old_len = self.length
+        old_len = self.offset
         if not self.parent.blob_versions._wait(
                 self, self.blob_id, old_len, timeout):
             return False
@@ -637,7 +661,7 @@ class VersionWaiter:
         self.cv = Condition(self.lock)
 
     def update(self, id, version):
-        logging.debug('update id=%d version=%d', id, version)
+        logging.debug('VersionWaiter.update id=%d version=%d', id, version)
         with self.lock:
             if id not in self.version: return
             waiter = self.version[id]

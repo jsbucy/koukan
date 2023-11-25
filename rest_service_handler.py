@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 
 from flask import Response as FlaskResponse, Request as FlaskRequest
+from werkzeug.datastructures import ContentRange
 
 class Handler(ABC):
     @abstractmethod
@@ -18,7 +19,9 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def put_blob(self, request : FlaskRequest) -> FlaskResponse:
+    def put_blob(self, request : FlaskRequest,
+                 range : ContentRange,
+                 range_in_headers : bool) -> FlaskResponse:
         pass
 
     @abstractmethod

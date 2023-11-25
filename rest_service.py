@@ -91,10 +91,26 @@ def create_app(handler_factory : HandlerFactory):
         logging.info("rest service append_data_chunk %s %s",
                      request, request.headers)
 
+        # no idea if underlying stack enforces this
+        assert(len(request.data) == request.content_length)
+        range = None
+        range_in_headers = 'content-range' in request.headers
+        if range_in_headers:
+            range = werkzeug.http.parse_content_range_header(
+                request.headers.get('content-range'))
+            logging.info('put_blob content-range: %s', range)
+            if not range or range.units != 'bytes':
+                return FlaskResponse(400, 'bad range')
+            # no idea if underlying stack enforces this
+            assert(range.stop - range.start == request.content_length)
+        else:
+           range = ContentRange('bytes', 0, request.content_length,
+                                request.content_length)
+
         handler = handler_factory.get_blob(blob_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['blob not found'])
-        return handler.put_blob(request)
+        return handler.put_blob(request, range, range_in_headers)
 
     return app
 

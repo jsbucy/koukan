@@ -208,34 +208,16 @@ class RestServiceTransaction(Handler):
                 ContentRange('bytes', 0, writer.offset, writer.length))
         return resp
 
-    def put_blob(self, request : FlaskRequest):
-        logging.info('put_blob %s', self.blob_rest_id)
+    def put_blob(self, request : FlaskRequest,
+                 range : ContentRange, range_in_headers : bool):
         logging.info('put_blob loaded %s off=%d len=%s',
                      self.blob_rest_id, self.blob_writer.offset,
                      self.blob_writer.length)
 
-        range = None
-        if 'content-range' not in request.headers:
-            logging.info('put_blob content-length=%d (no range)',
-                         request.content_length)
-            range = ContentRange('bytes', 0, request.content_length,
-                                 request.content_length)
-            # being extremely persnickety: we would reject a request
-            # without content-range after a request with it populated
-            # even if it's equivalent/noop but may not be worth
-            # storing that to enforce?
-        else:
-            # XXX move to frontline flask PUT handler
-            range = werkzeug.http.parse_content_range_header(
-                request.headers.get('content-range'))
-            logging.info('put_blob content-range: %s', range)
-            if not range or range.units != 'bytes':
-                return RestServiceTransaction.build_resp(
-                    400, 'bad range', self.blob_writer)
-            # not sure if the underlying stack enforces this?
-            if range.stop - range.start != request.content_length:
-                return RestServiceTransaction.build_resp(
-                    400, 'range/length mismatch', self.blob_writer)
+        # being extremely persnickety: we would reject
+        # !range_in_headers after a request with it populated even if
+        # it's equivalent/noop but may not be worth storing that to
+        # enforce?
 
         offset = range.start
         if offset > self.blob_writer.offset:

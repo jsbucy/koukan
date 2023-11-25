@@ -96,6 +96,8 @@ class SyncEndpoint:
 
     def append_data(self, last, blob):
         logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)
+        assert(not self.last)
+        self.last = last
         self.blobs.append(blob)
         with self.lock:
             self.cv.wait_for(lambda: bool(self.data_resp))
