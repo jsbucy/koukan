@@ -27,7 +27,8 @@ def create_app(handler_factory : HandlerFactory):
 
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> FlaskResponse:
-        print(request, request.headers)
+        logging.info('rest service start_transaction %s %s',
+                     request, request.headers)
         if not request.is_json:
             return FlaskResponse(status=400, response=['not json'])
         handler = handler_factory.create_tx(request.headers['host'])

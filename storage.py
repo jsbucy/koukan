@@ -1,4 +1,4 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 
 from blob import Blob, InlineBlob
 from threading import Lock, Condition
@@ -18,6 +18,12 @@ class Status:
     WAITING = 1
     INFLIGHT = 2
     DONE = 3
+    # XXX I think ONESHOT_DONE should go away:
+    # oneshot_inflight -> set durable -> inflight
+    # oneshot_temp -> set durable -> waiting
+    # done -> set durable -> done (noop)
+    # insert -> abort -> done
+    # oneshot inflight -> abort -> done
     ONESHOT_DONE = 4  # set_durable noop
     ONESHOT_INFLIGHT = 5
     ONESHOT_TEMP = 6  # set_durable -> WAITING
@@ -38,6 +44,8 @@ class Action:
     TEMP_FAIL = 3
     PERM_FAIL = 4
     ABORT = 6
+    # START is basically upstream start succeeded, upstream start err ->
+    # overall tx "attempt" result
     START = 7  # inflight -> inflight (no change)
     SET_DURABLE = 8  # ONESHOT_DONE -> WAITING or
                      # ONESHOT_INFLIGHT -> INFLIGHT
@@ -83,6 +91,7 @@ class TransactionCursor:
     i = 0  # TransactionContent index
     version : Optional[int] = None
     max_i = None
+    last = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -100,7 +109,6 @@ class TransactionCursor:
                 'VALUES (?, ?, ?, ?, ?, ?, ?)',
                 (rest_id, parent.session_id, now, now, 0,
                  Status.INSERT, False))
-            parent.db.commit()
             self.id = cursor.lastrowid
             self.version = 0
 
@@ -109,12 +117,13 @@ class TransactionCursor:
                 '(transaction_id, action_id, time, action) '
                 'VALUES (?,?,?,?)',
                 (self.id, 0, int(time.time()), Action.INSERT))
+            parent.db.commit()
 
         with parent.created_lock:
-            assert(parent.created_id is None or
-                   self.id > parent.created_id)
-            parent.created_id = self.id
-            parent.created_cv.notify_all()
+            logging.debug('TransactionCursor.create id %d', self.id)
+            if parent.created_id is None or self.id > parent.created_id:
+                parent.created_id = self.id
+                parent.created_cv.notify_all()
 
     def write_envelope(
             self,
@@ -178,14 +187,15 @@ class TransactionCursor:
                               Status.ONESHOT_INFLIGHT,
                               Status.ONESHOT_DONE,
                               Status.ONESHOT_TEMP])  # e.g. start tempfailed upstream
-            assert(version == self.version)
+            #xxx output side could have appended START action, etc.
+            #assert(version == self.version)
             assert(not db_last)
             cursor.execute(
                 'INSERT INTO TransactionContent '
                 '(transaction_id, i, length, inline) '
                 'VALUES (?, ?, ?, ?)',
                 (self.id, self.i, len(d), d))
-            new_version = self.version + 1
+            new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions SET version = ?, last = ?'
                 'WHERE id = ? AND version = ?',
@@ -212,10 +222,11 @@ class TransactionCursor:
                               Status.ONESHOT_DONE,
                               Status.INFLIGHT,    # xxx
                               Status.ONESHOT_INFLIGHT ])
-            logging.debug('append_blob version id=%d db %d new %d status %d '
-                          'db last %s op last %s',
+            logging.debug('Storage.append_blob version id=%d db %d new %d '
+                          'status %d db last %s op last %s',
                           self.id, row[1], self.version, status, db_last, last)
-            assert(version == self.version)
+            #xxx output side could have appended START action, etc.
+            #assert(version == self.version)
             assert(not db_last)
             # XXX we may want to append this before the blob is
             # finalized? in which case this isn't known yet.
@@ -232,11 +243,11 @@ class TransactionCursor:
                 '(transaction_id, i, blob_id) '
                 'VALUES (?, ?, ?)',
                 (self.id, self.i, blob_id))
-            new_version = self.version + 1
+            new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions SET version = ?, last = ? '
                 'WHERE id = ? AND version = ?',
-                (new_version, last, self.id, self.version))
+                (new_version, last, self.id, version))
             self.parent.db.commit()
             assert(cursor.rowcount == 1)
         self.version = new_version
@@ -306,13 +317,24 @@ class TransactionCursor:
                             if timeout is not None else None)
         asset(not 'unreachable')  #return False
 
+    # or status -> not inflight
     def wait_attr_not_none(self, attr, timeout=None):
-        return self.wait_for(
-            lambda: hasattr(self, attr) and getattr(self, attr) is not None,
-            timeout)
+        not_inflight = lambda: (self.status not in [Status.INFLIGHT,
+                                                    Status.ONESHOT_INFLIGHT])
+        attr_not_none = (lambda:
+          hasattr(self, attr) and getattr(self, attr) is not None)
+        if not self.wait_for(
+            lambda: not_inflight() or attr_not_none(), timeout):
+            return False
+        # probably abort
+        if not_inflight():
+            return False
+        assert(attr_not_none())
+        return True
 
     # -> (time, action, optional[response])
-    def load_last_action(self, num_actions):
+    def load_last_action(self, num_actions
+                         ) -> List[Tuple[int, int, Optional[Response]]] :
         cursor = self.parent.db.cursor()
         cursor.execute('SELECT version FROM Transactions WHERE id = ?',
                        (self.id,))
@@ -367,9 +389,10 @@ class TransactionCursor:
                 (self.id,))
             row = cursor.fetchone()
             status,version = row
-            logging.debug('append_action db version %d my version %d '
+            logging.debug('TransactionCursor.append_action (pre) id=%d '
+                          'db version %d my version %d '
                           'status=%d action=%d',
-                          version, self.version, status, action)
+                          self.id, version, self.version, status, action)
             # XXX this is too conservative e.g.
             # writer may SET_DURABLE while reader is inflight
             #assert(version == self.version)
@@ -433,9 +456,9 @@ class TransactionCursor:
             if action == Action.SET_DURABLE:
                 assert(self._check_payload_done(cursor))  # precondition
 
-            logging.info('TransactionCursor.append_action '
-                         'now=%d id=%d action=%d i=%s length=%s status=%d',
-                         now, self.id, action, self.i, self.length, status)
+            logging.info('TransactionCursor.append_action (post) id=%d '
+                         'now=%d action=%d i=%s length=%s status=%d',
+                         self.id, now, action, self.i, self.length, status)
             new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions '
@@ -858,8 +881,10 @@ class Storage:
         # can be a single db transaction
         cursor.execute('SELECT id from Transactions '
                        'WHERE last_update <= ? AND '
-                       'status IN (?, ?) LIMIT 1',
-                       (max_recent, Status.INSERT, Status.ONESHOT_TEMP))
+                       'status IN (?, ?, ?) LIMIT 1',
+                       (max_recent, Status.INSERT,
+                        Status.ONESHOT_INFLIGHT,
+                        Status.ONESHOT_TEMP))
         row = cursor.fetchone()
         if row is None: return False
 
@@ -878,8 +903,9 @@ class Storage:
 
     def wait_created(self, db_id, timeout=None):
         with self.created_lock:
+            logging.debug('Storage.wait_created %s %s', self.created_id, db_id)
             fn = lambda: self.created_id is not None and (
-                db_id is None or db_id > self.created_id)
+                db_id is None or self.created_id > db_id)
             return self.created_cv.wait_for(fn, timeout)
 
 

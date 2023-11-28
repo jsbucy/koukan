@@ -168,8 +168,10 @@ class StorageTest(unittest.TestCase):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz')
 
-        reader = self.s.get_transaction_cursor()
-        self.assertTrue(reader.load(writer.id))
+        # needs to be inflight to wait
+        reader = self.s.load_one()
+        self.assertIsNotNone(reader)
+        self.assertEqual(reader.id, writer.id)
         self.assertIsNone(reader.mail_from)
         self.assertIsNone(reader.rcpt_to)
 
@@ -180,11 +182,14 @@ class StorageTest(unittest.TestCase):
         time.sleep(0.1)
 
         writer.write_envelope(
-            'local_host', 'remote_host',
-            'alice', None,
-            'bob', None, 'host')
+            local_host='local_host',
+            remote_host='remote_host',
+            mail_from='alice',
+            rcpt_to='bob',
+            host='host')
 
-        t.join()
+        t.join(timeout=1)
+        self.assertFalse(t.is_alive())
 
         self.assertTrue(rv[0])
         self.assertEqual(reader.mail_from, 'alice')
@@ -205,23 +210,30 @@ class StorageTest(unittest.TestCase):
         # xxx self.assertEqual(13, reader.length)
 
     @staticmethod
-    def wait_created(s, rv, id):
-        rv[0] = s.wait_created(id, 5)
+    def wait_created(s, rv, db_id):
+        logging.info('StorageTest.wait_created %s', db_id)
+        rv[0] = s.wait_created(db_id, 1)
 
     def test_wait_created(self):
-        rv = [None]
-        t = Thread(target =
-                   lambda: StorageTest.wait_created(self.s, rv, None))
-        t.start()
-        time.sleep(0.1)
+        created_id = None
+        for i in range(1,3):
+            logging.info('StorageTest.test_wait_created i=%d', i)
+            rv = [None]
+            t = Thread(target =
+                       lambda: StorageTest.wait_created(self.s, rv, created_id))
+            t.start()
+            time.sleep(0.1)
 
-        writer = self.s.get_transaction_cursor()
-        writer.create('xyz')
+            writer = self.s.get_transaction_cursor()
+            writer.create('xyz%d' % i)
 
-        t.join(timeout=5)
-        self.assertFalse(t.is_alive())
+            logging.info('StorageTest.test_wait_created join')
+            t.join(timeout=2)
+            logging.info('StorageTest.test_wait_created join done')
+            self.assertFalse(t.is_alive())
 
-        self.assertTrue(rv[0])
+            self.assertTrue(rv[0])
+            created_id = self.s.created_id
 
     @staticmethod
     def wait_blob(reader, rv):

@@ -54,6 +54,7 @@ class BlobIdMap:
             self.cv.notify_all()
 
 class RestEndpoint:
+    # XXX I don't remember exactly why this is cached like this
     start_resp : Optional[Response] = None
     final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
@@ -87,23 +88,30 @@ class RestEndpoint:
         self.wait_response = wait_response
 
     def start(self,
-              local_host, remote_host,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
+              local_host=None, remote_host=None,
+              mail_from=None, transaction_esmtp=None,
+              rcpt_to=None, rcpt_esmtp=None):
         next_hop = (self.static_remote_host if self.static_remote_host
                     else remote_host)
-        req_json = {
-            'local_host': local_host,
-            'remote_host': next_hop,
-            'mail_from': mail_from,
-            'rcpt_to': rcpt_to
-        }
+        req_json = {}
+        if local_host is not None:
+            req_json['local_host'] = local_host
+        if remote_host is not None:
+            req_json['remote_host'] = remote_host
+        if mail_from is not None:
+            req_json['mail_from'] = mail_from
+        if rcpt_to is not None:
+            req_json['rcpt_to'] = rcpt_to
+        # xxx esmtp
+
         rest_resp = requests.post(self.base_url + '/transactions',
                                   json=req_json,
                                   headers={'host': self.http_host},
                                   timeout=self.timeout_start)
-        print(rest_resp)
+        logging.info('RestEndpoint.start resp %s', rest_resp)
         resp_json = get_resp_json(rest_resp)
+        logging.info('RestEndpoint.start resp_json %s', resp_json)
+
         # XXX  rest_resp.status_code or 'start_response' in resp_json
         if not resp_json or 'url' not in resp_json:
             return Response.Internal(
@@ -250,11 +258,11 @@ class RestEndpoint:
 
         return Response(), dlen
 
-    def start_response(self, timeout):
+    def start_response(self, timeout) -> Optional[Response]:
         if self.start_resp: return self.start_resp
         if not self.wait_response: return None
         # TODO inflight waiter list thing?
-        resp = self.get_json_field(timeout, 'start_response')
+        resp = self.get_json_response(timeout, 'start_response')
         if not resp:
             return Response(400, 'RestEndpoint.start_response timeout')
         self.start_resp = resp
@@ -264,29 +272,28 @@ class RestEndpoint:
         if self.final_status: return self.final_status
         if not self.wait_response: return None
         # TODO inflight waiter list thing?
-        resp = self.get_json_field(timeout, 'final_status')
+        resp = self.get_json_response(timeout, 'final_status')
         if not resp:
             return Response(400, 'RestEndpoint.get_status timeout')
         self.final_status = resp
         return self.final_status
 
-    def resp_from_rest_resp(self, rest_resp, field):
-        if rest_resp.status_code >= 500:
-            return None
-        if not (resp_json := get_resp_json(rest_resp)):
-            return None
-        if field not in resp_json or not resp_json[field]:
-            return None
-        return Response.from_json(resp_json[field])
+
+    # XXX clearly distinguish internal, test methods
 
     def get_json(self, timeout):
-        rest_resp = requests.get(self.transaction_url,
-                                 headers={'host': self.http_host},
-                                 timeout=timeout)
+        try:
+            rest_resp = requests.get(self.transaction_url,
+                                     headers={'host': self.http_host},
+                                     timeout=timeout)
+        except Exception:
+            return None
         return get_resp_json(rest_resp)
 
-    # block until transaction json contains field and is non-null or timeout
-    def get_json_field(self, timeout, field):
+
+    # block until transaction json contains field and is non-null or timeout,
+    # returns Response.from_json() from that field
+    def get_json_response(self, timeout, field) -> Optional[Response]:
         now = time.monotonic()
         deadline = now + timeout
         delta = 1
@@ -297,28 +304,23 @@ class RestEndpoint:
                 if deadline_left < 1:
                     break
                 time.sleep(min(1 - delta, deadline_left))
-            logging.info('RestEndpoint.get_json %f', deadline_left)
+            logging.info('RestEndpoint.get_json_response %f', deadline_left)
             start = time.monotonic()
-            # XXX throws on timeout
+
             # TODO pass the deadline in a header?
-            rest_resp = requests.get(self.transaction_url,
-                                     headers={'host': self.http_host},
-                                     timeout=deadline_left)
-            logging.info('RestEndpoint.get_json done %s', rest_resp)
+            resp_json = self.get_json(deadline_left)
+            logging.info('RestEndpoint.get_json_response done %s', resp_json)
             delta = time.monotonic() - start
             assert(delta >= 0)
-            if rest_resp.status_code >= 400 and rest_resp.status_code < 500:
+            if resp_json is None:
                 return Response(400, 'RestEndpoint.start_response GET '
                                 'failed')
-            resp_json = get_resp_json(rest_resp)
-            logging.info('RestEndpoint.get_json %s', resp_json)
-            if (resp := self.resp_from_rest_resp(rest_resp, field)) is not None:
-                return resp
+
+            if field in resp_json:
+                return Response.from_json(resp_json[field])
             now = time.monotonic()
         return None
 
-    def wait_status(self):
-        pass
 
     def set_durable(self):
         # XXX appended_last only gets set after the append has

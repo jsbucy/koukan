@@ -22,7 +22,7 @@ class Executor:
                 self.detach(fn)
                 return True
             else:
-                self.cv.wait_for(lambda: self.queues[tag] < self.queue_limits[tag])
+                self.cv.wait_for(lambda: len(self.queues[tag]) < self.queue_limits[tag])
                 self.queues[tag].append(fn)
                 return True
 
@@ -30,18 +30,24 @@ class Executor:
         t = Thread(target=lambda: self.run(fn), daemon=True)
         t.start()
 
+    # TODO add watchdog timer here
     def run(self, fn):
         try:
             fn()
-        finally:
-            with self.lock:
-                self.inflight -= 1
-                self.cv.notify()
+        except:
+            pass
+        with self.lock:
+            self.inflight -= 1
+            self.cv.notify()
 
     def empty(self):
         for tag,queue in self.queues.items():
             if len(queue): return False
         return True
+
+    def wait_empty(self, timeout=None) -> bool:
+        with self.lock:
+            return self.cv.wait_for(lambda: self.empty(), timeout)
 
     def dequeue(self):
         with self.lock:

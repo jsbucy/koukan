@@ -115,9 +115,16 @@ class Service:
     lock : Lock = None
     inflight : Dict[str, RouterTransaction] = None
     last_gc = 0
-    stop_dequeue = False
 
     rest_tx_factory : RestServiceTransactionFactory = None
+
+    # dequeue watermark
+    created_id : Optional[int] = None
+
+    dequeue_thread : Optional[Thread] = None
+    gc_thread : Optional[Thread] = None
+
+    _shutdown = False
 
     def __init__(self, config=None):
         self.lock = Lock()
@@ -143,8 +150,13 @@ class Service:
 
     def shutdown(self):
         logging.info("router_service shutdown()")
-        self.stop_dequeue = True
-        self.dequeue_thread.join()
+        self._shutdown = True
+        if self.dequeue_thread is not None:
+            self.dequeue_thread.join()
+        if self.gc_thread is not None:
+            self.gc_thread.join()
+
+        assert(self.executor.wait_empty(timeout=5))
 
         with self.lock:
             txx = [tx for id,tx in self.inflight.items()]
@@ -165,7 +177,7 @@ class Service:
 
         db_filename = self.config.get_str('db_filename')
         if not db_filename:
-            print("*** using in-memory/non-durable storage")
+            logging.warning("*** using in-memory/non-durable storage")
             self.storage.connect(db=Storage.get_inmemory_for_test())
         else:
             self.storage.connect(filename=db_filename)
@@ -173,9 +185,18 @@ class Service:
 
         self.blobs = BlobStorage()
 
-        self.dequeue_thread = Thread(target = lambda: self.load(),
-                                     daemon=True)
-        self.dequeue_thread.start()
+        if self.config.get_bool('dequeue', True):
+            self.dequeue_thread = Thread(target = lambda: self.dequeue(),
+                                         daemon=True)
+            self.dequeue_thread.start()
+
+        if self.config.get_int('gc_interval') > 0:
+            self.gc_thread = Thread(target = lambda: self.gc(),
+                                    daemon=True)
+            self.gc_thread.start()
+        else:
+            logging.warning('idle gc disabled')
+
 
         # top-level: http host -> endpoint
 
@@ -238,44 +259,58 @@ class Service:
     def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
         cursor_to_endpoint(storage_tx, endpoint)
 
-    def load(self):
-        created_id = None
-        while not self.stop_dequeue:
-            logging.info("dequeue %s", self.stop_dequeue)
-            storage_tx = None
-            if self.rest_tx_factory is not None:
-                if self.storage.wait_created(created_id, timeout=1):
-                    storage_tx = self.storage.load_one()
-                if (storage_tx is not None and
-                    storage_tx.status == Status.INSERT):  # XXX status??
-                    created_id = storage_tx.id
+    def _dequeue(self) -> bool:
+        storage_tx = None
+        if self.rest_tx_factory is not None:
+            if self.storage.wait_created(self.created_id, timeout=1):
+                # XXX this spins if for whatever reason we didn't load
+                # anything -> need to advance the watermark
+                storage_tx = self.storage.load_one()
+                if storage_tx is not None:
+                    self.created_id = storage_tx.id
 
-            self._gc_inflight()
+        tag = None
+        # XXX config, backoff
+        # XXX there is a race between RouterTransaction updating
+        # the storage (which makes it selectable here) vs running
+        # the done callback, if min_age is too low, this can clash
+        # with inflight
+        if storage_tx is None:
+            # XXX this will load INSERT but we probably only want WAITING?
+            storage_tx = self.storage.load_one(
+                min_age=self.config.get_int('retry_min_age', 5))
+            tag = Tag.LOAD
+        if storage_tx is None:
+            return False
 
-            tag = None
-            # XXX config, backoff
-            # XXX there is a race between RouterTransaction updating
-            # the storage (which makes it selectable here) vs running
-            # the done callback, if min_age is too low, this can clash
-            # with inflight
-            if storage_tx is None:
-                # XXX this will load INSERT but we probably only want WAITING?
-                storage_tx = self.storage.load_one(min_age=5)
-                tag = Tag.LOAD
-            if storage_tx:
-                logging.info("dequeued %d", storage_tx.id)
-                if self.rest_tx_factory:
-                    endpoint, msa = self.wiring.get_endpoint(storage_tx.host)
-                    assert(endpoint is not None)
-                    tag = Tag.MSA if msa else Tag.MX
-                    self.executor.enqueue(
-                        tag, lambda: self.handle_tx(storage_tx, endpoint))
-                else:
-                    self.executor.enqueue(tag, lambda: self.handle(storage_tx))
-            else:
-                logging.info("dequeue idle")
+        logging.info("dequeued %d", storage_tx.id)
+        if self.rest_tx_factory:
+            # XXX there is a race that this can be selected
+            # between creation and writing the envelope
+            storage_tx.wait_attr_not_none('host')
+            endpoint, msa = self.wiring.get_endpoint(storage_tx.host)
+            tag = Tag.MSA if msa else Tag.MX
+            self.executor.enqueue(
+                tag, lambda: self.handle_tx(storage_tx, endpoint))
+        else:
+            self.executor.enqueue(tag, lambda: self.handle(storage_tx))
+        return True
+
+    def dequeue(self):
+        while not self._shutdown:
+            logging.info("RouterService.dequeue")
+            if not self._dequeue():
                 # xxx config
-                time.sleep(1)
+                # otherwise we block in wait_created
+                if self.rest_tx_factory is None:
+                    logging.info("dequeue idle")
+                    time.sleep(1)
+
+    def gc(self):
+        while not self._shutdown:
+            self._gc_inflight(self.config.get_int('tx_idle_timeout', 5))
+            # xxx wait for shutdown
+            time.sleep(self.config.get_int('gc_interval'))
 
     def _add_inflight(self, tx):
         assert(tx.rest_id)
@@ -288,15 +323,15 @@ class Service:
         with self.lock:
             del self.inflight[tx.rest_id]
 
-    def _gc_inflight(self):
+    def _gc_inflight(self, idle_timeout=None):
         now = time.monotonic()
-        if (now - self.last_gc) < self.config.get_int('tx_idle_gc', 5): return
-        logging.info('router_service _gc_inflight')
-        self.last_gc = now
+        logging.info('router_service _gc_inflight %d', idle_timeout)
 
-        idle_timeout = self.config.get_int('tx_idle_timeout', 5)
         if self.rest_tx_factory:
-            self.storage.gc_non_durable(idle_timeout)
+            count = self.storage.gc_non_durable(idle_timeout)
+            logging.info('router_service _gc_inflight aborted %d', count)
+            return count
+
         with self.lock:
             dele = []
             for rest_id, tx in self.inflight.items():

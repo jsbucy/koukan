@@ -307,6 +307,7 @@ class TransactionTest(unittest.TestCase):
             rest_resp = rest_tx.get({})
             self.assertEqual(rest_resp.status_code, 200)
             resp_json = rest_resp.get_json()
+            logging.info('test_integrated start resp %s', resp_json)
             self.assertIsNotNone(resp_json)
             self.assertNotIn('final_status', resp_json)
             if 'start_response' in resp_json:
