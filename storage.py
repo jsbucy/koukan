@@ -18,13 +18,6 @@ class Status:
     WAITING = 1
     INFLIGHT = 2
     DONE = 3
-    # XXX I think ONESHOT_DONE should go away:
-    # oneshot_inflight -> set durable -> inflight
-    # oneshot_temp -> set durable -> waiting
-    # done -> set durable -> done (noop)
-    # insert -> abort -> done
-    # oneshot inflight -> abort -> done
-    ONESHOT_DONE = 4  # set_durable noop
     ONESHOT_INFLIGHT = 5
     ONESHOT_TEMP = 6  # set_durable -> WAITING
 
@@ -47,29 +40,8 @@ class Action:
     # START is basically upstream start succeeded, upstream start err ->
     # overall tx "attempt" result
     START = 7  # inflight -> inflight (no change)
-    SET_DURABLE = 8  # ONESHOT_DONE -> WAITING or
+    SET_DURABLE = 8  # INSERT -> WAITING
                      # ONESHOT_INFLIGHT -> INFLIGHT
-
-# TransactionCursor:
-# sync success/permfail (single mx temp) -> oneshot
-#   create
-#   write envelope
-#   append action(resp)
-#     status ONESHOT_DONE
-#     action DELIVERED | PERM_FAIL
-
-# durable (msa tempfail, multi-mx mixed)
-#   create
-#   write envelope
-#   append blob
-#   append action
-#     status DONE | WAITING
-#     action DELIVERED | TEMP_FAIL | PERM_FAIL
-
-# retry
-#   load
-#   read blobs
-#   append action
 
 class TransactionCursor:
     # XXX need a transaction/request object or something
@@ -185,7 +157,6 @@ class TransactionCursor:
             assert(status in [Status.INSERT,
                               Status.INFLIGHT,  # xxx
                               Status.ONESHOT_INFLIGHT,
-                              Status.ONESHOT_DONE,
                               Status.ONESHOT_TEMP])  # e.g. start tempfailed upstream
             #xxx output side could have appended START action, etc.
             #assert(version == self.version)
@@ -219,7 +190,6 @@ class TransactionCursor:
             row = cursor.fetchone()
             status,version,db_last = row
             assert(status in [Status.INSERT,
-                              Status.ONESHOT_DONE,
                               Status.INFLIGHT,    # xxx
                               Status.ONESHOT_INFLIGHT ])
             logging.debug('Storage.append_blob version id=%d db %d new %d '
@@ -410,12 +380,12 @@ class TransactionCursor:
                 if action in [Action.DELIVERED,
                               Action.PERM_FAIL,
                               Action.ABORT]:
-                    status = Status.ONESHOT_DONE
+                    status = Status.DONE
                 elif action == Action.TEMP_FAIL:
                     status = Status.ONESHOT_TEMP
                 elif action == Action.START:
                     # no change
-                    assert(status in [Status.INFLIGHT, Status.ONESHOT_INFLIGHT])
+                    pass
                 elif action == Action.SET_DURABLE:
                     status = Status.INFLIGHT
                 else:
@@ -430,17 +400,10 @@ class TransactionCursor:
             elif status == Status.WAITING:
                 assert(action == Action.LOAD)
             elif status == Status.DONE:
-                # XXX ambiguous, at least 2 possibilities:
-                # 1: tx was aborted
-                # 2: previous set_durable succeeded but resp timed out
-                #    and this is a retry
-                # for the sake of the tests for the time being,
-                # assume #1, probably we need a separate
-                # Status.ABORTED or this needs to read the last action
-                # and error out if it was Action.ABORT
+                # this could be a noop if it already succeeded
+                # upstream but treat as failed precondition at storage
+                # layer, deal with that in the handler
                 return False
-            elif status == Status.ONESHOT_DONE:
-                assert(action == Action.SET_DURABLE)
             elif status == Status.INFLIGHT:
                 if action in [Action.DELIVERED,
                               Action.PERM_FAIL,
@@ -485,7 +448,7 @@ class TransactionCursor:
                 '  ?,?' + resp_bind + ')',
                 (self.id, self.id, now, action) + resp_val)
 
-            # TODO gc payload on status DONE (still need ONESHOT_DONE?)
+            # TODO gc payload on status DONE
             # (or ttl, keep for ~1d after DONE?)
             self.parent.db.commit()
             self.version = new_version

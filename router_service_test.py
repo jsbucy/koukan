@@ -44,7 +44,7 @@ config_json = {
     'db_filename': '',
     'use_gunicorn': False,
     'tx_idle_timeout': 5,
-    'gc_interval': 0,
+    'gc_interval': None,
     'dequeue': False,
 }
 
@@ -125,10 +125,12 @@ class RouterServiceTest(unittest.TestCase):
         self.assertNotIn('start_response', resp_json)
         self.assertNotIn('final_status', resp_json)
 
-        self.assertEqual(1, self.service._dequeue())
 
         # set start response, initial inflight tempfails
         self.endpoint.set_start_response(Response(456))
+
+        self.assertEqual(1, self.service._dequeue())
+
         resp = read_endpoint.get_json_response(3, 'final_status')
         logging.info('test_read_routing start resp %s', resp)
         self.assertIsNotNone(resp)
@@ -147,7 +149,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     # set durable after upstream ok/perm -> noop
-    def test_durable_after_upstream_done(self):
+    def test_durable_after_upstream_success(self):
         start_endpoint = RestEndpoint(
             base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
@@ -166,8 +168,30 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIsNotNone(resp)
         self.assertEqual(256, resp.code)
 
-        # ONESHOT_DONE/DELIVERED -> noop
+        # DONE/DELIVERED -> noop
         self.assertTrue(start_endpoint.set_durable().ok())
+
+    def test_durable_after_upstream_perm(self):
+        start_endpoint = RestEndpoint(
+            base_url=self.router_url, http_host='outbound-gw',
+            wait_response=False,
+            msa=True)
+
+        self.endpoint.set_start_response(Response(234))
+        self.endpoint.add_data_response(Response(556))
+
+        start_resp = start_endpoint.start(mail_from='alice', rcpt_to='bob')
+        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
+
+        self.assertEqual(1, self.service._dequeue())
+
+        resp = start_endpoint.get_json_response(3, 'final_status')
+        logging.info('test_durable_after_upstream_done resp %s', resp)
+        self.assertIsNotNone(resp)
+        self.assertEqual(556, resp.code)
+
+        # DONE/PERMFAIL -> failed precondition
+        self.assertFalse(start_endpoint.set_durable().ok())
 
 
     def test_durable_after_upstream_temp(self):
@@ -249,7 +273,7 @@ class RouterServiceTest(unittest.TestCase):
     # xxx this only aborts insert/oneshot_temp, not inflight
     # do you want this to be the thing that makes output abort or
     # should it time out itself?
-    def disabled_test_idle_gc_oneshot_inflight(self):
+    def test_idle_gc_oneshot_inflight(self):
         start_endpoint = RestEndpoint(
             base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,

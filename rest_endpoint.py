@@ -60,6 +60,7 @@ class RestEndpoint:
     transaction_url : Optional[str] = None
     blob_id_map : BlobIdMap = None
     appended_last = False
+    static_remote_host : Optional[str] = None
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
@@ -96,8 +97,8 @@ class RestEndpoint:
         req_json = {}
         if local_host is not None:
             req_json['local_host'] = local_host
-        if remote_host is not None:
-            req_json['remote_host'] = remote_host
+        if next_hop is not None:
+            req_json['remote_host'] = next_hop
         if mail_from is not None:
             req_json['mail_from'] = mail_from
         if rcpt_to is not None:

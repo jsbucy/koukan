@@ -76,7 +76,7 @@ class ShimTransaction:
         if not storage_tx.load(rest_id=rest_id):
             return False
         status = storage_tx.status
-        if status != Status.DONE and status != Status.ONESHOT_DONE:
+        if status != Status.DONE:
             return True
 
         actions = storage_tx.load_last_action(1)
@@ -90,16 +90,14 @@ class ShimTransaction:
         # or PERM_FAIL, sync mx can be TEMP_FAIL. PERM_FAIL
         # ~corresponds to whether we would send a bounce
 
-        if (action == Action.TEMP_FAIL and
-            status != Status.ONESHOT_DONE):
+        if action == Action.TEMP_FAIL:
             pass
         else:
             self.final_status = response
 
-        logging.info('ShimTransaction.read %s status=%d action=%d', rest_id, status, action)
+        logging.info('ShimTransaction.read %s status=%d action=%d',
+                     rest_id, status, action)
         if status == Status.DONE:
-            self.done = True
-        elif status == Status.ONESHOT_DONE and action != Action.TEMP_FAIL:
             self.done = True
 
         return True
@@ -190,7 +188,7 @@ class Service:
                                          daemon=True)
             self.dequeue_thread.start()
 
-        if self.config.get_int('gc_interval') > 0:
+        if self.config.get_int('gc_interval') is not None:
             self.gc_thread = Thread(target = lambda: self.gc(),
                                     daemon=True)
             self.gc_thread.start()

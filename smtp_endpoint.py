@@ -30,14 +30,14 @@ class Factory:
 
 # rest or smtp services call upon a single instance of this
 class SmtpEndpoint:
-    smtp : smtplib.SMTP
-    data : bytes = None
-    start_resp : Response = None
-    final_status : Response = None
-    received_last = False  # xxx rest service endpoint abc
-    blobs_received = -1
-    rest_id = None
-    idle_start = None
+    smtp : Optional[smtplib.SMTP] = None
+    data : Optional[bytes] = None
+    start_resp : Optional[Response] = None
+    final_status : Optional[Response] = None
+    received_last: bool  = False  # xxx rest service endpoint abc
+    blobs_received : int = -1
+    rest_id : Optional[str] = None
+    idle_start : Optional[float] = None
 
     def __init__(self, rest_id, ehlo_hostname):
         self.rest_id = rest_id
@@ -73,7 +73,7 @@ class SmtpEndpoint:
 
 
     def start(self,
-              local_host, remote_host,
+              local_host, remote_host : Tuple[str, int],
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp=None):
         self.idle_start = time.monotonic()
