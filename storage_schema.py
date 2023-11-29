@@ -30,7 +30,8 @@ class Action(IntEnum):
     START = 7  # inflight -> inflight (no change)
     SET_DURABLE = 8  # INSERT -> WAITING
                      # ONESHOT_INFLIGHT -> INFLIGHT
-
+    # we don't persist this action but it's used with exceptions
+    APPEND = 9
 
 
 # state -> action -> new state
@@ -72,3 +73,10 @@ transition : Dict[Status, Dict[Action, Status]] = {
 class InvalidActionException(Exception):
     def __init__(self, status : Status, action : Action):
         pass
+
+
+def check_valid_append(status : Status):
+    if status not in [ Status.INSERT,
+                       Status.ONESHOT_INFLIGHT,
+                       Status.ONESHOT_TEMP ]:
+        raise InvalidActionException(status, Action.APPEND)

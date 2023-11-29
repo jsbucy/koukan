@@ -13,7 +13,7 @@ import logging
 
 from response import Response
 
-from storage_schema import Status, Action, transition, InvalidActionException
+from storage_schema import Status, Action, transition, InvalidActionException, check_valid_append
 
 class TransactionCursor:
     # XXX need a transaction/request object or something
@@ -132,9 +132,8 @@ class TransactionCursor:
             row = cursor.fetchone()
             status = Status(row[0])
             version,db_last = row[1:]
-            assert(status in [Status.INSERT,
-                              Status.INFLIGHT,    # xxx
-                              Status.ONESHOT_INFLIGHT ])
+            check_valid_append(status)
+
             logging.debug('Storage.append_blob version id=%d db %d new %d '
                           'status %s db last %s op last %s',
                           self.id, row[1], self.version, status.name, db_last,

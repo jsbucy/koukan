@@ -199,12 +199,17 @@ class RestServiceTransaction(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    # TODO this is not idempotent, need to pass an offset/chunk# in
-    # the req and pass down into the db
+    # TODO this is not idempotent -> etags
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        # mx enforces that start succeeded, etc.
-        # storage enforces preconditions that apply to all transactions:
-        #   e.g. tx didn't already fail/abort
+        # storage enforces universal preconditions:
+        # insert/oneshot_inflight/oneshot_temp
+        # i.e. start didn't already permfail and haven't already set_durable
+
+        # single-mx/full sync
+        # start didn't fail i.e. not oneshot_temp
+        # (may still be inflight with pipelining!)
+        # multi-mx (more like msa)
+
 
         logging.info('RestServiceTransaction.append %s %s',
                      self._tx_rest_id, req_json)

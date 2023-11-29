@@ -1,5 +1,6 @@
 
-from storage import Storage, Action, Status
+from storage import Storage
+from storage_schema import Action, Status, InvalidActionException
 
 from response import Response
 
@@ -102,6 +103,11 @@ class StorageTest(unittest.TestCase):
         resp = actions[2][2]
         self.assertIsNotNone(resp)
         self.assertEqual(456, resp.code)
+
+        stale_append = self.s.get_transaction_cursor()
+        stale_append.load(tx_writer.id)
+        with self.assertRaises(InvalidActionException):
+            stale_append.append_blob(d=b'stale', last=True)
 
     def test_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
