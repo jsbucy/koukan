@@ -1,7 +1,8 @@
 
 from typing import Dict, Optional, Any, List, Tuple
 
-from storage import Storage, Action, Status, TransactionCursor, BlobReader
+from storage import Storage, TransactionCursor, BlobReader
+from storage_schema import Action, Status, InvalidActionException
 from response import Response
 from blob import Blob
 
@@ -277,24 +278,24 @@ class RestServiceTransaction(Handler):
         pass
 
     def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        if self.tx_cursor.append_action(Action.SET_DURABLE):
-            return FlaskResponse()
+        try:
+            self.tx_cursor.append_action(Action.SET_DURABLE)
+        except InvalidActionException:
+            if self.tx_cursor.status != Status.DONE:
+                return FlaskResponse(status=400, response=['failed precondition'])
 
-        if self.tx_cursor.status != Status.DONE:
-            return FlaskResponse(status=400, response=['failed precondition'])
+            # set durable in done state means that it raced with something
+            # else that terminated the transaction either upstream
+            # success/perm or idle gc/abort
 
-        # set durable in done state means that it raced with something
-        # else that terminated the transaction either upstream
-        # success/perm or idle gc/abort
+            # set durable succeeding is us "taking responsibility for the
+            # message" wrt rfc5321 so we can only treat this as a noop if
+            # it already succeeded
 
-        # set durable succeeding is us "taking responsibility for the
-        # message" wrt rfc5321 so we can only treat this as a noop if
-        # it already succeeded
+            actions = self.tx_cursor.load_last_action(1)
 
-        actions = self.tx_cursor.load_last_action(1)
-
-        if actions[0][1] != Action.DELIVERED:
-            return FlaskResponse(status=400, response=['failed precondition'])
+            if actions[0][1] != Action.DELIVERED:
+                return FlaskResponse(status=400, response=['failed precondition'])
 
         return FlaskResponse()
 

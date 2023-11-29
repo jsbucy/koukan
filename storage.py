@@ -13,35 +13,7 @@ import logging
 
 from response import Response
 
-class Status:
-    INSERT = 0  # uncommitted
-    WAITING = 1
-    INFLIGHT = 2
-    DONE = 3
-    ONESHOT_INFLIGHT = 5
-    ONESHOT_TEMP = 6  # set_durable -> WAITING
-
-# TODO it seems like these fine-grained codes delivered/temp/perm are
-# redundant with the resp, this is a vestige of not originally storing
-# the resp? does anything directly reading the db distinguish those?
-# or do you want it to capture things like upstream temp + max retry
-# -> perm? or maybe that should be an additional action? conceptually
-# that is a separate attempt LOAD, TEMP, LOAD, PERM though in practice
-# the completion logic writes that?
-class Action:
-    INSERT = 0
-    LOAD = 1  # WAITING -> INFLIGHT
-              # INSERT -> ONESHOT_INFLIGHT
-    RECOVER = 5  # INFLIGHT w/stale session -> WAITING
-    DELIVERED = 2
-    TEMP_FAIL = 3
-    PERM_FAIL = 4
-    ABORT = 6
-    # START is basically upstream start succeeded, upstream start err ->
-    # overall tx "attempt" result
-    START = 7  # inflight -> inflight (no change)
-    SET_DURABLE = 8  # INSERT -> WAITING
-                     # ONESHOT_INFLIGHT -> INFLIGHT
+from storage_schema import Status, Action, transition, InvalidActionException
 
 class TransactionCursor:
     # XXX need a transaction/request object or something
@@ -58,7 +30,7 @@ class TransactionCursor:
     host = None
 
     id : Optional[int] = None
-    status = None
+    status : Status = None
     length = None
     i = 0  # TransactionContent index
     version : Optional[int] = None
@@ -152,8 +124,9 @@ class TransactionCursor:
                 'SELECT status,version,last From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            status,version,db_last = row
-            logging.info('append_data status=%d', status)
+            status = Status(row[0])
+            version,db_last = row[1:]
+            logging.info('append_data status=%s', status.name)
             assert(status in [Status.INSERT,
                               Status.INFLIGHT,  # xxx
                               Status.ONESHOT_INFLIGHT,
@@ -188,13 +161,15 @@ class TransactionCursor:
                 'SELECT status,version,last From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            status,version,db_last = row
+            status = Status(row[0])
+            version,db_last = row[1:]
             assert(status in [Status.INSERT,
                               Status.INFLIGHT,    # xxx
                               Status.ONESHOT_INFLIGHT ])
             logging.debug('Storage.append_blob version id=%d db %d new %d '
-                          'status %d db last %s op last %s',
-                          self.id, row[1], self.version, status, db_last, last)
+                          'status %s db last %s op last %s',
+                          self.id, row[1], self.version, status.name, db_last,
+                          last)
             #xxx output side could have appended START action, etc.
             #assert(version == self.version)
             assert(not db_last)
@@ -348,7 +323,7 @@ class TransactionCursor:
         return row[0] == 0
 
     # appends a TransactionAttempts record and marks Transaction done
-    def append_action(self, action,
+    def append_action(self, action : Action,
                       response : Optional[Response] = None) -> bool:
         now = int(time.time())
         with self.parent.db_write_lock:
@@ -358,70 +333,28 @@ class TransactionCursor:
                 'SELECT status,version from Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            status,version = row
+            status : Status = Status(row[0])
+            version = row[1]
             logging.debug('TransactionCursor.append_action (pre) id=%d '
                           'db version %d my version %d '
-                          'status=%d action=%d',
-                          self.id, version, self.version, status, action)
+                          'status=%s action=%s',
+                          self.id, version, self.version, status.name,
+                          action.name)
             # XXX this is too conservative e.g.
             # writer may SET_DURABLE while reader is inflight
             #assert(version == self.version)
 
-            if status == Status.INSERT:
-                if action == Action.SET_DURABLE:
-                    status = Status.WAITING
-                elif action == Action.LOAD:
-                    status = Status.ONESHOT_INFLIGHT
-                elif action == Action.ABORT:
-                    status = Status.DONE
-                else:
-                    assert(not "unexpected status")
-            elif status == Status.ONESHOT_INFLIGHT:
-                if action in [Action.DELIVERED,
-                              Action.PERM_FAIL,
-                              Action.ABORT]:
-                    status = Status.DONE
-                elif action == Action.TEMP_FAIL:
-                    status = Status.ONESHOT_TEMP
-                elif action == Action.START:
-                    # no change
-                    pass
-                elif action == Action.SET_DURABLE:
-                    status = Status.INFLIGHT
-                else:
-                    assert(not "unexpected status")
-            elif status == Status.ONESHOT_TEMP:
-                if action == Action.SET_DURABLE:
-                    status = Status.WAITING
-                elif action == Action.ABORT:
-                    status = Status.DONE
-                else:
-                    assert(not "unexpected status")
-            elif status == Status.WAITING:
-                assert(action == Action.LOAD)
-            elif status == Status.DONE:
-                # this could be a noop if it already succeeded
-                # upstream but treat as failed precondition at storage
-                # layer, deal with that in the handler
-                return False
-            elif status == Status.INFLIGHT:
-                if action in [Action.DELIVERED,
-                              Action.PERM_FAIL,
-                              Action.ABORT]:
-                    status = Status.DONE
-                elif action == Action.START:
-                    pass  # no change
-                elif action == Action.TEMP_FAIL:
-                    status = Status.WAITING
-                else:
-                    assert(not "unexpected status")
+            if status not in transition or action not in transition[status]:
+                raise InvalidActionException(status, action)
+            status = transition[status][action]
 
             if action == Action.SET_DURABLE:
                 assert(self._check_payload_done(cursor))  # precondition
 
             logging.info('TransactionCursor.append_action (post) id=%d '
-                         'now=%d action=%d i=%s length=%s status=%d',
-                         self.id, now, action, self.i, self.length, status)
+                         'now=%d action=%s i=%s length=%s status=%s',
+                         self.id, now, action.name, self.i, self.length,
+                         status.name)
             new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions '
@@ -807,16 +740,12 @@ class Storage:
                 return None
             db_id,status = row
 
-            if status == Status.INSERT:
-                new_status = Status.ONESHOT_INFLIGHT
-            elif status == Status.WAITING:
-                new_status = Status.INFLIGHT
+            # TODO: refactor/merge with TransactionCursor.append_action
+            new_status = transition[status][Action.LOAD]
 
             # TODO: if the last n consecutive actions are all
             # load/recover, this transaction may be crashing the system ->
             # quarantine
-            # TODO: move to inner TransactionCursor.append_action in db tx
-            # with above select?
             cursor.execute(
                 'UPDATE Transactions SET inflight_session_id = ?, status = ? '
                 'WHERE id = ?',
