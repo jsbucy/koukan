@@ -178,7 +178,7 @@ class RestServiceTransaction(Handler):
         logging.info('append_blob %s %s last=%s', self._tx_rest_id, uri, last)
         if uri:
             uri = uri.removeprefix('/blob/')  # XXX uri prefix
-            if (self.tx_cursor.append_blob(uri, last) ==
+            if (self.tx_cursor.append_blob(blob_rest_id=uri, last=last) ==
                 TransactionCursor.APPEND_BLOB_OK):
                 resp_json = {}
                 rest_resp = FlaskResponse()
@@ -189,7 +189,7 @@ class RestServiceTransaction(Handler):
         blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         writer = self.storage.get_blob_writer()
         writer.start(blob_rest_id)
-        if (self.tx_cursor.append_blob(blob_rest_id, last) !=
+        if (self.tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=last) !=
             TransactionCursor.APPEND_BLOB_OK):
             return FlaskResponse(500, 'internal error')
         # XXX move to rest service?
@@ -199,6 +199,8 @@ class RestServiceTransaction(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
+    # TODO this is not idempotent, need to pass an offset/chunk# in
+    # the req and pass down into the db
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
         # mx enforces that start succeeded, etc.
         # storage enforces preconditions that apply to all transactions:
@@ -218,7 +220,7 @@ class RestServiceTransaction(Handler):
             # TODO investigate this further, this may be effectively
             # round-tripping utf8 -> python str -> utf8
             d : bytes = req_json['d'].encode('utf-8')
-            self.tx_cursor.append_data(d, last)
+            self.tx_cursor.append_blob(d=d, last=last)
             return FlaskResponse()  # XXX range?
 
         # if 'uri' in req_json:  # xxx this would be a protocol change

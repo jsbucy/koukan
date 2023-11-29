@@ -40,33 +40,21 @@ class TransactionTest(unittest.TestCase):
                        'rcpt_to': 'bob'})
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
-#        cursor = self.storage.load_one()
-#        self.assertIsNotNone(cursor)
-#        self.assertEqual(cursor.rest_id, rest_tx.rest_id)
 
-#        tx_cursor = self.storage.get_transaction_cursor()
-#        tx_cursor.load(rest_id = rest_id)
-#        tx_cursor.append_action(Action.START, Response(234))
-
-#        rest_tx_cursor = self.storage.get_transaction_cursor()
-#        rest_tx_cursor.load(rest_id = rest_id)
-#        rest_tx = RestServiceTransaction(self.storage, rest_id, rest_tx_cursor)
-#        del rest_tx_cursor
-
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         rest_resp = rest_tx.get({})
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
-#        self.assertIn('start_response', resp_json)
-#        start_resp = Response.from_json(resp_json['start_response'])
-#        self.assertEqual(234, start_resp.code)
         self.assertNotIn('final_status', resp_json)
 
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         rest_resp = rest_tx.append({
             'd': 'hello, ',
             'last': False })
         self.assertEqual(rest_resp.status_code, 200)
 
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         rest_resp = rest_tx.append({
             'uri': None })
         self.assertEqual(rest_resp.status_code, 200)
@@ -89,6 +77,7 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(rest_resp.status_code, 200)
 
         # re-append the previous blob
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         rest_resp = rest_tx.append({
             'uri': blob_uri,
             'last': True })
@@ -97,7 +86,7 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(resp_json)
         self.assertNotIn('uri', resp_json)
 
-
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         rest_resp = rest_tx.set_durable({})
         self.assertEqual(rest_resp.status_code, 200)
 
@@ -239,7 +228,7 @@ class TransactionTest(unittest.TestCase):
 
         tx_cursor.write_envelope(
             mail_from='alice', rcpt_to='bob')
-        tx_cursor.append_data(b'hello, ', last=False)
+        tx_cursor.append_blob(d=b'hello, ', last=False)
 
         blob_writer = self.storage.get_blob_writer()
         blob_rest_id = 'blob_rest_id'
@@ -248,7 +237,7 @@ class TransactionTest(unittest.TestCase):
         for i in range(0,len(d)):
             blob_writer.append_data(d[i:i+1], len(d))
 
-        tx_cursor.append_blob(blob_rest_id, last=True)
+        tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=True)
 
         self.assertTrue(tx_cursor.append_action(Action.SET_DURABLE))
         del tx_cursor
@@ -331,6 +320,7 @@ class TransactionTest(unittest.TestCase):
         rest_resp = rest_tx.append({
             'uri': None,
             'last': True })
+        self.assertEqual(rest_resp.status_code, 200)
         blob_rest_id = rest_resp.json['uri']
 
 

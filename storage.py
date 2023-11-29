@@ -117,44 +117,13 @@ class TransactionCursor:
     # message. That would allow the key to be the byte offset
     # (allowing pread) instead of the simple index/counter i we're
     # using now.
-    def append_data(self, d : bytes, last : bool):
-        with self.parent.db_write_lock:
-            cursor = self.parent.db.cursor()
-            cursor.execute(
-                'SELECT status,version,last From Transactions WHERE id = ?',
-                (self.id,))
-            row = cursor.fetchone()
-            status = Status(row[0])
-            version,db_last = row[1:]
-            logging.info('append_data status=%s', status.name)
-            assert(status in [Status.INSERT,
-                              Status.INFLIGHT,  # xxx
-                              Status.ONESHOT_INFLIGHT,
-                              Status.ONESHOT_TEMP])  # e.g. start tempfailed upstream
-            #xxx output side could have appended START action, etc.
-            #assert(version == self.version)
-            assert(not db_last)
-            cursor.execute(
-                'INSERT INTO TransactionContent '
-                '(transaction_id, i, length, inline) '
-                'VALUES (?, ?, ?, ?)',
-                (self.id, self.i, len(d), d))
-            new_version = version + 1
-            cursor.execute(
-                'UPDATE Transactions SET version = ?, last = ?'
-                'WHERE id = ? AND version = ?',
-                (new_version, last, self.id, self.version))
-            self.parent.db.commit()
-            assert(cursor.rowcount == 1)
-            self.version = new_version
-            self.parent.versions.update(self.id, self.version)
-
-        self.i += 1
 
     APPEND_BLOB_OK = 0
     APPEND_BLOB_UNKNOWN = 1
 
-    def append_blob(self, blob_rest_id : str, last : bool) -> int:
+    def append_blob(self, d : Optional[bytes] = None,
+                    blob_rest_id : Optional[str] = None,
+                    last : bool = False) -> int:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
@@ -175,19 +144,31 @@ class TransactionCursor:
             assert(not db_last)
             # XXX we may want to append this before the blob is
             # finalized? in which case this isn't known yet.
-            cursor.execute(
-                'SELECT id,length FROM Blob WHERE rest_id = ?',
-                (blob_rest_id,))
-            row = cursor.fetchone()
-            if not row:
-                return TransactionCursor.APPEND_BLOB_UNKNOWN
-            blob_id,blob_len = row
 
+            if blob_rest_id is not None:
+                cursor.execute(
+                    'SELECT id,length FROM Blob WHERE rest_id = ?',
+                    (blob_rest_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return TransactionCursor.APPEND_BLOB_UNKNOWN
+                blob_id,blob_len = row
+
+            col = None
+            val = None
+            if d is not None:
+                col = 'inline'
+                val = (d,)
+            else:
+                col = 'blob_id'
+                val = (blob_id,)
+
+            new_max_i = self.max_i + 1 if self.max_i is not None else 0
             cursor.execute(
                 'INSERT INTO TransactionContent '
-                '(transaction_id, i, blob_id) '
+                '(transaction_id, i, ' + col + ') '
                 'VALUES (?, ?, ?)',
-                (self.id, self.i, blob_id))
+                (self.id, new_max_i) + val)
             new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions SET version = ?, last = ? '
@@ -197,7 +178,7 @@ class TransactionCursor:
             assert(cursor.rowcount == 1)
         self.version = new_version
         self.parent.versions.update(self.id, self.version)
-        self.i += 1
+        self.max_i = new_max_i
         return TransactionCursor.APPEND_BLOB_OK
 
     def load(self, db_id : Optional[int] = None,
