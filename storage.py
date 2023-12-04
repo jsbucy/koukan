@@ -92,23 +92,26 @@ class TransactionCursor:
             cursor.execute('SELECT version from Transactions WHERE id = ?',
                            (self.id,))
             row = cursor.fetchone()
-            assert(row is not None and (row[0] == self.version))
+            db_version = row[0]
+            #xxx too conservative, a reader could have LOADed
+            #assert(row is not None and (row[0] == self.version))
 
+            new_version = db_version + 1
             cursor.execute(
                 'UPDATE Transactions SET json = ?, version = ? '
                 'WHERE id = ? AND version = ?',
-                (json.dumps(trans_json), self.version + 1, self.id,
-                 self.version))
+                (json.dumps(trans_json), new_version, self.id,
+                 db_version))
 
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
             assert(cursor.rowcount == 1)
 
-            self.version += 1
+            self.version = db_version
             logging.info('write_envelope id=%d version=%d',
                          self.id, self.version)
 
-            self.parent.versions.update(self.id, self.version)
+            self.parent.versions.update(self.id, new_version)
         return True
 
     # TODO maybe this should be stricter and require the previous blob
@@ -302,71 +305,77 @@ class TransactionCursor:
         assert(row is not None)
         return row[0] == 0
 
-    # appends a TransactionAttempts record and marks Transaction done
     def append_action(self, action : Action,
-                      response : Optional[Response] = None) -> bool:
-        now = int(time.time())
+                       response : Optional[Response] = None) -> bool:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-
-            cursor.execute(
-                'SELECT status,version from Transactions WHERE id = ?',
-                (self.id,))
-            row = cursor.fetchone()
-            status : Status = Status(row[0])
-            version = row[1]
-            logging.debug('TransactionCursor.append_action (pre) id=%d '
-                          'db version %d my version %d '
-                          'status=%s action=%s',
-                          self.id, version, self.version, status.name,
-                          action.name)
-            # XXX this is too conservative e.g.
-            # writer may SET_DURABLE while reader is inflight
-            #assert(version == self.version)
-
-            if status not in transition or action not in transition[status]:
-                raise InvalidActionException(status, action)
-            status = transition[status][action]
-
-            if action == Action.SET_DURABLE:
-                assert(self._check_payload_done(cursor))  # precondition
-
-            logging.info('TransactionCursor.append_action (post) id=%d '
-                         'now=%d action=%s i=%s length=%s status=%s',
-                         self.id, now, action.name, self.i, self.length,
-                         status.name)
-            new_version = version + 1
-            cursor.execute(
-                'UPDATE Transactions '
-                'SET status = ?, last_update = ?, version = ?, '
-                'inflight_session_id = NULL '
-                'WHERE id = ? AND version = ?',
-                (status, now, new_version, self.id, version))
-            assert(cursor.rowcount == 1)
-
-            resp_col = ''
-            resp_val = ()
-            resp_bind = ''
-            if response is not None:
-                resp_col = ', response_json'
-                resp_val = (json.dumps(response.to_json()),)
-                resp_bind = ',?'
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action' + resp_col + ') '
-                'VALUES ('
-                '  ?,'
-                '  (SELECT MAX(action_id) FROM TransactionActions '
-                '   WHERE transaction_id = ?) + 1,'
-                '  ?,?' + resp_bind + ')',
-                (self.id, self.id, now, action) + resp_val)
-
-            # TODO gc payload on status DONE
-            # (or ttl, keep for ~1d after DONE?)
+            self._append_action_db(cursor, action, response)
             self.parent.db.commit()
-            self.version = new_version
-            self.parent.versions.update(self.id, self.version)
-            return True
+        self.parent.versions.update(self.id, self.version)
+        return True
+
+    # appends a TransactionAttempts record and updates status
+    def _append_action_db(self, cursor, action : Action,
+                         response : Optional[Response] = None) -> bool:
+        now = int(time.time())
+
+        cursor.execute(
+            'SELECT status,version from Transactions WHERE id = ?',
+            (self.id,))
+        row = cursor.fetchone()
+        status : Status = Status(row[0])
+        version = row[1]
+        logging.debug('TransactionCursor.append_action (pre) id=%d '
+                      'db version %d my version %d '
+                      'status=%s action=%s',
+                      self.id, version, self.version, status.name,
+                      action.name)
+        # XXX this is too conservative e.g.
+        # writer may SET_DURABLE while reader is inflight
+        #assert(version == self.version)
+
+        if status not in transition or action not in transition[status]:
+            raise InvalidActionException(status, action)
+        status = transition[status][action]
+
+        if action == Action.SET_DURABLE:
+            assert(self._check_payload_done(cursor))  # precondition
+
+        logging.info('TransactionCursor.append_action (post) id=%d '
+                     'now=%d action=%s i=%s length=%s status=%s',
+                     self.id, now, action.name, self.i, self.length,
+                     status.name)
+        new_version = version + 1
+        cursor.execute(
+            'UPDATE Transactions '
+            'SET status = ?, last_update = ?, version = ?, '
+            'inflight_session_id = NULL '
+            'WHERE id = ? AND version = ?',
+            (status, now, new_version, self.id, version))
+        assert(cursor.rowcount == 1)
+
+        resp_col = ''
+        resp_val = ()
+        resp_bind = ''
+        if response is not None:
+            resp_col = ', response_json'
+            resp_val = (json.dumps(response.to_json()),)
+            resp_bind = ',?'
+        cursor.execute(
+            'INSERT INTO TransactionActions '
+            '(transaction_id, action_id, time, action' + resp_col + ') '
+            'VALUES ('
+            '  ?,'
+            '  (SELECT MAX(action_id) FROM TransactionActions '
+            '   WHERE transaction_id = ?) + 1,'
+            '  ?,?' + resp_bind + ')',
+            (self.id, self.id, now, action) + resp_val)
+
+        # TODO gc payload on status DONE
+        # (or ttl, keep for ~1d after DONE?)
+        self.status = status
+        self.version = new_version
+        return True
 
 class BlobWriter:
     id = None
@@ -482,7 +491,7 @@ class BlobReader(Blob):
         cursor = self.parent.db.cursor()
         where = ''
         where_val = ()
-        if id is not None:
+        if db_id is not None:
             where = 'id = ?'
             where_val = (db_id,)
         elif rest_id is not None:
@@ -559,11 +568,11 @@ class VersionWaiter:
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-    def update(self, id, version):
-        logging.debug('VersionWaiter.update id=%d version=%d', id, version)
+    def update(self, db_id, version):
+        logging.debug('VersionWaiter.update id=%d version=%d', db_id, version)
         with self.lock:
-            if id not in self.version: return
-            waiter = self.version[id]
+            if db_id not in self.version: return
+            waiter = self.version[db_id]
             assert(waiter.version is None or (waiter.version <= version))
             waiter.version = version
             self.cv.notify_all()
@@ -573,13 +582,13 @@ class VersionWaiter:
         assert(cursor.id is not None)
         return self._wait(cursor, cursor.id, cursor.version, timeout)
 
-    def _wait(self, obj : object, id : int, version : int,
+    def _wait(self, obj : object, db_id : int, version : int,
               timeout=None) -> bool:
-        logging.debug('_wait id=%d version=%s', id, version)
+        logging.debug('_wait id=%d version=%s', db_id, version)
         with self.lock:
-            if id not in self.version:
-                self.version[id] = Waiter(version)
-            waiter = self.version[id]
+            if db_id not in self.version:
+                self.version[db_id] = Waiter(version)
+            waiter = self.version[db_id]
             assert(waiter.version is None or (waiter.version >= version))
             if waiter.version is not None and (waiter.version > version):
                 return True
@@ -590,7 +599,7 @@ class VersionWaiter:
             rv = waiter.version is not None and (version is None or (waiter.version > version))
             waiter.waiters.remove(obj)
             if not waiter.waiters:
-                del self.version[id]
+                del self.version[db_id]
             return rv
 
 class Storage:
@@ -652,11 +661,11 @@ class Storage:
         cursor = self.db.cursor()
         cursor.execute('SELECT id, pid, pid_create FROM Sessions')
         for row in cursor:
-            (id, pid, pid_create) = row
+            (db_id, pid, pid_create) = row
             if not Storage.check_pid(pid, pid_create):
                 logging.info('deleting stale session %s %s %s',
-                             id, pid, pid_create)
-                cursor.execute('DELETE FROM Sessions WHERE id = ?', (id,))
+                             db_id, pid, pid_create)
+                cursor.execute('DELETE FROM Sessions WHERE id = ?', (db_id,))
                 self.db.commit()
 
         logging.info('recover transactions')
@@ -666,10 +675,10 @@ class Storage:
 
         recovered = 0
         for row in cursor:
-            (id,) = row
-            logging.info('Storage.recover orphaned transaction %d', id)
+            (db_id,) = row
+            logging.info('Storage.recover orphaned transaction %d', db_id)
             cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
-                           (Status.WAITING, id))
+                           (Status.WAITING, db_id))
             cursor.execute(
                 'INSERT INTO TransactionActions '
                 '(transaction_id, action_id, time, action) '
@@ -678,7 +687,7 @@ class Storage:
                 '  (SELECT MAX(action_id) FROM TransactionActions '
                 '   WHERE transaction_id = ?) + 1,'
                 '  ?,?)',
-                (id, id, int(time.time()), Action.RECOVER))
+                (db_id, db_id, int(time.time()), Action.RECOVER))
             recovered += 1
         logging.info('Storage.recover recovered %s transactions', recovered)
         self.db.commit()
@@ -711,8 +720,9 @@ class Storage:
             # next attempt time logic into the previous request completion so
             # you can index on it
             cursor.execute('SELECT id,status from Transactions '
-                           'WHERE status = ? OR '
-                           '(status = ? AND last_update <= ?) '
+                           'WHERE (status = ? OR '
+                           '(status = ? AND last_update <= ?)) AND '
+                           '(json_extract(json, "$.host") IS NOT NULL) '
                            'LIMIT 1',
                            (Status.INSERT, Status.WAITING, max_recent))
             row = cursor.fetchone()
@@ -720,28 +730,17 @@ class Storage:
                 return None
             db_id,status = row
 
-            # TODO: refactor/merge with TransactionCursor.append_action
-            new_status = transition[status][Action.LOAD]
+            tx = self.get_transaction_cursor()
+            assert(tx.load(db_id=db_id))
+            tx._append_action_db(cursor, Action.LOAD)
+            self.versions.update(tx.id, tx.version)
+
 
             # TODO: if the last n consecutive actions are all
             # load/recover, this transaction may be crashing the system ->
             # quarantine
-            cursor.execute(
-                'UPDATE Transactions SET inflight_session_id = ?, status = ? '
-                'WHERE id = ?',
-                (self.session_id, new_status, db_id))
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action) '
-                'VALUES ('
-                '  ?,'
-                '  (SELECT MAX(action_id) FROM TransactionActions'
-                '   WHERE transaction_id = ?) + 1,'
-                '  ?,?)',
-                (db_id, db_id, int(time.time()), Action.LOAD))
+
             self.db.commit()
-            tx = self.get_transaction_cursor()
-            assert(tx.load(db_id=db_id))
             return tx
 
 

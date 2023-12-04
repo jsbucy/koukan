@@ -150,29 +150,18 @@ class Service:
     def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
         cursor_to_endpoint(storage_tx, endpoint)
 
-    def _dequeue(self) -> bool:
+    def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
-        if self.rest_tx_factory is not None:
-            if self.storage.wait_created(self.created_id, timeout=1):
-                # XXX this spins if for whatever reason we didn't load
-                # anything -> need to advance the watermark
-                storage_tx = self.storage.load_one()
-                if storage_tx is not None:
-                    self.created_id = storage_tx.id
-
-        tag = None
-        # XXX config, backoff
-        # XXX there is a race between RouterTransaction updating
-        # the storage (which makes it selectable here) vs running
-        # the done callback, if min_age is too low, this can clash
-        # with inflight
-        if storage_tx is None:
-            # XXX this will load INSERT but we probably only want WAITING?
-            storage_tx = self.storage.load_one(
-                min_age=self.config.get_int('retry_min_age', 5))
-            tag = Tag.LOAD
-        if storage_tx is None:
+        self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
+        storage_tx = self.storage.load_one()
+        if storage_tx is not None:
+            if self.created_id is None or (
+                    storage_tx.id > self.created_id):
+                self.created_id = storage_tx.id
+        else:
             return False
+
+        #xxxtag = Tag.LOAD
 
         logging.info("dequeued %d", storage_tx.id)
         # XXX there is a race that this can be selected
@@ -185,14 +174,10 @@ class Service:
         return True
 
     def dequeue(self):
+        prev = True
         while not self._shutdown:
             logging.info("RouterService.dequeue")
-            if not self._dequeue():
-                # xxx config
-                # otherwise we block in wait_created
-                if self.rest_tx_factory is None:
-                    logging.info("dequeue idle")
-                    time.sleep(1)
+            prev = self._dequeue(wait=(not prev))
 
     def gc(self):
         while not self._shutdown:
@@ -208,12 +193,3 @@ class Service:
         logging.info('router_service _gc_inflight aborted %d', count)
         return count
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
-
-    service = Service()
-
-    from pysmtpgw_config import Config as Wiring
-    wiring=Wiring()
-    service.main(wiring)

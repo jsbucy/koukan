@@ -119,7 +119,7 @@ class StorageTest(unittest.TestCase):
         #self.assertEqual(12, reader.length)
         self.assertEqual(reader.id, 12345)
         self.assertEqual(reader.mail_from, 'alice@example.com')
-        self.assertEqual(reader.i, 0)
+        self.assertEqual(reader.max_i, 0)
 
     def test_non_durable(self):
         writer = self.s.get_transaction_cursor()
@@ -184,6 +184,10 @@ class StorageTest(unittest.TestCase):
         tx_cursor = self.s.get_transaction_cursor()
         tx_cursor.create('xyz')
 
+        # must have http host to be loadable
+        tx_cursor.write_envelope(
+            host='outbound')
+
         # needs to be inflight to wait
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -202,7 +206,7 @@ class StorageTest(unittest.TestCase):
             remote_host='remote_host',
             mail_from='alice',
             rcpt_to='bob',
-            host='host')
+            host='outbound')
 
         t.join(timeout=1)
         self.assertFalse(t.is_alive())

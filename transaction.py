@@ -205,11 +205,18 @@ class RestServiceTransaction(Handler):
         # insert/oneshot_inflight/oneshot_temp
         # i.e. start didn't already permfail and haven't already set_durable
 
-        # single-mx/full sync
-        # start didn't fail i.e. not oneshot_temp
-        # (may still be inflight with pipelining!)
-        # multi-mx (more like msa)
+        # public rest submission always async, mx always sync
 
+        # smtp->rest gateway is a special/trusted/well-known client
+        # that is allowed to async for mx because of multi-recipient
+        # cases, if it can be trusted to set the mx_multi_rcpt bit,
+        # it can be trusted to keep appending after tempfail or not
+        # appropriately
+
+        # TODO for now, this always allows append even in
+        # oneshot_temp, at such time as we want to accept rest mx
+        # directly, we need a flag whether this req is from the
+        # gateway and 400, etc.
 
         logging.info('RestServiceTransaction.append %s %s',
                      self._tx_rest_id, req_json)
@@ -285,11 +292,14 @@ class RestServiceTransaction(Handler):
         pass
 
     def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
+        # TODO public rest mx: similar to append, disallow this in ONESHOT_TEMP
+
         try:
             self.tx_cursor.append_action(Action.SET_DURABLE)
         except InvalidActionException:
             if self.tx_cursor.status != Status.DONE:
-                return FlaskResponse(status=400, response=['failed precondition'])
+                return FlaskResponse(
+                    status=400, response=['failed precondition'])
 
             # set durable in done state means that it raced with something
             # else that terminated the transaction either upstream
@@ -302,7 +312,8 @@ class RestServiceTransaction(Handler):
             actions = self.tx_cursor.load_last_action(1)
 
             if actions[0][1] != Action.DELIVERED:
-                return FlaskResponse(status=400, response=['failed precondition'])
+                return FlaskResponse(
+                    status=400, response=['failed precondition'])
 
         return FlaskResponse()
 

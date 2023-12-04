@@ -227,7 +227,7 @@ class TransactionTest(unittest.TestCase):
         #tx_cursor = self.storage.load_one()
 
         tx_cursor.write_envelope(
-            mail_from='alice', rcpt_to='bob')
+            mail_from='alice', rcpt_to='bob', host='outbound')
         tx_cursor.append_blob(d=b'hello, ', last=False)
 
         blob_writer = self.storage.get_blob_writer()
@@ -277,7 +277,8 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
         rest_id : str = rest_tx.tx_rest_id()
         rest_tx.start({'mail_from': 'alice',
-                       'rcpt_to': 'bob'})
+                       'rcpt_to': 'bob',
+                       'host': 'outbound'})
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()
