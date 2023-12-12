@@ -21,29 +21,6 @@ import logging
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
 
-# def dequeue():
-#     created_id = None
-#     while True:
-#         cursor = None
-#         if storage.wait_created(created_id, timeout=1):
-#             cursor = storage.load()
-#             if cursor.status == Status.INSERT:
-#                 created_id = cursor.id
-#         else:
-#             cursor = self.storage.load_one(min_age=5)
-#         if cursor:
-#             executor.enqueue(lambda: handle(cursor))
-
-#         # 1: abort idle INSERT/INFLIGHT !last
-#         #   - idle ~10s of minutes
-#         #   - in particular, submission may be able to continue after
-#         #     crash/restart
-#         #   - triggers wakeup/err return for readers
-#         # (req completion logic drops payload for final)
-#         # 2: ttl all completed transactions after ~days
-#         # 3: unref'd blobs
-#         storage.maybe_gc()
-
 class RestServiceTransaction(Handler):
     http_host : str = None
 
@@ -318,7 +295,6 @@ class RestServiceTransaction(Handler):
         return FlaskResponse()
 
 
-
 # interface to top-level flask app
 class RestServiceTransactionFactory(HandlerFactory):
     def __init__(self, storage : Storage):
@@ -333,6 +309,7 @@ class RestServiceTransactionFactory(HandlerFactory):
 
     def get_blob(self, blob_rest_id) -> Optional[RestServiceTransaction]:
         return RestServiceTransaction.load_blob(self.storage, blob_rest_id)
+
 
 def output(cursor, endpoint) -> Optional[Response]:
     if not cursor.wait_attr_not_none('mail_from'):
