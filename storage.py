@@ -31,11 +31,17 @@ class TransactionCursor:
 
     id : Optional[int] = None
     status : Status = None
+    attempt_id : Optional[int] = None
+
     length = None
     i = 0  # TransactionContent index
     version : Optional[int] = None
     max_i = None
     last = None
+
+    mail_response : Optional[Response] = None
+    rcpt_response : Optional[Response] = None
+    data_response : Optional[Response] = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -50,10 +56,10 @@ class TransactionCursor:
                 'INSERT INTO Transactions '
                 '  (rest_id, inflight_session_id, creation, last_update, version, status, '
                 'last) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
                 (rest_id, parent.session_id, now, now, 0,
                  Status.INSERT, False))
-            self.id = cursor.lastrowid
+            self.id = cursor.fetchone()[0]
             self.version = 0
 
             cursor.execute(
@@ -113,6 +119,31 @@ class TransactionCursor:
 
             self.parent.versions.update(self.id, new_version)
         return True
+
+    def _set_response(self, col : str, response : Response):
+        assert(self.attempt_id is not None)
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute('UPDATE TransactionAttempts SET ' + col + ' = ? '
+                           'WHERE transaction_id = ? AND attempt_id = ?',
+                           (json.dumps(response.to_json()), self.id, self.attempt_id))
+            new_version = self.version + 1
+            cursor.execute('UPDATE Transactions SET version = ? '
+                           'WHERE version = ? AND id = ? RETURNING id',
+                           (new_version, self.version, self.id))
+            assert(cursor.fetchone() is not None)
+            self.parent.db.commit()
+            self.version = new_version
+
+    def set_mail_response(self, response : Response):
+        self._set_response('mail_response', response)
+
+    def set_rcpt_response(self, response : Response):
+        self._set_response('rcpt_response', response)
+
+    def set_data_response(self, response : Response):
+        self._set_response('data_response', response)
+
 
     # TODO maybe this should be stricter and require the previous blob
     # to at least have its length determined (i.e. PUT with the
@@ -219,6 +250,20 @@ class TransactionCursor:
                        (self.id,))
         row = cursor.fetchone()
         self.max_i = row[0]
+
+        cursor.execute(
+            'SELECT attempt_id,mail_response,rcpt_response,data_response '
+            'FROM TransactionAttempts WHERE transaction_id = ? '
+            'ORDER BY attempt_id DESC LIMIT 1', (self.id,))
+        row = cursor.fetchone()
+        if row is not None:
+            attempt_id,mail_json,rcpt_json,data_json = row
+            if mail_json:
+                self.mail_response = Response.from_json(json.loads(mail_json))
+            if rcpt_json:
+                self.rcpt_response = Response.from_json(json.loads(rcpt_json))
+            if data_json:
+                self.data_response = Response.from_json(json.loads(data_json))
 
         return True
 
@@ -354,6 +399,26 @@ class TransactionCursor:
             (status, now, new_version, self.id, version))
         assert(cursor.rowcount == 1)
 
+
+        attempt_id = None
+        if action == Action.LOAD:
+            cursor.execute(
+                'INSERT INTO TransactionAttempts (transaction_id, attempt_id) '
+                'VALUES (?, (SELECT iif(i IS NULL, 1, i+1) '
+                'FROM (SELECT max(attempt_id) AS i from TransactionAttempts '
+                'WHERE transaction_id = ?))) RETURNING attempt_id',
+                (self.id, self.id))
+            attempt_id = cursor.fetchone()[0]
+        elif action in [Action.ABORT, Action.SET_DURABLE]:
+            if status == Status.ONESHOT_INFLIGHT:
+                cursor.execute(
+                    'SELECT MAX(attempt_id) FROM TransactionAttempts '
+                    'WHERE transaction_id = ?', (self.id,))
+                attempt_id = cursor.fetchone()[0]
+        elif action != Action.INSERT:
+            assert(self.attempt_id is not None)
+            attempt_id = self.attempt_id
+
         resp_col = ''
         resp_val = ()
         resp_bind = ''
@@ -371,10 +436,12 @@ class TransactionCursor:
             '  ?,?' + resp_bind + ')',
             (self.id, self.id, now, action) + resp_val)
 
+
         # TODO gc payload on status DONE
         # (or ttl, keep for ~1d after DONE?)
         self.status = status
         self.version = new_version
+        self.attempt_id = attempt_id
         return True
 
 class BlobWriter:
@@ -392,9 +459,10 @@ class BlobWriter:
             cursor = self.parent.db.cursor()
             cursor.execute(
                 'INSERT INTO Blob (last_update, rest_id, last) '
-                'VALUES (?, ?, false)', (int(time.time()), rest_id))
+                'VALUES (?, ?, false) RETURNING id',
+                (int(time.time()), rest_id))
+            self.id = cursor.fetchone()[0]
             self.parent.db.commit()
-            self.id = cursor.lastrowid
             self.rest_id = rest_id
         return self.id
 
@@ -651,10 +719,11 @@ class Storage:
         # longer exists but as this evolves, we might also
         # periodically check that our own session hasn't been evicted
         proc_self = psutil.Process()
-        cursor.execute('INSERT INTO Sessions (pid, pid_create) VALUES (?,?)',
+        cursor.execute('INSERT INTO Sessions (pid, pid_create) VALUES (?,?) '
+                       'RETURNING id',
                        (proc_self.pid, int(proc_self.create_time())))
+        self.session_id = cursor.fetchone()[0]
         self.db.commit()
-        self.session_id = cursor.lastrowid
         self.recover()
 
     def recover(self):

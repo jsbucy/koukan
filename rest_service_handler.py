@@ -20,7 +20,7 @@ class Handler(ABC):
 
     @abstractmethod
     def put_blob(self, request : FlaskRequest,
-                 range : ContentRange,
+                 content_range : ContentRange,
                  range_in_headers : bool) -> FlaskResponse:
         pass
 

@@ -1,28 +1,29 @@
 
-from typing import Dict, Optional, Any, List, Tuple
+from typing import Dict, Optional, Any
+import logging
+import json
+import secrets
 
-from storage import Storage, TransactionCursor, BlobReader
-from storage_schema import Action, Status, InvalidActionException
-from response import Response
-from blob import Blob
-
-from flask import Request as FlaskRequest, Response as FlaskResponse, jsonify
+from flask import Request as FlaskRequest, Response as FlaskResponse
 
 from werkzeug.datastructures import ContentRange
-import werkzeug.http
 
 from rest_service_handler import Handler, HandlerFactory
 
-import json
+from storage import Storage, TransactionCursor, BlobReader, BlobWriter
+from storage_schema import Action, Status, InvalidActionException
+from response import Response
 
-import secrets
-
-import logging
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
 
 class RestServiceTransaction(Handler):
-    http_host : str = None
+    storage : Storage
+    _tx_rest_id : str
+    http_host : Optional[str]
+    tx_cursor : TransactionCursor
+    blob_rest_id : Optional[str]
+    blob_writer : Optional[BlobWriter]
 
     def __init__(self, storage,
                  tx_rest_id=None,
@@ -52,7 +53,8 @@ class RestServiceTransaction(Handler):
     @staticmethod
     def load_tx(storage, rest_id) -> Optional["RestServiceTransaction"]:
         cursor = storage.get_transaction_cursor()
-        if not cursor.load(rest_id=rest_id): return None
+        if not cursor.load(rest_id=rest_id):
+            return None
         return RestServiceTransaction(
             storage, tx_rest_id=rest_id, tx_cursor=cursor)
 
@@ -65,16 +67,8 @@ class RestServiceTransaction(Handler):
         return RestServiceTransaction(
             storage, blob_rest_id=blob_rest_id, blob_writer=blob_writer)
 
-    @staticmethod
-    def trim_actions(actions):
-        # these are in descending order
-        for i in range(0, len(actions)):
-            time, action, resp = actions[i]
-            if action == Action.LOAD:
-                return actions[0:(i+1)]
-        return actions
-
-    def tx_rest_id(self): return self._tx_rest_id
+    def tx_rest_id(self):
+        return self._tx_rest_id
 
     def start(self, req_json) -> FlaskResponse:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
@@ -89,59 +83,30 @@ class RestServiceTransaction(Handler):
         return FlaskResponse()
 
 
-    @staticmethod
-    def have_action(actions : List[Tuple[int, int, Optional[Response]]],
-                    pred_actions : List[int]) -> bool:
-        return next((x for x in actions if x[1] in pred_actions),
-                    None) is not None
-
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        wait = False
-        while True:
-            # the exact number just needs to be an upper bound on max seq of
-            # LOAD, START, SET_DURABLE, DELIVERED, etc
-            actions = self.tx_cursor.load_last_action(5)
-            actions = RestServiceTransaction.trim_actions(actions)
-            logging.info('RestServiceTransaction.get actions %s', actions)
+        resp_json = {}
 
-            resp_json = {}
-            for timestamp,action,resp in reversed(actions):
-                if action == Action.START:
-                    resp_json['start_response'] = resp.to_json()
-                elif (action in [ Action.DELIVERED,
-                                  Action.TEMP_FAIL,
-                                  Action.PERM_FAIL,
-                                  Action.ABORT ]):
-                    resp_json['final_status'] = resp.to_json()
-
-            # not inflight: state unlikely to change if we wait
-            if self.tx_cursor.status not in [
-                    Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
-                break
-            # already done
-            if 'final_status' in resp_json:
-                break
-            # already waited once
-            if wait: break
-
-            # if we have the whole envelope: wait for start or final
-            if (self.tx_cursor.rcpt_to is not None and
-                not RestServiceTransaction.have_action(
-                    actions, [Action.START])):
-                wait = True
-            # if we have the whole payload, wait for the final resp
-            # XXX last doesn't entail any blob uploads have finished
-            # but it's good enough for now
-            if (self.tx_cursor.last and
-                not RestServiceTransaction.have_action(actions, [
-                    Action.DELIVERED, Action.TEMP_FAIL, Action.PERM_FAIL,
-                    Action.ABORT ])):
-                wait = True
-
-            if not wait: break
+        # only wait if something is inflight upstream and we think the
+        # status might change soon
+        wait_mail = (self.tx_cursor.mail_from is not None and
+                     self.tx_cursor.mail_response is None)
+        wait_rcpt = (self.tx_cursor.rcpt_to is not None and
+                     self.tx_cursor.rcpt_response is None)
+        wait_data = (self.tx_cursor.last and
+                     self.tx_cursor.data_response is None)
+        if (self.tx_cursor.status in [
+                Status.INFLIGHT, Status.ONESHOT_INFLIGHT ] and
+            (wait_mail or wait_rcpt or wait_data)):
             logging.info('RestServiceTransaction.get wait')
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
+
+        if self.tx_cursor.rcpt_response is not None:
+            resp_json['start_response'] = (
+                self.tx_cursor.rcpt_response.to_json())
+        if self.tx_cursor.data_response is not None:
+            resp_json['final_status'] = (
+                self.tx_cursor.data_response.to_json())
 
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?
@@ -149,7 +114,7 @@ class RestServiceTransaction(Handler):
         rest_resp.set_data(json.dumps(resp_json))
         rest_resp.content_type = 'application/json'
         return rest_resp
-        #return jsonify(resp_json)
+
 
     def append_blob(self, uri : Optional[str], last) -> FlaskResponse:
         logging.info('append_blob %s %s last=%s', self._tx_rest_id, uri, last)
@@ -232,7 +197,7 @@ class RestServiceTransaction(Handler):
         return resp
 
     def put_blob(self, request : FlaskRequest,
-                 range : ContentRange, range_in_headers : bool):
+                 content_range : ContentRange, range_in_headers : bool):
         logging.info('put_blob loaded %s off=%d len=%s',
                      self.blob_rest_id, self.blob_writer.offset,
                      self.blob_writer.length)
@@ -242,24 +207,23 @@ class RestServiceTransaction(Handler):
         # it's equivalent/noop but may not be worth storing that to
         # enforce?
 
-        offset = range.start
+        offset = content_range.start
         if offset > self.blob_writer.offset:
-                return RestServiceTransaction.build_resp(
-                    400, 'range start past the end', self.blob_writer)
-        last = range.length is not None and range.stop == range.length
+            return RestServiceTransaction.build_resp(
+                400, 'range start past the end', self.blob_writer)
 
         if (self.blob_writer.length is not None and
-            range.length != self.blob_writer.length):
+            content_range.length != self.blob_writer.length):
             return RestServiceTransaction.build_resp(
                 400, 'append or !last after last', self.blob_writer)
 
-        if self.blob_writer.offset >= range.stop:
+        if self.blob_writer.offset >= content_range.stop:
             return RestServiceTransaction.build_resp(
                 200, 'noop (range)', self.blob_writer)
 
         d = request.data[self.blob_writer.offset - offset:]
-        assert(len(d) > 0)
-        self.blob_writer.append_data(d, range.length)
+        assert len(d) > 0
+        self.blob_writer.append_data(d, content_range.length)
 
         return RestServiceTransaction.build_resp(
             200, None, self.blob_writer)
@@ -328,6 +292,8 @@ def output(cursor, endpoint) -> Optional[Response]:
     if resp.err():
         return resp
 
+    cursor.set_mail_response(Response())  # XXX
+    cursor.set_rcpt_response(resp)
     cursor.append_action(Action.START, resp)
 
     i = 0
@@ -363,11 +329,12 @@ def output(cursor, endpoint) -> Optional[Response]:
             assert(resp is None or resp.err())
         else:
             # last must return a response
-            assert(resp is not None)
+            assert resp is not None
 
         if resp is not None:
+            cursor.set_data_response(resp)
             return resp
-    assert(False)  # unreached
+    assert False  # unreached
 
 def cursor_to_endpoint(cursor, endpoint):
     logging.debug('cursor_to_endpoint %s', cursor.rest_id)

@@ -65,7 +65,7 @@ transition : Dict[Status, Dict[Action, Status]] = {
 
     Status.INFLIGHT: {
         Action.DELIVERED: Status.DONE,
-        Action.PERM_FAIL: Action.ABORT,
+        Action.PERM_FAIL: Status.DONE,
         Action.START: Status.INFLIGHT,  # no change
         Action.TEMP_FAIL: Status.WAITING },
 }
