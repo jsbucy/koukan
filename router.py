@@ -1,4 +1,5 @@
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, TypeAlias
+from abc import ABC, abstractmethod
 
 import logging
 
@@ -6,47 +7,56 @@ from response import Response, Esmtp
 
 from blob import Blob, InlineBlob
 
+from filter import Filter, HostPort, TransactionMetadata
+
 import smtp_endpoint
 import email.utils
 
-class RoutingPolicy:
+class RoutingPolicy(ABC):
     # called on the first recipient in the transaction
 
-    # really Transaction
-    # this calls Endpoint.on_connect() before return, returned
-    # Endpoint is ready for start_transaction()
-    # -> Endpoint, dest host, Response
+    # -> rest endpoint base url, remote_host, Response
     # returns one of endpoint and possibly dest_host or response which
     # is probably a not-found error
+
+    @abstractmethod
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Any, Optional[Tuple[str, int]], Optional[Response]]:
+            str, HostPort, Optional[Response]]:
         raise NotImplementedError
 
 
-class Router:
-    endpoint = None
+class Router(Filter):
+    endpoint: Filter
     received_ascii : bytes = None
+    policy : RoutingPolicy
 
-    def __init__(self, policy):
+    def __init__(self, policy : RoutingPolicy, next : Filter):
         self.policy = policy
+        self.endpoint = next
         self.ehlo = "fixme.ehlo"
 
     def start(self,
-              local_host, remote_host,
+              transaction_metadata : TransactionMetadata,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
         logging.debug('Router.start %s %s', mail_from, rcpt_to)
 
-        received_host = remote_host[0] if remote_host else ""
+        received_host = ""
+        if transaction_metadata.remote_host and transaction_metadata.remote_host.host:
+            received_host = transaction_metadata.remote_host.host
         received = 'Received: from %s ([%s]);\r\n\t%s\r\n' % (
             self.ehlo, received_host,
             email.utils.format_datetime(email.utils.localtime()))
         self.received_ascii = received.encode('ascii')
 
-        self.endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(rcpt_to)
-        if resp and resp.err(): return resp
+        rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(rcpt_to)
+        if resp and resp.err():
+            return resp
+        upstream_tx = TransactionMetadata()
+        upstream_tx.rest_endpoint = rest_endpoint
+        upstream_tx.remote_host = next_hop
         return self.endpoint.start(
-            None, next_hop,
+            upstream_tx,
             mail_from, transaction_esmtp,
             rcpt_to, rcpt_esmtp)
 

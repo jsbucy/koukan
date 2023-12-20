@@ -1,4 +1,4 @@
-from typing import Any, Callable
+from typing import Any, Callable, Tuple
 import logging
 import sys
 
@@ -8,7 +8,8 @@ from dest_domain_policy import DestDomainPolicy
 from router import Router
 from rest_endpoint import RestEndpoint
 from dkim_endpoint import DkimEndpoint
-from mx_resolution_endpoint import MxResolutionEndpoint
+from mx_resolution import resolve as resolve_mx
+from filter import Filter, HostPort
 
 class Config:
     rest_blob_id_map = None
@@ -20,7 +21,6 @@ class Config:
            'rest_output': self.rest_output,
            'router': self.router,
            'dkim': self.dkim,
-           'mx_resolution': self.mx
        }
        self.rest_blob_id_map = rest_blob_id_map
 
@@ -39,43 +39,43 @@ class Config:
 
     def rest_output(self, yaml, next):
         assert next is None
-        static_remote_host = yaml['static_remote_host']
+        static_remote_host = HostPort.from_yaml(yaml['static_remote_host'])
         logging.info('Factory.rest_output %s', static_remote_host)
-        return lambda: RestEndpoint(
-            yaml['endpoint'],
+        remote_host_disco = None
+        if yaml.get('remote_host_discovery', '') == 'mx':
+                remote_host_disco = resolve_mx
+        return RestEndpoint(
+            static_base_url = yaml['static_endpoint'],
             http_host = yaml['http_host'],
-            static_remote_host = (static_remote_host['host'],
-                                  static_remote_host['port']),
-            blob_id_map=self.rest_blob_id_map)
+            static_remote_host = static_remote_host,
+            blob_id_map=self.rest_blob_id_map,
+            remote_host_resolution = remote_host_disco)
 
-    def router_policy_dest_domain(self, policy_yaml, next):
-        return DestDomainPolicy(next)
+    def router_policy_dest_domain(self, policy_yaml):
+        return DestDomainPolicy()
 
-    def router_policy_local_domain(self, policy_yaml, next):
+    def router_policy_local_domain(self, policy_yaml):
         d = {}
         for domain in policy_yaml['domains']:
-            d[domain['name']] = next
+            d[domain['name']] = domain.get('endpoint', None)
         logging.info('router_policy_local_domain %s', d)
         return LocalDomainPolicy(d)
 
     def router(self, yaml, next):
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
-        policy = self.router_policies[policy_name](policy_yaml, next)
-        return Router(policy)
+        policy = self.router_policies[policy_name](policy_yaml)
+        return Router(policy, next)
 
     def dkim(self, yaml, next):
         if 'key' not in yaml:
             return None
-        return lambda: DkimEndpoint(
+        return DkimEndpoint(
             yaml['domain'], yaml['selector'], yaml['key'], next)
 
-    def mx(self, yaml, next):
-        return lambda: MxResolutionEndpoint(next)
-
-    def get_endpoint(self, host):
+    def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]
-        next = None
+        next : Filter = None
         for filter_yaml in reversed(endpoint_yaml['chain']):
             filter_name = filter_yaml['filter']
             endpoint = self.filters[filter_name](filter_yaml, next)

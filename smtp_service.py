@@ -1,23 +1,18 @@
-from aiosmtpd.smtp import SMTP
-from aiosmtpd.controller import Controller
-import ssl
-
 import asyncio
 import time
 import logging
-
+from typing import Optional, List, Tuple
 from functools import partial
+import ssl
+
+from aiosmtpd.smtp import SMTP
+from aiosmtpd.controller import Controller
 
 from blob import InlineBlob
-
-from typing import Optional, List, Tuple
-
-
 from response import ok_resp, to_smtp_resp
-
 from smtp_auth import Authenticator
-
 from response import Response
+from filter import HostPort, TransactionMetadata
 
 MSA_RCPT_WAIT=5
 MX_RCPT_WAIT=30
@@ -54,7 +49,10 @@ class SmtpHandler:
               mail_from, transaction_esmtp,
               rcpt, rcpt_esmtp):
         logging.info('SmtpHandler.start')
-        rresp[0] = trans.start(local, remote, mail_from, transaction_esmtp,
+        tx_meta = TransactionMetadata()
+        tx_meta.remote_host = HostPort.from_seq(remote) if remote else None
+        tx_meta.local_host = HostPort.from_seq(local) if remote else None
+        rresp[0] = trans.start(tx_meta, mail_from, transaction_esmtp,
                                rcpt, rcpt_esmtp)
         logging.info('SmtpHandler.start done %s', rresp[0])
 

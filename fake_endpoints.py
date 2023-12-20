@@ -1,17 +1,16 @@
-from response import Response, Esmtp
-
 from threading import Lock, Condition
-
 import logging
 
-class FakeEndpoint:
+from response import Response, Esmtp
+from filter import Filter, TransactionMetadata
+
+class FakeEndpoint(Filter):
     start_response = None
     final_response = None
     aborted = False
 
     def __init__(self):
-        self.local_host = None
-        self.remote_host = None
+        self.tx_meta = None
         self.mail_from = None
         self.transaction_esmtp = None
         self.rcpt_to = None
@@ -21,12 +20,11 @@ class FakeEndpoint:
         self.last = False
 
     def start(self,
-              local_host, remote_host,
+              transaction_metadata : TransactionMetadata,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
         logging.info('FakeEndpoint.start %s %s', mail_from, rcpt_to)
-        self.local_host = local_host
-        self.remote_host = remote_host
+        self.tx_meta = transaction_metadata
         self.mail_from = mail_from
         self.transaction_esmtp = transaction_esmtp
         self.rcpt_to = rcpt_to
@@ -44,7 +42,7 @@ class FakeEndpoint:
     def abort(self):
         self.aborted = True
 
-class SyncEndpoint:
+class SyncEndpoint(Filter):
     start_response = None
     aborted = False
 
@@ -52,8 +50,7 @@ class SyncEndpoint:
     cv : Condition
 
     def __init__(self):
-        self.local_host = None
-        self.remote_host = None
+        self.tx_meta = None
         self.mail_from = None
         self.transaction_esmtp = None
         self.rcpt_to = None
@@ -78,12 +75,11 @@ class SyncEndpoint:
             self.cv.notify_all()
 
     def start(self,
-              local_host, remote_host,
+              transaction_metadata : TransactionMetadata,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
         logging.info('SyncEndpoint.start %s %s', mail_from, rcpt_to)
-        self.local_host = local_host
-        self.remote_host = remote_host
+        self.tx_meta = transaction_metadata
         self.mail_from = mail_from
         self.transaction_esmtp = transaction_esmtp
         self.rcpt_to = rcpt_to

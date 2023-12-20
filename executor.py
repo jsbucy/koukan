@@ -33,10 +33,10 @@ class Executor:
 
     # TODO add watchdog timer here
     def run(self, fn):
-        try:
-            fn()
-        except:
-            pass
+        #try:
+        fn()
+        #except:
+        #    pass
         with self.lock:
             self.inflight -= 1
             self.cv.notify()

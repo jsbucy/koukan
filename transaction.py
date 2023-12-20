@@ -13,7 +13,7 @@ from rest_service_handler import Handler, HandlerFactory
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import Action, Status, InvalidActionException
 from response import Response
-
+from filter import HostPort, TransactionMetadata
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
 
@@ -88,13 +88,17 @@ class RestServiceTransaction(Handler):
 
         # only wait if something is inflight upstream and we think the
         # status might change soon
+        logging.info('RestServiceTransaction.get %s %s',
+                     self.tx_cursor.rcpt_to, self.tx_cursor.rcpt_response)
         wait_mail = (self.tx_cursor.mail_from is not None and
                      self.tx_cursor.mail_response is None)
         wait_rcpt = (self.tx_cursor.rcpt_to is not None and
                      self.tx_cursor.rcpt_response is None)
         wait_data = (self.tx_cursor.last and
                      self.tx_cursor.data_response is None)
+        # TODO cursor.wait_for() the appropriate response field per above
         if (self.tx_cursor.status in [
+                Status.INSERT,
                 Status.INFLIGHT, Status.ONESHOT_INFLIGHT ] and
             (wait_mail or wait_rcpt or wait_data)):
             logging.info('RestServiceTransaction.get wait')
@@ -290,8 +294,11 @@ def output(cursor, endpoint) -> Optional[Response]:
                   endpoint,
                   cursor.mail_from, cursor.rcpt_to)
 
+    tx_meta = TransactionMetadata()
+    tx_meta.remote_host = HostPort.from_seq(cursor.remote_host) if cursor.remote_host else None
+    tx_meta.local_host = HostPort.from_seq(cursor.local_host) if cursor.local_host else None
     resp = endpoint.start(
-        cursor.remote_host, cursor.local_host,
+        tx_meta,
         cursor.mail_from, cursor.transaction_esmtp,
         cursor.rcpt_to, cursor.rcpt_esmtp)
     logging.debug('cursor_to_endpoint %s start resp %s', cursor.rest_id, resp)

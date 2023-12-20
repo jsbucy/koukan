@@ -1,15 +1,15 @@
+from typing import Any, Optional, Tuple
 
 import dkim
 
 from response import Response, Esmtp
 from blob import Blob, InlineBlob
+from filter import Filter
 
-from typing import Any, Optional, Tuple
-
-class DkimEndpoint:
+class DkimEndpoint(Filter):
     data : bytes = None
 
-    def __init__(self, domain, selector, privkey, next):
+    def __init__(self, domain, selector, privkey, next : Filter):
         f = open(privkey, "rb")
         self.domain = domain
         self.selector = selector

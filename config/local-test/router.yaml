@@ -16,14 +16,14 @@ endpoint:
   - filter: router
     policy:
       name: dest_domain
-  #- filter: dkim
-    #key
-    #domain:
-    #selector:
-  - filter: mx_resolution
+# - filter: dkim
+#   key
+#   domain:
+#   selector:
   - filter: rest_output
-    endpoint: http://localhost:8001
+    static_endpoint: http://localhost:8001
     http_host: outbound
+    remote_host_discovery: mx
     static_remote_host:
       host: 127.0.0.1
       port: 3025
@@ -37,7 +37,7 @@ endpoint:
       domains:
       - name: d
   - filter: rest_output
-    endpoint: http://localhost:8001
+    static_endpoint: http://localhost:8001
     http_host: outbound
     static_remote_host:
       host: 127.0.0.1

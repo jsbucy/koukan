@@ -1,28 +1,19 @@
-import unittest
+from typing import Any, Tuple
+from threading import Thread, Lock, Condition
 import logging
-
+import unittest
 import socketserver
+import time
 
 
 from router_service import Service
-
-from fake_endpoints import SyncEndpoint
-
 from rest_endpoint import RestEndpoint
-
-from typing import Any, Tuple
-
-from threading import Thread, Lock, Condition
-
-import time
-
 from rest_endpoint import RestEndpoint
-
 from response import Response
-
 from blob import InlineBlob
-
 from config import Config
+from fake_endpoints import SyncEndpoint
+from filter import TransactionMetadata
 
 root_yaml = {
     'global': {
@@ -78,9 +69,10 @@ class RouterServiceTest(unittest.TestCase):
                     http_host='probe',
                     wait_response=False)
                 start_resp = rest_endpoint.start(
+                    TransactionMetadata(),
                     mail_from='probe-from%d' % i, rcpt_to='probe-to%d' % i)
             except:
-                time.sleep(0.1)
+                    time.sleep(0.1)
             else:
                 break
         else:
@@ -106,6 +98,7 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
 
         start_resp = start_endpoint.start(
+            TransactionMetadata(),
             mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
         self.assertTrue(start_endpoint.set_durable().ok())
@@ -157,7 +150,9 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(256))
 
-        start_resp = start_endpoint.start(mail_from='alice', rcpt_to='bob')
+        start_resp = start_endpoint.start(
+            TransactionMetadata(),
+            mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -179,7 +174,9 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(556))
 
-        start_resp = start_endpoint.start(mail_from='alice', rcpt_to='bob')
+        start_resp = start_endpoint.start(
+            TransactionMetadata(),
+            mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -202,7 +199,9 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
-        start_resp = start_endpoint.start(mail_from='alice', rcpt_to='bob')
+        start_resp = start_endpoint.start(
+            TransactionMetadata(),
+            mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -221,7 +220,9 @@ class RouterServiceTest(unittest.TestCase):
 
         self.endpoint.set_start_response(Response(234))
 
-        start_resp = start_endpoint.start(mail_from='alice', rcpt_to='bob')
+        start_resp = start_endpoint.start(
+            TransactionMetadata(),
+            mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -253,6 +254,7 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint.add_data_response(Response(456))
 
         start_resp = start_endpoint.start(
+            TransactionMetadata(),
             mail_from='alice',  rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -284,6 +286,7 @@ class RouterServiceTest(unittest.TestCase):
 
         # output blocks waiting on rcpt_to
         start_resp = start_endpoint.start(
+            TransactionMetadata(),
             mail_from='alice', rcpt_to='bob')
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 

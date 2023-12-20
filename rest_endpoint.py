@@ -1,17 +1,15 @@
-import requests
+from typing import Tuple, Optional
+from threading import Lock, Condition
+import logging
 import time
 
+
+import requests
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
-from typing import Tuple, Optional
-
-from threading import Lock, Condition
-
+from filter import Filter, HostPort, TransactionMetadata
 from response import Response, Esmtp
-
-import logging
-
 from blob import Blob
 
 # these are artificially low for testing
@@ -53,29 +51,32 @@ class BlobIdMap:
             self.map[key] = ext_blob_id
             self.cv.notify_all()
 
-class RestEndpoint:
+class RestEndpoint(Filter):
     # XXX I don't remember exactly why this is cached like this
     start_resp : Optional[Response] = None
     final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
     blob_id_map : BlobIdMap = None
     appended_last = False
-    static_remote_host : Optional[str] = None
+    static_remote_host : Optional[HostPort] = None
+    static_base_url : Optional[str] = None
+    base_url : Optional[str] = None
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
     # pass base_url/http_host or transaction_url
     def __init__(self,
-                 base_url=None,
+                 static_base_url=None,
                  http_host=None,
                  transaction_url=None,
-                 static_remote_host=None,
+                 static_remote_host : Optional[HostPort] = None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
                  blob_id_map = None,
                  msa = False,
-                 wait_response = True):
-        self.base_url = base_url
+                 wait_response = True,
+                 remote_host_resolution = None):
+        self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
         self.static_remote_host = static_remote_host
@@ -87,31 +88,41 @@ class RestEndpoint:
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.wait_response = wait_response
+        self.remote_host_resolution = None
 
     def start(self,
-              local_host=None, remote_host=None,
+              transaction_metadata : TransactionMetadata,
               mail_from=None, transaction_esmtp=None,
               rcpt_to=None, rcpt_esmtp=None):
-        next_hop = (self.static_remote_host if self.static_remote_host
-                    else remote_host)
+        self.base_url = (self.static_base_url if self.static_base_url else
+                    transaction_metadata.rest_endpoint)
+
         req_json = {}
-        if local_host is not None:
-            req_json['local_host'] = local_host
-        if next_hop is not None:
-            req_json['remote_host'] = next_hop
+        if transaction_metadata.local_host is not None:
+            req_json['local_host'] = transaction_metadata.local_host.to_tuple()
         if mail_from is not None:
             req_json['mail_from'] = mail_from
         if rcpt_to is not None:
             req_json['rcpt_to'] = rcpt_to
         # xxx esmtp
 
-        rest_resp = requests.post(self.base_url + '/transactions',
-                                  json=req_json,
-                                  headers={'host': self.http_host},
-                                  timeout=self.timeout_start)
-        logging.info('RestEndpoint.start resp %s', rest_resp)
-        resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint.start resp_json %s', resp_json)
+        remote_host_disco = [None]
+        next_hop = (self.static_remote_host if self.static_remote_host
+                    else transaction_metadata.remote_host)
+        if next_hop:
+            remote_host_disco = self.remote_host_resolution(next_hop) if self.remote_host_resolution is not None else [next_hop]
+
+        for remote_host in remote_host_disco:
+            if remote_host is not None:
+                req_json['remote_host'] = remote_host.to_tuple()
+
+            rest_resp = requests.post(self.base_url + '/transactions',
+                                      json=req_json,
+                                      headers={'host': self.http_host},
+                                      timeout=self.timeout_start)
+            logging.info('RestEndpoint.start resp %s', rest_resp)
+            resp_json = get_resp_json(rest_resp)
+            logging.info('RestEndpoint.start resp_json %s', resp_json)
 
         # XXX  rest_resp.status_code or 'start_response' in resp_json
         if not resp_json or 'url' not in resp_json:
@@ -170,6 +181,7 @@ class RestEndpoint:
 
         ext_id = None
         if blob.id() and self.blob_id_map:
+            # XXX transaction_url??
             ext_id = self.blob_id_map.lookup_or_insert(self.base_url, blob.id())
             req_json['uri'] = ext_id
 
@@ -213,6 +225,7 @@ class RestEndpoint:
             logging.info('RestEndpoint.append_data %s %d %s',
                          last, offset, resp)
             if blob.id() and self.blob_id_map:
+                # XXX transaction_url?
                 self.blob_id_map.finalize(
                     self.base_url, blob.id(), resp_json['uri'])
 
@@ -237,6 +250,7 @@ class RestEndpoint:
                                  offset + len(d) if last else None)
             headers['content-range'] = range.to_header()
         headers['host'] = self.http_host
+        # XXX shouldn't chunk_uri be fully-qualified by this point?
         rest_resp = requests.put(
             self.base_url + chunk_uri, headers=headers, data=d,
             timeout=self.timeout_data)
