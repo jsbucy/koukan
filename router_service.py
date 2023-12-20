@@ -1,6 +1,15 @@
 
 from typing import Dict, Tuple, Any, Optional
 
+import time
+import logging
+
+from threading import Lock, Condition, Thread
+import json
+
+
+from wsgiref.simple_server import make_server
+
 import rest_service
 from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
@@ -22,22 +31,12 @@ from response import Response
 
 from tags import Tag
 
-import time
-import logging
-
-from threading import Lock, Condition, Thread
 
 from mx_resolution_endpoint import MxResolutionEndpoint
 
-import sys
 from executor import Executor
 
-import json
-
-from wsgiref.simple_server import make_server
-
 from config import Config
-
 
 class Service:
     lock : Lock = None
@@ -53,6 +52,8 @@ class Service:
 
     _shutdown = False
 
+    config : Optional[Config] = None
+
     def __init__(self, config=None):
         self.lock = Lock()
 
@@ -67,8 +68,6 @@ class Service:
 
         self.config = config
         
-        self.wiring = None
-
         self.rest_blob_id_map = RestBlobIdMap()
 
     def shutdown(self):
@@ -84,15 +83,14 @@ class Service:
         if self.wsgi_server:
             self.wsgi_server.shutdown()
 
-    def main(self, wiring):
-        if self.config is None:
-            self.config = Config(filename=sys.argv[1])
+    def main(self, config_filename=None):
+        if config_filename:
+            config = Config(rest_blob_id_map=self.rest_blob_id_map)
+            config.load_yaml(config_filename)
+            self.config = config
 
-        self.wiring = wiring
-        wiring.setup(self.config,
-                     rest_blob_id_map=self.rest_blob_id_map)
-
-        db_filename = self.config.get_str('db_filename')
+        db_filename = self.config.root_yaml['storage'].get(
+            'db_filename', None)
         if not db_filename:
             logging.warning("*** using in-memory/non-durable storage")
             self.storage.connect(db=Storage.get_inmemory_for_test())
@@ -102,50 +100,39 @@ class Service:
 
         self.blobs = BlobStorage()
 
-        if self.config.get_bool('dequeue', True):
+        if self.config.root_yaml['global'].get('dequeue', True):
             self.dequeue_thread = Thread(target = lambda: self.dequeue(),
                                          daemon=True)
             self.dequeue_thread.start()
 
-        if self.config.get_int('gc_interval') is not None:
+        if self.config.root_yaml['global'].get('gc_interval', None):
             self.gc_thread = Thread(target = lambda: self.gc(),
                                     daemon=True)
             self.gc_thread.start()
         else:
             logging.warning('idle gc disabled')
 
-
         # top-level: http host -> endpoint
 
         handler_factory = None
-        if False:
-            self.adapter_factory = RestEndpointAdapterFactory(
-                self.endpoint_factory, self.blobs)
-            handler_factory = self.adapter_factory
-        else:
-            self.rest_tx_factory = RestServiceTransactionFactory(self.storage)
-            handler_factory = self.rest_tx_factory
+        self.rest_tx_factory = RestServiceTransactionFactory(self.storage)
+        handler_factory = self.rest_tx_factory
 
         flask_app = rest_service.create_app(handler_factory)
-        if self.config.get_bool('use_gunicorn'):
+        listener_yaml = self.config.root_yaml['rest_listener']
+        if listener_yaml.get('use_gunicorn', False):
             gunicorn_main.run(
-                'localhost', self.config.get_int('rest_port'),
-                self.config.get_str('cert'),
-                self.config.get_str('key'),
+                [listener_yaml['addr']],
+                listener_yaml.get('cert', None),
+                listener_yaml.get('key', None),
                 flask_app)
         else:
-            self.wsgi_server = make_server('localhost',
-                                           self.config.get_int('rest_port'),
-                                           flask_app)
+            self.wsgi_server = make_server(
+                listener_yaml['addr'][0],
+                listener_yaml['addr'][1],
+                flask_app)
             self.wsgi_server.serve_forever()
 
-
-    # -> Endpoint, Tag, is-msa
-    def get_endpoint(self, host) -> Optional[Tuple[Any, int, bool]]:
-        endpoint, msa = self.wiring.get_endpoint(host)
-        if not endpoint: return None
-        tag = Tag.MSA if msa else Tag.MX
-        return endpoint, tag, msa
 
     def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
         cursor_to_endpoint(storage_tx, endpoint)
@@ -167,7 +154,8 @@ class Service:
         # XXX there is a race that this can be selected
         # between creation and writing the envelope
         storage_tx.wait_attr_not_none('host')
-        endpoint, msa = self.wiring.get_endpoint(storage_tx.host)
+        endpoint, msa = self.config.get_endpoint(storage_tx.host)
+        logging.info('_dequeue %s %s', endpoint, msa)
         tag = Tag.MSA if msa else Tag.MX
         self.executor.enqueue(
             tag, lambda: self.handle_tx(storage_tx, endpoint))
@@ -181,9 +169,10 @@ class Service:
 
     def gc(self):
         while not self._shutdown:
-            self._gc_inflight(self.config.get_int('tx_idle_timeout', 5))
+            self._gc_inflight(
+                self.config.root_yaml['global'].get('tx_idle_timeout', 5))
             # xxx wait for shutdown
-            time.sleep(self.config.get_int('gc_interval'))
+            time.sleep(self.config.root_yaml['global'].get('gc_interval', 5))
 
     def _gc_inflight(self, idle_timeout=None):
         now = time.monotonic()

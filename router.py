@@ -1,7 +1,8 @@
+from typing import Any, Callable, Dict, Optional, Tuple
+
+import logging
 
 from response import Response, Esmtp
-
-from typing import Any, Callable, Dict, Optional, Tuple
 
 from blob import Blob, InlineBlob
 
@@ -26,7 +27,7 @@ class Router:
     endpoint = None
     received_ascii : bytes = None
 
-    def __init__(self, policy): # : Callable[[str], Tuple["Endpoint", Response]]):
+    def __init__(self, policy):
         self.policy = policy
         self.ehlo = "fixme.ehlo"
 
@@ -34,6 +35,7 @@ class Router:
               local_host, remote_host,
               mail_from, transaction_esmtp,
               rcpt_to, rcpt_esmtp):
+        logging.debug('Router.start %s %s', mail_from, rcpt_to)
 
         received_host = remote_host[0] if remote_host else ""
         received = 'Received: from %s ([%s]);\r\n\t%s\r\n' % (

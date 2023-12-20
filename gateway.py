@@ -24,7 +24,6 @@ from config import Config
 
 from wsgiref.simple_server import make_server
 
-
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SmtpEndpoint]
     config = None
@@ -32,19 +31,10 @@ class SmtpGateway(EndpointFactory):
 
     def __init__(self, config):
         self.config = config
-        self.rest_port = config.get_int('rest_port')
-        self.router_port = config.get_int('router_port')
-        self.mx_port = config.get_int('mx_port')
-        self.msa_port = config.get_int('msa_port')
-        self.cert = config.get_str('cert')
-        self.key = config.get_str('key')
-        self.auth_secrets = config.get_str('auth_secrets')
-        self.ehlo_host = config.get_str('ehlo_host')
-        self.listen_host = config.get_str('listen_host')
 
         self.blob_id_map = BlobIdMap()
 
-        self.router_base_url = 'http://localhost:%d/' % self.router_port
+        self.router_base_url = config.root_yaml['rest_output']['endpoint']
 
         self.blobs = BlobStorage()
         self.smtp_factory = SmtpFactory()
@@ -73,7 +63,7 @@ class SmtpGateway(EndpointFactory):
     def create(self, host):
         if host == 'outbound':
             endpoint = self.smtp_factory.new(
-                ehlo_hostname=self.ehlo_host)
+                ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
             self.inflight[endpoint.rest_id] = endpoint
             return endpoint
         else:
@@ -88,7 +78,7 @@ class SmtpGateway(EndpointFactory):
         while not self.shutdown_gc:
             now = time.monotonic()
             delta = now - last_gc
-            tx_idle_gc = self.config.get_int('tx_idle_gc', 5)
+            tx_idle_gc = self.config.root_yaml['rest_listener'].get('tx_idle_gc', 5)
             if delta < tx_idle_gc:
                 time.sleep(tx_idle_gc - delta)
             last_gc = now
@@ -105,23 +95,30 @@ class SmtpGateway(EndpointFactory):
                 del self.inflight[d]
 
     def main(self):
-        smtp_service(lambda: self.mx_rest_factory(), port=self.mx_port,
-                     cert=self.cert, key=self.key,
-                     msa=False, hostname=self.listen_host)
+        for service_yaml in self.config.root_yaml['smtp_listener']['services']:
+            factory = None
+            msa = False
+            if service_yaml['type'] == 'mx':
+                factory = lambda: self.mx_rest_factory()
+            elif service_yaml['type'] == 'msa':
+                factory = lambda: self.msa_rest_factory()
+                msa = True
 
-        smtp_service(lambda: self.msa_rest_factory(),
-                     port=self.msa_port,
-                     cert=self.cert, key=self.key,
-                     msa=True,
-                     auth_secrets_path=self.auth_secrets,
-                     hostname=self.listen_host)
+            addr = service_yaml['addr']
+            smtp_service(
+                factory, hostname=addr[0], port=addr[1],
+                cert=service_yaml.get('cert', None),
+                key=service_yaml.get('key', None),
+                msa=msa,
+                auth_secrets_path=service_yaml.get('auth_secrets', None))
 
         self.adapter_factory = RestEndpointAdapterFactory(self, self.blobs)
 
         flask_app=rest_service.create_app(self.adapter_factory)
-        if self.config.get_bool('use_gunicorn'):
+        if self.config.root_yaml['rest_listener']['use_gunicorn']:
             gunicorn_main.run(
-                'localhost', self.rest_port, cert=None, key=None,
+                [self.config.root_yaml['rest_listener']['addr']],
+                cert=None, key=None,
                 app=flask_app)
         else:
             self.wsgi_server = make_server('localhost',
@@ -133,6 +130,7 @@ class SmtpGateway(EndpointFactory):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
-    config = Config(filename=sys.argv[1])
+    config = Config()
+    config.load_yaml(sys.argv[1])
     gw = SmtpGateway(config)
     gw.main()

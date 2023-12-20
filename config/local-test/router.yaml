@@ -1,0 +1,50 @@
+global:
+  dequeue: true
+  gc_interval: 5
+  tx_idle_timeout: 5
+
+rest_listener:
+  use_gunicorn: true
+  addr: ["[::0]", 8000]
+  # cert:
+  # key:
+    
+endpoint:
+- name: outbound-gw
+  msa: true
+  chain:
+  - filter: router
+    policy:
+      name: dest_domain
+  #- filter: dkim
+    #key
+    #domain:
+    #selector:
+  - filter: mx_resolution
+  - filter: rest_output
+    endpoint: http://localhost:8001
+    http_host: outbound
+    static_remote_host:
+      host: 127.0.0.1
+      port: 3025
+
+- name: inbound-gw
+  msa: false
+  chain:
+  - filter: router
+    policy:
+      name: local_domain
+      domains:
+      - name: d
+  - filter: rest_output
+    endpoint: http://localhost:8001
+    http_host: outbound
+    static_remote_host:
+      host: 127.0.0.1
+      port: 3025
+
+
+storage:
+  db_filename: storage.sqlite3
+
+

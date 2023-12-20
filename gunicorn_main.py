@@ -1,3 +1,5 @@
+from typing import List, Tuple
+import logging
 
 import gunicorn.app.base
 
@@ -16,9 +18,10 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
     def load(self):
         return self.application
 
-def run(host, port, cert, key, app):
+def run(bind : List[Tuple[str,int]], cert, key, app):
+    bnd = [('%s:%d' % (h,p)) for h,p in bind]
     options = {
-        'bind': '%s:%s' % (host, port),
+        'bind': bnd,
         'threads': 4,
         'worker-class': 'gthread'
     }

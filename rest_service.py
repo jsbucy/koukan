@@ -46,6 +46,7 @@ def create_app(handler_factory : HandlerFactory):
         #if resp is not None:
         #    json_out['start_response'] = resp.to_json()
 
+        # XXX 201 created and return uri in Location: header
         return jsonify(json_out)
 
     @app.route('/transactions/<tx_rest_id>',

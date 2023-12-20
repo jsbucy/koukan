@@ -1,9 +1,7 @@
-
 from router_service import Service
+import sys
 
 import logging
-
-from pysmtpgw_config import Config as Wiring
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
@@ -11,5 +9,4 @@ if __name__ == '__main__':
 
     service = Service()
 
-    wiring=Wiring()
-    service.main(wiring)
+    service.main(sys.argv[1])

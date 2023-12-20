@@ -108,6 +108,8 @@ class RestServiceTransaction(Handler):
             resp_json['final_status'] = (
                 self.tx_cursor.data_response.to_json())
 
+        logging.info('RestServiceTransaction.get %s', resp_json)
+
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?
         rest_resp = FlaskResponse()
@@ -278,10 +280,14 @@ class RestServiceTransactionFactory(HandlerFactory):
 def output(cursor, endpoint) -> Optional[Response]:
     if not cursor.wait_attr_not_none('mail_from'):
         return None
+    # this will get propagated upstream with the updated filter chain
+    cursor.set_mail_response(Response())
+
     if not cursor.wait_attr_not_none('rcpt_to'):
         return None
 
-    logging.debug('cursor_to_endpoint %s from=%s to=%s', cursor.rest_id,
+    logging.debug('cursor_to_endpoint %s %s from=%s to=%s', cursor.rest_id,
+                  endpoint,
                   cursor.mail_from, cursor.rcpt_to)
 
     resp = endpoint.start(
@@ -289,22 +295,25 @@ def output(cursor, endpoint) -> Optional[Response]:
         cursor.mail_from, cursor.transaction_esmtp,
         cursor.rcpt_to, cursor.rcpt_esmtp)
     logging.debug('cursor_to_endpoint %s start resp %s', cursor.rest_id, resp)
-    if resp.err():
-        return resp
 
-    cursor.set_mail_response(Response())  # XXX
     cursor.set_rcpt_response(resp)
     cursor.append_action(Action.START, resp)
+
+    if resp.err():
+        return resp
 
     i = 0
     last = False
     while not last:
-        logging.info('cursor_to_endpoint %s cursor.last=%s max_i=%s',
-                     cursor.rest_id, cursor.last, cursor.max_i)
+        # TODO this is working around some waiting bug
+        while True:
+            logging.info('cursor_to_endpoint %s cursor.last=%s max_i=%s',
+                         cursor.rest_id, cursor.last, cursor.max_i)
 
-        # xxx hide this wait in TransactionCursor.read_content() ?
-        cursor.wait_for(lambda: (cursor.max_i is not None) and
-                        (cursor.max_i >= i))  # or abort
+            # xxx hide this wait in TransactionCursor.read_content() ?
+            if cursor.wait_for(lambda: (cursor.max_i is not None) and
+                               (cursor.max_i >= i), 1):
+                break
 
         # XXX this should just be sequential?
         blob = cursor.read_content(i)
@@ -317,7 +326,7 @@ def output(cursor, endpoint) -> Optional[Response]:
 
         last = cursor.last and (i == cursor.max_i)
         logging.info('cursor_to_endpoint %s i=%d blob_len=%d '
-                     'cursor.max_i=%d last=%s',
+                     'cursor.max_i=%s last=%s',
                      cursor.rest_id,
                      i, blob.len(), cursor.max_i, last)
         i += 1

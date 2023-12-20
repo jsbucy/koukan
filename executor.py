@@ -27,6 +27,7 @@ class Executor:
                 return True
 
     def detach(self, fn):
+        # XXX don't want daemon here? swallows exceptions?
         t = Thread(target=lambda: self.run(fn), daemon=True)
         t.start()
 

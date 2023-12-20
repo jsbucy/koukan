@@ -280,14 +280,17 @@ class TransactionCursor:
         return self.version > old  # xxx assert?
 
     def wait_for(self, fn, timeout=None):
-        start = time.monotonic() if timeout is not None else None
+        if timeout is not None:
+            start = time.monotonic()
         timeout_left = timeout
         while True:
             if fn(): return True
-            if timeout is not None and timeout_left <= 0: return False
-            if not self.wait(timeout_left): return False
-            timeout_left = (timeout - (time.monotonic() - start)
-                            if timeout is not None else None)
+            if timeout is not None and timeout_left <= 0:
+                return False
+            if not self.wait(timeout_left):
+                return False
+            if timeout is not None:
+                timeout_left = timeout - (time.monotonic() - start)
         asset(not 'unreachable')  #return False
 
     # or status -> not inflight

@@ -1,7 +1,10 @@
 import unittest
 import logging
 
-from router_service import Service, Config
+import socketserver
+
+
+from router_service import Service
 
 from fake_endpoints import SyncEndpoint
 
@@ -19,33 +22,29 @@ from response import Response
 
 from blob import InlineBlob
 
-import socketserver
+from config import Config
 
-
-class Wiring:
-    def __init__(self, endpoint):
-        self.endpoint = endpoint
-
-    def setup(self, config, rest_blob_id_map=None):
-        self.config = config
-        self.rest_blob_id_map = rest_blob_id_map
-
-    def get_endpoint(self, host) -> Tuple[Any, bool]:
-        if host == 'inbound-gw':
-            return self.endpoint, False
-        elif host == 'outbound-gw':
-            return self.endpoint, True
-        else:
-            logging.warning('router_service_test.Wiring unknown host %s', host)
-            return None, None
-
-config_json = {
-    'rest_port': None,
-    'db_filename': '',
-    'use_gunicorn': False,
-    'tx_idle_timeout': 5,
-    'gc_interval': None,
-    'dequeue': False,
+root_yaml = {
+    'global': {
+        'use_gunicorn': False,
+        'tx_idle_timeout': 5,
+        'gc_interval': None,
+        'dequeue': False,
+    },
+    'rest_listener': {
+    },
+    'endpoint': [
+        {
+            'name': 'outbound-gw',
+            'msa': True,
+            'chain': [{'filter': 'sync'}]
+        },
+        {
+            'name': 'inbound-gw',
+            'chain': [{'filter': 'sync'}]
+        },
+    ],
+    'storage': {}
 }
 
 class RouterServiceTest(unittest.TestCase):
@@ -56,15 +55,16 @@ class RouterServiceTest(unittest.TestCase):
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             self.port = s.server_address[1]
-        config_json['rest_port'] = self.port
+        root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         self.router_url = 'http://localhost:%d' % self.port
         self.endpoint = SyncEndpoint()
-        self.config = Config(js=config_json)
+        self.config = Config()
+        self.config.inject_yaml(root_yaml)
+        self.config.inject_filter('sync', lambda yaml, next: self.endpoint)
         self.service = Service(config=self.config)
-        wiring = Wiring(self.endpoint)
         self.service_thread = Thread(
             daemon=True,
-            target=lambda: self.service.main(wiring))
+            target=lambda: self.service.main())
         self.service_thread.start()
 
         # probe for startup
@@ -131,12 +131,11 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = read_endpoint.get_json_response(3, 'final_status')
+        resp = read_endpoint.get_json_response(3, 'start_response')
         logging.info('test_read_routing start resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 456)
 
-        self.config.js['retry_min_age'] = 0
         self.assertEqual(1, self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
