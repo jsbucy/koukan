@@ -4,8 +4,8 @@ global:
   tx_idle_timeout: 5
 
 rest_listener:
-  use_gunicorn: true
-  addr: ["[::0]", 8000]
+  use_gunicorn: false
+  addr: ["127.0.0.1", 8000]
   # cert:
   # key:
     

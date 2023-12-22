@@ -1,41 +1,23 @@
-
 from typing import Dict, Tuple, Any, Optional
-
 import time
 import logging
-
 from threading import Lock, Condition, Thread
 import json
-
 
 from wsgiref.simple_server import make_server
 
 import rest_service
-from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
 
-from address_policy import AddressPolicy, PrefixAddr
 from blobs import BlobStorage
 from blob import InlineBlob
-from local_domain_policy import LocalDomainPolicy
-from dest_domain_policy import DestDomainPolicy
-from router import Router
-from rest_endpoint import RestEndpoint, BlobIdMap as RestBlobIdMap
-from dkim_endpoint import DkimEndpoint
+from rest_endpoint import BlobIdMap as RestBlobIdMap
 
 from storage import Storage, Action, Status, TransactionCursor
-
 from transaction import RestServiceTransactionFactory, cursor_to_endpoint
-
 from response import Response
-
 from tags import Tag
-
-
-from mx_resolution_endpoint import MxResolutionEndpoint
-
 from executor import Executor
-
 from config import Config
 
 class Service:
@@ -121,6 +103,8 @@ class Service:
         flask_app = rest_service.create_app(handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_gunicorn', False):
+            # XXX gunicorn always forks, need to get all our startup code
+            # into the worker e.g. post_worker_init() hook
             gunicorn_main.run(
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),

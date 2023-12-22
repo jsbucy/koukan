@@ -23,7 +23,8 @@ def run(bind : List[Tuple[str,int]], cert, key, app):
     options = {
         'bind': bnd,
         'threads': 4,
-        'worker-class': 'gthread'
+        'worker_class': 'gthread',
+        'workers': 1,
     }
     if cert and key:
         options['certfile'] = cert

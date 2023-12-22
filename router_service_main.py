@@ -5,7 +5,7 @@ import logging
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(process)d] [%(thread)d] %(message)s')
 
     service = Service()
 
