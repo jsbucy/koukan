@@ -1,8 +1,8 @@
-
 from typing import Dict, Optional, Any
 import logging
 import json
 import secrets
+import time
 
 from flask import Request as FlaskRequest, Response as FlaskResponse
 
@@ -83,36 +83,40 @@ class RestServiceTransaction(Handler):
         return FlaskResponse()
 
 
+    # TODO pass a timeout possibly from request-timeout header e.g.
+    # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
         resp_json = {}
 
-        # only wait if something is inflight upstream and we think the
-        # status might change soon
-        logging.info('RestServiceTransaction.get %s %s',
-                     self.tx_cursor.rcpt_to, self.tx_cursor.rcpt_response)
-        wait_mail = (self.tx_cursor.mail_from is not None and
-                     self.tx_cursor.mail_response is None)
-        wait_rcpt = (self.tx_cursor.rcpt_to is not None and
-                     self.tx_cursor.rcpt_response is None)
-        wait_data = (self.tx_cursor.last and
-                     self.tx_cursor.data_response is None)
-        # TODO cursor.wait_for() the appropriate response field per above
-        if (self.tx_cursor.status in [
-                Status.INSERT,
-                Status.INFLIGHT, Status.ONESHOT_INFLIGHT ] and
-            (wait_mail or wait_rcpt or wait_data)):
+        start = time.monotonic()
+        while (time.monotonic() - start) < 1:
+            # only wait if something is inflight upstream and we think the
+            # status might change soon
+            logging.info('RestServiceTransaction.get %s %s',
+                         self.tx_cursor.rcpt_to, self.tx_cursor.rcpt_response)
+            if self.tx_cursor.status not in [
+                    Status.INSERT, Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
+                break
+            wait_mail = (self.tx_cursor.mail_from is not None and
+                         self.tx_cursor.mail_response is None)
+            wait_rcpt = (self.tx_cursor.rcpt_to is not None and
+                         self.tx_cursor.rcpt_response is None)
+            wait_data = (self.tx_cursor.last and
+                         self.tx_cursor.data_response is None)
+            if not (wait_mail or wait_rcpt or wait_data):
+                break
             logging.info('RestServiceTransaction.get wait')
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
-        if self.tx_cursor.rcpt_response is not None:
-            resp_json['start_response'] = (
+            if self.tx_cursor.rcpt_response is not None:
+                resp_json['start_response'] = (
                 self.tx_cursor.rcpt_response.to_json())
-        if self.tx_cursor.data_response is not None:
-            resp_json['final_status'] = (
-                self.tx_cursor.data_response.to_json())
+            if self.tx_cursor.data_response is not None:
+                resp_json['final_status'] = (
+                    self.tx_cursor.data_response.to_json())
 
-        logging.info('RestServiceTransaction.get %s', resp_json)
+            logging.info('RestServiceTransaction.get %s', resp_json)
 
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?

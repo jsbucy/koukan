@@ -11,7 +11,6 @@ from transaction import RestServiceTransaction, cursor_to_endpoint
 from fake_endpoints import SyncEndpoint
 
 from flask import Request as FlaskRequest
-from wsgiref.types import WSGIEnvironment
 from werkzeug.datastructures import ContentRange
 
 
@@ -42,6 +41,7 @@ class TransactionTest(unittest.TestCase):
 
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.get({})
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
@@ -49,12 +49,14 @@ class TransactionTest(unittest.TestCase):
         self.assertNotIn('final_status', resp_json)
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.append({
             'd': 'hello, ',
             'last': False })
         self.assertEqual(rest_resp.status_code, 200)
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.append({
             'uri': None })
         self.assertEqual(rest_resp.status_code, 200)
@@ -64,7 +66,7 @@ class TransactionTest(unittest.TestCase):
         blob_uri = resp_json['uri']
 
         d = b'world!'
-        put_req = FlaskRequest(WSGIEnvironment())
+        put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
         put_req.method = 'PUT'
         put_req.data = d
         put_req.content_length = len(put_req.data)
@@ -78,6 +80,7 @@ class TransactionTest(unittest.TestCase):
 
         # re-append the previous blob
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.append({
             'uri': blob_uri,
             'last': True })
@@ -87,6 +90,7 @@ class TransactionTest(unittest.TestCase):
         self.assertNotIn('uri', resp_json)
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.set_durable({})
         self.assertEqual(rest_resp.status_code, 200)
 
@@ -112,7 +116,7 @@ class TransactionTest(unittest.TestCase):
             expected_http_code=None, expected_resp_content=None,
             expected_length=None, expected_last=None):
         range = ContentRange('bytes', offset, offset + len(d), overall)
-        put_req = FlaskRequest(WSGIEnvironment())
+        put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
         put_req.method = 'PUT'
         put_req.data = d
         put_req.content_length = len(put_req.data)
@@ -330,7 +334,7 @@ class TransactionTest(unittest.TestCase):
             blob_tx = RestServiceTransaction.load_blob(
                 self.storage, blob_rest_id)
             self.assertIsNotNone(blob_tx)
-            put_req = FlaskRequest(WSGIEnvironment())
+            put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
             put_req.method = 'PUT'
             b = d[i:i+1]
             self.assertEqual(len(b), 1)
