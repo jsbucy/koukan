@@ -1,18 +1,16 @@
 from typing import Any, Dict, Optional
 from abc import ABC, abstractmethod
+import logging
 
 from flask import Response as FlaskResponse, Request as FlaskRequest, jsonify
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
-
 from response import Response as MailResponse
 from blob import Blob, InlineBlob
 from blobs import BlobStorage
-
 from rest_service_handler import Handler, HandlerFactory
-
-import logging
+from filter import TransactionMetadata
 
 
 class RestEndpointAdapter(Handler):
@@ -33,13 +31,8 @@ class RestEndpointAdapter(Handler):
     def tx_rest_id(self): return self._tx_rest_id
 
     def start(self, req_json) -> Optional[FlaskResponse]:
-        return self.endpoint.start(
-            local_host = req_json.get('local_host', None),
-            remote_host = req_json.get('remote_host', None),
-            mail_from = req_json.get('mail_from', None),
-            transaction_esmtp = None,  # XXX
-            rcpt_to = req_json.get('rcpt_to', None),
-            rcpt_esmtp = None)
+        tx = TransactionMetadata.from_json(req_json)
+        return self.endpoint.start(tx)
 
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
         # TODO: the upstream code currently waits for 1s if inflight

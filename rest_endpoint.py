@@ -120,15 +120,7 @@ class RestEndpoint(Filter):
         else:
             self.base_url = tx.rest_endpoint
 
-        req_json = {}
-        if tx.local_host is not None:
-            req_json['local_host'] = txc.local_host.to_tuple()
-        if tx.mail_from is not None:
-            req_json['mail_from'] = tx.mail_from.mailbox
-        if tx.rcpt_to is not None:
-            req_json['rcpt_to'] = tx.rcpt_to.mailbox
-
-        resp_json = self._start(tx, req_json)
+        resp_json = self._start(tx, tx.to_json())
 
         # XXX  rest_resp.status_code or 'start_response' in resp_json
         if not resp_json or 'url' not in resp_json:

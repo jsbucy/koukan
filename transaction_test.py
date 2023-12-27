@@ -1,18 +1,16 @@
-
 import unittest
 import logging
 from threading import Thread
 import time
 
-from storage import Storage, Action
-from response import Response
-from transaction import RestServiceTransaction, cursor_to_endpoint
-
-from fake_endpoints import SyncEndpoint
-
 from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
 
+from storage import Action, Storage, TransactionCursor
+from response import Response
+from transaction import RestServiceTransaction, cursor_to_endpoint
+from fake_endpoints import SyncEndpoint
+from filter import Mailbox, TransactionMetadata
 
 
 class TransactionTest(unittest.TestCase):
@@ -35,8 +33,8 @@ class TransactionTest(unittest.TestCase):
             self.storage, 'host')
         self.assertIsNotNone(rest_tx)
         rest_id = rest_tx.tx_rest_id()
-        rest_tx.start({'mail_from': 'alice',
-                       'rcpt_to': 'bob'})
+        rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
+                                          rcpt_to=Mailbox('bob')).to_json())
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
 
@@ -140,8 +138,8 @@ class TransactionTest(unittest.TestCase):
         rest_tx = RestServiceTransaction.create_tx(self.storage, 'host')
         self.assertIsNotNone(rest_tx)
         rest_id = rest_tx.tx_rest_id()
-        rest_tx.start({'mail_from': 'alice',
-                       'rcpt_to': 'bob'})
+        rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
+                                          rcpt_to=Mailbox('bob')).to_json())
 
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
@@ -231,7 +229,9 @@ class TransactionTest(unittest.TestCase):
         #tx_cursor = self.storage.load_one()
 
         tx_cursor.write_envelope(
-            mail_from='alice', rcpt_to='bob', host='outbound')
+            TransactionMetadata(
+                mail_from=Mailbox('alice'), rcpt_to=Mailbox('bob'),
+                host='outbound'))
         tx_cursor.append_blob(d=b'hello, ', last=False)
 
         blob_writer = self.storage.get_blob_writer()
@@ -280,9 +280,8 @@ class TransactionTest(unittest.TestCase):
             self.storage, 'host')
         self.assertIsNotNone(rest_tx)
         rest_id : str = rest_tx.tx_rest_id()
-        rest_tx.start({'mail_from': 'alice',
-                       'rcpt_to': 'bob',
-                       'host': 'outbound'})
+        rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
+                                          rcpt_to=Mailbox('bob')).to_json())
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()

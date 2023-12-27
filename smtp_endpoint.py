@@ -1,17 +1,12 @@
-
 from typing import Dict, List, Optional, Tuple
-
 import smtplib
+import logging
+import psutil
+import time
 
 from blob import Blob
-
 from response import Response, Esmtp
-
-import logging
-
-import psutil
-
-import time
+from filter import TransactionMetadata
 
 factory_rest_id_next = 0
 
@@ -72,14 +67,11 @@ class SmtpEndpoint:
             return [400, b'connect error']
 
 
-    def start(self,
-              local_host, remote_host : Tuple[str, int],
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp=None):
+    def start(self, tx : TransactionMetadata):
         self.idle_start = time.monotonic()
-        logging.info('SmtpEndpoint.start %s %s', self.rest_id, remote_host)
+        logging.info('SmtpEndpoint.start %s %s', self.rest_id, tx.remote_host)
         resp = Response.from_smtp(
-            self.connect(host=remote_host[0], port=remote_host[1]))
+            self.connect(host=tx.remote_host[0], port=tx.remote_host[1]))
         if resp.err():
             self._shutdown()
             return resp
@@ -101,14 +93,14 @@ class SmtpEndpoint:
                 self._shutdown()
                 return ehlo_resp
 
-        resp = Response.from_smtp(self.smtp.mail(mail_from))
+        resp = Response.from_smtp(self.smtp.mail(tx.mail_from.mailbox))
         if resp.err():
             self._shutdown()
             return resp
 
         self.data = bytes()
 
-        self.start_resp = Response.from_smtp(self.smtp.rcpt(rcpt_to))
+        self.start_resp = Response.from_smtp(self.smtp.rcpt(tx.rcpt_to.mailbox))
         if self.start_resp.err():
             self._shutdown()
         return self.start_resp

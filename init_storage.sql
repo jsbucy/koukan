@@ -15,7 +15,7 @@ CREATE TABLE Transactions (
   rest_id TEXT UNIQUE,
 
   -- tag/queue/service/host
-  json TEXT,
+  json JSON,
 
   status INTEGER,
   -- length INTEGER NOT NULL,

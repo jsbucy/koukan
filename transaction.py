@@ -72,14 +72,11 @@ class RestServiceTransaction(Handler):
 
     def start(self, req_json) -> FlaskResponse:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
-        self.tx_cursor.write_envelope(
-            local_host = req_json.get('local_host', None),
-            remote_host = req_json.get('remote_host', None),
-            mail_from = req_json.get('mail_from', None),
-            transaction_esmtp = None,
-            rcpt_to = req_json.get('rcpt_to', None),
-            rcpt_esmtp = None,
-            host = self.http_host)
+        assert 'host' not in req_json
+        js = req_json
+        js['host'] = self.http_host
+        tx = TransactionMetadata.from_json(js)
+        self.tx_cursor.write_envelope(tx)
         return FlaskResponse()
 
 
@@ -93,28 +90,28 @@ class RestServiceTransaction(Handler):
             # only wait if something is inflight upstream and we think the
             # status might change soon
             logging.info('RestServiceTransaction.get %s %s',
-                         self.tx_cursor.rcpt_to, self.tx_cursor.rcpt_response)
+                         self.tx_cursor.tx.rcpt_to, self.tx_cursor.tx.rcpt_response)
             if self.tx_cursor.status not in [
                     Status.INSERT, Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
                 break
-            wait_mail = (self.tx_cursor.mail_from is not None and
-                         self.tx_cursor.mail_response is None)
-            wait_rcpt = (self.tx_cursor.rcpt_to is not None and
-                         self.tx_cursor.rcpt_response is None)
+            wait_mail = (self.tx_cursor.tx.mail_from is not None and
+                         self.tx_cursor.tx.mail_response is None)
+            wait_rcpt = (self.tx_cursor.tx.rcpt_to is not None and
+                         self.tx_cursor.tx.rcpt_response is None)
             wait_data = (self.tx_cursor.last and
-                         self.tx_cursor.data_response is None)
+                         self.tx_cursor.tx.data_response is None)
             if not (wait_mail or wait_rcpt or wait_data):
                 break
             logging.info('RestServiceTransaction.get wait')
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
-        if self.tx_cursor.rcpt_response is not None:
+        if self.tx_cursor.tx.rcpt_response is not None:
             resp_json['start_response'] = (
-                self.tx_cursor.rcpt_response.to_json())
-        if self.tx_cursor.data_response is not None:
+                self.tx_cursor.tx.rcpt_response.to_json())
+        if self.tx_cursor.tx.data_response is not None:
             resp_json['final_status'] = (
-                self.tx_cursor.data_response.to_json())
+                self.tx_cursor.tx.data_response.to_json())
 
         logging.info('RestServiceTransaction.get %s', resp_json)
 
@@ -296,17 +293,10 @@ def output(cursor, endpoint) -> Optional[Response]:
 
     logging.debug('cursor_to_endpoint %s %s from=%s to=%s', cursor.rest_id,
                   endpoint,
-                  cursor.mail_from, cursor.rcpt_to)
+                  cursor.tx.mail_from, cursor.tx.rcpt_to)
 
-    tx_meta = TransactionMetadata()
-    if cursor.remote_host:
-        tx_meta.remote_host = HostPort.from_seq(cursor.remote_host)
-    if cursor.local_host:
-        tx_meta.local_host = HostPort.from_seq(cursor.local_host)
-    tx_meta.mail_from = Mailbox(cursor.mail_from)
-    tx_meta.rcpt_to = Mailbox(cursor.rcpt_to)
-    endpoint.on_update(tx_meta)
-    resp = tx_meta.rcpt_response
+    endpoint.on_update(cursor.tx)
+    resp = cursor.tx.rcpt_response
     logging.debug('cursor_to_endpoint %s start resp %s', cursor.rest_id, resp)
 
     cursor.set_rcpt_response(resp)

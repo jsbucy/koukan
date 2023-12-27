@@ -1,7 +1,7 @@
-
 from enum import IntEnum
-from typing import Any, List, Optional, Tuple, TypeAlias
+from typing import Any, Dict, List, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
+import logging
 
 from response import Response
 
@@ -39,7 +39,20 @@ class Mailbox:
     #def domain(self) -> Optional[str]:
     #    pass
 
+    def to_json(self):
+        out = {'m': self.mailbox}
+        if self.esmtp:
+            out['e'] = self.esmtp
+        return out
+
+    @staticmethod
+    def from_json(json):
+        return Mailbox(json['m'], json['e'] if 'e' in json else None)
+
 class TransactionMetadata:
+    single_fields = ['local_host', 'remote_host', 'host']
+    mailbox_fields = ['mail_from', 'rcpt_to']
+
     rest_endpoint : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
@@ -49,6 +62,51 @@ class TransactionMetadata:
     mail_response : Optional[Response] = None
     rcpt_to : Optional[Mailbox] = None
     rcpt_response : Optional[Response] = None
+    data_response : Optional[Response] = None
+
+    def __init__(self, local_host : Optional[str] = None,
+                 remote_host : Optional[str] = None,
+                 mail_from : Optional[Mailbox] = None,
+                 rcpt_to : Optional[Mailbox] = None,
+                 host : Optional[str] = None):
+        self.local_host = local_host
+        self.remote_host = remote_host
+        self.mail_from = mail_from
+        self.rcpt_to = rcpt_to
+        self.host = host
+
+    @staticmethod
+    def from_json(json):
+        tx =  TransactionMetadata()
+        for f in TransactionMetadata.mailbox_fields:
+            if f in json.keys():
+                setattr(tx, f, Mailbox.from_json(json[f]))
+        for f in TransactionMetadata.single_fields:
+            if f in json.keys():
+                setattr(tx, f, json[f])
+        return tx
+
+    def to_json(self):
+        json = {}
+        for f in TransactionMetadata.mailbox_fields:
+            if hasattr(self, f) and getattr(self, f):
+                json[f] = getattr(self, f).to_json()
+        for f in TransactionMetadata.single_fields:
+            if hasattr(self, f) and getattr(self, f):
+                json[f] = getattr(self, f)
+        return json
+
+    def merge(self, delta : "TransactionMetadata"
+              ) -> Optional["TransactionMetadata"]:
+        out = TransactionMetadata()
+        for f in TransactionMetadata.single_fields + TransactionMetadata.mailbox_fields:
+            if hasattr(delta, f) and getattr(delta, f):
+                if hasattr(self, f) and getattr(self, f):
+                    return None
+                setattr(out, f, getattr(delta, f))
+            elif hasattr(self, f) and getattr(self, f):
+                setattr(out, f, getattr(self, f))
+        return out
 
 class Filter(ABC):
     @abstractmethod

@@ -1,34 +1,18 @@
 from typing import Optional, Dict, List, Tuple
-
-from blob import Blob, InlineBlob
+import sqlite3
+import json
+import time
+import logging
 from threading import Lock, Condition
 
 import psutil
 
-import sqlite3
-import json
-import time
-
-import logging
-
+from blob import Blob, InlineBlob
 from response import Response
-
 from storage_schema import Status, Action, transition, InvalidActionException, check_valid_append
+from filter import TransactionMetadata
 
 class TransactionCursor:
-    # XXX need a transaction/request object or something
-    FIELDS = ['local_host', 'remote_host', 'mail_from', 'transaction_esmtp',
-              'rcpt_to', 'rcpt_esmtp', 'host']
-
-    # json fields
-    local_host = None
-    remote_host = None
-    mail_from = None
-    transaction_esmtp = None
-    rcpt_to = None
-    rcpt_esmtp = None
-    host = None
-
     id : Optional[int] = None
     status : Status = None
     attempt_id : Optional[int] = None
@@ -39,9 +23,7 @@ class TransactionCursor:
     max_i = None
     last = None
 
-    mail_response : Optional[Response] = None
-    rcpt_response : Optional[Response] = None
-    data_response : Optional[Response] = None
+    tx : Optional[TransactionMetadata] = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -75,30 +57,22 @@ class TransactionCursor:
                 parent.created_id = self.id
                 parent.created_cv.notify_all()
 
-    def write_envelope(
-            self,
-            local_host : Optional[str] = None,
-            remote_host : Optional[str] = None,
-            mail_from : Optional[str] = None,
-            transaction_esmtp : Optional[Dict[str,str]] = None,
-            rcpt_to : Optional[str] = None,
-            rcpt_esmtp  : Optional[Dict[str,str]] = None,
-            host : Optional[str] = None):
-        trans_json = {
-            'local_host': local_host,
-            'remote_host': remote_host,
-            'mail_from': mail_from,
-            'transaction_esmtp': transaction_esmtp,
-            'rcpt_to': rcpt_to,
-            'rcpt_esmtp': rcpt_esmtp,
-            'host': host,
-        }
+    def write_envelope(self, tx_delta : TransactionMetadata):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            cursor.execute('SELECT version from Transactions WHERE id = ?',
-                           (self.id,))
+            cursor.execute('SELECT version, json FROM Transactions '
+                           'WHERE id = ?', (self.id,))
             row = cursor.fetchone()
             db_version = row[0]
+            db_json = row[1]
+
+            if db_json:
+                db_js = json.loads(db_json)
+                db_tx = TransactionMetadata.from_json(db_js)
+                merged = db_tx.merge(tx_delta)
+                assert merged is not None
+                tx_delta = merged
+
             #xxx too conservative, a reader could have LOADed
             #assert(row is not None and (row[0] == self.version))
 
@@ -106,7 +80,7 @@ class TransactionCursor:
             cursor.execute(
                 'UPDATE Transactions SET json = ?, version = ? '
                 'WHERE id = ? AND version = ?',
-                (json.dumps(trans_json), new_version, self.id,
+                (json.dumps(tx_delta.to_json()), new_version, self.id,
                  db_version))
 
             # XXX need to catch exceptions and db.rollback()? (throughout)
@@ -218,7 +192,7 @@ class TransactionCursor:
         return TransactionCursor.APPEND_BLOB_OK
 
     def load(self, db_id : Optional[int] = None,
-             rest_id : Optional[str] = None):
+             rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
         assert(db_id is not None or rest_id is not None)
 
         cursor = self.parent.db.cursor()
@@ -238,15 +212,14 @@ class TransactionCursor:
                        where_id)
         row = cursor.fetchone()
         if not row:
-            return False
+            return None
 
         (self.id, self.rest_id,
          self.creation, json_str, self.status, self.version,
          self.last) = row
 
         trans_json = json.loads(json_str) if json_str else {}
-        for a in TransactionCursor.FIELDS:
-            self.__setattr__(a, trans_json.get(a, None))
+        self.tx = TransactionMetadata.from_json(trans_json)
 
         cursor.execute('SELECT max(i) '
                        'FROM TransactionContent WHERE transaction_id = ?',
@@ -262,13 +235,13 @@ class TransactionCursor:
         if row is not None:
             attempt_id,mail_json,rcpt_json,data_json = row
             if mail_json:
-                self.mail_response = Response.from_json(json.loads(mail_json))
+                self.tx.mail_response = Response.from_json(json.loads(mail_json))
             if rcpt_json:
-                self.rcpt_response = Response.from_json(json.loads(rcpt_json))
+                self.tx.rcpt_response = Response.from_json(json.loads(rcpt_json))
             if data_json:
-                self.data_response = Response.from_json(json.loads(data_json))
+                self.tx.data_response = Response.from_json(json.loads(data_json))
 
-        return True
+        return self.tx
 
     def wait(self, timeout=None) -> bool:
         old = self.version
@@ -301,7 +274,7 @@ class TransactionCursor:
         not_inflight = lambda: (self.status not in [Status.INFLIGHT,
                                                     Status.ONESHOT_INFLIGHT])
         attr_not_none = (lambda:
-          hasattr(self, attr) and getattr(self, attr) is not None)
+          self.tx and hasattr(self.tx, attr) and getattr(self.tx, attr) is not None)
         if not self.wait_for(
             lambda: not_inflight() or attr_not_none(), timeout):
             return False
