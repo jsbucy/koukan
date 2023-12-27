@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Any, Dict, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
@@ -90,27 +90,16 @@ class RestEndpoint(Filter):
         self.wait_response = wait_response
         self.remote_host_resolution = None
 
-    def start(self,
-              transaction_metadata : TransactionMetadata,
-              mail_from=None, transaction_esmtp=None,
-              rcpt_to=None, rcpt_esmtp=None):
-        self.base_url = (self.static_base_url if self.static_base_url else
-                    transaction_metadata.rest_endpoint)
-
-        req_json = {}
-        if transaction_metadata.local_host is not None:
-            req_json['local_host'] = transaction_metadata.local_host.to_tuple()
-        if mail_from is not None:
-            req_json['mail_from'] = mail_from
-        if rcpt_to is not None:
-            req_json['rcpt_to'] = rcpt_to
-        # xxx esmtp
-
+    def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any]):
         remote_host_disco = [None]
         next_hop = (self.static_remote_host if self.static_remote_host
-                    else transaction_metadata.remote_host)
+                    else tx.remote_host)
+
         if next_hop:
-            remote_host_disco = self.remote_host_resolution(next_hop) if self.remote_host_resolution is not None else [next_hop]
+            if self.remote_host_resolution is not None:
+                remote_host_disco = self.remote_host_resolution(next_hop)
+            else:
+                remote_host_disco = [next_hop]
 
         for remote_host in remote_host_disco:
             if remote_host is not None:
@@ -123,6 +112,23 @@ class RestEndpoint(Filter):
             logging.info('RestEndpoint.start resp %s', rest_resp)
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.start resp_json %s', resp_json)
+            return resp_json
+
+    def on_update(self, tx : TransactionMetadata):
+        if self.static_base_url:
+            self.base_url = self.static_base_url
+        else:
+            self.base_url = tx.rest_endpoint
+
+        req_json = {}
+        if tx.local_host is not None:
+            req_json['local_host'] = txc.local_host.to_tuple()
+        if tx.mail_from is not None:
+            req_json['mail_from'] = tx.mail_from.mailbox
+        if tx.rcpt_to is not None:
+            req_json['rcpt_to'] = tx.rcpt_to.mailbox
+
+        resp_json = self._start(tx, req_json)
 
         # XXX  rest_resp.status_code or 'start_response' in resp_json
         if not resp_json or 'url' not in resp_json:
@@ -133,7 +139,7 @@ class RestEndpoint(Filter):
             self.transaction_url = self.base_url + resp_json['url']
             self.cv.notify_all()
 
-        return self.start_response(self.timeout_start)
+        tx.rcpt_response = self.start_response(self.timeout_start)
 
     def append_data(self, last : bool, blob : Blob,
                     mx_multi_rcpt=None) -> Optional[Response]:

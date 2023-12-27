@@ -4,7 +4,7 @@ import dkim
 
 from response import Response, Esmtp
 from blob import Blob, InlineBlob
-from filter import Filter
+from filter import Filter, TransactionMetadata
 
 class DkimEndpoint(Filter):
     data : bytes = None
@@ -17,18 +17,9 @@ class DkimEndpoint(Filter):
         self.next = next
         self.blobs = []
 
-    def start(self,
-              local_host, remote_host,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
+    def start(self, tx : TransactionMetadata):
         self.ok_resp = False
-        resp = self.next.start(
-            local_host, remote_host,
-            mail_from, transaction_esmtp,
-            rcpt_to, rcpt_esmtp)
-        if resp.ok():
-            self.data = bytes()
-        return resp
+        return self.next.on_update(tx)
 
     def sign(self):
         data = b''
@@ -46,7 +37,7 @@ class DkimEndpoint(Filter):
                         include_headers=[b'From', b'Date', b'Message-ID'])
         
 
-    def append_data(self, last : bool, blob : Blob):
+    def append_data(self, last : bool, blob : Blob) -> Response:
         self.blobs.append(blob)
         if not last:
             return Response()

@@ -13,7 +13,7 @@ from rest_service_handler import Handler, HandlerFactory
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import Action, Status, InvalidActionException
 from response import Response
-from filter import HostPort, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
 
@@ -109,14 +109,14 @@ class RestServiceTransaction(Handler):
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
-            if self.tx_cursor.rcpt_response is not None:
-                resp_json['start_response'] = (
+        if self.tx_cursor.rcpt_response is not None:
+            resp_json['start_response'] = (
                 self.tx_cursor.rcpt_response.to_json())
-            if self.tx_cursor.data_response is not None:
-                resp_json['final_status'] = (
-                    self.tx_cursor.data_response.to_json())
+        if self.tx_cursor.data_response is not None:
+            resp_json['final_status'] = (
+                self.tx_cursor.data_response.to_json())
 
-            logging.info('RestServiceTransaction.get %s', resp_json)
+        logging.info('RestServiceTransaction.get %s', resp_json)
 
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?
@@ -299,12 +299,14 @@ def output(cursor, endpoint) -> Optional[Response]:
                   cursor.mail_from, cursor.rcpt_to)
 
     tx_meta = TransactionMetadata()
-    tx_meta.remote_host = HostPort.from_seq(cursor.remote_host) if cursor.remote_host else None
-    tx_meta.local_host = HostPort.from_seq(cursor.local_host) if cursor.local_host else None
-    resp = endpoint.start(
-        tx_meta,
-        cursor.mail_from, cursor.transaction_esmtp,
-        cursor.rcpt_to, cursor.rcpt_esmtp)
+    if cursor.remote_host:
+        tx_meta.remote_host = HostPort.from_seq(cursor.remote_host)
+    if cursor.local_host:
+        tx_meta.local_host = HostPort.from_seq(cursor.local_host)
+    tx_meta.mail_from = Mailbox(cursor.mail_from)
+    tx_meta.rcpt_to = Mailbox(cursor.rcpt_to)
+    endpoint.on_update(tx_meta)
+    resp = tx_meta.rcpt_response
     logging.debug('cursor_to_endpoint %s start resp %s', cursor.rest_id, resp)
 
     cursor.set_rcpt_response(resp)

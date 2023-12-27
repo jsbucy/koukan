@@ -1,3 +1,4 @@
+from typing import Optional
 from threading import Lock, Condition
 import logging
 
@@ -8,28 +9,16 @@ class FakeEndpoint(Filter):
     start_response = None
     final_response = None
     aborted = False
+    tx : Optional[TransactionMetadata] = None
 
     def __init__(self):
-        self.tx_meta = None
-        self.mail_from = None
-        self.transaction_esmtp = None
-        self.rcpt_to = None
-        self.rcpt_esmtp = None
-
         self.blobs = []
         self.last = False
 
-    def start(self,
-              transaction_metadata : TransactionMetadata,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
+    def on_update(self, tx : TransactionMetadata):
         logging.info('FakeEndpoint.start %s %s', mail_from, rcpt_to)
-        self.tx_meta = transaction_metadata
-        self.mail_from = mail_from
-        self.transaction_esmtp = transaction_esmtp
-        self.rcpt_to = rcpt_to
-        self.rcpt_esmtp = rcpt_esmtp
-        return self.start_response
+        self.tx = tx
+        self.tx.rcpt_response = self.start_response
 
     def append_data(self, last, blob):
         logging.info('FakeEndpoint.append_data %d %s', blob.len(), last)
@@ -48,14 +37,9 @@ class SyncEndpoint(Filter):
 
     lock : Lock
     cv : Condition
+    tx : Optional[TransactionMetadata] = None
 
     def __init__(self):
-        self.tx_meta = None
-        self.mail_from = None
-        self.transaction_esmtp = None
-        self.rcpt_to = None
-        self.rcpt_esmtp = None
-
         self.blobs = []
         self.last = False
 
@@ -74,21 +58,13 @@ class SyncEndpoint(Filter):
             self.data_resp.append(resp)
             self.cv.notify_all()
 
-    def start(self,
-              transaction_metadata : TransactionMetadata,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
-        logging.info('SyncEndpoint.start %s %s', mail_from, rcpt_to)
-        self.tx_meta = transaction_metadata
-        self.mail_from = mail_from
-        self.transaction_esmtp = transaction_esmtp
-        self.rcpt_to = rcpt_to
-        self.rcpt_esmtp = rcpt_esmtp
+    def on_update(self, tx : TransactionMetadata):
+        logging.info('SyncEndpoint.start %s %s', tx.mail_from, tx.rcpt_to)
+        self.tx = tx
         with self.lock:
             self.cv.wait_for(lambda: self.start_response is not None)
-            resp = self.start_response
+            self.tx.rcpt_response = self.start_response
             self.start_response = None
-            return resp
 
     def append_data(self, last, blob):
         logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)

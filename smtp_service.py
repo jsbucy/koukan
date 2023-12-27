@@ -12,7 +12,7 @@ from blob import InlineBlob
 from response import ok_resp, to_smtp_resp
 from smtp_auth import Authenticator
 from response import Response
-from filter import HostPort, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata
 
 MSA_RCPT_WAIT=5
 MX_RCPT_WAIT=30
@@ -47,13 +47,15 @@ class SmtpHandler:
 
     def start(self, rresp : List[Optional[Response]], trans, local, remote,
               mail_from, transaction_esmtp,
-              rcpt, rcpt_esmtp):
+              rcpt_to, rcpt_esmtp):
         logging.info('SmtpHandler.start')
-        tx_meta = TransactionMetadata()
-        tx_meta.remote_host = HostPort.from_seq(remote) if remote else None
-        tx_meta.local_host = HostPort.from_seq(local) if remote else None
-        rresp[0] = trans.start(tx_meta, mail_from, transaction_esmtp,
-                               rcpt, rcpt_esmtp)
+        tx = TransactionMetadata()
+        tx.remote_host = HostPort.from_seq(remote) if remote else None
+        tx.local_host = HostPort.from_seq(local) if remote else None
+        tx.mail_from = Mailbox(mail_from, transaction_esmtp)
+        tx.rcpt_to = Mailbox(rcpt_to, rcpt_esmtp)
+        trans.on_update(tx)
+        rresp[0] =  tx.rcpt_response
         logging.info('SmtpHandler.start done %s', rresp[0])
 
     async def handle_RCPT(

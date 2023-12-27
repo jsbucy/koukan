@@ -35,30 +35,29 @@ class Router(Filter):
         self.endpoint = next
         self.ehlo = "fixme.ehlo"
 
-    def start(self,
-              transaction_metadata : TransactionMetadata,
-              mail_from, transaction_esmtp,
-              rcpt_to, rcpt_esmtp):
-        logging.debug('Router.start %s %s', mail_from, rcpt_to)
+    def on_update(self, tx : TransactionMetadata):
+        logging.debug('Router.start %s %s', tx.mail_from, tx.rcpt_to)
 
         received_host = ""
-        if transaction_metadata.remote_host and transaction_metadata.remote_host.host:
-            received_host = transaction_metadata.remote_host.host
+        if tx.remote_host and tx.remote_host.host:
+            received_host = tx.remote_host.host
         received = 'Received: from %s ([%s]);\r\n\t%s\r\n' % (
             self.ehlo, received_host,
             email.utils.format_datetime(email.utils.localtime()))
         self.received_ascii = received.encode('ascii')
 
-        rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(rcpt_to)
+        rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(
+            tx.rcpt_to.mailbox)
         if resp and resp.err():
-            return resp
+            tx_meta.rcpt_response = resp
+            return
         upstream_tx = TransactionMetadata()
         upstream_tx.rest_endpoint = rest_endpoint
         upstream_tx.remote_host = next_hop
-        return self.endpoint.start(
-            upstream_tx,
-            mail_from, transaction_esmtp,
-            rcpt_to, rcpt_esmtp)
+        upstream_tx.mail_from = tx.mail_from
+        upstream_tx.rcpt_to = tx.rcpt_to
+        self.endpoint.on_update(upstream_tx)
+        tx.rcpt_response = upstream_tx.rcpt_response
 
     def append_data(self, last : bool, blob : Blob):
         if self.received_ascii:

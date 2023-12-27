@@ -128,6 +128,9 @@ class TransactionCursor:
                            'WHERE transaction_id = ? AND attempt_id = ?',
                            (json.dumps(response.to_json()), self.id, self.attempt_id))
             new_version = self.version + 1
+            # XXX this version precondition is too conservative,
+            # client could have set_durable() concurrent with upstream
+            # cf write_envelope()
             cursor.execute('UPDATE Transactions SET version = ? '
                            'WHERE version = ? AND id = ? RETURNING id',
                            (new_version, self.version, self.id))

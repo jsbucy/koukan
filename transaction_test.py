@@ -256,8 +256,8 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         cursor_to_endpoint(tx_cursor, endpoint)
 
-        self.assertEqual(endpoint.mail_from, 'alice')
-        self.assertEqual(endpoint.rcpt_to, 'bob')
+        self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
+        self.assertEqual(endpoint.tx.rcpt_to.mailbox, 'bob')
         self.assertEqual(len(endpoint.blobs), 2)
         self.assertEqual(endpoint.blobs[0].contents(), b'hello, ')
         self.assertEqual(endpoint.blobs[1].contents(), b'world!')
@@ -312,8 +312,8 @@ class TransactionTest(unittest.TestCase):
         else:
             self.fail('no start result')
 
-        self.assertEqual(endpoint.mail_from, 'alice')
-        self.assertEqual(endpoint.rcpt_to, 'bob')
+        self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
+        self.assertEqual(endpoint.tx.rcpt_to.mailbox, 'bob')
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)

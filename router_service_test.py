@@ -5,6 +5,7 @@ import unittest
 import socketserver
 import time
 
+from requests.exceptions import ConnectionError
 
 from router_service import Service
 from rest_endpoint import RestEndpoint
@@ -13,7 +14,7 @@ from response import Response
 from blob import InlineBlob
 from config import Config
 from fake_endpoints import SyncEndpoint
-from filter import TransactionMetadata
+from filter import Mailbox, TransactionMetadata
 
 root_yaml = {
     'global': {
@@ -65,13 +66,14 @@ class RouterServiceTest(unittest.TestCase):
                 # use an invalid host per Wiring so output will fail
                 # immediately and not consume responses from endpoint
                 rest_endpoint = RestEndpoint(
-                    base_url=self.router_url,
+                    static_base_url=self.router_url,
                     http_host='probe',
                     wait_response=False)
-                start_resp = rest_endpoint.start(
-                    TransactionMetadata(),
-                    mail_from='probe-from%d' % i, rcpt_to='probe-to%d' % i)
-            except:
+                tx = TransactionMetadata()
+                tx.mail_from = Mailbox('probe-from%d' % i)
+                tx.rcpt_to = Mailbox('probe-to%d' % i)
+                start_resp = rest_endpoint.on_update(tx)
+            except ConnectionError:
                     time.sleep(0.1)
             else:
                 break
@@ -93,20 +95,21 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_read_routing(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
         self.assertTrue(start_endpoint.set_durable().ok())
 
         transaction_url = start_endpoint.transaction_url
 
         read_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             transaction_url=transaction_url,
             wait_response=True)
 
@@ -143,16 +146,17 @@ class RouterServiceTest(unittest.TestCase):
     # set durable after upstream ok/perm -> noop
     def test_durable_after_upstream_success(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
 
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(256))
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -167,16 +171,17 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_durable_after_upstream_perm(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
 
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(556))
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -192,16 +197,17 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_durable_after_upstream_temp(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
 
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -214,15 +220,16 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_durable_upstream_inflight(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
 
         self.endpoint.set_start_response(Response(234))
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -245,7 +252,7 @@ class RouterServiceTest(unittest.TestCase):
     # set durable after ttl -> failed precondition
     def test_idle_gc_oneshot_temp(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
         transaction_url = start_endpoint.transaction_url
@@ -253,9 +260,10 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint.set_start_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice',  rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())
@@ -276,7 +284,7 @@ class RouterServiceTest(unittest.TestCase):
     # should it time out itself?
     def test_idle_gc_oneshot_inflight(self):
         start_endpoint = RestEndpoint(
-            base_url=self.router_url, http_host='outbound-gw',
+            static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False,
             msa=True)
         transaction_url = start_endpoint.transaction_url
@@ -285,9 +293,10 @@ class RouterServiceTest(unittest.TestCase):
         # no data response -> output blocks
 
         # output blocks waiting on rcpt_to
-        start_resp = start_endpoint.start(
-            TransactionMetadata(),
-            mail_from='alice', rcpt_to='bob')
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = Mailbox('bob')
+        start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
         self.assertEqual(1, self.service._dequeue())

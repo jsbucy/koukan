@@ -1,9 +1,3 @@
-
-
-from smtp_service import SmtpHandler
-
-from aiosmtpd.controller import Controller
-
 import smtplib
 
 import logging
@@ -11,22 +5,29 @@ import unittest
 
 import time
 
+from aiosmtpd.controller import Controller
+
+from filter import TransactionMetadata
+from smtp_service import SmtpHandler
 from response import Response
 
+# XXX subclass Filter here or does smtp use a different dialect?
 class FakeRestEndpoint:
     def __init__(self):
         self.rcpt = None
         self.durable = None
         self.last = False
 
-    def start(self, local, remote, mail_from, transaction_esmtp,
-              rcpt, rcpt_esmtp):
+    def on_update(self, tx : TransactionMetadata):
+        self.tx = tx
+        rcpt = tx.rcpt_to.mailbox
         self.rcpt = rcpt
+        resp = Response()
         if rcpt.startswith('rcpttemp'):
-            return Response(code=400)
+            resp = Response(code=400)
         elif rcpt.startswith('rcptperm'):
-            return Response(code=500)
-        return Response()
+            resp = Response(code=500)
+        tx.rcpt_response = resp
 
     def append_data(self, last, blob, mx_multi_rcpt):
         logging.info('FakeRestEndpoint.append_data')

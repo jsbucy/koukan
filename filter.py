@@ -22,12 +22,6 @@ class HostPort:
     def to_tuple(self):
         return (self.host, self.port)
 
-class TransactionMetadata:
-    rest_endpoint : Optional[str] = None
-    remote_host : Optional[HostPort] = None
-    local_host : Optional[HostPort] = None
-    # tls mumble
-
 class Esmtp:
     # from aiosmtpd
     # TODO parse out into keyword and key/value
@@ -35,23 +29,34 @@ class Esmtp:
 
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
-    esmtp : Esmtp
+    esmtp : Optional[Esmtp] = None
+    def __init__(self, mailbox, esmtp=None):
+        self.mailbox = mailbox
+        self.esmtp = esmtp
 
-    def local_part(self) -> Optional[str]:
-        pass
-    def domain(self) -> Optional[str]:
-        pass
+    #def local_part(self) -> Optional[str]:
+    #    pass
+    #def domain(self) -> Optional[str]:
+    #    pass
+
+class TransactionMetadata:
+    rest_endpoint : Optional[str] = None
+    remote_host : Optional[HostPort] = None
+    local_host : Optional[HostPort] = None
+    # tls mumble
+
+    mail_from : Optional[Mailbox] = None
+    mail_response : Optional[Response] = None
+    rcpt_to : Optional[Mailbox] = None
+    rcpt_response : Optional[Response] = None
 
 class Filter(ABC):
     @abstractmethod
-    def start(self,
-              transaction_metadata : TransactionMetadata,
-              mail_from : str, transaction_esmtp : Optional[Any],
-              rcpt_to : str, rcpt_esmtp : Optional[Any]):
+    def on_update(self, transaction_metadata : TransactionMetadata):
         pass
 
     @abstractmethod
-    def append_data(self, last : bool, blob : Blob):
+    def append_data(self, last : bool, blob : Blob) -> Response:
         pass
 
     @abstractmethod
