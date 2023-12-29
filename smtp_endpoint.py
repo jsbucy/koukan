@@ -27,7 +27,8 @@ class Factory:
 class SmtpEndpoint:
     smtp : Optional[smtplib.SMTP] = None
     data : Optional[bytes] = None
-    start_resp : Optional[Response] = None
+    mail_resp : Optional[Response] = None
+    rcpt_resp : Optional[Response] = None
     final_status : Optional[Response] = None
     received_last: bool  = False  # xxx rest service endpoint abc
     blobs_received : int = -1
@@ -93,17 +94,18 @@ class SmtpEndpoint:
                 self._shutdown()
                 return ehlo_resp
 
-        resp = Response.from_smtp(self.smtp.mail(tx.mail_from.mailbox))
-        if resp.err():
+        # TODO buffer partial here
+        self.mail_resp = Response.from_smtp(self.smtp.mail(tx.mail_from.mailbox))
+        if self.mail_resp.err():
             self._shutdown()
-            return resp
+            return self.mail_resp
 
         self.data = bytes()
 
-        self.start_resp = Response.from_smtp(self.smtp.rcpt(tx.rcpt_to.mailbox))
-        if self.start_resp.err():
+        self.rcpt_resp = Response.from_smtp(self.smtp.rcpt(tx.rcpt_to.mailbox))
+        if self.rcpt_resp.err():
             self._shutdown()
-        return self.start_resp
+        return self.rcpt_resp
 
     def append_data(self, last : bool, blob : Blob):
         self.idle_start = time.monotonic()
@@ -121,7 +123,5 @@ class SmtpEndpoint:
         self._shutdown()
         return self.final_status
 
-    def get_start_result(self, timeout=None):
-        return self.start_resp
     def get_final_status(self, timeout=None):
         return self.final_status

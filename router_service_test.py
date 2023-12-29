@@ -132,7 +132,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 456)
 
-        self.assertEqual(1, self.service._dequeue())
+        self.assertTrue(self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
         self.endpoint.set_start_response(Response(234))

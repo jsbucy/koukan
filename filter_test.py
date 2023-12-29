@@ -25,6 +25,23 @@ class FilterTest(unittest.TestCase):
         merged = orig.merge(delta)
         self.assertIsNone(merged)
 
+    def testDelta(self):
+        orig = TransactionMetadata()
+        self.assertFalse(orig)
+        orig.host = 'host'
+        next = TransactionMetadata()
+        next.host = orig.host
+        next.local_host = 'local_host'
+        delta = orig.delta(next)
+        self.assertIsNotNone(delta)
+        self.assertTrue(delta)
+        self.assertFalse(hasattr(delta, 'host') and getattr(delta, 'host'))
+        self.assertEqual(delta.local_host, 'local_host')
+
+        del next.host
+        delta = orig.delta(next)
+        self.assertIsNone(delta)
+
 
 if __name__ == '__main__':
     unittest.main()

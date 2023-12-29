@@ -50,12 +50,20 @@ def create_app(handler_factory : HandlerFactory):
         return jsonify(json_out)
 
     @app.route('/transactions/<tx_rest_id>',
-               methods=['GET'])
+               methods=['PATCH'])
     def get_transaction(tx_rest_id) -> FlaskResponse:
         handler = handler_factory.get_tx(tx_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['transaction not found'])
-        return handler.get({})  # xxx request.get_json())
+        return handler.patch(request.get_json())
+
+    @app.route('/transactions/<tx_rest_id>',
+               methods=['GET'])
+    def update_transaction(tx_rest_id) -> FlaskResponse:
+        handler = handler_factory.get_tx(tx_rest_id)
+        if handler is None:
+            return FlaskResponse(status=404, response=['transaction not found'])
+        return handler.get({})
 
     @app.route('/transactions/<tx_rest_id>/appendData',
                methods=['POST'])

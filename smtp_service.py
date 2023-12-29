@@ -55,7 +55,8 @@ class SmtpHandler:
         tx.mail_from = Mailbox(mail_from, transaction_esmtp)
         tx.rcpt_to = Mailbox(rcpt_to, rcpt_esmtp)
         trans.on_update(tx)
-        rresp[0] =  tx.rcpt_response
+        # XXX or mail if err
+        rresp[0] = tx.rcpt_response
         logging.info('SmtpHandler.start done %s', rresp[0])
 
     async def handle_RCPT(

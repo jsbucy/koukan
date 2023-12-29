@@ -75,6 +75,12 @@ class TransactionMetadata:
         self.rcpt_to = rcpt_to
         self.host = host
 
+    def __bool__(self):
+        for f in TransactionMetadata.single_fields + TransactionMetadata.mailbox_fields:
+            if hasattr(self, f) and getattr(self, f):
+                return True
+        return False
+
     @staticmethod
     def from_json(json):
         tx =  TransactionMetadata()
@@ -106,6 +112,18 @@ class TransactionMetadata:
                 setattr(out, f, getattr(delta, f))
             elif hasattr(self, f) and getattr(self, f):
                 setattr(out, f, getattr(self, f))
+        return out
+
+    def delta(self, next : "TransactionMetadata"
+              ) -> Optional["TransactionMetadata"]:
+        out = TransactionMetadata()
+        for f in TransactionMetadata.single_fields + TransactionMetadata.mailbox_fields:
+            if hasattr(next, f) and getattr(next, f):
+                if not hasattr(self, f) or not getattr(self, f):
+                    setattr(out, f, getattr(next, f))
+            elif hasattr(self, f) and getattr(self, f):
+                return None
+
         return out
 
 class Filter(ABC):

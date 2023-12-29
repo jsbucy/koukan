@@ -77,8 +77,15 @@ class RestServiceTransaction(Handler):
         js['host'] = self.http_host
         tx = TransactionMetadata.from_json(js)
         self.tx_cursor.write_envelope(tx)
+        # todo should return oneshot get()?
         return FlaskResponse()
 
+    def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
+        resp_json = {}
+        tx = TransactionMetadata.from_json(js)
+        self.tx_cursor.write_envelope(tx)
+        # todo should return oneshot get()?
+        return FlaskResponse()
 
     # TODO pass a timeout possibly from request-timeout header e.g.
     # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
@@ -112,6 +119,14 @@ class RestServiceTransaction(Handler):
         if self.tx_cursor.tx.data_response is not None:
             resp_json['final_status'] = (
                 self.tx_cursor.tx.data_response.to_json())
+
+        resp_js = lambda r: r.to_json() if r is not None else None
+        if self.tx_cursor.tx.mail_from is not None:
+            resp_json['mail_response'] = resp_js(self.tx_cursor.tx.mail_response)
+        if self.tx_cursor.tx.rcpt_to is not None:
+            resp_json['rcpt_response'] = resp_js(self.tx_cursor.tx.rcpt_response)
+        if self.tx_cursor.max_i is not None:
+            resp_json['data_response'] = resp_js(self.tx_cursor.tx.data_response)
 
         logging.info('RestServiceTransaction.get %s', resp_json)
 
@@ -283,27 +298,53 @@ class RestServiceTransactionFactory(HandlerFactory):
 
 
 def output(cursor, endpoint) -> Optional[Response]:
-    if not cursor.wait_attr_not_none('mail_from'):
-        return None
-    # this will get propagated upstream with the updated filter chain
-    cursor.set_mail_response(Response())
+    logging.debug('cursor_to_endpoint %s', cursor.rest_id)
 
-    if not cursor.wait_attr_not_none('rcpt_to'):
-        return None
+    last_tx = TransactionMetadata()
+    err = None
+    while True:
+        delta = last_tx.delta(cursor.tx)
+        assert delta is not None
+        logging.info('output max_i %s', cursor.max_i)
+        if delta:
+            endpoint.on_update(delta)
 
-    logging.debug('cursor_to_endpoint %s %s from=%s to=%s', cursor.rest_id,
-                  endpoint,
-                  cursor.tx.mail_from, cursor.tx.rcpt_to)
+            if delta.mail_from:
+                logging.debug('cursor_to_endpoint %s mail_from: %s',
+                              cursor.rest_id, delta.mail_from.mailbox)
+                resp = delta.mail_response
+                if not resp:
+                    # XXX fix upstream and assert
+                    logging.warning('tx out: output chain didn\'t set '
+                                    'mail response')
+                    resp = Response()
+                else:
+                    logging.debug('cursor_to_endpoint %s mail_resp %s',
+                                  cursor.rest_id, resp)
+                if resp.err():
+                    err = resp
+                cursor.set_mail_response(resp)
+            if delta.rcpt_to:
+                logging.debug('cursor_to_endpoint %s rcpt_to: %s',
+                              cursor.rest_id, delta.rcpt_to.mailbox)
+                resp = delta.rcpt_response
+                logging.debug('cursor_to_endpoint %s rcpt_resp %s',
+                              cursor.rest_id, resp)
 
-    endpoint.on_update(cursor.tx)
-    resp = cursor.tx.rcpt_response
-    logging.debug('cursor_to_endpoint %s start resp %s', cursor.rest_id, resp)
+                cursor.set_rcpt_response(resp)
+                cursor.append_action(Action.START, resp)
+                if resp.err():
+                    err = resp
 
-    cursor.set_rcpt_response(resp)
-    cursor.append_action(Action.START, resp)
+            last_tx = cursor.tx
 
-    if resp.err():
-        return resp
+        if cursor.max_i is not None:
+            break
+
+        cursor.wait()
+
+    if err:
+        return err
 
     i = 0
     last = False

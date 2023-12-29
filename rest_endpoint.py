@@ -52,7 +52,7 @@ class BlobIdMap:
             self.cv.notify_all()
 
 class RestEndpoint(Filter):
-    # XXX I don't remember exactly why this is cached like this
+    # XXX I think these responses are dead code, delete
     start_resp : Optional[Response] = None
     final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
@@ -61,6 +61,7 @@ class RestEndpoint(Filter):
     static_remote_host : Optional[HostPort] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
+    remote_host : Optional[str] = None
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
@@ -102,8 +103,9 @@ class RestEndpoint(Filter):
                 remote_host_disco = [next_hop]
 
         for remote_host in remote_host_disco:
-            if remote_host is not None:
+            if remote_host is not None:  # none if no remote_host/disco (above)
                 req_json['remote_host'] = remote_host.to_tuple()
+                self.remote_host = remote_host
 
             rest_resp = requests.post(self.base_url + '/transactions',
                                       json=req_json,
@@ -120,26 +122,30 @@ class RestEndpoint(Filter):
         else:
             self.base_url = tx.rest_endpoint
 
-        resp_json = self._start(tx, tx.to_json())
+        if not self.transaction_url:
+            resp_json = self._start(tx, tx.to_json())
+        else:
+            req_json = tx.to_json()
+            if self.remote_host:
+                req_json['remote_host'] = self.remote_host.to_tuple()
+            rest_resp = requests.post(self.transaction_url,
+                                      json=req_json,
+                                      headers={'host': self.http_host},
+                                      timeout=self.timeout_start)
 
-        # XXX  rest_resp.status_code or 'start_response' in resp_json
-        if not resp_json or 'url' not in resp_json:
-            return Response.Internal(
-                'RestEndpoint.start internal error (no json)')
+        if not self.transaction_url:
+            if not resp_json or 'url' not in resp_json:
+                return Response.Internal(
+                    'RestEndpoint.start internal error (no json)')
+            with self.lock:
+                self.transaction_url = self.base_url + resp_json['url']
+                self.cv.notify_all()
 
-        with self.lock:
-            self.transaction_url = self.base_url + resp_json['url']
-            self.cv.notify_all()
-
-        tx.rcpt_response = self.start_response(self.timeout_start)
+        if self.wait_response:
+            self.get_tx_response(self.timeout_start, tx)
 
     def append_data(self, last : bool, blob : Blob,
                     mx_multi_rcpt=None) -> Optional[Response]:
-        if self.msa:
-            assert(self.start_resp is None or not self.start_resp.perm())
-        else:
-            assert(self.start_resp is not None and self.start_resp.ok() and
-                   self.final_status is None)
         # TODO revisit whether we should explicitly split waiting for
         # the post vs polling the json for the result in this api
         with self.lock:
@@ -271,16 +277,6 @@ class RestEndpoint(Filter):
 
         return Response(), dlen
 
-    def start_response(self, timeout) -> Optional[Response]:
-        if self.start_resp: return self.start_resp
-        if not self.wait_response: return None
-        # TODO inflight waiter list thing?
-        resp = self.get_json_response(timeout, 'start_response')
-        if not resp:
-            return Response(400, 'RestEndpoint.start_response timeout')
-        self.start_resp = resp
-        return self.start_resp
-
     def get_status(self, timeout) -> Optional[Response]:
         if self.final_status: return self.final_status
         if not self.wait_response: return None
@@ -331,6 +327,45 @@ class RestEndpoint(Filter):
 
             if field in resp_json:
                 return Response.from_json(resp_json[field])
+            now = time.monotonic()
+        return None
+
+    def get_tx_response(self, timeout, tx : TransactionMetadata):
+        now = time.monotonic()
+        deadline = now + timeout
+        delta = 1
+        while now <= deadline:
+            deadline_left = deadline - now
+            # retry at most once per second
+            if delta < 1:
+                if deadline_left < 1:
+                    break
+                time.sleep(min(1 - delta, deadline_left))
+            logging.info('RestEndpoint.get_json_response %f', deadline_left)
+            start = time.monotonic()
+
+            # TODO pass the deadline in a header?
+            resp_json = self.get_json(deadline_left)
+            logging.info('RestEndpoint.get_tx_response done %s', resp_json)
+            delta = time.monotonic() - start
+            assert(delta >= 0)
+            if resp_json is None:
+                return Response(400, 'RestEndpoint.start_response GET '
+                                'failed')
+
+            fields = {'mail_from': 'mail_response',
+                      'rcpt_to': 'rcpt_response'}
+            for req_f,resp_f in fields.items():
+                done = True
+                if hasattr(tx, req_f) and getattr(tx, req_f):
+                    if resp_f in resp_json and resp_json[resp_f]:
+                        setattr(tx, resp_f,
+                                Response.from_json(resp_json[resp_f]))
+                    else:
+                        done = False
+            if done:
+                break
+
             now = time.monotonic()
         return None
 

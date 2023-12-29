@@ -32,22 +32,15 @@ class RestEndpointAdapter(Handler):
 
     def start(self, req_json) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
-        return self.endpoint.start(tx)
+        self.endpoint.start(tx)
 
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        # TODO: the upstream code currently waits for 1s if inflight
-        # which isn't great in terms of busy-waiting but still pretty
-        # short relative to a http timeout
-
-        # mx always waits for start resp
-        # msa waits for start resp (perm) err within short timeout and
-        # then detaches
-
         json_out = {}
-        # xxx this is the wrong way to surface this?
-        start_resp = self.endpoint.get_start_result()
-        if start_resp is not None:
-            json_out['start_response'] = start_resp.to_json()
+
+        if self.endpoint.mail_resp:
+            json_out['mail_response'] = self.endpoint.mail_resp.to_json()
+        if self.endpoint.rcpt_resp:
+            json_out['rcpt_response'] = self.endpoint.rcpt_resp.to_json()
 
         final_status = self.endpoint.get_final_status(
             timeout = 1 if self.endpoint.received_last else 0)
@@ -189,7 +182,7 @@ class EndpointFactory(ABC):
         pass
 
 class RestEndpointAdapterFactory(HandlerFactory):
-    blob_storages : BlobStorage
+    blob_storage : BlobStorage
     def __init__(self, endpoint_factory, blob_storage : BlobStorage):
         self.endpoint_factory = endpoint_factory
         self.blob_storage = blob_storage
