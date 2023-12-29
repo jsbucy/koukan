@@ -44,7 +44,7 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
-        self.assertNotIn('final_status', resp_json)
+        self.assertFalse('data_response' in resp_json and resp_json['data_response'])
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
@@ -92,6 +92,7 @@ class TransactionTest(unittest.TestCase):
         rest_resp = rest_tx.set_durable({})
         self.assertEqual(rest_resp.status_code, 200)
 
+        # XXX fix or delete
         # reader = self.storage.get_blob_reader()
         # self.assertIsNotNone(reader.start(rest_id=blob_uri))
         # self.assertEqual(reader.length, len(d))
@@ -103,8 +104,8 @@ class TransactionTest(unittest.TestCase):
         # resp_json = rest_resp.get_json()
         # self.assertIsNotNone(resp_json)
         # self.assertIn('start_response', resp_json)
-        # self.assertIn('final_status', resp_json)
-        # final_resp = Response.from_json(resp_json['final_status'])
+        # self.assertIn('data_response', resp_json)
+        # final_resp = Response.from_json(resp_json['data_response'])
         # self.assertEqual(245, final_resp.code)
 
         #self.dump_db()
@@ -247,7 +248,7 @@ class TransactionTest(unittest.TestCase):
         del tx_cursor
 
         endpoint = SyncEndpoint()
-        endpoint.set_start_response(Response(234))
+        endpoint.set_rcpt_response(Response(234))
         endpoint.add_data_response(None)
         endpoint.add_data_response(Response(256))
 
@@ -285,7 +286,7 @@ class TransactionTest(unittest.TestCase):
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()
-        endpoint.set_start_response(Response(234))
+        endpoint.set_rcpt_response(Response(234))
 
         t = Thread(target=lambda: self.output(rest_id, endpoint),
                    daemon=True)
@@ -302,10 +303,10 @@ class TransactionTest(unittest.TestCase):
             resp_json = rest_resp.get_json()
             logging.info('test_integrated start resp %s', resp_json)
             self.assertIsNotNone(resp_json)
-            self.assertNotIn('final_status', resp_json)
-            if 'start_response' in resp_json:
-                start_resp = Response.from_json(resp_json['start_response'])
-                self.assertEqual(234, start_resp.code)
+            self.assertNotIn('data_response', resp_json)
+            if resp_json['rcpt_response'] is not None:
+                rcpt_resp = Response.from_json(resp_json['rcpt_response'])
+                self.assertEqual(234, rcpt_resp.code)
                 break
             time.sleep(0.2)
         else:
@@ -356,8 +357,8 @@ class TransactionTest(unittest.TestCase):
             self.assertEqual(rest_resp.status_code, 200)
             resp_json = rest_resp.get_json()
             self.assertIsNotNone(resp_json)
-            if 'final_status' in resp_json:
-                resp = Response.from_json(resp_json['final_status'])
+            if 'data_response' in resp_json:
+                resp = Response.from_json(resp_json['data_response'])
                 self.assertEqual(245, resp.code)
                 break
             time.sleep(0.5)

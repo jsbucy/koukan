@@ -29,7 +29,7 @@ class SmtpEndpoint:
     data : Optional[bytes] = None
     mail_resp : Optional[Response] = None
     rcpt_resp : Optional[Response] = None
-    final_status : Optional[Response] = None
+    data_response : Optional[Response] = None
     received_last: bool  = False  # xxx rest service endpoint abc
     blobs_received : int = -1
     rest_id : Optional[str] = None
@@ -118,10 +118,7 @@ class SmtpEndpoint:
         else:
             self.received_last = True
 
-        self.final_status = Response.from_smtp(self.smtp.data(self.data))
-        logging.info(self.final_status)
+        self.data_response = Response.from_smtp(self.smtp.data(self.data))
+        logging.info(self.data_response)
         self._shutdown()
-        return self.final_status
-
-    def get_final_status(self, timeout=None):
-        return self.final_status
+        return self.data_response

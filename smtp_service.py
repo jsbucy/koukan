@@ -86,7 +86,7 @@ class SmtpHandler:
         resp = rresp[0]
         if resp is None:
             resp = Response(400, 'upstream rcpt timeout')
-        logging.info('rcpt start_response done %s', resp)
+        logging.info('rcpt_response done %s', resp)
         session.total_rcpt_wait += max(time.monotonic() - start_time, 0)
 
         if self.msa:

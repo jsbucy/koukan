@@ -60,7 +60,7 @@ class RouterServiceTest(unittest.TestCase):
         self.service_thread.start()
 
         # probe for startup
-        self.endpoint.set_start_response(Response())
+        self.endpoint.set_rcpt_response(Response())
         for i in range(1,5):
             try:
                 # use an invalid host per Wiring so output will fail
@@ -118,16 +118,15 @@ class RouterServiceTest(unittest.TestCase):
         # it to or not
         resp_json = read_endpoint.get_json(2)
         logging.info('inflight %s', resp_json)
-        self.assertNotIn('start_response', resp_json)
-        self.assertNotIn('final_status', resp_json)
-
+        self.assertIsNone(resp_json['rcpt_response'])
+        self.assertIsNone(resp_json['data_response'])
 
         # set start response, initial inflight tempfails
-        self.endpoint.set_start_response(Response(456))
+        self.endpoint.set_rcpt_response(Response(456))
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = read_endpoint.get_json_response(3, 'start_response')
+        resp = read_endpoint.get_json_response(3, 'rcpt_response')
         logging.info('test_read_routing start resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 456)
@@ -135,10 +134,10 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(245))
 
-        resp = read_endpoint.get_json_response(3, 'final_status')
+        resp = read_endpoint.get_json_response(3, 'data_response')
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 245)
 
@@ -150,7 +149,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(256))
 
         tx = TransactionMetadata()
@@ -161,7 +160,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = start_endpoint.get_json_response(3, 'final_status')
+        resp = start_endpoint.get_json_response(3, 'data_response')
         logging.info('test_durable_after_upstream_done resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(256, resp.code)
@@ -175,7 +174,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(556))
 
         tx = TransactionMetadata()
@@ -186,7 +185,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = start_endpoint.get_json_response(3, 'final_status')
+        resp = start_endpoint.get_json_response(3, 'data_response')
         logging.info('test_durable_after_upstream_done resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(556, resp.code)
@@ -201,7 +200,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
         tx = TransactionMetadata()
@@ -212,7 +211,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = start_endpoint.get_json_response(2, 'final_status')
+        resp = start_endpoint.get_json_response(2, 'data_response')
         logging.info('test_durable_after_upstream_temp resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 456)
@@ -224,7 +223,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
@@ -234,17 +233,17 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = start_endpoint.get_json_response(2, 'start_response')
+        resp = start_endpoint.get_json_response(2, 'rcpt_response')
         logging.info('test_durable_upstream_inflight start resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 234)
 
         self.assertTrue(start_endpoint.set_durable().ok())
 
-        self.endpoint.set_start_response(Response(245))
+        self.endpoint.set_rcpt_response(Response(245))
         self.endpoint.add_data_response(Response(267))
 
-        resp = start_endpoint.get_json_response(2, 'final_status')
+        resp = start_endpoint.get_json_response(2, 'data_response')
         logging.info('test_durable_upstream_inflight final resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 267)
@@ -257,7 +256,7 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
         tx = TransactionMetadata()
@@ -268,7 +267,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = start_endpoint.get_json_response(5, 'final_status')
+        resp = start_endpoint.get_json_response(5, 'data_response')
         logging.info('test_idle_gc resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.code, 456)
@@ -289,7 +288,7 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
-        self.endpoint.set_start_response(Response(234))
+        self.endpoint.set_rcpt_response(Response(234))
         # no data response -> output blocks
 
         # output blocks waiting on rcpt_to

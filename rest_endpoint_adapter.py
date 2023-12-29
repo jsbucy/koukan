@@ -41,11 +41,8 @@ class RestEndpointAdapter(Handler):
             json_out['mail_response'] = self.endpoint.mail_resp.to_json()
         if self.endpoint.rcpt_resp:
             json_out['rcpt_response'] = self.endpoint.rcpt_resp.to_json()
-
-        final_status = self.endpoint.get_final_status(
-            timeout = 1 if self.endpoint.received_last else 0)
-        if final_status is not None:
-            json_out['final_status'] = final_status.to_json()
+        if self.endpoint.data_response:
+            json_out['data_response'] = self.endpoint.data_response.to_json()
 
         return jsonify(json_out)
 
@@ -129,9 +126,6 @@ class RestEndpointAdapter(Handler):
 
         if last:
             self.last = True
-
-        if resp is not None:
-            self.final_status = resp
 
         return resp
 

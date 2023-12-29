@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from threading import Lock, Condition
 import logging
 
@@ -6,8 +6,9 @@ from response import Response, Esmtp
 from filter import Filter, TransactionMetadata
 
 class FakeEndpoint(Filter):
-    start_response = None
-    final_response = None
+    mail_response : Optional[Response] = None
+    rcpt_response : Optional[Response] = None
+    data_response : Optional[Response] = None
     aborted = False
     tx : Optional[TransactionMetadata] = None
 
@@ -18,7 +19,9 @@ class FakeEndpoint(Filter):
     def on_update(self, tx : TransactionMetadata):
         logging.info('FakeEndpoint.start %s %s', mail_from, rcpt_to)
         self.tx = tx
-        self.tx.rcpt_response = self.start_response
+        for x in ['mail_response', 'rcpt_response', 'data_response']:
+            if getattr(self, x):
+                setattr(self.tx, x, getattr(self, x))
 
     def append_data(self, last, blob):
         logging.info('FakeEndpoint.append_data %d %s', blob.len(), last)
@@ -32,7 +35,8 @@ class FakeEndpoint(Filter):
         self.aborted = True
 
 class SyncEndpoint(Filter):
-    start_response = None
+    rcpt_response : Optional[Response] = None
+    data_resp : List[Response]
     aborted = False
 
     lock : Lock
@@ -48,9 +52,9 @@ class SyncEndpoint(Filter):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-    def set_start_response(self, resp):
+    def set_rcpt_response(self, resp):
         with self.lock:
-            self.start_response = resp
+            self.rcpt_response = resp
             self.cv.notify_all()
 
     def add_data_response(self, resp):
@@ -61,10 +65,13 @@ class SyncEndpoint(Filter):
     def on_update(self, tx : TransactionMetadata):
         logging.info('SyncEndpoint.start %s %s', tx.mail_from, tx.rcpt_to)
         self.tx = tx
-        with self.lock:
-            self.cv.wait_for(lambda: self.start_response is not None)
-            self.tx.rcpt_response = self.start_response
-            self.start_response = None
+        if tx.mail_from:
+            tx.mail_response = Response()
+        if tx.rcpt_to:
+            with self.lock:
+                self.cv.wait_for(lambda: self.rcpt_response is not None)
+                self.tx.rcpt_response = self.rcpt_response
+                self.rcpt_response = None
 
     def append_data(self, last, blob):
         logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)

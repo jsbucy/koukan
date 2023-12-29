@@ -36,15 +36,13 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(
                 status=500,
                 response=['internal error creating transaction'])
-        #resp =
-        handler.start(request.get_json())
+        resp : Optional[FlaskResponse] = handler.start(request.get_json())
+        if resp:
+            return resp
 
         json_out = {
             'url': '/transactions/' + handler.tx_rest_id()
         }
-        # xxx this could be sync success or something like a syntax error
-        #if resp is not None:
-        #    json_out['start_response'] = resp.to_json()
 
         # XXX 201 created and return uri in Location: header
         return jsonify(json_out)

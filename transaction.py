@@ -70,7 +70,7 @@ class RestServiceTransaction(Handler):
     def tx_rest_id(self):
         return self._tx_rest_id
 
-    def start(self, req_json) -> FlaskResponse:
+    def start(self, req_json) -> Optional[FlaskResponse]:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
         assert 'host' not in req_json
         js = req_json
@@ -78,7 +78,7 @@ class RestServiceTransaction(Handler):
         tx = TransactionMetadata.from_json(js)
         self.tx_cursor.write_envelope(tx)
         # todo should return oneshot get()?
-        return FlaskResponse()
+        return None  # Response only on error
 
     def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
         resp_json = {}
@@ -97,7 +97,8 @@ class RestServiceTransaction(Handler):
             # only wait if something is inflight upstream and we think the
             # status might change soon
             logging.info('RestServiceTransaction.get %s %s',
-                         self.tx_cursor.tx.rcpt_to, self.tx_cursor.tx.rcpt_response)
+                         self.tx_cursor.tx.rcpt_to.mailbox,
+                         self.tx_cursor.tx.rcpt_response)
             if self.tx_cursor.status not in [
                     Status.INSERT, Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
                 break
@@ -113,20 +114,17 @@ class RestServiceTransaction(Handler):
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
-        if self.tx_cursor.tx.rcpt_response is not None:
-            resp_json['start_response'] = (
-                self.tx_cursor.tx.rcpt_response.to_json())
-        if self.tx_cursor.tx.data_response is not None:
-            resp_json['final_status'] = (
-                self.tx_cursor.tx.data_response.to_json())
-
+        # xxx ever expected to have the resp without the req?
         resp_js = lambda r: r.to_json() if r is not None else None
         if self.tx_cursor.tx.mail_from is not None:
-            resp_json['mail_response'] = resp_js(self.tx_cursor.tx.mail_response)
+            resp_json['mail_response'] = resp_js(
+                self.tx_cursor.tx.mail_response)
         if self.tx_cursor.tx.rcpt_to is not None:
-            resp_json['rcpt_response'] = resp_js(self.tx_cursor.tx.rcpt_response)
+            resp_json['rcpt_response'] = resp_js(
+                self.tx_cursor.tx.rcpt_response)
         if self.tx_cursor.max_i is not None:
-            resp_json['data_response'] = resp_js(self.tx_cursor.tx.data_response)
+            resp_json['data_response'] = resp_js(
+                self.tx_cursor.tx.data_response)
 
         logging.info('RestServiceTransaction.get %s', resp_json)
 

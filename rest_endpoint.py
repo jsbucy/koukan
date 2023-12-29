@@ -52,9 +52,6 @@ class BlobIdMap:
             self.cv.notify_all()
 
 class RestEndpoint(Filter):
-    # XXX I think these responses are dead code, delete
-    start_resp : Optional[Response] = None
-    final_status : Optional[Response] = None
     transaction_url : Optional[str] = None
     blob_id_map : BlobIdMap = None
     appended_last = False
@@ -114,6 +111,14 @@ class RestEndpoint(Filter):
             logging.info('RestEndpoint.start resp %s', rest_resp)
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.start resp_json %s', resp_json)
+
+            if not resp_json or 'url' not in resp_json:
+                return Response.Internal(
+                    'RestEndpoint.start internal error (no json)')
+            with self.lock:
+                self.transaction_url = self.base_url + resp_json['url']
+                self.cv.notify_all()
+
             return resp_json
 
     def on_update(self, tx : TransactionMetadata):
@@ -132,14 +137,6 @@ class RestEndpoint(Filter):
                                       json=req_json,
                                       headers={'host': self.http_host},
                                       timeout=self.timeout_start)
-
-        if not self.transaction_url:
-            if not resp_json or 'url' not in resp_json:
-                return Response.Internal(
-                    'RestEndpoint.start internal error (no json)')
-            with self.lock:
-                self.transaction_url = self.base_url + resp_json['url']
-                self.cv.notify_all()
 
         if self.wait_response:
             self.get_tx_response(self.timeout_start, tx)
@@ -168,20 +165,20 @@ class RestEndpoint(Filter):
                 pass  # i.e. skip if not text
             else:
                 req_json['d'] = utf8
-                rest_resp = requests.post(self.transaction_url + '/appendData',
-                                          json=req_json,
-                                          headers={'host': self.http_host},
-                                          timeout=self.timeout_data)
-                # XXX rest_resp.status_code or
-                #   'final_status' in rest_resp.json()
-                logging.info('RestEndpoint.append_data inline %s', rest_resp)
-                if not last:
-                    return Response()
-                else:
-                    with self.lock:
-                        self.appended_last = True
-                        self.cv.notify_all()
-                return self.get_status(self.timeout_data)
+            rest_resp = requests.post(self.transaction_url + '/appendData',
+                                      json=req_json,
+                                      headers={'host': self.http_host},
+                                      timeout=self.timeout_data)
+            # XXX rest_resp.status_code or
+            #   'data_response' in rest_resp.json()
+            logging.info('RestEndpoint.append_data inline %s', rest_resp)
+            if not last:
+                return Response()
+            else:
+                with self.lock:
+                    self.appended_last = True
+                    self.cv.notify_all()
+            return self.get_status(self.timeout_data)
 
         ext_id = None
         if blob.id() and self.blob_id_map:
@@ -201,8 +198,8 @@ class RestEndpoint(Filter):
             return Response(400, 'RestEndpoint.append_data POST failed: http')
         if resp_json is None:
             return Response(400, 'RestEndpoint.append_data POST failed: no json')
-        if 'final_status' in resp_json:
-            return Response.from_json(resp_json['final_status'])
+        if 'data_response' in resp_json:
+            return Response.from_json(resp_json['data_response'])
 
         if 'uri' not in req_json and 'uri' not in resp_json:
             return Response(400, 'RestEndpoint.append_data endpoint didn\'t'
@@ -222,9 +219,6 @@ class RestEndpoint(Filter):
                     uri, offset=offset,
                     d=blob.contents()[offset:offset+CHUNK_SIZE], last=True)
                 if resp.err():
-                    self.final_status = (
-                        Response(400,
-                                 'RestEndpoint.append_data blob put error'))
                     return resp
             logging.info('RestEndpoint.append_data %s %d %s',
                          last, offset, resp)
@@ -278,14 +272,11 @@ class RestEndpoint(Filter):
         return Response(), dlen
 
     def get_status(self, timeout) -> Optional[Response]:
-        if self.final_status: return self.final_status
         if not self.wait_response: return None
-        # TODO inflight waiter list thing?
-        resp = self.get_json_response(timeout, 'final_status')
+        resp = self.get_json_response(timeout, 'data_response')
         if not resp:
             return Response(400, 'RestEndpoint.get_status timeout')
-        self.final_status = resp
-        return self.final_status
+        return resp
 
 
     # XXX clearly distinguish internal, test methods
@@ -322,7 +313,7 @@ class RestEndpoint(Filter):
             delta = time.monotonic() - start
             assert(delta >= 0)
             if resp_json is None:
-                return Response(400, 'RestEndpoint.start_response GET '
+                return Response(400, 'RestEndpoint.get_json_response GET '
                                 'failed')
 
             if field in resp_json:
@@ -350,7 +341,7 @@ class RestEndpoint(Filter):
             delta = time.monotonic() - start
             assert(delta >= 0)
             if resp_json is None:
-                return Response(400, 'RestEndpoint.start_response GET '
+                return Response(400, 'RestEndpoint.get_tx_response GET '
                                 'failed')
 
             fields = {'mail_from': 'mail_response',
