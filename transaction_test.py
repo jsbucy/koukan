@@ -34,7 +34,7 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
         rest_id = rest_tx.tx_rest_id()
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
-                                          rcpt_to=Mailbox('bob')).to_json())
+                                          rcpt_to=[Mailbox('bob')]).to_json())
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
 
@@ -140,7 +140,7 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
         rest_id = rest_tx.tx_rest_id()
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
-                                          rcpt_to=Mailbox('bob')).to_json())
+                                          rcpt_to=[Mailbox('bob')]).to_json())
 
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
@@ -231,7 +231,7 @@ class TransactionTest(unittest.TestCase):
 
         tx_cursor.write_envelope(
             TransactionMetadata(
-                mail_from=Mailbox('alice'), rcpt_to=Mailbox('bob'),
+                mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
                 host='outbound'))
         tx_cursor.append_blob(d=b'hello, ', last=False)
 
@@ -248,7 +248,7 @@ class TransactionTest(unittest.TestCase):
         del tx_cursor
 
         endpoint = SyncEndpoint()
-        endpoint.set_rcpt_response(Response(234))
+        endpoint.add_rcpt_response(Response(234))
         endpoint.add_data_response(None)
         endpoint.add_data_response(Response(256))
 
@@ -258,7 +258,7 @@ class TransactionTest(unittest.TestCase):
         cursor_to_endpoint(tx_cursor, endpoint)
 
         self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(endpoint.tx.rcpt_to.mailbox, 'bob')
+        self.assertEqual(endpoint.tx.rcpt_to[0].mailbox, 'bob')
         self.assertEqual(len(endpoint.blobs), 2)
         self.assertEqual(endpoint.blobs[0].contents(), b'hello, ')
         self.assertEqual(endpoint.blobs[1].contents(), b'world!')
@@ -282,11 +282,11 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
         rest_id : str = rest_tx.tx_rest_id()
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
-                                          rcpt_to=Mailbox('bob')).to_json())
+                                          rcpt_to=[Mailbox('bob')]).to_json())
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()
-        endpoint.set_rcpt_response(Response(234))
+        endpoint.add_rcpt_response(Response(234))
 
         t = Thread(target=lambda: self.output(rest_id, endpoint),
                    daemon=True)
@@ -304,16 +304,16 @@ class TransactionTest(unittest.TestCase):
             logging.info('test_integrated start resp %s', resp_json)
             self.assertIsNotNone(resp_json)
             self.assertNotIn('data_response', resp_json)
-            if resp_json['rcpt_response'] is not None:
-                rcpt_resp = Response.from_json(resp_json['rcpt_response'])
+            if resp_json['rcpt_response']:
+                rcpt_resp = Response.from_json(resp_json['rcpt_response'][0])
                 self.assertEqual(234, rcpt_resp.code)
                 break
             time.sleep(0.2)
         else:
-            self.fail('no start result')
+            self.fail('no rcpt result')
 
         self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(endpoint.tx.rcpt_to.mailbox, 'bob')
+        self.assertEqual(endpoint.tx.rcpt_to[0].mailbox, 'bob')
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
@@ -357,7 +357,7 @@ class TransactionTest(unittest.TestCase):
             self.assertEqual(rest_resp.status_code, 200)
             resp_json = rest_resp.get_json()
             self.assertIsNotNone(resp_json)
-            if 'data_response' in resp_json:
+            if resp_json.get('data_response', None):
                 resp = Response.from_json(resp_json['data_response'])
                 self.assertEqual(245, resp.code)
                 break

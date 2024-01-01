@@ -58,7 +58,7 @@ class RestEndpoint(Filter):
     static_remote_host : Optional[HostPort] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
-    remote_host : Optional[str] = None
+    remote_host : Optional[HostPort] = None
 
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
@@ -291,6 +291,8 @@ class RestEndpoint(Filter):
         return get_resp_json(rest_resp)
 
 
+    # TODO currently only used by router_service_test, port that to
+    # get_tx_response()
     # block until transaction json contains field and is non-null or timeout,
     # returns Response.from_json() from that field
     def get_json_response(self, timeout, field) -> Optional[Response]:
@@ -317,6 +319,8 @@ class RestEndpoint(Filter):
                                 'failed')
 
             if field in resp_json:
+                if field == 'rcpt_response':
+                    return [Response.from_json(r) for r in resp_json[field]]
                 return Response.from_json(resp_json[field])
             now = time.monotonic()
         return None
@@ -332,7 +336,7 @@ class RestEndpoint(Filter):
                 if deadline_left < 1:
                     break
                 time.sleep(min(1 - delta, deadline_left))
-            logging.info('RestEndpoint.get_json_response %f', deadline_left)
+            logging.info('RestEndpoint.get_tx_response %f', deadline_left)
             start = time.monotonic()
 
             # TODO pass the deadline in a header?
@@ -344,16 +348,17 @@ class RestEndpoint(Filter):
                 return Response(400, 'RestEndpoint.get_tx_response GET '
                                 'failed')
 
-            fields = {'mail_from': 'mail_response',
-                      'rcpt_to': 'rcpt_response'}
-            for req_f,resp_f in fields.items():
-                done = True
-                if hasattr(tx, req_f) and getattr(tx, req_f):
-                    if resp_f in resp_json and resp_json[resp_f]:
-                        setattr(tx, resp_f,
-                                Response.from_json(resp_json[resp_f]))
-                    else:
-                        done = False
+            done = True
+            if tx.mail_from:
+                if resp_json.get('mail_response', None):
+                    tx.mail_response = Response.from_json(resp_json['mail_response'])
+                else:
+                    done = False
+            if tx.rcpt_to:
+                if len(resp_json.get('rcpt_response', [])) == len(tx.rcpt_to):
+                    tx.rcpt_response = [Response.from_json(r) for r in resp_json['rcpt_response']] if 'rcpt_response' in resp_json else []
+                else:
+                    done = False
             if done:
                 break
 

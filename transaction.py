@@ -82,7 +82,7 @@ class RestServiceTransaction(Handler):
 
     def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
         resp_json = {}
-        tx = TransactionMetadata.from_json(js)
+        tx = TransactionMetadata.from_json(req_json)
         self.tx_cursor.write_envelope(tx)
         # todo should return oneshot get()?
         return FlaskResponse()
@@ -97,7 +97,7 @@ class RestServiceTransaction(Handler):
             # only wait if something is inflight upstream and we think the
             # status might change soon
             logging.info('RestServiceTransaction.get %s %s',
-                         self.tx_cursor.tx.rcpt_to.mailbox,
+                         self.tx_cursor.tx.rcpt_to,
                          self.tx_cursor.tx.rcpt_response)
             if self.tx_cursor.status not in [
                     Status.INSERT, Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
@@ -105,7 +105,7 @@ class RestServiceTransaction(Handler):
             wait_mail = (self.tx_cursor.tx.mail_from is not None and
                          self.tx_cursor.tx.mail_response is None)
             wait_rcpt = (self.tx_cursor.tx.rcpt_to is not None and
-                         self.tx_cursor.tx.rcpt_response is None)
+                         (not(self.tx_cursor.tx.rcpt_response) or len(self.tx_cursor.tx.rcpt_response) < len(self.tx_cursor.tx.rcpt_to)))
             wait_data = (self.tx_cursor.last and
                          self.tx_cursor.tx.data_response is None)
             if not (wait_mail or wait_rcpt or wait_data):
@@ -119,9 +119,9 @@ class RestServiceTransaction(Handler):
         if self.tx_cursor.tx.mail_from is not None:
             resp_json['mail_response'] = resp_js(
                 self.tx_cursor.tx.mail_response)
-        if self.tx_cursor.tx.rcpt_to is not None:
-            resp_json['rcpt_response'] = resp_js(
-                self.tx_cursor.tx.rcpt_response)
+        if self.tx_cursor.tx.rcpt_to:
+            resp_json['rcpt_response'] = [
+                r.to_json() for r in self.tx_cursor.tx.rcpt_response]
         if self.tx_cursor.max_i is not None:
             resp_json['data_response'] = resp_js(
                 self.tx_cursor.tx.data_response)
@@ -300,6 +300,7 @@ def output(cursor, endpoint) -> Optional[Response]:
 
     last_tx = TransactionMetadata()
     err = None
+    ok_rcpt = False
     while True:
         delta = last_tx.delta(cursor.tx)
         assert delta is not None
@@ -324,15 +325,21 @@ def output(cursor, endpoint) -> Optional[Response]:
                 cursor.set_mail_response(resp)
             if delta.rcpt_to:
                 logging.debug('cursor_to_endpoint %s rcpt_to: %s',
-                              cursor.rest_id, delta.rcpt_to.mailbox)
+                              cursor.rest_id, delta.rcpt_to)
                 resp = delta.rcpt_response
                 logging.debug('cursor_to_endpoint %s rcpt_resp %s',
                               cursor.rest_id, resp)
 
-                cursor.set_rcpt_response(resp)
-                cursor.append_action(Action.START, resp)
-                if resp.err():
-                    err = resp
+                cursor.add_rcpt_response(resp)
+                for r in resp:
+                    if r.ok():
+                        ok_rcpt = True
+                    elif err is None:
+                        # XXX revisit in the context of the exploder,
+                        # this is used downstream for append_action,
+                        # what does that mean in the context of
+                        # multi-rcpt?
+                        err = r
 
             last_tx = cursor.tx
 
@@ -341,7 +348,7 @@ def output(cursor, endpoint) -> Optional[Response]:
 
         cursor.wait()
 
-    if err:
+    if not ok_rcpt:
         return err
 
     i = 0

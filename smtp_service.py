@@ -53,10 +53,10 @@ class SmtpHandler:
         tx.remote_host = HostPort.from_seq(remote) if remote else None
         tx.local_host = HostPort.from_seq(local) if remote else None
         tx.mail_from = Mailbox(mail_from, transaction_esmtp)
-        tx.rcpt_to = Mailbox(rcpt_to, rcpt_esmtp)
+        tx.rcpt_to = [Mailbox(rcpt_to, rcpt_esmtp)]
         trans.on_update(tx)
         # XXX or mail if err
-        rresp[0] = tx.rcpt_response
+        rresp[0] = tx.rcpt_response[0]
         logging.info('SmtpHandler.start done %s', rresp[0])
 
     async def handle_RCPT(

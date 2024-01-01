@@ -40,7 +40,7 @@ class RestEndpointAdapter(Handler):
         if self.endpoint.mail_resp:
             json_out['mail_response'] = self.endpoint.mail_resp.to_json()
         if self.endpoint.rcpt_resp:
-            json_out['rcpt_response'] = self.endpoint.rcpt_resp.to_json()
+            json_out['rcpt_response'] = [r.to_json() for r in self.endpoint.rcpt_resp]
         if self.endpoint.data_response:
             json_out['data_response'] = self.endpoint.data_response.to_json()
 

@@ -28,7 +28,7 @@ class SmtpEndpoint:
     smtp : Optional[smtplib.SMTP] = None
     data : Optional[bytes] = None
     mail_resp : Optional[Response] = None
-    rcpt_resp : Optional[Response] = None
+    rcpt_resp : List[Response]
     data_response : Optional[Response] = None
     received_last: bool  = False  # xxx rest service endpoint abc
     blobs_received : int = -1
@@ -39,6 +39,7 @@ class SmtpEndpoint:
         self.rest_id = rest_id
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
+        self.rcpt_resp = []
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -72,7 +73,7 @@ class SmtpEndpoint:
         self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.start %s %s', self.rest_id, tx.remote_host)
         resp = Response.from_smtp(
-            self.connect(host=tx.remote_host[0], port=tx.remote_host[1]))
+            self.connect(host=tx.remote_host.host, port=tx.remote_host.port))
         if resp.err():
             self._shutdown()
             return resp
@@ -102,8 +103,13 @@ class SmtpEndpoint:
 
         self.data = bytes()
 
-        self.rcpt_resp = Response.from_smtp(self.smtp.rcpt(tx.rcpt_to.mailbox))
-        if self.rcpt_resp.err():
+        good_rcpt = False
+        for rcpt in tx.rcpt_to:
+            resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox))
+            if resp.ok():
+                good_rcpt = True
+            self.rcpt_resp.append(resp)
+        if not good_rcpt:
             self._shutdown()
         return self.rcpt_resp
 

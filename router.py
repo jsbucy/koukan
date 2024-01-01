@@ -18,10 +18,9 @@ class RoutingPolicy(ABC):
     # -> rest endpoint base url, remote_host, Response
     # returns one of endpoint and possibly dest_host or response which
     # is probably a not-found error
-
     @abstractmethod
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            str, HostPort, Optional[Response]]:
+            Optional[str], Optional[HostPort], Optional[Response]]:
         raise NotImplementedError
 
 
@@ -29,15 +28,14 @@ class Router(Filter):
     endpoint: Filter
     received_ascii : bytes = None
     policy : RoutingPolicy
+    upstream_tx : Optional[TransactionMetadata] = None
 
     def __init__(self, policy : RoutingPolicy, next : Filter):
         self.policy = policy
         self.endpoint = next
         self.ehlo = "fixme.ehlo"
 
-    def on_update(self, tx : TransactionMetadata):
-        logging.debug('Router.start %s %s', tx.mail_from, tx.rcpt_to)
-
+    def _route(self, tx : TransactionMetadata):
         received_host = ""
         if tx.remote_host and tx.remote_host.host:
             received_host = tx.remote_host.host
@@ -47,17 +45,30 @@ class Router(Filter):
         self.received_ascii = received.encode('ascii')
 
         rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(
-            tx.rcpt_to.mailbox)
+            tx.rcpt_to[0].mailbox)
+        # TODO validate that other mailboxes route to the same place
+        # else -> internal error?
         if resp and resp.err():
-            tx_meta.rcpt_response = resp
+            tx.rcpt_response = resp
             return
-        upstream_tx = TransactionMetadata()
-        upstream_tx.rest_endpoint = rest_endpoint
-        upstream_tx.remote_host = next_hop
-        upstream_tx.mail_from = tx.mail_from
-        upstream_tx.rcpt_to = tx.rcpt_to
-        self.endpoint.on_update(upstream_tx)
-        tx.rcpt_response = upstream_tx.rcpt_response
+        self.upstream_tx = TransactionMetadata()
+        self.upstream_tx.rest_endpoint = rest_endpoint
+        self.upstream_tx.remote_host = next_hop
+
+    def on_update(self, tx : TransactionMetadata):
+        logging.debug('Router.start %s %s', tx.mail_from, tx.rcpt_to)
+
+        if self.upstream_tx is None and tx.rcpt_to:
+            self._route(tx)
+        else:
+            self.upstream_tx = TransactionMetadata()
+
+        self.upstream_tx.mail_from = tx.mail_from
+        self.upstream_tx.rcpt_to = tx.rcpt_to
+
+        self.endpoint.on_update(self.upstream_tx)
+        tx.mail_response = self.upstream_tx.mail_response
+        tx.rcpt_response = self.upstream_tx.rcpt_response
 
     def append_data(self, last : bool, blob : Blob):
         if self.received_ascii:

@@ -60,7 +60,7 @@ class RouterServiceTest(unittest.TestCase):
         self.service_thread.start()
 
         # probe for startup
-        self.endpoint.set_rcpt_response(Response())
+        self.endpoint.add_rcpt_response(Response())
         for i in range(1,5):
             try:
                 # use an invalid host per Wiring so output will fail
@@ -71,7 +71,7 @@ class RouterServiceTest(unittest.TestCase):
                     wait_response=False)
                 tx = TransactionMetadata()
                 tx.mail_from = Mailbox('probe-from%d' % i)
-                tx.rcpt_to = Mailbox('probe-to%d' % i)
+                tx.rcpt_to = [Mailbox('probe-to%d' % i)]
                 start_resp = rest_endpoint.on_update(tx)
             except ConnectionError:
                     time.sleep(0.1)
@@ -79,6 +79,8 @@ class RouterServiceTest(unittest.TestCase):
                 break
         else:
             self.fail('service not ready')
+
+        self.endpoint.rcpt_response = []
 
         # gc the probe request so it doesn't cause confusion later
         # TODO rest_endpoint.abort()
@@ -101,7 +103,7 @@ class RouterServiceTest(unittest.TestCase):
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
         self.assertTrue(start_endpoint.set_durable().ok())
@@ -118,23 +120,23 @@ class RouterServiceTest(unittest.TestCase):
         # it to or not
         resp_json = read_endpoint.get_json(2)
         logging.info('inflight %s', resp_json)
-        self.assertIsNone(resp_json['rcpt_response'])
+        self.assertFalse(resp_json['rcpt_response'])
         self.assertIsNone(resp_json['data_response'])
 
         # set start response, initial inflight tempfails
-        self.endpoint.set_rcpt_response(Response(456))
+        self.endpoint.add_rcpt_response(Response(456))
 
         self.assertEqual(1, self.service._dequeue())
 
         resp = read_endpoint.get_json_response(3, 'rcpt_response')
         logging.info('test_read_routing start resp %s', resp)
         self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 456)
+        self.assertEqual(resp[0].code, 456)
 
         self.assertTrue(self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(245))
 
         resp = read_endpoint.get_json_response(3, 'data_response')
@@ -149,12 +151,12 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(256))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -174,12 +176,12 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(556))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -200,12 +202,12 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -223,11 +225,11 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -236,11 +238,11 @@ class RouterServiceTest(unittest.TestCase):
         resp = start_endpoint.get_json_response(2, 'rcpt_response')
         logging.info('test_durable_upstream_inflight start resp %s', resp)
         self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 234)
+        self.assertEqual(resp[0].code, 234)
 
         self.assertTrue(start_endpoint.set_durable().ok())
 
-        self.endpoint.set_rcpt_response(Response(245))
+        self.endpoint.add_rcpt_response(Response(245))
         self.endpoint.add_data_response(Response(267))
 
         resp = start_endpoint.get_json_response(2, 'data_response')
@@ -256,12 +258,12 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 
@@ -288,13 +290,13 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
-        self.endpoint.set_rcpt_response(Response(234))
+        self.endpoint.add_rcpt_response(Response(234))
         # no data response -> output blocks
 
         # output blocks waiting on rcpt_to
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = Mailbox('bob')
+        tx.rcpt_to = [Mailbox('bob')]
         start_resp = start_endpoint.on_update(tx)
         start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
 

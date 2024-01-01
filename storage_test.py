@@ -6,7 +6,7 @@ import logging
 from storage import Storage, TransactionCursor
 from storage_schema import Action, Status, InvalidActionException
 from response import Response
-from filter import Mailbox, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata
 
 class StorageTest(unittest.TestCase):
 
@@ -25,9 +25,9 @@ class StorageTest(unittest.TestCase):
         tx_writer.create('tx_rest_id')
         logging.info('version %d', tx_writer.version)
         tx_writer.write_envelope(TransactionMetadata(
-            'local_host', 'remote_host',
+            HostPort('local_host', 25), HostPort('remote_host', 2525),
             Mailbox('alice'),
-            Mailbox('bob'), 'host'))
+            [Mailbox('bob')], 'host'))
 
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.load(rest_id='tx_rest_id')
@@ -57,7 +57,7 @@ class StorageTest(unittest.TestCase):
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        reader.set_rcpt_response(Response(456, 'busy'))
+        reader.add_rcpt_response([Response(456, 'busy')])
         reader.append_action(Action.TEMP_FAIL, Response(456))
 
 #        reader = self.s.get_transaction_cursor()
@@ -83,7 +83,7 @@ class StorageTest(unittest.TestCase):
         self.assertIsNotNone(r2)
         self.assertEqual(r2.id, tx_writer.id)
         self.assertIsNone(r2.tx.mail_response)
-        self.assertEqual(r2.tx.rcpt_response.code, 456)
+        self.assertEqual(r2.tx.rcpt_response[0].code, 456)
         self.assertIsNone(r2.tx.data_response)
 
         r2.append_action(Action.DELIVERED, Response(234))
@@ -125,9 +125,9 @@ class StorageTest(unittest.TestCase):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz')
         writer.write_envelope(TransactionMetadata(
-            'local_host', 'remote_host',
+            HostPort('local_host', 25), HostPort('remote_host', 2525),
             Mailbox('alice'),
-            Mailbox('bob'), 'host'))
+            [Mailbox('bob')], 'host'))
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -147,9 +147,9 @@ class StorageTest(unittest.TestCase):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz')
         writer.write_envelope(TransactionMetadata(
-            'local_host', 'remote_host',
+            HostPort('local_host', 25), HostPort('remote_host', 2525),
             Mailbox('alice'),
-            Mailbox('bob'), 'host'))
+            [Mailbox('bob')], 'host'))
         self.assertEqual(self.s.gc_non_durable(min_age = 0), 1)
 
     def test_waiting_slowpath(self):
@@ -157,19 +157,19 @@ class StorageTest(unittest.TestCase):
         writer.create('xyz')
 
         reader = self.s.get_transaction_cursor()
-        self.assertTrue(reader.load(writer.id))
+        self.assertIsNotNone(reader.load(writer.id))
         self.assertIsNone(reader.tx.mail_from)
-        self.assertIsNone(reader.tx.rcpt_to)
+        self.assertFalse(bool(reader.tx.rcpt_to))
         self.assertFalse(reader.wait(1))
 
         writer.write_envelope(TransactionMetadata(
-            'local_host', 'remote_host',
+            HostPort('local_host', 25), HostPort('remote_host', 2525),
             Mailbox('alice'),
-            Mailbox('bob'), 'host'))
+            [Mailbox('bob')], 'host'))
 
         self.assertTrue(reader.wait(0))
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(reader.tx.rcpt_to.mailbox, 'bob')
+        self.assertEqual(reader.tx.rcpt_to[0].mailbox, 'bob')
 
     @staticmethod
     def wait_for(reader, rv, fn):
@@ -193,7 +193,7 @@ class StorageTest(unittest.TestCase):
         self.assertIsNotNone(reader)
         self.assertEqual(reader.id, tx_cursor.id)
         self.assertIsNone(reader.tx.mail_from)
-        self.assertIsNone(reader.tx.rcpt_to)
+        self.assertFalse(bool(reader.tx.rcpt_to))
 
         rv = [None]
         t = Thread(target =
@@ -202,17 +202,16 @@ class StorageTest(unittest.TestCase):
         time.sleep(0.1)
 
         tx_cursor.write_envelope(TransactionMetadata(
-            local_host='local_host',
-            remote_host='remote_host',
+            HostPort('local_host', 25), HostPort('remote_host', 2525),
             mail_from=Mailbox('alice'),
-            rcpt_to=Mailbox('bob')))
+            rcpt_to=[Mailbox('bob')]))
 
         t.join(timeout=1)
         self.assertFalse(t.is_alive())
 
         self.assertTrue(rv[0])
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(reader.tx.rcpt_to.mailbox, 'bob')
+        self.assertEqual(reader.tx.rcpt_to[0].mailbox, 'bob')
 
         fn = lambda: (reader.max_i is not None)   #and (reader.max_i > 0)
         self.assertFalse(reader.wait_for(fn, timeout=0.1))

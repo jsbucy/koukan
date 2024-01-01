@@ -100,7 +100,8 @@ class TransactionCursor:
             cursor = self.parent.db.cursor()
             cursor.execute('UPDATE TransactionAttempts SET ' + col + ' = ? '
                            'WHERE transaction_id = ? AND attempt_id = ?',
-                           (json.dumps(response.to_json()), self.id, self.attempt_id))
+                           (json.dumps(response.to_json()),
+                            self.id, self.attempt_id))
             new_version = self.version + 1
             # XXX this version precondition is too conservative,
             # client could have set_durable() concurrent with upstream
@@ -111,12 +112,39 @@ class TransactionCursor:
             assert(cursor.fetchone() is not None)
             self.parent.db.commit()
             self.version = new_version
+            self.parent.versions.update(self.id, new_version)
+
 
     def set_mail_response(self, response : Response):
         self._set_response('mail_response', response)
 
-    def set_rcpt_response(self, response : Response):
-        self._set_response('rcpt_response', response)
+    def add_rcpt_response(self, response : List[Response]):
+        assert(self.attempt_id is not None)
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            cursor.execute('SELECT rcpt_response FROM TransactionAttempts '
+                           'WHERE transaction_id = ? AND attempt_id = ?',
+                           (self.id, self.attempt_id))
+            old_resp = []
+            row = cursor.fetchone()
+            if row and row[0]:
+                old_resp = json.loads(row[0])
+            old_resp.extend([r.to_json() for r in response])
+            cursor.execute('UPDATE TransactionAttempts SET rcpt_response = ?'
+                           'WHERE transaction_id = ? AND attempt_id = ?',
+                           (json.dumps(old_resp),
+                            self.id, self.attempt_id))
+            new_version = self.version + 1
+            # XXX this version precondition is too conservative,
+            # client could have set_durable() concurrent with upstream
+            # cf write_envelope()
+            cursor.execute('UPDATE Transactions SET version = ? '
+                           'WHERE version = ? AND id = ? RETURNING id',
+                           (new_version, self.version, self.id))
+            assert(cursor.fetchone() is not None)
+            self.parent.db.commit()
+            self.version = new_version
+            self.parent.versions.update(self.id, new_version)
 
     def set_data_response(self, response : Response):
         self._set_response('data_response', response)
@@ -237,7 +265,8 @@ class TransactionCursor:
             if mail_json:
                 self.tx.mail_response = Response.from_json(json.loads(mail_json))
             if rcpt_json:
-                self.tx.rcpt_response = Response.from_json(json.loads(rcpt_json))
+                self.tx.rcpt_response = [
+                    Response.from_json(r) for r in json.loads(rcpt_json)]
             if data_json:
                 self.tx.data_response = Response.from_json(json.loads(data_json))
 
