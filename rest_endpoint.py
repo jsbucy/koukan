@@ -60,6 +60,16 @@ class RestEndpoint(Filter):
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
 
+    # possibly a defect in the rest api: we send rcpts to append but
+    # it sends back the responses for all rcpts so far, need to
+    # remember how many we've sent to know if we have all the
+    # responses.
+    # XXX this will not work correctly in the presence of concurrent
+    # updates (unexpected but maybe retries), need etags to sort this
+    # out, possibly rcpt appends should have some patch syntax
+    # e.g. the offset to insert at and fail if it isn't the end
+    rcpts = 0
+
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
     # pass base_url/http_host or transaction_url
@@ -129,14 +139,17 @@ class RestEndpoint(Filter):
 
         if not self.transaction_url:
             resp_json = self._start(tx, tx.to_json())
+            self.rcpts = len(tx.rcpt_to)
         else:
             req_json = tx.to_json()
             if self.remote_host:
                 req_json['remote_host'] = self.remote_host.to_tuple()
-            rest_resp = requests.post(self.transaction_url,
-                                      json=req_json,
-                                      headers={'host': self.http_host},
-                                      timeout=self.timeout_start)
+            rest_resp = requests.patch(self.transaction_url,
+                                       json=req_json,
+                                       headers={'host': self.http_host},
+                                       timeout=self.timeout_start)
+            if rest_resp.status_code < 300:
+                self.rcpts += len(tx.rcpt_to)
 
         if self.wait_response:
             self.get_tx_response(self.timeout_start, tx)
@@ -335,7 +348,9 @@ class RestEndpoint(Filter):
             if delta < 1:
                 if deadline_left < 1:
                     break
-                time.sleep(min(1 - delta, deadline_left))
+                wait = min(1 - delta, deadline_left)
+                logging.debug('RestEndpoint.get_tx_response wait %d', wait)
+                time.sleep(wait)
             logging.info('RestEndpoint.get_tx_response %f', deadline_left)
             start = time.monotonic()
 
@@ -355,7 +370,7 @@ class RestEndpoint(Filter):
                 else:
                     done = False
             if tx.rcpt_to:
-                if len(resp_json.get('rcpt_response', [])) == len(tx.rcpt_to):
+                if len(resp_json.get('rcpt_response', [])) == self.rcpts:
                     tx.rcpt_response = [Response.from_json(r) for r in resp_json['rcpt_response']] if 'rcpt_response' in resp_json else []
                 else:
                     done = False

@@ -1,4 +1,4 @@
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 import logging
 import sys
 
@@ -10,9 +10,13 @@ from rest_endpoint import RestEndpoint
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
 from filter import Filter, HostPort
+from storage_writer_filter import StorageWriterFilter
+from exploder import Exploder
+from storage import Storage
 
 class Config:
     rest_blob_id_map = None
+    storage : Optional[Storage] = None
     def __init__(self, rest_blob_id_map = None):
        self.router_policies = {
            'dest_domain': self.router_policy_dest_domain,
@@ -21,8 +25,12 @@ class Config:
            'rest_output': self.rest_output,
            'router': self.router,
            'dkim': self.dkim,
+           'exploder': self.exploder,
        }
        self.rest_blob_id_map = rest_blob_id_map
+
+    def set_storage(self, storage : Storage):
+        self.storage = storage
 
     def inject_filter(self, name : str, fac : Callable[[Any, Any], Any]):
         self.filters[name] = fac
@@ -36,6 +44,12 @@ class Config:
     def load_yaml(self, filename):
         root_yaml = load(open(filename, 'r'), Loader=Loader)
         self.inject_yaml(root_yaml)
+
+    def exploder(self, yaml, next):
+        assert next is None
+        return Exploder(yaml['output_chain'],
+                        lambda: StorageWriterFilter(self.storage))
+
 
     def rest_output(self, yaml, next):
         assert next is None

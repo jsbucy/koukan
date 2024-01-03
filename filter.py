@@ -39,6 +39,11 @@ class Mailbox:
     def __eq__(self, x : "Mailbox"):
         return self.mailbox == x.mailbox
 
+    def __str__(self):
+        return self.mailbox
+    def __repr__(self):
+        return self.mailbox
+
     #def local_part(self) -> Optional[str]:
     #    pass
     #def domain(self) -> Optional[str]:
@@ -60,6 +65,7 @@ class TransactionMetadata:
     mailbox_fields = ['mail_from']
     all_fields = single_fields + host_port_fields + mailbox_fields + ['rcpt_to']
 
+    host : Optional[str] = None
     rest_endpoint : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
@@ -131,6 +137,7 @@ class TransactionMetadata:
                 setattr(out, f, getattr(delta, f))
             elif hasattr(self, f) and getattr(self, f):
                 setattr(out, f, getattr(self, f))
+        out.rcpt_to.extend(self.rcpt_to)
         out.rcpt_to.extend(delta.rcpt_to)
         return out
 
@@ -142,11 +149,13 @@ class TransactionMetadata:
                 if not hasattr(self, f) or not getattr(self, f):
                     setattr(out, f, getattr(next, f))
             elif hasattr(self, f) and getattr(self, f):
+                logging.info('invalid delta %s', f)
                 return None
 
         # rcpts must be a prefix
         old_len = len(self.rcpt_to)
         if len(next.rcpt_to) < old_len or self.rcpt_to != next.rcpt_to[0:old_len]:
+            logging.info('invalid delta rcpt %s %s', self.rcpt_to, next.rcpt_to)
             return None
         out.rcpt_to = next.rcpt_to[old_len:]
         return out

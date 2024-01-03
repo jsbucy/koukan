@@ -13,6 +13,12 @@ endpoint:
 - name: outbound-gw
   msa: true
   chain:
+  - filter: exploder
+    output_chain: msa-output
+
+- name: msa-output
+  msa: true
+  chain:
   - filter: router
     policy:
       name: dest_domain
@@ -29,6 +35,12 @@ endpoint:
       port: 3025
 
 - name: inbound-gw
+  msa: false
+  chain:
+  - filter: exploder
+    output_chain: msa-output
+
+- name: mx-out
   msa: false
   chain:
   - filter: router

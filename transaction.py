@@ -90,8 +90,8 @@ class RestServiceTransaction(Handler):
     # TODO pass a timeout possibly from request-timeout header e.g.
     # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
+        logging.info('RestServiceTransaction.get %s', self._tx_rest_id)
         resp_json = {}
-
         start = time.monotonic()
         while (time.monotonic() - start) < 1:
             # only wait if something is inflight upstream and we think the
@@ -104,13 +104,12 @@ class RestServiceTransaction(Handler):
                 break
             wait_mail = (self.tx_cursor.tx.mail_from is not None and
                          self.tx_cursor.tx.mail_response is None)
-            wait_rcpt = (self.tx_cursor.tx.rcpt_to is not None and
-                         (not(self.tx_cursor.tx.rcpt_response) or len(self.tx_cursor.tx.rcpt_response) < len(self.tx_cursor.tx.rcpt_to)))
+            wait_rcpt = len(self.tx_cursor.tx.rcpt_response) < len(self.tx_cursor.tx.rcpt_to)
             wait_data = (self.tx_cursor.last and
                          self.tx_cursor.tx.data_response is None)
             if not (wait_mail or wait_rcpt or wait_data):
                 break
-            logging.info('RestServiceTransaction.get wait')
+            logging.info('RestServiceTransaction.get wait mail=%s rcpt=%s data=%s', wait_mail, wait_rcpt, wait_data)
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
@@ -126,7 +125,7 @@ class RestServiceTransaction(Handler):
             resp_json['data_response'] = resp_js(
                 self.tx_cursor.tx.data_response)
 
-        logging.info('RestServiceTransaction.get %s', resp_json)
+        logging.info('RestServiceTransaction.get done %s %s', self._tx_rest_id, resp_json)
 
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?

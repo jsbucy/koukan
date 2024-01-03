@@ -54,7 +54,10 @@ class FilterTest(unittest.TestCase):
         next.rcpt_to = [Mailbox('alice'), Mailbox('bob')]
         delta = orig.delta(next)
         self.assertIsNotNone(delta)
-
+        self.assertEqual(delta.rcpt_to, [Mailbox('bob')])
+        merged = orig.merge(delta)
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged.rcpt_to, [Mailbox('alice'), Mailbox('bob')])
 
 if __name__ == '__main__':
     unittest.main()

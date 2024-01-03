@@ -49,7 +49,7 @@ class Service:
         self.blobs = None
 
         self.config = config
-        
+
         self.rest_blob_id_map = RestBlobIdMap()
 
     def shutdown(self):
@@ -70,6 +70,8 @@ class Service:
             config = Config(rest_blob_id_map=self.rest_blob_id_map)
             config.load_yaml(config_filename)
             self.config = config
+
+        self.config.set_storage(self.storage)
 
         db_filename = self.config.root_yaml['storage'].get(
             'db_filename', None)
@@ -125,16 +127,16 @@ class Service:
         storage_tx = None
         self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         storage_tx = self.storage.load_one()
-        if storage_tx is not None:
-            if self.created_id is None or (
-                    storage_tx.id > self.created_id):
-                self.created_id = storage_tx.id
-        else:
+        logging.info("dequeued %s", storage_tx.id if storage_tx else None)
+        if storage_tx is None:
             return False
+
+        if self.created_id is None or (
+                storage_tx.id > self.created_id):
+            self.created_id = storage_tx.id
 
         #xxxtag = Tag.LOAD
 
-        logging.info("dequeued %d", storage_tx.id)
         # XXX there is a race that this can be selected
         # between creation and writing the envelope
         storage_tx.wait_attr_not_none('host')

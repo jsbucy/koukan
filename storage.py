@@ -65,7 +65,8 @@ class TransactionCursor:
             row = cursor.fetchone()
             db_version = row[0]
             db_json = row[1]
-
+            logging.debug('TransactionCursor.write_envelope db=%s delta=%s',
+                          db_json, tx_delta.to_json())
             if db_json:
                 db_js = json.loads(db_json)
                 db_tx = TransactionMetadata.from_json(db_js)
@@ -73,8 +74,12 @@ class TransactionCursor:
                 assert merged is not None
                 tx_delta = merged
 
-            #xxx too conservative, a reader could have LOADed
-            #assert(row is not None and (row[0] == self.version))
+            #xxx need to retry on conflicts, a reader could have LOADed?
+            if db_version != self.version:
+                logging.critical('TransactionCursor.write_envelope conflict '
+                                 'self=%d db=%d',
+                                 self.version, db_version)
+
 
             new_version = db_version + 1
             cursor.execute(
@@ -86,6 +91,8 @@ class TransactionCursor:
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
             assert(cursor.rowcount == 1)
+
+            self.tx = tx_delta
 
             self.version = db_version
             logging.info('write_envelope id=%d version=%d',
@@ -135,13 +142,13 @@ class TransactionCursor:
                            (json.dumps(old_resp),
                             self.id, self.attempt_id))
             new_version = self.version + 1
-            # XXX this version precondition is too conservative,
+            # XXX need to retry on version conflicts? e.g.
             # client could have set_durable() concurrent with upstream
             # cf write_envelope()
             cursor.execute('UPDATE Transactions SET version = ? '
-                           'WHERE version = ? AND id = ? RETURNING id',
+                           'WHERE version = ? AND id = ?',  # RETURNING id',
                            (new_version, self.version, self.id))
-            assert(cursor.fetchone() is not None)
+            #assert(cursor.fetchone() is not None)
             self.parent.db.commit()
             self.version = new_version
             self.parent.versions.update(self.id, new_version)
@@ -222,7 +229,11 @@ class TransactionCursor:
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
         assert(db_id is not None or rest_id is not None)
+        with self.parent.db_write_lock:
+            return self._load_db_locked(db_id, rest_id)
 
+    def _load_db_locked(self, db_id : Optional[int] = None,
+              rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
         cursor = self.parent.db.cursor()
         where = None
         where_id = None
@@ -665,7 +676,12 @@ class VersionWaiter:
             if db_id not in self.version:
                 self.version[db_id] = Waiter(version)
             waiter = self.version[db_id]
-            assert(waiter.version is None or (waiter.version >= version))
+            if waiter.version is not None and (waiter.version < version):
+                logging.critical(
+                    'VersionWaiter._wait() precondition failure '
+                    'id=%d waiter=%s arg=%s',
+                    db_id, waiter.version, version)
+                assert False
             if waiter.version is not None and (waiter.version > version):
                 return True
             waiter.waiters.add(obj)
@@ -808,7 +824,7 @@ class Storage:
             db_id,status = row
 
             tx = self.get_transaction_cursor()
-            assert(tx.load(db_id=db_id))
+            assert(tx._load_db_locked(db_id=db_id))
             tx._append_action_db(cursor, Action.LOAD)
             self.versions.update(tx.id, tx.version)
 
