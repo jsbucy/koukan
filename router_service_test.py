@@ -40,6 +40,8 @@ root_yaml = {
 }
 
 class RouterServiceTest(unittest.TestCase):
+    def get_endpoint(self):
+        return self.endpoint
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
@@ -52,7 +54,7 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoint = SyncEndpoint()
         self.config = Config()
         self.config.inject_yaml(root_yaml)
-        self.config.inject_filter('sync', lambda yaml, next: self.endpoint)
+        self.config.inject_filter('sync', lambda yaml, next: self.get_endpoint())
         self.service = Service(config=self.config)
         self.service_thread = Thread(
             daemon=True,
@@ -60,6 +62,7 @@ class RouterServiceTest(unittest.TestCase):
         self.service_thread.start()
 
         # probe for startup
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response())
         for i in range(1,5):
             try:
@@ -80,7 +83,7 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('service not ready')
 
-        self.endpoint.rcpt_response = []
+        self.endpoint = SyncEndpoint()
 
         # gc the probe request so it doesn't cause confusion later
         # TODO rest_endpoint.abort()
@@ -124,18 +127,21 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIsNone(resp_json['data_response'])
 
         # set start response, initial inflight tempfails
+        self.endpoint.set_mail_response(Response())
         self.endpoint.add_rcpt_response(Response(456))
 
         self.assertEqual(1, self.service._dequeue())
 
         resp = read_endpoint.get_json_response(3, 'rcpt_response')
-        logging.info('test_read_routing start resp %s', resp)
+        logging.info('test_read_routing rcpt resp %s', resp)
         self.assertIsNotNone(resp)
         self.assertEqual(resp[0].code, 456)
 
+        self.endpoint = SyncEndpoint()
         self.assertTrue(self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
+        self.endpoint.set_mail_response(Response())
         self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(245))
 
@@ -151,6 +157,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(256))
 
@@ -176,6 +183,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(556))
 
@@ -202,6 +210,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
@@ -225,6 +234,7 @@ class RouterServiceTest(unittest.TestCase):
             wait_response=False,
             msa=True)
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
 
         tx = TransactionMetadata()
@@ -242,6 +252,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertTrue(start_endpoint.set_durable().ok())
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(245))
         self.endpoint.add_data_response(Response(267))
 
@@ -258,6 +269,7 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
+        self.endpoint.set_mail_response(Response())
         self.endpoint.add_rcpt_response(Response(234))
         self.endpoint.add_data_response(Response(456))
 
@@ -290,6 +302,7 @@ class RouterServiceTest(unittest.TestCase):
             msa=True)
         transaction_url = start_endpoint.transaction_url
 
+        self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
         # no data response -> output blocks
 

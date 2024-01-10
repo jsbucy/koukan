@@ -74,17 +74,6 @@ class SmtpHandler:
         await asyncio.wait([fut], timeout=5)  # XXX
 
         logging.info('rcpt_response %s', envelope.tx.rcpt_response)
-        #session.total_rcpt_wait += max(time.monotonic() - start_time, 0)
-        # if self.msa:
-        #     if resp.perm():
-        #         return resp.to_smtp_resp()
-        #     elif resp.temp():
-        #         logging.info('msa_async')
-        #         envelope.msa_async = True
-        #         # '250 msa rcpt upstream temp continue'
-        # else:  # mx
-        #     if resp.err():
-        #         return resp.to_smtp_resp()
 
         rcpt_resp = envelope.tx.rcpt_response[envelope.rcpt_i]
         envelope.rcpt_i += 1
@@ -98,12 +87,6 @@ class SmtpHandler:
                      last, blob.len())
         envelope.tx.data_response = envelope.endpoint.append_data(last, blob)
         logging.info('SmtpHandler.append_data %s', envelope.tx.data_response)
-
-    #def set_durable(self, rresp, i, trans):
-    #    logging.info('SmtpHandler.set_durable %d', i)
-    #    r = trans.set_durable()
-    #    logging.info('SmtpHandler.set_durable %d %s', i, r)
-    #    rresp[i] = r
 
     def get_blob_id(self):
         id = 'gw_blob_%d' % self.next_blob_id
@@ -120,57 +103,6 @@ class SmtpHandler:
                 None, lambda: self.append_data(envelope, last=True, blob=blob))
         await asyncio.wait([fut], timeout=5)  # XXX
         return envelope.tx.data_response.to_smtp_resp()
-
-        # # xxx pass this timeout to RestEndpoint.append_data
-        # timeout = None
-        # if self.msa:
-        #     # if rcpt already tempfailed (self.msa_async), that
-        #     # propagates to json final transaction status so the get
-        #     # for that after the last append will return immediately.
-        #     timeout = MSA_DATA_WAIT
-        # else:  # mx
-        #     timeout = MX_DATA_WAIT
-        # s0 = status = None
-        # same_major = None
-        # if timeout is not None:
-        #     #done, pending =
-        #     await asyncio.wait(
-        #         futures, timeout=timeout, return_when=asyncio.ALL_COMPLETED)
-        #     status = []
-        #     for i,s in enumerate(sstatus):
-        #         if s is None:
-        #             s = Response(400, 'upstream data timeout')
-        #         logging.info(s)
-        #         major = int(s.code/100)
-        #         if i == 0:
-        #             s0 = s
-        #             same_major = major
-        #         else:
-        #             if major != same_major:
-        #                 same_major = None
-        #         status.append(s)
-        # logging.info('same_major %s', same_major)
-        # if self.msa:
-        #     if not envelope.msa_async:
-        #         if same_major == 2 or same_major == 5:
-        #             assert(s0 is not None)
-        #             return s0.to_smtp_resp()
-        # else:  # mx
-        #     if same_major is not None:
-        #         return s0.to_smtp_resp()
-
-        # rresp = [None] * len(envelope.transactions)
-        # futures = []
-        # for i,t in enumerate(envelope.transactions):
-        #     futures.append(server.loop.run_in_executor(
-        #         None, partial(lambda i, t:
-        #                       self.set_durable(rresp, i, t), i, t)))
-        # #done, pending =
-        # await asyncio.wait(
-        #     futures, timeout=5, return_when=asyncio.ALL_COMPLETED)
-        # if any(map(lambda r: r is None or r.err(), rresp)):
-        #     return b'400 set_durable timeout/err'
-        # return b'250 smtp gw accepted async'
 
 
 class ControllerTls(Controller):

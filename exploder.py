@@ -51,7 +51,11 @@ class Exploder(Filter):
             # fan this out if there were multiple though gw/smtplib
             # doesn't do pipelining so it will only send us one at
             # a time
+
             # XXX this needs to be able to time out
+            # this is where we do the "accept" part of "accept&bounce"
+            # for msa (or multi-rcpt mx) i.e. convert a 4xx or timeout
+            # to 250 in the hope that it will succeed later
             endpoint_i.on_update(tx_i)
             rcpt_resp = tx_i.rcpt_response[0]
             logging.info('Exploder.on_updated %s %s',

@@ -248,6 +248,7 @@ class TransactionTest(unittest.TestCase):
         del tx_cursor
 
         endpoint = SyncEndpoint()
+        endpoint.set_mail_response(Response())
         endpoint.add_rcpt_response(Response(234))
         endpoint.add_data_response(None)
         endpoint.add_data_response(Response(256))
@@ -286,6 +287,7 @@ class TransactionTest(unittest.TestCase):
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()
+        endpoint.set_mail_response(Response())
         endpoint.add_rcpt_response(Response(234))
 
         t = Thread(target=lambda: self.output(rest_id, endpoint),

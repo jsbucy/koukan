@@ -35,6 +35,8 @@ class FakeEndpoint(Filter):
         self.aborted = True
 
 class SyncEndpoint(Filter):
+    mail_from : Optional[Mailbox] = None
+    mail_response : Optional[Response] = None
     rcpt_to : List[Mailbox]
     rcpt_response : List[Response]
     data_resp : List[Response]
@@ -55,6 +57,11 @@ class SyncEndpoint(Filter):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
+    def set_mail_response(self, resp : Response):
+        with self.lock:
+            self.mail_response = resp
+            self.cv.notify_all()
+
     def add_rcpt_response(self, resp : Response):
         with self.lock:
             self.rcpt_response.append(resp)
@@ -69,13 +76,17 @@ class SyncEndpoint(Filter):
         logging.info('SyncEndpoint.on_update %s %s', tx.mail_from, tx.rcpt_to)
         self.tx = tx
         if tx.mail_from:
-            tx.mail_response = Response()
+            assert not self.mail_from
+            self.mail_from = tx.mail_from
+            with self.lock:
+                self.cv.wait_for(lambda: self.mail_response is not None)
+                tx.mail_response = self.mail_response
         if tx.rcpt_to:
             self.rcpt_to.extend(tx.rcpt_to)
             with self.lock:
-                self.cv.wait_for(lambda: bool(self.rcpt_response))
+                self.cv.wait_for(lambda: len(self.rcpt_response) == len(self.rcpt_to))
                 self.tx.rcpt_response = self.rcpt_response
-                self.rcpt_response = []
+
 
     def append_data(self, last, blob):
         logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)

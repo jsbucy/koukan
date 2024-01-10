@@ -63,6 +63,7 @@ class ExploderTest(unittest.TestCase):
 
         with self.mu:
             self.cv.wait_for(lambda: len(self.upstream_endpoints) > 0)
+        self.upstream_endpoints[0].set_mail_response(Response(250))
         self.upstream_endpoints[0].add_rcpt_response(Response(201))
 
         t.join(timeout=1)
