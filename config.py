@@ -47,8 +47,17 @@ class Config:
 
     def exploder(self, yaml, next):
         assert next is None
+        msa = msa=yaml.get('msa', False)
+        rcpt_timeout=30
+        data_timeout=300
+        if msa:
+            rcpt_timeout=5
+            data_timeout=30
         return Exploder(yaml['output_chain'],
-                        lambda: StorageWriterFilter(self.storage))
+                        lambda: StorageWriterFilter(self.storage),
+                        msa=msa,
+                        rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
+                        data_timeout=yaml.get('data_timeout', rcpt_timeout))
 
 
     def rest_output(self, yaml, next):

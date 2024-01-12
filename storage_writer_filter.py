@@ -25,10 +25,15 @@ class StorageWriterFilter(Filter):
         self.tx_cursor.create(rest_id)
 
 
-    def on_update(self, tx : TransactionMetadata):
+    def on_update(self, tx : TransactionMetadata,
+                  timeout : Optional[float] = None):
         if self.tx_cursor is None:
             self._create()
+        if tx.durable:
+            self.tx_cursor.append_action(Action.SET_DURABLE)
+            return
         self.tx_cursor.write_envelope(tx)
+        start = time.monotonic()
         while True:
             done = True
             if self.tx_cursor.tx is None:
@@ -45,10 +50,14 @@ class StorageWriterFilter(Filter):
                 done = False
             if done:
                 break
-            self.tx_cursor.wait()
+            deadline_left = None
+            if timeout is not None:
+                timeout = (time.monotonic() - start)
+            self.tx_cursor.wait(deadline_left)
 
 
-    def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
+    def append_data(self, last : bool, blob : Blob,
+                    timeout : Optional[float] = None) -> Optional[Response]:
         no_blob_id = True
         if isinstance(blob, BlobReader):
             if (self.tx_cursor.append_blob(
@@ -65,8 +74,15 @@ class StorageWriterFilter(Filter):
         if not last:
             return None
 
+        start = time.monotonic()
         while self.tx_cursor.tx.data_response is None:
-            self.tx_cursor.wait()
+            timeout_left = None
+            if timeout is not None:
+                timeout_left = timeout - (time.monotonic() - start)
+                if timeout_left <= 0:
+                    break
+            self.tx_cursor.wait(timeout_left)
+
         return self.tx_cursor.tx.data_response
 
     def abort(self):

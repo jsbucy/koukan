@@ -15,6 +15,7 @@ endpoint:
   chain:
   - filter: exploder
     output_chain: msa-output
+    msa: true
 
 - name: msa-output
   msa: true

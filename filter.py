@@ -77,17 +77,22 @@ class TransactionMetadata:
     rcpt_response : List[Response]
     data_response : Optional[Response] = None
 
+    durable : Optional[bool] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
-                 host : Optional[str] = None):
+                 host : Optional[str] = None,
+                 durable : Optional[bool] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.rcpt_to = rcpt_to if rcpt_to else []
         self.rcpt_response = []
         self.host = host
+        if durable is not None:
+            self.durable = durable
 
     def __bool__(self):
         for f in TransactionMetadata.all_fields:
@@ -162,13 +167,16 @@ class TransactionMetadata:
 
 class Filter(ABC):
     @abstractmethod
-    def on_update(self, transaction_metadata : TransactionMetadata):
+    def on_update(self, transaction_metadata : TransactionMetadata,
+                  timeout : Optional[float] = None):
         pass
 
     @abstractmethod
-    def append_data(self, last : bool, blob : Blob) -> Response:
+    def append_data(self, last : bool, blob : Blob,
+                    timeout : Optional[float] = None) -> Response:
         pass
 
     @abstractmethod
     def abort(self):
         pass
+

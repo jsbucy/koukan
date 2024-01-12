@@ -1,6 +1,7 @@
 from typing import List, Optional
 from threading import Lock, Condition
 import logging
+import time
 
 from response import Response, Esmtp
 from filter import Filter, Mailbox, TransactionMetadata
@@ -16,7 +17,8 @@ class FakeEndpoint(Filter):
         self.blobs = []
         self.last = False
 
-    def on_update(self, tx : TransactionMetadata):
+    def on_update(self, tx : TransactionMetadata,
+                  timeout : Optional[float] = None):
         logging.info('FakeEndpoint.start %s %s', tx.mail_from, tx.rcpt_to)
         self.tx = tx
         for x in ['mail_response', 'rcpt_response', 'data_response']:
@@ -72,30 +74,49 @@ class SyncEndpoint(Filter):
             self.data_resp.append(resp)
             self.cv.notify_all()
 
-    def on_update(self, tx : TransactionMetadata):
+    def on_update(self, tx : TransactionMetadata,
+                  timeout : Optional[float] = None):
         logging.info('SyncEndpoint.on_update %s %s', tx.mail_from, tx.rcpt_to)
         self.tx = tx
+        start = time.monotonic()
+        deadline_left = None
+        if timeout:
+            deadline_left = timeout - (time.monotonic() - start)
         if tx.mail_from:
             assert not self.mail_from
             self.mail_from = tx.mail_from
             with self.lock:
-                self.cv.wait_for(lambda: self.mail_response is not None)
+                self.cv.wait_for(lambda: self.mail_response is not None,
+                                 deadline_left)
                 tx.mail_response = self.mail_response
+
+        if timeout:
+            deadline_left = timeout - (time.monotonic() - start)
         if tx.rcpt_to:
             self.rcpt_to.extend(tx.rcpt_to)
             with self.lock:
-                self.cv.wait_for(lambda: len(self.rcpt_response) == len(self.rcpt_to))
+                self.cv.wait_for(
+                    lambda: len(self.rcpt_response) == len(self.rcpt_to),
+                    deadline_left)
                 self.tx.rcpt_response = self.rcpt_response
 
 
-    def append_data(self, last, blob):
+    def append_data(self, last, blob,
+                    timeout : Optional[float] = None):
         logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)
         assert(not self.last)
         self.last = last
         self.blobs.append(blob)
         with self.lock:
-            self.cv.wait_for(lambda: bool(self.data_resp))
+            if not self.cv.wait_for(lambda: bool(self.data_resp), timeout):
+                return None
             return self.data_resp.pop(0)
 
     def abort(self):
         self.aborted = True
+
+    def get_data(self):
+        out = b''
+        for blob in self.blobs:
+            out += blob.contents()
+        return out
