@@ -14,18 +14,18 @@ from smtp_auth import Authenticator
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
-MSA_RCPT_WAIT=5
-MX_RCPT_WAIT=30
-MSA_DATA_WAIT=5
-MX_DATA_WAIT=300
-
 class SmtpHandler:
-    def __init__(self, endpoint_factory, msa, max_rcpt=None):
+    def __init__(self, endpoint_factory, msa, max_rcpt=None,
+                 timeout_mail=10,
+                 timeout_rcpt=60,
+                 timeout_data=330):
         self.endpoint_factory = endpoint_factory
         self.msa = msa
         self.max_rcpt = max_rcpt
-
         self.next_blob_id = 0
+        self.timeout_mail = timeout_mail
+        self.timeout_rcpt = timeout_rcpt
+        self.timeout_data = timeout_data
 
     # TODO would be nice to abort the upstream transaction if the
     # client goes away, handle_QUIT(), subclass aiosmtpd.smtp.SMTP and
@@ -51,7 +51,7 @@ class SmtpHandler:
         envelope.tx.mail_from = Mailbox(mail_from, mail_esmtp)
         fut = server.loop.run_in_executor(
             None, lambda: self._update_tx(envelope.endpoint, envelope.tx))
-        await asyncio.wait([fut], timeout=5)  # XXX
+        await asyncio.wait([fut], timeout=self.timeout_mail)
         logging.info('mail resp %s', envelope.tx.mail_response)
 
         if envelope.tx.mail_response.ok():
@@ -71,7 +71,7 @@ class SmtpHandler:
         fut = server.loop.run_in_executor(
             None, lambda: self._update_tx(envelope.endpoint, envelope.tx))
 
-        await asyncio.wait([fut], timeout=5)  # XXX
+        await asyncio.wait([fut], timeout=self.timeout_rcpt)
 
         logging.info('rcpt_response %s', envelope.tx.rcpt_response)
 
@@ -101,7 +101,7 @@ class SmtpHandler:
 
         fut = server.loop.run_in_executor(
                 None, lambda: self.append_data(envelope, last=True, blob=blob))
-        await asyncio.wait([fut], timeout=5)  # XXX
+        await asyncio.wait([fut], timeout=self.timeout_data)
         return envelope.tx.data_response.to_smtp_resp()
 
 
@@ -120,7 +120,8 @@ class ControllerTls(Controller):
 
 def service(endpoint, msa,
             hostname="localhost", port=9025, cert=None, key=None,
-            auth_secrets_path=None, max_rcpt=None):
+            auth_secrets_path=None, max_rcpt=None,
+            rcpt_timeout=None, data_timeout=None):
     # DEBUG logs message contents!
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
@@ -131,7 +132,7 @@ def service(endpoint, msa,
     else:
         ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    handler = SmtpHandler(endpoint, msa, max_rcpt)
+    handler = SmtpHandler(endpoint, msa, max_rcpt, rcpt_timeout, data_timeout)
     controller = ControllerTls(handler,
                                hostname, port, ssl_context,
                                auth)

@@ -104,13 +104,22 @@ class SmtpGateway(EndpointFactory):
                 factory = lambda: self.msa_rest_factory()
                 msa = True
 
+            # cf router config.Config.exploder()
+            rcpt_timeout=40
+            data_timeout=310
+            if msa:
+                rcpt_timeout=15
+                data_timeout=40
+
             addr = service_yaml['addr']
             smtp_service(
                 factory, hostname=addr[0], port=addr[1],
                 cert=service_yaml.get('cert', None),
                 key=service_yaml.get('key', None),
                 msa=msa,
-                auth_secrets_path=service_yaml.get('auth_secrets', None))
+                auth_secrets_path=service_yaml.get('auth_secrets', None),
+                rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
+                data_timeout=service_yaml.get('data_timeout', data_timeout))
 
         self.adapter_factory = RestEndpointAdapterFactory(self, self.blobs)
 

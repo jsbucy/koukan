@@ -39,7 +39,7 @@ endpoint:
   msa: false
   chain:
   - filter: exploder
-    output_chain: msa-output
+    output_chain: mx-out
 
 - name: mx-out
   msa: false

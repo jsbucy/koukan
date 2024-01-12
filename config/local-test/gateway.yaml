@@ -15,6 +15,7 @@ smtp_listener:
       type: mx
     - addr: [localhost, 1587]
       type: msa
+
   # auth_secrets
 
 rest_output:
