@@ -57,7 +57,7 @@ class Config:
                         lambda: StorageWriterFilter(self.storage),
                         msa=msa,
                         rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
-                        data_timeout=yaml.get('data_timeout', rcpt_timeout))
+                        data_timeout=yaml.get('data_timeout', data_timeout))
 
 
     def rest_output(self, yaml, next):

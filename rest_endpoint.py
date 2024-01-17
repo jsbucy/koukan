@@ -59,6 +59,8 @@ class RestEndpoint(Filter):
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
+    # XXX this field is dead?
+    msa : bool
 
     # possibly a defect in the rest api: we send rcpts to append but
     # it sends back the responses for all rcpts so far, need to
@@ -309,6 +311,7 @@ class RestEndpoint(Filter):
     # block until transaction json contains field and is non-null or timeout,
     # returns Response.from_json() from that field
     def get_json_response(self, timeout, field) -> Optional[Response]:
+        # XXX verify this timeout code
         now = time.monotonic()
         deadline = now + timeout
         delta = 1
@@ -331,8 +334,9 @@ class RestEndpoint(Filter):
                 return Response(400, 'RestEndpoint.get_json_response GET '
                                 'failed')
 
-            if field in resp_json:
+            if resp_json.get(field, None) is not None:
                 if field == 'rcpt_response':
+                    # xxx wait until rcpt_response is expected length?
                     return [Response.from_json(r) for r in resp_json[field]]
                 return Response.from_json(resp_json[field])
             now = time.monotonic()
