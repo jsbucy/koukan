@@ -104,12 +104,15 @@ class RestServiceTransaction(Handler):
                 break
             wait_mail = (self.tx_cursor.tx.mail_from is not None and
                          self.tx_cursor.tx.mail_response is None)
-            wait_rcpt = len(self.tx_cursor.tx.rcpt_response) < len(self.tx_cursor.tx.rcpt_to)
+            wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
+                         len(self.tx_cursor.tx.rcpt_to))
             wait_data = (self.tx_cursor.last and
                          self.tx_cursor.tx.data_response is None)
             if not (wait_mail or wait_rcpt or wait_data):
                 break
-            logging.info('RestServiceTransaction.get wait mail=%s rcpt=%s data=%s', wait_mail, wait_rcpt, wait_data)
+            logging.info('RestServiceTransaction.get wait '
+                         'mail=%s rcpt=%s data=%s',
+                         wait_mail, wait_rcpt, wait_data)
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
@@ -125,7 +128,8 @@ class RestServiceTransaction(Handler):
             resp_json['data_response'] = resp_js(
                 self.tx_cursor.tx.data_response)
 
-        logging.info('RestServiceTransaction.get done %s %s', self._tx_rest_id, resp_json)
+        logging.info('RestServiceTransaction.get done %s %s',
+                     self._tx_rest_id, resp_json)
 
         # xxx flask jsonify() depends on app context which we may
         # not have in tests?
@@ -149,7 +153,7 @@ class RestServiceTransaction(Handler):
 
         blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         writer = self.storage.get_blob_writer()
-        writer.start(blob_rest_id)
+        writer.create(blob_rest_id)
         if (self.tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=last) !=
             TransactionCursor.APPEND_BLOB_OK):
             return FlaskResponse(500, 'internal error')

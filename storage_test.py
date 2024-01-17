@@ -41,7 +41,7 @@ class StorageTest(unittest.TestCase):
                          tx_writer.APPEND_BLOB_UNKNOWN)
 
         blob_writer = self.s.get_blob_writer()
-        self.assertIsNotNone(blob_writer.start('blob_rest_id'))
+        self.assertIsNotNone(blob_writer.create('blob_rest_id'))
         blob_writer.append_data(b'blob1')
         blob_writer.append_data(b'blob2', 10)
 
@@ -259,10 +259,10 @@ class StorageTest(unittest.TestCase):
 
     def test_blob_waiting(self):
         blob_writer = self.s.get_blob_writer()
-        blob_writer.start('blob_rest_id')
+        blob_writer.create('blob_rest_id')
 
         reader = self.s.get_blob_reader()
-        reader.start(blob_writer.id)
+        reader.load(blob_writer.id)
 
         rv = [False]
         t = Thread(target =

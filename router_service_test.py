@@ -16,6 +16,7 @@ from config import Config
 from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
+# XXX exercise exploder flows
 root_yaml = {
     'global': {
         'use_gunicorn': False,

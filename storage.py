@@ -355,7 +355,7 @@ class TransactionCursor:
         if inline:
             return InlineBlob(inline)
         r = self.parent.get_blob_reader()
-        r.start(db_id=blob_id)
+        r.load(db_id=blob_id)
         return r
 
     def _check_payload_done(self, cursor) -> bool:
@@ -473,7 +473,7 @@ class BlobWriter:
     def __init__(self, storage):
         self.parent = storage
 
-    def start(self, rest_id):  # xxx create()
+    def create(self, rest_id):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             cursor.execute(
@@ -573,7 +573,7 @@ class BlobReader(Blob):
     def id(self):
         return 'storage_%s' % self.blob_id
 
-    def start(self, db_id = None, rest_id = None):  # xxx load()
+    def load(self, db_id = None, rest_id = None):
         self.blob_id = db_id
         cursor = self.parent.db.cursor()
         where = ''
@@ -630,7 +630,7 @@ class BlobReader(Blob):
         if not self.parent.blob_versions._wait(
                 self, self.blob_id, old_len, timeout):
             return False
-        self.start(self.blob_id)
+        self.load(self.blob_id)
         return old_len is None or (self.length > old_len)
 
     # wait until fully written

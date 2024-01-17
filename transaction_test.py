@@ -237,7 +237,7 @@ class TransactionTest(unittest.TestCase):
 
         blob_writer = self.storage.get_blob_writer()
         blob_rest_id = 'blob_rest_id'
-        blob_writer.start(blob_rest_id)
+        blob_writer.create(blob_rest_id)
         d = b'world!'
         for i in range(0,len(d)):
             blob_writer.append_data(d[i:i+1], len(d))
