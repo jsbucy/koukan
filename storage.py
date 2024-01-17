@@ -98,7 +98,7 @@ class TransactionCursor:
             logging.info('write_envelope id=%d version=%d',
                          self.id, self.version)
 
-            self.parent.versions.update(self.id, new_version)
+            self.parent.tx_versions.update(self.id, new_version)
         return True
 
     def _set_response(self, col : str, response : Response):
@@ -119,7 +119,7 @@ class TransactionCursor:
             assert(cursor.fetchone() is not None)
             self.parent.db.commit()
             self.version = new_version
-            self.parent.versions.update(self.id, new_version)
+            self.parent.tx_versions.update(self.id, new_version)
 
 
     def set_mail_response(self, response : Response):
@@ -151,7 +151,7 @@ class TransactionCursor:
             #assert(cursor.fetchone() is not None)
             self.parent.db.commit()
             self.version = new_version
-            self.parent.versions.update(self.id, new_version)
+            self.parent.tx_versions.update(self.id, new_version)
 
     def set_data_response(self, response : Response):
         self._set_response('data_response', response)
@@ -222,12 +222,15 @@ class TransactionCursor:
             self.parent.db.commit()
             assert(cursor.rowcount == 1)
         self.version = new_version
-        self.parent.versions.update(self.id, self.version)
+        self.parent.tx_versions.update(self.id, self.version)
         self.max_i = new_max_i
         return TransactionCursor.APPEND_BLOB_OK
 
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
+        if self.id is not None:
+            assert(db_id is None and rest_id is None)
+            db_id = self.id
         assert(db_id is not None or rest_id is not None)
         with self.parent.db_write_lock:
             return self._load_db_locked(db_id, rest_id)
@@ -285,14 +288,14 @@ class TransactionCursor:
 
     def wait(self, timeout=None) -> bool:
         old = self.version
-        self.load(self.id)
+        self.load()
         if self.version > old:
             return True
 
-        if not self.parent.versions.wait(self, timeout):
+        if not self.parent.tx_versions.wait(self, self.id, old, timeout):
             logging.debug('TransactionCursor.wait timed out')
             return False
-        self.load(self.id)
+        self.load()
         return self.version > old  # xxx assert?
 
     def wait_for(self, fn, timeout=None):
@@ -375,7 +378,7 @@ class TransactionCursor:
             cursor = self.parent.db.cursor()
             self._append_action_db(cursor, action, response)
             self.parent.db.commit()
-        self.parent.versions.update(self.id, self.version)
+        self.parent.tx_versions.update(self.id, self.version)
         return True
 
     # appends a TransactionAttempts record and updates status
@@ -626,8 +629,8 @@ class BlobReader(Blob):
         return dd
 
     def wait_length(self, timeout):
-        old_len = self.offset
-        if not self.parent.blob_versions._wait(
+        old_len = self.offset if self.offset is not None else 0
+        if not self.parent.blob_versions.wait(
                 self, self.blob_id, old_len, timeout):
             return False
         self.load(self.blob_id)
@@ -638,68 +641,75 @@ class BlobReader(Blob):
         while not self.last:
             self.wait_length(timeout)
 
-class Waiter:
+class IdVersion:
+    lock : Lock
+    cv : Condition
+
     version : int
     waiters : set[object]
     def __init__(self, version):
+        self.lock = Lock()
+        self.cv = Condition(self.lock)
+
         self.waiters = set()
         self.version = version
+    def wait(self, version, timeout):
+        with self.lock:
+            return self.cv.wait_for(lambda: self.version > version, timeout)
+    def update(self, version):
+        with self.lock:
+            assert version > self.version
+            self.version = version
+            self.cv.notify_all()
 
-class VersionWaiter:
+class Waiter:
+    def __init__(self, parent, db_id, version, obj):
+        self.parent = parent
+        self.db_id = db_id
+        self.obj = obj
+        self.id_version = self.parent.get_id_version(db_id, version, obj)
+    def __enter__(self):
+        return self.id_version
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.id_version.waiters.remove(self.obj)
+        if not self.id_version.waiters:
+            del self.parent.version[self.db_id]
+
+class IdVersionMap:
     lock : Lock
-    cv : Condition
-    version : dict[int,Waiter] = None  # db id
+    version : dict[int,IdVersion]  # db-id
 
     def __init__(self):
         self.version = {}
         self.lock = Lock()
-        self.cv = Condition(self.lock)
 
     def update(self, db_id, version):
-        logging.debug('VersionWaiter.update id=%d version=%d', db_id, version)
+        logging.debug('IdVersionMap.update id=%d version=%d', db_id, version)
         with self.lock:
             if db_id not in self.version: return
             waiter = self.version[db_id]
-            assert(waiter.version is None or (waiter.version <= version))
-            waiter.version = version
-            self.cv.notify_all()
+            waiter.update(version)
 
-
-    def wait(self, cursor : TransactionCursor, timeout=None) -> bool:
-        assert(cursor.id is not None)
-        return self._wait(cursor, cursor.id, cursor.version, timeout)
-
-    def _wait(self, obj : object, db_id : int, version : int,
-              timeout=None) -> bool:
-        logging.debug('_wait id=%d version=%s', db_id, version)
+    def get_id_version(self, db_id, version, obj):
         with self.lock:
             if db_id not in self.version:
-                self.version[db_id] = Waiter(version)
+                self.version[db_id] = IdVersion(version)
             waiter = self.version[db_id]
-            if waiter.version is not None and (waiter.version < version):
-                logging.critical(
-                    'VersionWaiter._wait() precondition failure '
-                    'id=%d waiter=%s arg=%s',
-                    db_id, waiter.version, version)
-                assert False
-            if waiter.version is not None and (waiter.version > version):
-                return True
             waiter.waiters.add(obj)
-            self.cv.wait_for(
-                lambda: waiter.version is not None and (version is None or (waiter.version > version)),
-                timeout=timeout)
-            rv = waiter.version is not None and (version is None or (waiter.version > version))
-            waiter.waiters.remove(obj)
-            if not waiter.waiters:
-                del self.version[db_id]
-            return rv
+            return waiter
+
+    def wait(self, obj : object, db_id : int, version : int,
+             timeout=None) -> bool:
+        logging.debug('_wait id=%d version=%s', db_id, version)
+        with Waiter(self, db_id, version, obj) as id_version:
+            return id_version.wait(version, timeout)
 
 class Storage:
     session_id = None
-    tx_versions : VersionWaiter
-    blob_versions : VersionWaiter
+    tx_versions : IdVersionMap
+    blob_versions : IdVersionMap
 
-    # TODO VersionWaiter w/single object id 0?
+    # TODO IdVersionMap w/single object id 0?
     created_id = None
     created_lock = None
     created_cv = None
@@ -707,8 +717,8 @@ class Storage:
     def __init__(self):
         self.db = None
         self.db_write_lock = Lock()
-        self.versions = VersionWaiter()
-        self.blob_versions = VersionWaiter()
+        self.tx_versions = IdVersionMap()
+        self.blob_versions = IdVersionMap()
 
         self.created_lock = Lock()
         self.created_cv = Condition(self.created_lock)
@@ -826,8 +836,7 @@ class Storage:
             tx = self.get_transaction_cursor()
             assert(tx._load_db_locked(db_id=db_id))
             tx._append_action_db(cursor, Action.LOAD)
-            self.versions.update(tx.id, tx.version)
-
+            self.tx_versions.update(tx.id, tx.version)
 
             # TODO: if the last n consecutive actions are all
             # load/recover, this transaction may be crashing the system ->
