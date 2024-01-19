@@ -15,6 +15,10 @@ class Handler(ABC):
         pass
 
     @abstractmethod
+    def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
+        pass
+
+    @abstractmethod
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
         pass
 
@@ -31,6 +35,12 @@ class Handler(ABC):
     @abstractmethod
     def tx_rest_id(self) -> str:
         pass
+
+    # This should be valid before and after handling a request. The
+    # first-tier request handler validates if-match: and returns etag:
+    # headers.
+    def etag(self) -> Optional[str]:
+        return None
 
 class HandlerFactory(ABC):
     @abstractmethod

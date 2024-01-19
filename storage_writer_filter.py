@@ -5,7 +5,7 @@ import secrets
 import time
 
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
-from storage_schema import Action, Status, InvalidActionException
+from storage_schema import Action, Status, InvalidActionException, VersionConflictException
 from response import Response
 from filter import Filter, HostPort, Mailbox, TransactionMetadata
 from blob import Blob
@@ -32,7 +32,12 @@ class StorageWriterFilter(Filter):
         if tx.durable:
             self.tx_cursor.append_action(Action.SET_DURABLE)
             return
-        self.tx_cursor.write_envelope(tx)
+        while True:
+            try:
+                self.tx_cursor.write_envelope(tx)
+                break
+            except VersionConflictException:
+                self.tx_cursor.load()
         start = time.monotonic()
         while True:
             done = True

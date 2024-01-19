@@ -39,7 +39,7 @@ class SmtpHandler:
     def _update_tx(self, endpoint, tx):
         logging.info('SmtpHandler._update_tx')
         endpoint.on_update(tx)
-        logging.info('SmtpHandler._update_tx done')  # %s', rresp[0])
+        logging.info('SmtpHandler._update_tx done')
 
     async def handle_MAIL(
             self, server, session, envelope, mail_from, mail_esmtp):

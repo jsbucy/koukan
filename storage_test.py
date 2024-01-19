@@ -4,7 +4,7 @@ import unittest
 import logging
 
 from storage import Storage, TransactionCursor
-from storage_schema import Action, Status, InvalidActionException
+from storage_schema import Action, Status, InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
@@ -201,10 +201,15 @@ class StorageTest(unittest.TestCase):
         t.start()
         time.sleep(0.1)
 
-        tx_cursor.write_envelope(TransactionMetadata(
-            HostPort('local_host', 25), HostPort('remote_host', 2525),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]))
+        while True:
+            try:
+                tx_cursor.write_envelope(TransactionMetadata(
+                    HostPort('local_host', 25), HostPort('remote_host', 2525),
+                    mail_from=Mailbox('alice'),
+                    rcpt_to=[Mailbox('bob')]))
+                break
+            except VersionConflictException:
+                tx_cursor.load()
 
         t.join(timeout=1)
         self.assertFalse(t.is_alive())

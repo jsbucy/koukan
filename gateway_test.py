@@ -17,6 +17,7 @@ from fake_smtpd import FakeSmtpd
 
 from blob import InlineBlob
 
+# xxx -> yaml
 config_json = {
     "rest_port": None,
     "router_port": None,

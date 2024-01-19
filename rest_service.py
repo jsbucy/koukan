@@ -1,3 +1,10 @@
+from threading import Lock, Condition
+import logging
+import json
+
+from typing import Any, Dict, Optional, List
+from typing import Callable, Tuple
+
 from flask import Flask
 from flask import Response as FlaskResponse
 from flask import jsonify
@@ -10,12 +17,6 @@ from blobs import Blob, BlobStorage
 from blob import InlineBlob
 from tags import Tag
 
-from threading import Lock, Condition
-
-import logging
-
-from typing import Any, Dict, Optional, List
-from typing import Callable, Tuple
 
 from response import Response as MailResponse
 
@@ -24,6 +25,20 @@ from rest_service_handler import Handler, HandlerFactory
 
 def create_app(handler_factory : HandlerFactory):
     app = Flask(__name__)
+
+    def set_etag(resp, handler):
+        etag = handler.etag()
+        if etag is None:
+            return
+        resp.set_etag(etag)
+
+    def validate_etag(request, handler) -> Optional[FlaskResponse]:
+        etag = request.headers.get('if-match', None)
+        if etag is None:
+            return None
+        if handler.etag() != etag.strip('"'):
+            return FlaskResponse(status=412, response=['version mismatch'])
+        return None
 
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> FlaskResponse:
@@ -40,42 +55,54 @@ def create_app(handler_factory : HandlerFactory):
         if resp:
             return resp
 
-        json_out = {
+        resp_json = {
             'url': '/transactions/' + handler.tx_rest_id()
         }
 
+        rest_resp = FlaskResponse()
+        rest_resp.set_data(json.dumps(resp_json))
+        rest_resp.content_type = 'application/json'
+        set_etag(rest_resp, handler)
         # XXX 201 created and return uri in Location: header
-        return jsonify(json_out)
+        return rest_resp
 
     @app.route('/transactions/<tx_rest_id>',
                methods=['PATCH'])
-    def get_transaction(tx_rest_id) -> FlaskResponse:
-        handler = handler_factory.get_tx(tx_rest_id)
-        if handler is None:
-            return FlaskResponse(status=404, response=['transaction not found'])
-        return handler.patch(request.get_json())
-
-    @app.route('/transactions/<tx_rest_id>',
-               methods=['GET'])
     def update_transaction(tx_rest_id) -> FlaskResponse:
         handler = handler_factory.get_tx(tx_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['transaction not found'])
-        return handler.get({})
+        if (err := validate_etag(request, handler)) is not None:
+            return err
+        rest_resp = handler.patch(request.get_json())
+        set_etag(rest_resp, handler)
+        return rest_resp
+
+    @app.route('/transactions/<tx_rest_id>',
+               methods=['GET'])
+    def get_transaction(tx_rest_id) -> FlaskResponse:
+        handler = handler_factory.get_tx(tx_rest_id)
+        if handler is None:
+            return FlaskResponse(status=404, response=['transaction not found'])
+        rest_resp = handler.get({})
+        set_etag(rest_resp, handler)
+        return rest_resp
 
     @app.route('/transactions/<tx_rest_id>/appendData',
                methods=['POST'])
     def append_data(tx_rest_id):
         if not request.is_json:
             return FlaskResponse(status=400, response=['not json'])
-
         handler = handler_factory.get_tx(tx_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['transaction not found'])
+        if (err := validate_etag(request, handler)) is not None:
+            return err
 
         logging.info("rest service append_data %s %s %s",
                      request, request.headers, request.get_json())
         rest_resp = handler.append(request.get_json())
+        set_etag(rest_resp, handler)
         logging.info('rest service append_data %s', rest_resp)
         return rest_resp
 

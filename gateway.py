@@ -56,8 +56,7 @@ class SmtpGateway(EndpointFactory):
                             blob_id_map=self.blob_id_map)
 
     def msa_rest_factory(self):
-        return RestEndpoint(self.router_base_url, http_host='outbound-gw',
-                            msa=True)
+        return RestEndpoint(self.router_base_url, http_host='outbound-gw')
 
     # EndpointFactory
     def create(self, host):
@@ -85,6 +84,7 @@ class SmtpGateway(EndpointFactory):
             dele = []
             for (rest_id, tx) in self.inflight.items():
                 tx_idle = now - tx.idle_start if tx.idle_start else 0
+                # xxx doesn't work, pre-yaml api
                 if tx_idle > self.config.get_int('tx_idle_timeout', 5):
                     logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                                  tx.rest_id)
@@ -130,6 +130,7 @@ class SmtpGateway(EndpointFactory):
                 cert=None, key=None,
                 app=flask_app)
         else:
+            # xxx doesn't work, pre-yaml api
             self.wsgi_server = make_server('localhost',
                                            self.config.get_int('rest_port'),
                                            flask_app)

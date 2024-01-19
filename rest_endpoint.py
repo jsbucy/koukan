@@ -59,8 +59,7 @@ class RestEndpoint(Filter):
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
-    # XXX this field is dead?
-    msa : bool
+    etag : Optional[str] = None
 
     # possibly a defect in the rest api: we send rcpts to append but
     # it sends back the responses for all rcpts so far, need to
@@ -83,7 +82,6 @@ class RestEndpoint(Filter):
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
                  blob_id_map = None,
-                 msa = False,
                  wait_response = True,
                  remote_host_resolution = None):
         self.static_base_url = static_base_url
@@ -94,7 +92,6 @@ class RestEndpoint(Filter):
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
         self.blob_id_map = blob_id_map
-        self.msa = msa
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.wait_response = wait_response
@@ -120,7 +117,9 @@ class RestEndpoint(Filter):
                                       json=req_json,
                                       headers={'host': self.http_host},
                                       timeout=self.timeout_start)
+            # XXX rest_resp.status_code?
             logging.info('RestEndpoint.start resp %s', rest_resp)
+            self.etag = rest_resp.headers.get('etag', None)
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.start resp_json %s', resp_json)
 
@@ -146,12 +145,19 @@ class RestEndpoint(Filter):
             req_json = tx.to_json()
             if self.remote_host:
                 req_json['remote_host'] = self.remote_host.to_tuple()
+            req_headers = { 'host': self.http_host }
+            if self.etag:
+                req_headers['if-match'] = self.etag
             rest_resp = requests.patch(self.transaction_url,
                                        json=req_json,
-                                       headers={'host': self.http_host},
+                                       headers=req_headers,
                                        timeout=self.timeout_start)
             if rest_resp.status_code < 300:
                 self.rcpts += len(tx.rcpt_to)
+                self.etag = rest_resp.headers.get('etag', None)
+            else:
+                self.etag = None
+                # xxx err?
 
         if self.wait_response:
             self.get_tx_response(self.timeout_start, tx)
@@ -172,6 +178,10 @@ class RestEndpoint(Filter):
             'last': last }
         if mx_multi_rcpt: req_json['mx_multi_rcpt'] = True
 
+        req_headers = {'host': self.http_host}
+        if self.etag:
+            req_headers['if-match'] = self.etag
+
         if blob.len() < MAX_INLINE:
             uri = False
             try:
@@ -182,7 +192,7 @@ class RestEndpoint(Filter):
                 req_json['d'] = utf8
             rest_resp = requests.post(self.transaction_url + '/appendData',
                                       json=req_json,
-                                      headers={'host': self.http_host},
+                                      headers=req_headers,
                                       timeout=self.timeout_data)
             # XXX rest_resp.status_code or
             #   'data_response' in rest_resp.json()
@@ -203,7 +213,7 @@ class RestEndpoint(Filter):
 
         rest_resp = requests.post(self.transaction_url + '/appendData',
                                   json=req_json,
-                                  headers={'host': self.http_host},
+                                  headers=req_headers,
                                   timeout=self.timeout_data)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.append_data POST resp %s %s',
@@ -212,7 +222,8 @@ class RestEndpoint(Filter):
         if rest_resp.status_code > 299:
             return Response(400, 'RestEndpoint.append_data POST failed: http')
         if resp_json is None:
-            return Response(400, 'RestEndpoint.append_data POST failed: no json')
+            return Response(400, 'RestEndpoint.append_data POST failed: '
+                            'no json')
         if 'data_response' in resp_json:
             return Response.from_json(resp_json['data_response'])
 
@@ -303,6 +314,10 @@ class RestEndpoint(Filter):
                                      timeout=timeout)
         except Exception:
             return None
+        if rest_resp.status_code < 300:
+            self.etag = rest_resp.headers.get('etag', None)
+        else:
+            self.etag = None
         return get_resp_json(rest_resp)
 
 
@@ -374,8 +389,10 @@ class RestEndpoint(Filter):
                 else:
                     done = False
             if tx.rcpt_to:
+                logging.info('get_tx_response self.rcpts %d', self.rcpts)
+                # XXX rest returns the full vector but this returns the delta?
                 if len(resp_json.get('rcpt_response', [])) == self.rcpts:
-                    tx.rcpt_response = [Response.from_json(r) for r in resp_json['rcpt_response']] if 'rcpt_response' in resp_json else []
+                    tx.rcpt_response = [Response.from_json(r) for r in resp_json['rcpt_response']]
                 else:
                     done = False
             if done:

@@ -46,6 +46,12 @@ class RestEndpointAdapter(Handler):
 
         return jsonify(json_out)
 
+    def patch(self, req_json : Dict[str, Any],
+              etag : Optional[str] = None) -> FlaskResponse:
+        raise NotImplementedError()
+
+    def etag(self):
+        return None
 
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
         assert(isinstance(req_json['chunk_id'], int))

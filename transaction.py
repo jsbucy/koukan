@@ -11,7 +11,7 @@ from werkzeug.datastructures import ContentRange
 from rest_service_handler import Handler, HandlerFactory
 
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
-from storage_schema import Action, Status, InvalidActionException
+from storage_schema import Action, Status, InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
@@ -37,6 +37,9 @@ class RestServiceTransaction(Handler):
         self.tx_cursor = tx_cursor
         self.blob_rest_id = blob_rest_id
         self.blob_writer = blob_writer
+
+    def etag(self):
+        return self.tx_cursor.etag()
 
     @staticmethod
     def create_tx(storage, http_host) -> Optional["RestServiceTransaction"]:
@@ -76,16 +79,23 @@ class RestServiceTransaction(Handler):
         js = req_json
         js['host'] = self.http_host
         tx = TransactionMetadata.from_json(js)
-        self.tx_cursor.write_envelope(tx)
+        try:
+            self.tx_cursor.write_envelope(tx)
+        except VersionConflictException:
+            return FlaskResponse(412, 'version conflict')
         # todo should return oneshot get()?
         return None  # Response only on error
 
     def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
         resp_json = {}
         tx = TransactionMetadata.from_json(req_json)
-        self.tx_cursor.write_envelope(tx)
+        try:
+            self.tx_cursor.write_envelope(tx)
+        except VersionConflictException:
+            return FlaskResponse(412, 'version conflict')
         # todo should return oneshot get()?
-        return FlaskResponse()
+        rest_resp = FlaskResponse()
+        return rest_resp
 
     # TODO pass a timeout possibly from request-timeout header e.g.
     # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
@@ -143,8 +153,11 @@ class RestServiceTransaction(Handler):
         logging.info('append_blob %s %s last=%s', self._tx_rest_id, uri, last)
         if uri:
             uri = uri.removeprefix('/blob/')  # XXX uri prefix
-            if (self.tx_cursor.append_blob(blob_rest_id=uri, last=last) ==
-                TransactionCursor.APPEND_BLOB_OK):
+            try:
+                append = self.tx_cursor.append_blob(blob_rest_id=uri, last=last)
+            except VersionConflictException:
+                return FlaskResponse(412, 'version conflict')
+            if append == TransactionCursor.APPEND_BLOB_OK:
                 resp_json = {}
                 rest_resp = FlaskResponse()
                 rest_resp.set_data(json.dumps(resp_json))
@@ -154,8 +167,12 @@ class RestServiceTransaction(Handler):
         blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         writer = self.storage.get_blob_writer()
         writer.create(blob_rest_id)
-        if (self.tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=last) !=
-            TransactionCursor.APPEND_BLOB_OK):
+        try:
+            append = self.tx_cursor.append_blob(
+                blob_rest_id=blob_rest_id, last=last)
+        except VersionConflictException:
+            return FlaskResponse(412, 'version conflict')
+        if append != TransactionCursor.APPEND_BLOB_OK:
             return FlaskResponse(500, 'internal error')
         # XXX move to rest service?
         resp_json = {'uri': '/blob/' + blob_rest_id}
@@ -164,7 +181,6 @@ class RestServiceTransaction(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    # TODO this is not idempotent -> etags
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
         # storage enforces universal preconditions:
         # insert/oneshot_inflight/oneshot_temp
@@ -260,6 +276,8 @@ class RestServiceTransaction(Handler):
 
         try:
             self.tx_cursor.append_action(Action.SET_DURABLE)
+        except VersionConflictException:
+            return FlaskResponse(412, 'version conflict')
         except InvalidActionException:
             if self.tx_cursor.status != Status.DONE:
                 return FlaskResponse(
@@ -333,7 +351,11 @@ def output(cursor, endpoint) -> Optional[Response]:
                 logging.debug('cursor_to_endpoint %s rcpt_resp %s',
                               cursor.rest_id, resp)
 
-                cursor.add_rcpt_response(resp)
+                try:
+                    cursor.add_rcpt_response(resp)
+                except VersionConflictException:
+                    cursor.load()
+                    continue
                 for r in resp:
                     if r.ok():
                         ok_rcpt = True
@@ -393,7 +415,13 @@ def output(cursor, endpoint) -> Optional[Response]:
             assert resp is not None
 
         if resp is not None:
-            cursor.set_data_response(resp)
+            while True:
+                try:
+                    cursor.set_data_response(resp)
+                except VersionConflictException:
+                    cursor.load()
+                    continue
+                break
             return resp
     assert False  # unreached
 

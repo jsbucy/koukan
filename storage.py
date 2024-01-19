@@ -4,12 +4,14 @@ import json
 import time
 import logging
 from threading import Lock, Condition
+from hashlib import sha256
+from base64 import b64encode
 
 import psutil
 
 from blob import Blob, InlineBlob
 from response import Response
-from storage_schema import Status, Action, transition, InvalidActionException, check_valid_append
+from storage_schema import Status, Action, transition, InvalidActionException, check_valid_append, VersionConflictException
 from filter import TransactionMetadata
 
 class TransactionCursor:
@@ -22,6 +24,8 @@ class TransactionCursor:
     version : Optional[int] = None
     max_i = None
     last = None
+    creation : Optional[int] = None
+    status : Optional[Status] = None
 
     tx : Optional[TransactionMetadata] = None
 
@@ -29,20 +33,28 @@ class TransactionCursor:
         self.parent = storage
         self.id = None
 
+    def etag(self) -> str:
+        base = '%d.%d.%d' % (self.creation, self.id, self.version)
+        return b64encode(
+            sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
+
     def create(self, rest_id):
         parent = self.parent
-        now = int(time.time())
+        self.creation = int(time.time())
         with parent.db_write_lock:
             cursor = parent.db.cursor()
+            self.status = Status.INSERT
+            self.last = False
+            self.version = 0
             cursor.execute(
                 'INSERT INTO Transactions '
-                '  (rest_id, inflight_session_id, creation, last_update, version, status, '
-                'last) '
+                '  (rest_id, inflight_session_id, creation, last_update, '
+                'version, status, last) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
-                (rest_id, parent.session_id, now, now, 0,
-                 Status.INSERT, False))
+                (rest_id, parent.session_id, self.creation, self.creation,
+                 self.version, self.status, self.last))
             self.id = cursor.fetchone()[0]
-            self.version = 0
+            self.tx = TransactionMetadata()
 
             cursor.execute(
                 'INSERT INTO TransactionActions '
@@ -60,45 +72,35 @@ class TransactionCursor:
     def write_envelope(self, tx_delta : TransactionMetadata):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            cursor.execute('SELECT version, json FROM Transactions '
-                           'WHERE id = ?', (self.id,))
-            row = cursor.fetchone()
-            db_version = row[0]
-            db_json = row[1]
-            logging.debug('TransactionCursor.write_envelope db=%s delta=%s',
-                          db_json, tx_delta.to_json())
-            if db_json:
-                db_js = json.loads(db_json)
-                db_tx = TransactionMetadata.from_json(db_js)
-                merged = db_tx.merge(tx_delta)
-                assert merged is not None
-                tx_delta = merged
-
-            #xxx need to retry on conflicts, a reader could have LOADed?
-            if db_version != self.version:
-                logging.critical('TransactionCursor.write_envelope conflict '
-                                 'self=%d db=%d',
-                                 self.version, db_version)
-
-
-            new_version = db_version + 1
+            # XXX should this just load()? or use sql json functions
+            # to patch the json in the db directly without this
+            # read-modify-write?
+            merged = self.tx.merge(tx_delta)
+            # e.g. overwriting an existing field
+            # xxx return/throw
+            assert merged is not None
+            new_version = self.version + 1
+            # TODO all updates '... WHERE inflight_session_id =
+            #   self.parent.session' ?
             cursor.execute(
                 'UPDATE Transactions SET json = ?, version = ? '
-                'WHERE id = ? AND version = ?',
-                (json.dumps(tx_delta.to_json()), new_version, self.id,
-                 db_version))
+                'WHERE id = ? AND version = ? RETURNING version',
+                (json.dumps(merged.to_json()), new_version, self.id,
+                 self.version))
+
+            if (row := cursor.fetchone()) is None:
+                raise VersionConflictException()
+            self.version = row[0]
 
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
-            assert(cursor.rowcount == 1)
 
             self.tx = tx_delta
 
-            self.version = db_version
             logging.info('write_envelope id=%d version=%d',
                          self.id, self.version)
 
-            self.parent.tx_versions.update(self.id, new_version)
+            self.parent.tx_versions.update(self.id, self.version)
         return True
 
     def _set_response(self, col : str, response : Response):
@@ -110,15 +112,13 @@ class TransactionCursor:
                            (json.dumps(response.to_json()),
                             self.id, self.attempt_id))
             new_version = self.version + 1
-            # XXX this version precondition is too conservative,
-            # client could have set_durable() concurrent with upstream
-            # cf write_envelope()
             cursor.execute('UPDATE Transactions SET version = ? '
-                           'WHERE version = ? AND id = ? RETURNING id',
+                           'WHERE version = ? AND id = ? RETURNING version',
                            (new_version, self.version, self.id))
-            assert(cursor.fetchone() is not None)
+            if (row := cursor.fetchone()) is None:
+                raise VersionConflictException()
             self.parent.db.commit()
-            self.version = new_version
+            self.version = row[0]
             self.parent.tx_versions.update(self.id, new_version)
 
 
@@ -129,6 +129,7 @@ class TransactionCursor:
         assert(self.attempt_id is not None)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
+            # TODO load-that's-not-a-load, cf write_envelope()
             cursor.execute('SELECT rcpt_response FROM TransactionAttempts '
                            'WHERE transaction_id = ? AND attempt_id = ?',
                            (self.id, self.attempt_id))
@@ -142,15 +143,13 @@ class TransactionCursor:
                            (json.dumps(old_resp),
                             self.id, self.attempt_id))
             new_version = self.version + 1
-            # XXX need to retry on version conflicts? e.g.
-            # client could have set_durable() concurrent with upstream
-            # cf write_envelope()
             cursor.execute('UPDATE Transactions SET version = ? '
-                           'WHERE version = ? AND id = ?',  # RETURNING id',
+                           'WHERE version = ? AND id = ? RETURNING version',
                            (new_version, self.version, self.id))
-            #assert(cursor.fetchone() is not None)
+            if (row := cursor.fetchone()) is None:
+                raise VersionConflictException()
+            self.version = row[0]
             self.parent.db.commit()
-            self.version = new_version
             self.parent.tx_versions.update(self.id, new_version)
 
     def set_data_response(self, response : Response):
@@ -217,11 +216,12 @@ class TransactionCursor:
             new_version = version + 1
             cursor.execute(
                 'UPDATE Transactions SET version = ?, last = ? '
-                'WHERE id = ? AND version = ?',
+                'WHERE id = ? AND version = ? RETURNING version',
                 (new_version, last, self.id, version))
+            if (row := cursor.fetchone()) is None:
+                raise VersionConflictException()
+            self.version = row[0]
             self.parent.db.commit()
-            assert(cursor.rowcount == 1)
-        self.version = new_version
         self.parent.tx_versions.update(self.id, self.version)
         self.max_i = new_max_i
         return TransactionCursor.APPEND_BLOB_OK
@@ -248,8 +248,8 @@ class TransactionCursor:
             where = 'WHERE rest_id = ?'
             where_id = (rest_id,)
 
-        cursor.execute('SELECT id,rest_id,creation,json,status,version,'
-                       'last '
+        cursor.execute('SELECT id,rest_id,creation,json,version,'
+                       'last,status '
                        'FROM Transactions ' + where,
                        where_id)
         row = cursor.fetchone()
@@ -257,8 +257,8 @@ class TransactionCursor:
             return None
 
         (self.id, self.rest_id,
-         self.creation, json_str, self.status, self.version,
-         self.last) = row
+         self.creation, json_str, self.version, self.last) = row[0:6]
+        self.status = Status(row[6])
 
         trans_json = json.loads(json_str) if json_str else {}
         self.tx = TransactionMetadata.from_json(trans_json)
@@ -386,24 +386,16 @@ class TransactionCursor:
                          response : Optional[Response] = None) -> bool:
         now = int(time.time())
 
-        cursor.execute(
-            'SELECT status,version from Transactions WHERE id = ?',
-            (self.id,))
-        row = cursor.fetchone()
-        status : Status = Status(row[0])
-        version = row[1]
+        # TODO load() here? cf write_envelope()
         logging.debug('TransactionCursor.append_action (pre) id=%d '
-                      'db version %d my version %d '
+                      'my version %d '
                       'status=%s action=%s',
-                      self.id, version, self.version, status.name,
+                      self.id, self.version, self.status.name,
                       action.name)
-        # XXX this is too conservative e.g.
-        # writer may SET_DURABLE while reader is inflight
-        #assert(version == self.version)
 
-        if status not in transition or action not in transition[status]:
-            raise InvalidActionException(status, action)
-        status = transition[status][action]
+        if self.status not in transition or action not in transition[self.status]:
+            raise InvalidActionException(self.status, action)
+        status = transition[self.status][action]
 
         if action == Action.SET_DURABLE:
             assert(self._check_payload_done(cursor))  # precondition
@@ -411,16 +403,17 @@ class TransactionCursor:
         logging.info('TransactionCursor.append_action (post) id=%d '
                      'now=%d action=%s i=%s length=%s status=%s',
                      self.id, now, action.name, self.i, self.length,
-                     status.name)
-        new_version = version + 1
+                     self.status.name)
+        new_version = self.version + 1
         cursor.execute(
             'UPDATE Transactions '
             'SET status = ?, last_update = ?, version = ?, '
             'inflight_session_id = NULL '
-            'WHERE id = ? AND version = ?',
-            (status, now, new_version, self.id, version))
-        assert(cursor.rowcount == 1)
-
+            'WHERE id = ? AND version = ? RETURNING version',
+            (status, now, new_version, self.id, self.version))
+        if (row := cursor.fetchone()) is None:
+            raise VersionConflictException()
+        db_new_version = row[0]
 
         attempt_id = None
         if action == Action.LOAD:
@@ -462,7 +455,7 @@ class TransactionCursor:
         # TODO gc payload on status DONE
         # (or ttl, keep for ~1d after DONE?)
         self.status = status
-        self.version = new_version
+        self.version = db_new_version
         self.attempt_id = attempt_id
         return True
 
@@ -673,28 +666,32 @@ class Waiter:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.id_version.waiters.remove(self.obj)
         if not self.id_version.waiters:
-            del self.parent.version[self.db_id]
+            self.parent.del_id(self.db_id)
 
 class IdVersionMap:
     lock : Lock
-    version : dict[int,IdVersion]  # db-id
+    id_version_map : dict[int,IdVersion]  # db-id
 
     def __init__(self):
-        self.version = {}
+        self.id_version_map = {}
         self.lock = Lock()
+
+    def del_id(self, id):
+        with self.lock:
+            del self.id_version_map[id]
 
     def update(self, db_id, version):
         logging.debug('IdVersionMap.update id=%d version=%d', db_id, version)
         with self.lock:
-            if db_id not in self.version: return
-            waiter = self.version[db_id]
+            if db_id not in self.id_version_map: return
+            waiter = self.id_version_map[db_id]
             waiter.update(version)
 
     def get_id_version(self, db_id, version, obj):
         with self.lock:
-            if db_id not in self.version:
-                self.version[db_id] = IdVersion(version)
-            waiter = self.version[db_id]
+            if db_id not in self.id_version_map:
+                self.id_version_map[db_id] = IdVersion(version)
+            waiter = self.id_version_map[db_id]
             waiter.waiters.add(obj)
             return waiter
 

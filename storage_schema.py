@@ -80,3 +80,6 @@ def check_valid_append(status : Status):
                        Status.ONESHOT_INFLIGHT,
                        Status.ONESHOT_TEMP ]:
         raise InvalidActionException(status, Action.APPEND)
+
+class VersionConflictException(Exception):
+    pass

@@ -65,13 +65,13 @@ class StorageWriterFilterTest(unittest.TestCase):
             'from: alice\r\nto: bob\r\nsubject: hello\r\n\r\n'))
 
         blob_writer = self.storage.get_blob_writer()
-        blob_writer.start('blob_rest_id')
+        blob_writer.create('blob_rest_id')
         d = b'hello, world!\r\n'
         blob_writer.append_data(d, len(d))
         del blob_writer
 
         blob_reader = self.storage.get_blob_reader()
-        self.assertIsNotNone(blob_reader.start(rest_id='blob_rest_id'))
+        self.assertIsNotNone(blob_reader.load(rest_id='blob_rest_id'))
 
         rresp = []
         t = Thread(target=lambda: self.append(rresp, filter, blob_reader, True))

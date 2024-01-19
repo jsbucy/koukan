@@ -102,8 +102,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_read_routing(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
@@ -114,6 +113,8 @@ class RouterServiceTest(unittest.TestCase):
 
         transaction_url = start_endpoint.transaction_url
 
+        # XXX rewrite these tests, RestEndpoint increasingly doesn't
+        # work as a generic client outside of Filter api/protocol.
         read_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
             transaction_url=transaction_url,
@@ -125,7 +126,7 @@ class RouterServiceTest(unittest.TestCase):
         resp_json = read_endpoint.get_json(2)
         logging.info('inflight %s', resp_json)
         self.assertFalse(resp_json['rcpt_response'])
-        self.assertIsNone(resp_json['data_response'])
+        self.assertIsNone(resp_json.get('data_response', None))
 
         # set start response, initial inflight tempfails
         self.endpoint.set_mail_response(Response())
@@ -155,8 +156,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_durable_after_upstream_success(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
 
         self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
@@ -181,8 +181,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_durable_after_upstream_perm(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
 
         self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
@@ -208,8 +207,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_durable_after_upstream_temp(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
 
         self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
@@ -232,8 +230,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_durable_upstream_inflight(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
 
         self.endpoint.set_mail_response(Response(250))
         self.endpoint.add_rcpt_response(Response(234))
@@ -266,8 +263,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_idle_gc_oneshot_temp(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
         transaction_url = start_endpoint.transaction_url
 
         self.endpoint.set_mail_response(Response())
@@ -299,8 +295,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_idle_gc_oneshot_inflight(self):
         start_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False,
-            msa=True)
+            wait_response=False)
         transaction_url = start_endpoint.transaction_url
 
         self.endpoint.set_mail_response(Response(250))
