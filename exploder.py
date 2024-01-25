@@ -24,7 +24,7 @@ from response import Response
 
 # Since the PRDR extension for SMTP has yet to get traction, we have
 # to fan in the DATA results. Again, 2 modes
-# - in MX mode, if all the upstream data results the same (for the
+# - in MX mode, if all the upstream data results were the same (for the
 #   rcpts that previously succeeded), we return that directly
 # - in MSA mode, we only do that if they were all success or permfail,
 #   tempfail gets upgraded per above

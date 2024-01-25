@@ -233,6 +233,12 @@ class RouterServiceTest(unittest.TestCase):
     # subset of RestEndpoint instead of the Filter
     # api/protocol/personality
 
+    # Moreover, many of these are testing set_durable() which was
+    # really a special hook for the smtp gw "multi-rcpt sync/same
+    # resp" optimization which has moved to the internal exploder
+    # flow. Native rest clients will probably always specify it in the
+    # initial POST/never need to PATCH it later?
+
     # set durable after upstream ok/perm -> noop
     def test_durable_after_upstream_success(self):
         start_endpoint = RestEndpoint(

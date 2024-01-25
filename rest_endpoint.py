@@ -51,7 +51,6 @@ class BlobIdMap:
 class RestEndpoint(Filter):
     transaction_url : Optional[str] = None
     blob_id_map : BlobIdMap = None
-    appended_last = False
     static_remote_host : Optional[HostPort] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -89,16 +88,6 @@ class RestEndpoint(Filter):
         self.timeout_data = timeout_data
         self.blob_id_map = blob_id_map
 
-        # xxx at one point in smtp gw
-        # mail from -> 250 and buffer
-        # rcpt to -> start tx upstream
-        # which is really start; wait on tx
-        # msa could time out, return a 250 and continue "detach"
-        # this was to make it wait at least until the start part was done
-        # exploder does the detach part on the router side now so this
-        # should be dead
-        self.lock = Lock()
-        self.cv = Condition(self.lock)
         # TODO this is only false in router_service test which needs
         # to be ported to the raw request subset of the api.
         self.wait_response = wait_response
@@ -140,9 +129,7 @@ class RestEndpoint(Filter):
             #if not resp_json or 'url' not in resp_json:
             #    return Response.Internal(
             #        'RestEndpoint.start internal error (no json)')
-            with self.lock:
-                self.transaction_url = self.base_url + resp_json['url']
-                self.cv.notify_all()
+            self.transaction_url = self.base_url + resp_json['url']
 
             return rest_resp
 
@@ -233,21 +220,12 @@ class RestEndpoint(Filter):
         return rest_resp
 
     def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
-        # TODO revisit whether we should explicitly split waiting for
-        # the post vs polling the json for the result in this api
-        with self.lock:
-            self.cv.wait_for(lambda: self.transaction_url is not None)
-
         logging.info('RestEndpoint.append_data %s %d', last, blob.len())
 
         if blob.len() < self.max_inline:
             self._append_inline(last, blob)
             if not last:
                 return Response()
-            else:
-                with self.lock:
-                    self.appended_last = True
-                    self.cv.notify_all()
             # XXX -> get_tx_response()?
             return self.get_status(self.timeout_data)
 
@@ -286,7 +264,6 @@ class RestEndpoint(Filter):
             return resp
         else:
             with self.lock:
-                self.appended_last = True
                 self.cv.notify_all()
 
         return self.get_status(self.timeout_data)
@@ -463,14 +440,6 @@ class RestEndpoint(Filter):
 
 
     def set_durable(self):
-        # XXX appended_last only gets set after the append has
-        # succeeded but this is valid as long as the server has
-        # *received* the append i.e. concurrent with inflight
-        with self.lock:
-            self.cv.wait_for(
-                lambda:
-                self.transaction_url is not None)  # and self.appended_last)
-
         rest_resp = requests.post(self.transaction_url + '/smtpMode',
                                   json={},
                                   headers={'host': self.http_host},
@@ -480,6 +449,7 @@ class RestEndpoint(Filter):
             return Response(400, "RestEndpoint.set_durable")
 
         return Response()
+
 
     def abort(self):
         # TODO
