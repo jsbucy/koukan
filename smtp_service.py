@@ -46,6 +46,7 @@ class SmtpHandler:
         envelope.endpoint = self.endpoint_factory()
         envelope.tx = TransactionMetadata()
 
+        # XXX fix
         #envelope.tx.remote_host = HostPort.from_seq(remote) if remote else None
         #envelope.tx.local_host = HostPort.from_seq(local) if remote else None
         envelope.tx.mail_from = Mailbox(mail_from, mail_esmtp)
@@ -53,7 +54,8 @@ class SmtpHandler:
             None, lambda: self._update_tx(envelope.endpoint, envelope.tx))
         await asyncio.wait([fut], timeout=self.timeout_mail)
         logging.info('mail resp %s', envelope.tx.mail_response)
-
+        if envelope.tx.mail_response is None:
+            return b'450 MAIL upstream timeout/internal err'
         if envelope.tx.mail_response.ok():
             envelope.mail_from = mail_from
             envelope.mail_options.extend(mail_esmtp)
@@ -73,10 +75,16 @@ class SmtpHandler:
 
         await asyncio.wait([fut], timeout=self.timeout_rcpt)
 
-        logging.info('rcpt_response %s', envelope.tx.rcpt_response)
+        logging.info('handle_RCPT rcpt_response %s', envelope.tx.rcpt_response)
 
-        rcpt_resp = envelope.tx.rcpt_response[envelope.rcpt_i]
+        # for now without pipelining we send one rcpt upstream at a time
+        if len(envelope.tx.rcpt_response) != 1:
+            return b'450 RCPT upstream timeout/internal err'
+        rcpt_resp = envelope.tx.rcpt_response[0]
+
         envelope.rcpt_i += 1
+        if rcpt_resp is None:
+            return b'450 RCPT upstream timeout/internal err'
         if rcpt_resp.ok():
             envelope.rcpt_tos.append(rcpt_to)
             #XXX envelope.rcpt_options.append(rcpt_esmtp)

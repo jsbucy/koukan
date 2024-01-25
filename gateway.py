@@ -1,25 +1,16 @@
+from typing import Dict
 import sys
+import logging
+from threading import Thread
+import time
 
 from rest_endpoint import RestEndpoint, BlobIdMap
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
-
-from executor import Executor
-from tags import Tag
-
 from blobs import BlobStorage
 from smtp_service import service as smtp_service
 import rest_service
 from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
-
-import logging
-
-from typing import Dict
-
-from threading import Thread
-
-import time
-
 from config import Config
 
 from wsgiref.simple_server import make_server

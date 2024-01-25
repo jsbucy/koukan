@@ -9,7 +9,6 @@ from requests.exceptions import ConnectionError
 
 from router_service import Service
 from rest_endpoint import RestEndpoint
-from rest_endpoint import RestEndpoint
 from response import Response
 from blob import InlineBlob
 from config import Config
@@ -26,6 +25,31 @@ root_yaml = {
     },
     'rest_listener': {
     },
+    'endpoint': [
+        {
+            'name': 'smtp-msa',
+            'msa': True,
+            'chain': [{'filter': 'exploder',
+                       'output_chain': 'outbound-gw',
+                       'msa': True}]
+        },
+        {
+            'name': 'submission',
+            'msa': True,
+            'chain': [{'filter': 'sync'}]
+        },
+        {
+            'name': 'smtp-in',
+            'msa': True,
+            'chain': [{'filter': 'exploder',
+                       'output_chain': 'inbound-gw',
+                       'msa': False}]
+        },
+        {
+            'name': 'inbound-gw',
+            'chain': [{'filter': 'sync'}]
+        },
+    ],
     'endpoint': [
         {
             'name': 'outbound-gw',
@@ -99,58 +123,115 @@ class RouterServiceTest(unittest.TestCase):
         for l in self.service.storage.db.iterdump():
             print(l)
 
-    def test_read_routing(self):
-        start_endpoint = RestEndpoint(
+    def test_retry(self):
+        rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='outbound-gw',
             wait_response=False)
+        rest_resp = rest_endpoint._start(TransactionMetadata(), {})
+        tx_json = rest_resp.json()
+        logging.debug('RouterServiceTest.test_retry create %s %s',
+                      rest_resp, tx_json)
+        self.assertEqual(tx_json.get('mail_response', None), None)
+        self.assertEqual(tx_json.get('rcpt_response', None), None)
+        self.assertEqual(tx_json.get('data_response', None), None)
+        self.assertEqual(tx_json.get('last', None), None)
 
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
-        self.assertTrue(start_endpoint.set_durable().ok())
+        rest_resp = rest_endpoint._update(
+            TransactionMetadata(mail_from=Mailbox('alice')))
+        tx_json = rest_resp.json()
+        logging.debug('RouterServiceTest.test_retry patch mail_from %s %s',
+                      rest_resp, tx_json)
+        self.assertEqual(tx_json.get('mail_response', None), {})
+        self.assertEqual(tx_json.get('rcpt_response', None), None)
+        self.assertEqual(tx_json.get('data_response', None), None)
+        self.assertEqual(tx_json.get('last', None), None)
 
-        transaction_url = start_endpoint.transaction_url
+        tx_json = rest_endpoint.get_json(1.2)
+        logging.debug('RouterServiceTest.test_retry get after mail_from %s',
+                      tx_json)
 
-        # XXX rewrite these tests, RestEndpoint increasingly doesn't
-        # work as a generic client outside of Filter api/protocol.
-        read_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            transaction_url=transaction_url,
-            wait_response=True)
+        rest_resp = rest_endpoint._update(
+            TransactionMetadata(rcpt_to = [Mailbox('bob')]))
+        tx_json = rest_resp.json()
+        logging.debug('RouterServiceTest.test_retry patch rcpt_to %s %s',
+                      rest_resp, tx_json)
+        self.assertEqual(tx_json.get('mail_response', None), {})
+        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
+        self.assertEqual(tx_json.get('data_response', None), None)
+        self.assertEqual(tx_json.get('last', None), None)
 
-        # read from initial inflight
-        # xxx rest service blocks on start/final resp whether you want
-        # it to or not
-        resp_json = read_endpoint.get_json(2)
-        logging.info('inflight %s', resp_json)
-        self.assertFalse(resp_json['rcpt_response'])
-        self.assertIsNone(resp_json.get('data_response', None))
+        tx_json = rest_endpoint.get_json(1.2)
+        logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
+                      tx_json)
 
-        # set start response, initial inflight tempfails
-        self.endpoint.set_mail_response(Response())
+        rest_resp = rest_endpoint._append_inline(
+            chunk_id=0, last=False, blob=InlineBlob(b'hello'))
+        tx_json = rest_resp.json()
+        logging.debug('RouterServiceTest.test_retry post append %s %s',
+                      rest_resp, tx_json)
+        self.assertEqual(tx_json.get('mail_response', None), {})
+        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
+        self.assertEqual(tx_json.get('data_response', None), {})
+        self.assertEqual(tx_json.get('last', None), False)
+
+        rest_resp = rest_endpoint._append_blob(
+            chunk_id=0, last=True, blob_uri=None)
+        logging.debug('RouterServiceTest.test_retry append blob %s',
+                      rest_resp)
+        tx_json = rest_resp.json()
+        blob_uri = tx_json.get('uri', None)
+        rest_resp = rest_endpoint._put_blob(
+            blob=InlineBlob('world'), uri=blob_uri)
+
+
+        logging.debug('RouterServiceTest.test_retry get after append %s',
+                      tx_json)
+        self.assertTrue(rest_endpoint.set_durable().ok())
+
+
+        # set upstream responses so output tempfails at rcpt
+        self.endpoint.set_mail_response(Response(201))
         self.endpoint.add_rcpt_response(Response(456))
 
         self.assertEqual(1, self.service._dequeue())
 
-        resp = read_endpoint.get_json_response(3, 'rcpt_response')
-        logging.info('test_read_routing rcpt resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp[0].code, 456)
+        tx_json = rest_endpoint.get_json(1.2)
+        logging.debug('RouterServiceTest.test_retry get after first attempt '
+                      '%s %s', rest_resp, tx_json)
+        mail_resp = Response.from_json(tx_json.get('mail_response', None))
+        self.assertEqual(mail_resp.code, 201)
+        rcpt_resp = [ Response.from_json(r).code
+                     for r in tx_json.get('rcpt_response', []) ]
+        self.assertEqual(rcpt_resp, [456])
+        self.assertEqual(tx_json.get('data_response', None), {})
+        self.assertEqual(tx_json.get('last', None), True)
 
+
+        # set upstream responses so output (retry) succeeds
         self.endpoint = SyncEndpoint()
         self.assertTrue(self.service._dequeue())
 
         # upstream success, retry succeeds, propagates down to rest
-        self.endpoint.set_mail_response(Response())
-        self.endpoint.add_rcpt_response(Response(234))
-        self.endpoint.add_data_response(Response(245))
+        self.endpoint.set_mail_response(Response(201))
+        self.endpoint.add_rcpt_response(Response(202))
+        self.endpoint.add_data_response(None)
+        self.endpoint.add_data_response(Response(203))
 
-        resp = read_endpoint.get_json_response(3, 'data_response')
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 245)
+        tx_json = rest_endpoint.get_json(1.2)
+        logging.debug('RouterServiceTest.test_retry get after second attempt '
+                      '%s %s', rest_resp, tx_json)
+        mail_resp = Response.from_json(tx_json.get('mail_response', None))
+        self.assertEqual(mail_resp.code, 201)
+        rcpt_resp = [ Response.from_json(r).code
+                     for r in tx_json.get('rcpt_response', []) ]
+        self.assertEqual(rcpt_resp, [202])
+        mail_resp = Response.from_json(tx_json.get('data_response', None))
+        self.assertEqual(mail_resp.code, 203)
+        self.assertEqual(tx_json.get('last', None), True)
 
+    # TODO refactor the rest of these tests to use the "raw request"
+    # subset of RestEndpoint instead of the Filter
+    # api/protocol/personality
 
     # set durable after upstream ok/perm -> noop
     def test_durable_after_upstream_success(self):

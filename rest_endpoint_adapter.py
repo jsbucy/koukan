@@ -33,6 +33,11 @@ class RestEndpointAdapter(Handler):
     def start(self, req_json) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
         self.endpoint.start(tx)
+        # xxx inflight response fields per tx req fields
+        rest_resp = FlaskResponse(200)
+        rest_resp.set_data('{}')
+        rest_resp.content_type = 'application/json'
+        return rest_resp
 
     def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
         json_out = {}
@@ -40,7 +45,8 @@ class RestEndpointAdapter(Handler):
         if self.endpoint.mail_resp:
             json_out['mail_response'] = self.endpoint.mail_resp.to_json()
         if self.endpoint.rcpt_resp:
-            json_out['rcpt_response'] = [r.to_json() for r in self.endpoint.rcpt_resp]
+            json_out['rcpt_response'] = [
+                r.to_json() for r in self.endpoint.rcpt_resp]
         if self.endpoint.data_response:
             json_out['data_response'] = self.endpoint.data_response.to_json()
 

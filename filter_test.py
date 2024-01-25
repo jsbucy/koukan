@@ -9,55 +9,65 @@ class FilterTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-    def testBasic(self):
-        orig = TransactionMetadata()
-        orig.host = 'host'
-        delta = TransactionMetadata()
-        merged = orig.merge(delta)
-        self.assertIsNotNone(merged)
-        orig.mail_from = Mailbox('alice')
-        orig.rcpt_to = [Mailbox('bob')]
-        self.assertEqual(orig.to_json(),
-                         {'mail_from': {'m': 'alice'},
-                          'rcpt_to': [{'m': 'bob'}],
-                          'host': 'host'})
 
-        orig = TransactionMetadata.from_json(
-            {'mail_from': {'m': 'alice'},
-             'rcpt_to': [{'m': 'bob'}],
-             'host': 'host'})
-        delta.host = 'host2'
-        merged = orig.merge(delta)
-        self.assertIsNone(merged)
+    def testSingleField(self):
+        tx = TransactionMetadata()
+        js = tx.to_json()
+        self.assertEqual(js, {})
 
-    def testDelta(self):
-        orig = TransactionMetadata()
-        self.assertFalse(orig)
-        orig.host = 'host'
-        next = TransactionMetadata()
-        next.host = orig.host
-        next.local_host = HostPort('local_host', 25)
-        delta = orig.delta(next)
-        self.assertIsNotNone(delta)
-        self.assertTrue(delta)
-        self.assertFalse(hasattr(delta, 'host') and getattr(delta, 'host'))
-        self.assertEqual(delta.local_host.host, 'local_host')
+        self.assertIsNone(TransactionMetadata.from_json({'mail_from': None}))
+        self.assertIsNone(TransactionMetadata.from_json({'rcpt_to': []}))
 
-        del next.host
-        delta = orig.delta(next)
-        self.assertIsNone(delta)
+        succ = TransactionMetadata(mail_from=Mailbox('alice'))
+        delta = tx.delta(succ)
+        self.assertEqual(delta.rcpt_to, [])
+        self.assertEqual(delta.to_json(), {'mail_from': {'m': 'alice'}})
 
-    def testDeltaRcpt(self):
-        orig = TransactionMetadata()
-        orig.rcpt_to = [Mailbox('alice')]
-        next = TransactionMetadata()
-        next.rcpt_to = [Mailbox('alice'), Mailbox('bob')]
-        delta = orig.delta(next)
-        self.assertIsNotNone(delta)
-        self.assertEqual(delta.rcpt_to, [Mailbox('bob')])
-        merged = orig.merge(delta)
-        self.assertIsNotNone(merged)
-        self.assertEqual(merged.rcpt_to, [Mailbox('alice'), Mailbox('bob')])
+        merged = tx.merge(delta)
+        self.assertEqual(merged.to_json(), {'mail_from': {'m': 'alice'}})
+
+    def testBadSingleField(self):
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        succ = TransactionMetadata(mail_from=Mailbox('bob'))
+        self.assertIsNone(tx.delta(succ))
+
+    def testRcptFirst(self):
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        succ = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+
+        delta = tx.delta(succ)
+        self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob'}]})
+
+        merged = tx.merge(delta)
+        self.assertEqual(merged.to_json(), {'mail_from': {'m': 'alice'},
+                                            'rcpt_to': [{'m': 'bob'}]})
+
+    def testRcptAppend(self):
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')])
+        succ = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
+
+        delta = tx.delta(succ)
+        self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob2'}]})
+
+        merged = tx.merge(delta)
+        self.assertEqual(merged.to_json(), {
+            'mail_from': {'m': 'alice'},
+            'rcpt_to': [{'m': 'bob'}, {'m': 'bob2'}]})
+
+    def testBadRcpt(self):
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')])
+        succ = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob2'), Mailbox('bob2')])
+        # not a prefix
+        self.assertIsNone(tx.delta(succ))
+
 
 if __name__ == '__main__':
     unittest.main()

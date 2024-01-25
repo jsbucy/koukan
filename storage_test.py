@@ -25,9 +25,23 @@ class StorageTest(unittest.TestCase):
         tx_writer.create('tx_rest_id')
         logging.info('version %d', tx_writer.version)
         tx_writer.write_envelope(TransactionMetadata(
-            HostPort('local_host', 25), HostPort('remote_host', 2525),
-            Mailbox('alice'),
-            [Mailbox('bob')], 'host'))
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice')))
+
+        tx_reader = self.s.load_one()
+        self.assertIsNotNone(tx_reader)
+        self.assertEqual(tx_writer.id, tx_reader.id)
+        tx_reader.set_mail_response(Response(450))
+
+        tx_writer.load()  # pick up version
+        tx_writer.write_envelope(TransactionMetadata(
+            rcpt_to=[Mailbox('bob')]))
+        self.assertEqual(tx_writer.tx.remote_host.host, 'remote_host')
+        self.assertEqual(tx_writer.tx.host, 'host')
+        self.assertEqual(tx_writer.tx.mail_from.mailbox, 'alice')
+        self.assertEqual(tx_writer.tx.mail_response.code, 450)
+        self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.load(rest_id='tx_rest_id')
@@ -55,17 +69,16 @@ class StorageTest(unittest.TestCase):
         self.assertTrue(tx_writer.append_action(Action.SET_DURABLE))
         #self.dump_db()
 
-        reader = self.s.load_one()
-        self.assertIsNotNone(reader)
-        reader.add_rcpt_response([Response(456, 'busy')])
-        reader.append_action(Action.TEMP_FAIL, Response(456))
+        tx_reader.load()
+        tx_reader.add_rcpt_response([Response(456, 'busy')])
+        tx_reader.append_action(Action.TEMP_FAIL, Response(456))
 
-#        reader = self.s.get_transaction_cursor()
-#        reader.load(db_id=tx_writer.id)
-#        self.assertEqual(reader.id, tx_writer.id)
+        # reader = self.s.get_transaction_cursor()
+        # reader.load(db_id=tx_writer.id)
+        # self.assertEqual(reader.id, tx_writer.id)
         # xxx self.assertEqual(reader.length, 23)
-        self.assertTrue(reader.last)
-        self.assertEqual(reader.max_i, 3)
+        self.assertTrue(tx_reader.last)
+        self.assertEqual(tx_reader.max_i, 3)
 
         expected_content = [
             b'abc',
@@ -75,7 +88,7 @@ class StorageTest(unittest.TestCase):
         ]
         for i,c in enumerate(expected_content):
             logging.info('%d', i)
-            blob = reader.read_content(i)
+            blob = tx_reader.read_content(i)
             self.assertIsNotNone(blob)
             self.assertEqual(c, blob.contents())
 
@@ -83,7 +96,7 @@ class StorageTest(unittest.TestCase):
         self.assertIsNotNone(r2)
         self.assertEqual(r2.id, tx_writer.id)
         self.assertIsNone(r2.tx.mail_response)
-        self.assertEqual(r2.tx.rcpt_response[0].code, 456)
+        self.assertEqual(r2.tx.rcpt_response, [])
         self.assertIsNone(r2.tx.data_response)
 
         r2.append_action(Action.DELIVERED, Response(234))

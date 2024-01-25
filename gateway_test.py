@@ -1,21 +1,14 @@
-
-from gateway import SmtpGateway
-
 import unittest
-
 import logging
-
-from config import Config
 import socketserver
 from threading import Thread
-
-from rest_endpoint import RestEndpoint
-
 import time
 
+from config import Config
+from gateway import SmtpGateway
 from fake_smtpd import FakeSmtpd
-
 from blob import InlineBlob
+from rest_endpoint import RestEndpoint
 
 # xxx -> yaml
 config_json = {

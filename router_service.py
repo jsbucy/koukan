@@ -125,6 +125,7 @@ class Service:
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
+        # xxx broken needs to loop?
         self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         storage_tx = self.storage.load_one()
         logging.info("dequeued %s", storage_tx.id if storage_tx else None)

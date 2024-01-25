@@ -96,10 +96,10 @@ class SyncEndpoint(Filter):
             self.rcpt_to.extend(tx.rcpt_to)
             with self.lock:
                 self.cv.wait_for(
-                    lambda: len(self.rcpt_response) == len(self.rcpt_to),
+                    lambda: len(self.rcpt_response) == len(tx.rcpt_to),
                     deadline_left)
                 self.tx.rcpt_response = self.rcpt_response
-
+                self.rcpt_response = []
 
     def append_data(self, last, blob,
                     timeout : Optional[float] = None):

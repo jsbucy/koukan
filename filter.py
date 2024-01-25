@@ -21,6 +21,8 @@ class HostPort:
         return HostPort(yaml['host'], yaml['port'])
     def to_tuple(self):
         return (self.host, self.port)
+    def to_json(self):
+        return self.to_tuple()
 
 class Esmtp:
     # from aiosmtpd
@@ -59,11 +61,24 @@ class Mailbox:
     def from_json(json):
         return Mailbox(json['m'], json['e'] if 'e' in json else None)
 
+def list_from_js(js, builder):
+    return [builder(j) for j in js]
+
+# NOTE in the Filter api/stack, this is usually interpreted as a delta where
+# field == None means "not present in the delta". As such, there is
+# currently no representation of "set this field to None".
 class TransactionMetadata:
-    single_fields = ['host']
-    host_port_fields = ['local_host', 'remote_host']
-    mailbox_fields = ['mail_from']
-    all_fields = single_fields + host_port_fields + mailbox_fields + ['rcpt_to']
+    fields = {
+        'host': lambda x: x,
+        'remote_host': HostPort.from_seq,
+        'local_host': HostPort.from_seq,
+        'mail_from': Mailbox.from_json,
+        'mail_response': Response.from_json,
+        'rcpt_to': lambda js: list_from_js(js, Mailbox.from_json),
+        'rcpt_response': lambda js: list_from_js(js, Response.from_json),
+        'data_response': Response.from_json
+        # XXX last?
+    }
 
     host : Optional[str] = None
     rest_endpoint : Optional[str] = None
@@ -94,78 +109,124 @@ class TransactionMetadata:
         if durable is not None:
             self.durable = durable
 
-    def __bool__(self):
-        for f in TransactionMetadata.all_fields:
-            if hasattr(self, f) and bool(getattr(self, f)):
-                return True
-        return False
+#    def __bool__(self):
+#        for f in TransactionMetadata.all_fields:
+#            if hasattr(self, f) and bool(getattr(self, f)):
+#                return True
+#        return False
+
+    def __repr__(self):
+        out = ''
+        out += 'mail_from=%s mail_response=%s ' % (
+            self.mail_from, self.mail_response)
+        out += 'rcpt_to=%s rcpt_response=%s ' % (
+            self.rcpt_to, self.rcpt_response)
+        out += 'data_response=%s' % self.data_response
+        return out
 
     @staticmethod
     def from_json(json):
-        tx =  TransactionMetadata()
-        for f in TransactionMetadata.mailbox_fields:
-            if f in json.keys():
-                setattr(tx, f, Mailbox.from_json(json[f]))
-        for f in TransactionMetadata.host_port_fields:
-            if f in json.keys():
-                h,p = json[f]
-                setattr(tx, f, HostPort(h,p))
-        if 'rcpt_to' in json and json['rcpt_to']:
-            tx.rcpt_to = [Mailbox.from_json(r) for r in json['rcpt_to']]
-        for f in TransactionMetadata.single_fields:
-            if f in json.keys():
-                setattr(tx, f, json[f])
+        tx = TransactionMetadata()
+        for f in json.keys():
+            builder = TransactionMetadata.fields.get(f, None)
+            if not builder:
+                return None  # invalid
+            js_v = json[f]
+            if js_v is None:
+                # TODO for now setting a non-null field back to null
+                # is not a valid operation so reject json with that
+                return None
+            if isinstance(js_v, list) and not js_v:
+                return None
+            v = builder(js_v)
+            if not v:
+                return None
+            setattr(tx, f, v)
         return tx
 
     def to_json(self):
         json = {}
-        for f in TransactionMetadata.mailbox_fields:
-            if hasattr(self, f) and getattr(self, f):
-                json[f] = getattr(self, f).to_json()
-        for f in TransactionMetadata.host_port_fields:
-            if hasattr(self, f) and getattr(self, f):
-                json[f] = getattr(self, f).to_tuple()
-        if self.rcpt_to:
-            json['rcpt_to'] = [r.to_json() for r in self.rcpt_to]
-        for f in TransactionMetadata.single_fields:
-            if hasattr(self, f) and getattr(self, f):
-                json[f] = getattr(self, f)
+        for f in TransactionMetadata.fields.keys():
+            if hasattr(self, f) and getattr(self, f) is not None:
+                v = getattr(self, f)
+                if v is None:
+                    continue
+                v_js = None
+                if isinstance(v, str):
+                    v_js = v
+                elif isinstance(v, list):
+                    if v:
+                        v_js = [vv.to_json() for vv in v]
+                else:
+                    v_js = v.to_json()
+                if v_js is not None:
+                    json[f] = v_js
         return json
 
+    # apply a delta to self -> next
     def merge(self, delta : "TransactionMetadata"
               ) -> Optional["TransactionMetadata"]:
         out = TransactionMetadata()
-        for f in TransactionMetadata.single_fields + TransactionMetadata.host_port_fields + TransactionMetadata.mailbox_fields:
-            if hasattr(delta, f) and getattr(delta, f):
-                if hasattr(self, f) and getattr(self, f):
-                    return None
-                setattr(out, f, getattr(delta, f))
-            elif hasattr(self, f) and getattr(self, f):
-                setattr(out, f, getattr(self, f))
-        out.rcpt_to.extend(self.rcpt_to)
-        out.rcpt_to.extend(delta.rcpt_to)
+
+        for f in TransactionMetadata.fields.keys():
+            old_v = getattr(self, f, None)
+            new_v = getattr(delta, f, None)
+            if old_v is None and new_v is not None:
+                setattr(out, f, new_v)
+                continue
+            if old_v is not None and new_v is None:
+                setattr(out, f, old_v)
+                continue
+
+            if isinstance(old_v, list) != isinstance(new_v, list):
+                return None  # invalid
+            if not isinstance(old_v, list):
+                # could verify that old_v == new_v
+                continue
+            l = []
+            l.extend(old_v)
+            l.extend(new_v)
+            setattr(out, f, l)
+
         return out
 
-    def delta(self, next : "TransactionMetadata"
+    # compute a delta from self to successor
+    def delta(self, successor : "TransactionMetadata"
               ) -> Optional["TransactionMetadata"]:
         out = TransactionMetadata()
-        for f in TransactionMetadata.single_fields + TransactionMetadata.host_port_fields + TransactionMetadata.mailbox_fields:
-            if hasattr(next, f) and getattr(next, f):
-                if not hasattr(self, f) or not getattr(self, f):
-                    setattr(out, f, getattr(next, f))
-            elif hasattr(self, f) and getattr(self, f):
-                logging.info('invalid delta %s', f)
-                return None
+        for f in TransactionMetadata.fields.keys():
+            old_v = getattr(self, f, None)
+            new_v = getattr(successor, f, None)
+            if (old_v is not None) and (new_v is None):
+                return None  # invalid
+            if (old_v is None) and (new_v is not None):
+                setattr(out, f, new_v)
+                continue
+            if old_v == new_v:
+                if isinstance(old_v, list):
+                    setattr(out, f, [])
+                else:
+                    setattr(out, f, None)
+                continue
 
-        # rcpts must be a prefix
-        old_len = len(self.rcpt_to)
-        if len(next.rcpt_to) < old_len or self.rcpt_to != next.rcpt_to[0:old_len]:
-            logging.info('invalid delta rcpt %s %s', self.rcpt_to, next.rcpt_to)
-            return None
-        out.rcpt_to = next.rcpt_to[old_len:]
+            if isinstance(old_v, list) != isinstance(new_v, list):
+                return None  # invalid
+            if not isinstance(old_v, list):
+                if old_v != new_v:
+                    return None  # invalid
+                continue
+
+            old_len = len(old_v)
+            if old_len > len(new_v):
+                return None  # invalid
+            if new_v[0:old_len] != old_v:
+                return None
+            setattr(out, f, new_v[old_len:])
+
         return out
 
 class Filter(ABC):
+    # XXX needs to return some errors e.g. http 412 directly instead of via tx
     @abstractmethod
     def on_update(self, transaction_metadata : TransactionMetadata,
                   timeout : Optional[float] = None):

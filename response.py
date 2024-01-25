@@ -51,8 +51,10 @@ class Response:
         return {'code': self.code, 'message': self.message}
 
     @staticmethod
-    def from_json(d : Dict) -> "Response":
-        return Response(d['code'], d['message'])
+    def from_json(d : Dict) -> Optional["Response"]:
+        if 'code' not in d:
+            return None
+        return Response(d['code'], d.get('message', None))
 
     def to_smtp_resp(self) -> bytes:
         assert(not self.internal())

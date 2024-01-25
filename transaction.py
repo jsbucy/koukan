@@ -73,40 +73,70 @@ class RestServiceTransaction(Handler):
     def tx_rest_id(self):
         return self._tx_rest_id
 
+    # xxx don't allow setting resp fields?
     def start(self, req_json) -> Optional[FlaskResponse]:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
         assert 'host' not in req_json
         js = req_json
         js['host'] = self.http_host
         tx = TransactionMetadata.from_json(js)
+        if tx is None:
+            return FlaskResponse(400, 'invalid transaction json')
         try:
             self.tx_cursor.write_envelope(tx)
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
-        # todo should return oneshot get()?
-        return None  # Response only on error
+        self.tx_cursor.load()
+        return self._get_tx_json()
 
+    # xxx don't allow setting resp fields?
     def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
         resp_json = {}
         tx = TransactionMetadata.from_json(req_json)
+        if tx is None:
+            return FlaskResponse(400, 'invalid transaction delta')
         try:
             self.tx_cursor.write_envelope(tx)
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
-        # todo should return oneshot get()?
+        self.tx_cursor.load()
+        return self._get_tx_json()
+
+    def _get_tx_json(self) -> FlaskResponse:
+        resp_json = {}
+        resp_js = lambda r: r.to_json() if r is not None else {}
+        if (self.tx_cursor.tx.mail_from is not None or
+            self.tx_cursor.tx.mail_response is not None):
+            resp_json['mail_response'] = resp_js(
+                self.tx_cursor.tx.mail_response)
+        if (self.tx_cursor.tx.rcpt_to or self.tx_cursor.tx.rcpt_response):
+            resp_json['rcpt_response'] = len(self.tx_cursor.tx.rcpt_to) * [{}]
+            for i,r in enumerate(self.tx_cursor.tx.rcpt_response):
+                resp_json['rcpt_response'][i] = r.to_json()
+        if self.tx_cursor.max_i is not None:
+            resp_json['data_response'] = resp_js(
+                self.tx_cursor.tx.data_response)
+            resp_json['last'] = bool(self.tx_cursor.last)
+
+        logging.info('RestServiceTransaction.get done %s %s',
+                     self._tx_rest_id, resp_json)
+
+        # xxx flask jsonify() depends on app context which we may
+        # not have in tests?
         rest_resp = FlaskResponse()
+        rest_resp.set_data(json.dumps(resp_json))
+        rest_resp.content_type = 'application/json'
         return rest_resp
 
     # TODO pass a timeout possibly from request-timeout header e.g.
     # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
-    def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
+    def get(self, req_json : Dict[str, Any], wait_inflight=1) -> FlaskResponse:
         logging.info('RestServiceTransaction.get %s', self._tx_rest_id)
-        resp_json = {}
         start = time.monotonic()
-        while (time.monotonic() - start) < 1:
+        while (time.monotonic() - start) < wait_inflight:
             # only wait if something is inflight upstream and we think the
             # status might change soon
-            logging.info('RestServiceTransaction.get %s %s',
+            logging.info('RestServiceTransaction.get rcpt_to=%s rcpt_resp=%s',
                          self.tx_cursor.tx.rcpt_to,
                          self.tx_cursor.tx.rcpt_response)
             if self.tx_cursor.status not in [
@@ -126,27 +156,9 @@ class RestServiceTransaction(Handler):
             self.tx_cursor.wait(timeout=1)
             logging.info('RestServiceTransaction.get wait done')
 
-        # xxx ever expected to have the resp without the req?
-        resp_js = lambda r: r.to_json() if r is not None else None
-        if self.tx_cursor.tx.mail_from is not None:
-            resp_json['mail_response'] = resp_js(
-                self.tx_cursor.tx.mail_response)
-        if self.tx_cursor.tx.rcpt_to:
-            resp_json['rcpt_response'] = [
-                r.to_json() for r in self.tx_cursor.tx.rcpt_response]
-        if self.tx_cursor.max_i is not None:
-            resp_json['data_response'] = resp_js(
-                self.tx_cursor.tx.data_response)
-
-        logging.info('RestServiceTransaction.get done %s %s',
-                     self._tx_rest_id, resp_json)
-
-        # xxx flask jsonify() depends on app context which we may
-        # not have in tests?
-        rest_resp = FlaskResponse()
-        rest_resp.set_data(json.dumps(resp_json))
-        rest_resp.content_type = 'application/json'
-        return rest_resp
+        logging.info('RestServiceTransaction.get %s %s', self._tx_rest_id,
+                     self.tx_cursor.tx)
+        return self._get_tx_json()
 
 
     def append_blob(self, uri : Optional[str], last) -> FlaskResponse:
@@ -214,7 +226,8 @@ class RestServiceTransaction(Handler):
             # round-tripping utf8 -> python str -> utf8
             d : bytes = req_json['d'].encode('utf-8')
             self.tx_cursor.append_blob(d=d, last=last)
-            return FlaskResponse()  # XXX range?
+            self.tx_cursor.load()
+            return self._get_tx_json()
 
         # if 'uri' in req_json:  # xxx this would be a protocol change
         uri = req_json.get('uri', None)
@@ -324,56 +337,78 @@ def output(cursor, endpoint) -> Optional[Response]:
     ok_rcpt = False
     while True:
         delta = last_tx.delta(cursor.tx)
+        # XXX delta() outputs response fields
+        # but we don't really say if it's a precondition of Filter.on_update()
+        # that those fields are unset
+        delta.mail_response = None
+        delta.rcpt_response = []
         assert delta is not None
-        logging.info('output max_i %s', cursor.max_i)
-        if delta:
-            endpoint.on_update(delta)
+        logging.info('cursor_to_endpoint %s '
+                     'mail_from = %s '
+                     'rcpt_to = %s '
+                     ' max_i=%s',
+                     cursor.rest_id,
+                     delta.mail_from, delta.rcpt_to, cursor.max_i)
+        if delta.mail_from is None and not delta.rcpt_to:
+            if cursor.max_i is not None:
+                logging.debug('cursor_to_endpoint %s -> data', cursor.rest_id)
+                break
+            else:
+                cursor.wait()
+                continue
 
-            if delta.mail_from:
-                logging.debug('cursor_to_endpoint %s mail_from: %s',
-                              cursor.rest_id, delta.mail_from.mailbox)
-                resp = delta.mail_response
-                if not resp:
-                    # XXX fix upstream and assert
-                    logging.warning('tx out: output chain didn\'t set '
-                                    'mail response')
-                    resp = Response()
-                else:
-                    logging.debug('cursor_to_endpoint %s mail_resp %s',
-                                  cursor.rest_id, resp)
-                if resp.err():
-                    err = resp
-                cursor.set_mail_response(resp)
-            if delta.rcpt_to:
-                logging.debug('cursor_to_endpoint %s rcpt_to: %s',
-                              cursor.rest_id, delta.rcpt_to)
-                resp = delta.rcpt_response
-                logging.debug('cursor_to_endpoint %s rcpt_resp %s',
+        endpoint.on_update(delta)
+        if delta.mail_from:
+            logging.debug('cursor_to_endpoint %s mail_from: %s',
+                          cursor.rest_id, delta.mail_from.mailbox)
+            resp = delta.mail_response
+            if not resp:
+                # XXX fix upstream and assert
+                logging.warning('tx out: output chain didn\'t set '
+                                'mail response')
+                resp = Response()
+            else:
+                logging.debug('cursor_to_endpoint %s mail_resp %s',
                               cursor.rest_id, resp)
+            if resp.err():
+                err = resp
+            while True:
+                try:
+                    cursor.set_mail_response(resp)
+                except VersionConflictException:
+                    cursor.load()
+                    continue
+                break
+            last_tx.mail_from = delta.mail_from
 
+        if delta.rcpt_to:
+            resp = delta.rcpt_response
+            logging.debug('cursor_to_endpoint %s rcpt_to: %s resp %s',
+                          cursor.rest_id, delta.rcpt_to, resp)
+            assert len(resp) == len(delta.rcpt_to)
+            logging.debug('cursor_to_endpoint %s rcpt_resp %s',
+                          cursor.rest_id, resp)
+            while True:
                 try:
                     cursor.add_rcpt_response(resp)
                 except VersionConflictException:
                     cursor.load()
                     continue
-                for r in resp:
-                    if r.ok():
-                        ok_rcpt = True
-                    elif err is None:
-                        # XXX revisit in the context of the exploder,
-                        # this is used downstream for append_action,
-                        # what does that mean in the context of
-                        # multi-rcpt?
-                        err = r
+                break
+            for r in resp:
+                if r.ok():
+                    ok_rcpt = True
+                elif err is None:
+                    # XXX revisit in the context of the exploder,
+                    # this is used downstream for append_action,
+                    # what does that mean in the context of
+                    # multi-rcpt?
+                    err = r
+            last_tx.rcpt_to += delta.rcpt_to
 
-            last_tx = cursor.tx
-
-        if cursor.max_i is not None:
-            break
-
-        cursor.wait()
 
     if not ok_rcpt:
+        logging.debug('cursor_to_endpoint %s no rcpt', cursor.rest_id)
         return err
 
     i = 0

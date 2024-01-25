@@ -1,16 +1,13 @@
 from typing import Any, Callable, Dict, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
-
 import logging
 
+import email.utils
+
 from response import Response, Esmtp
-
 from blob import Blob, InlineBlob
-
 from filter import Filter, HostPort, TransactionMetadata
 
-import smtp_endpoint
-import email.utils
 
 class RoutingPolicy(ABC):
     # called on the first recipient in the transaction

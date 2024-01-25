@@ -35,8 +35,10 @@ class TransactionCursor:
 
     def etag(self) -> str:
         base = '%d.%d.%d' % (self.creation, self.id, self.version)
-        return b64encode(
-            sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
+        return base
+        # xxx enable in prod
+        #return b64encode(
+        #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
     def create(self, rest_id):
         parent = self.parent
@@ -72,20 +74,24 @@ class TransactionCursor:
     def write_envelope(self, tx_delta : TransactionMetadata):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            # XXX should this just load()? or use sql json functions
-            # to patch the json in the db directly without this
-            # read-modify-write?
-            merged = self.tx.merge(tx_delta)
+            # TODO this should just load(), trying to save a single
+            # point read rfom the db isn't worth worrying about the
+            # state in the cursor getting out of sync with the db.
+            tx_to_db = self.tx.merge(tx_delta)
+            tx_to_db.mail_response = None
+            tx_to_db.rcpt_response = None
+            tx_to_db.data_response = None
             # e.g. overwriting an existing field
             # xxx return/throw
-            assert merged is not None
+            assert tx_to_db is not None
+            logging.debug('write_envelope %s', tx_to_db.to_json())
             new_version = self.version + 1
             # TODO all updates '... WHERE inflight_session_id =
             #   self.parent.session' ?
             cursor.execute(
                 'UPDATE Transactions SET json = ?, version = ? '
                 'WHERE id = ? AND version = ? RETURNING version',
-                (json.dumps(merged.to_json()), new_version, self.id,
+                (json.dumps(tx_to_db.to_json()), new_version, self.id,
                  self.version))
 
             if (row := cursor.fetchone()) is None:
@@ -95,7 +101,10 @@ class TransactionCursor:
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
 
-            self.tx = tx_delta
+            # TODO or RETURNING json
+            # XXX doesn't include response fields? tx.merge() should
+            # handle that?
+            self.tx = self.tx.merge(tx_delta)
 
             logging.info('write_envelope id=%d version=%d',
                          self.id, self.version)
@@ -123,8 +132,11 @@ class TransactionCursor:
 
 
     def set_mail_response(self, response : Response):
+        # XXX enforce that req field is populated
         self._set_response('mail_response', response)
 
+    # xxx this is append responses?
+    # enforce that this doesn't add more responses than len(rcpt_to)?
     def add_rcpt_response(self, response : List[Response]):
         assert(self.attempt_id is not None)
         with self.parent.db_write_lock:
@@ -171,6 +183,7 @@ class TransactionCursor:
                     last : bool = False) -> int:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
+            # TODO load-that's-not-a-load, cf write_envelope()
             cursor.execute(
                 'SELECT status,version,last From Transactions WHERE id = ?',
                 (self.id,))
@@ -261,6 +274,8 @@ class TransactionCursor:
         self.status = Status(row[6])
 
         trans_json = json.loads(json_str) if json_str else {}
+        logging.debug('TransactionCursor._load_db_locked %s %s',
+                      self.rest_id, trans_json)
         self.tx = TransactionMetadata.from_json(trans_json)
 
         cursor.execute('SELECT max(i) '
@@ -831,8 +846,10 @@ class Storage:
             db_id,status = row
 
             tx = self.get_transaction_cursor()
+            # XXX append_action(LOAD) creates the new attempt
             assert(tx._load_db_locked(db_id=db_id))
             tx._append_action_db(cursor, Action.LOAD)
+            assert(tx._load_db_locked(db_id=db_id))
             self.tx_versions.update(tx.id, tx.version)
 
             # TODO: if the last n consecutive actions are all

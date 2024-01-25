@@ -3,7 +3,6 @@ from threading import Lock, Condition
 import logging
 import time
 
-
 import requests
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
@@ -15,9 +14,6 @@ from blob import Blob
 # these are artificially low for testing
 TIMEOUT_START=5
 TIMEOUT_DATA=5
-CHUNK_SIZE=1048576
-
-MAX_INLINE=1
 
 def get_resp_json(resp):
     try:
@@ -26,6 +22,7 @@ def get_resp_json(resp):
         return None
 
 # TODO dedupe with implementation in RouterTransaction?
+# XXX or dismantle? was this only for blob sharing for gw -> router multi-rcpt?
 class BlobIdMap:
     def __init__(self):
         self.map = {}
@@ -60,15 +57,12 @@ class RestEndpoint(Filter):
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
     etag : Optional[str] = None
+    max_inline : int
+    chunk_size : int
 
-    # possibly a defect in the rest api: we send rcpts to append but
-    # it sends back the responses for all rcpts so far, need to
-    # remember how many we've sent to know if we have all the
-    # responses.
-    # XXX this will not work correctly in the presence of concurrent
-    # updates (unexpected but maybe retries), need etags to sort this
-    # out, possibly rcpt appends should have some patch syntax
-    # e.g. the offset to insert at and fail if it isn't the end
+    # PATCH sends rcpts to append but it sends back the responses for
+    # all rcpts so far, need to remember how many we've sent to know
+    # if we have all the responses.
     rcpts = 0
 
     # static_remote_host overrides transaction remote_host to send all
@@ -83,8 +77,11 @@ class RestEndpoint(Filter):
                  timeout_data=TIMEOUT_DATA,
                  blob_id_map = None,
                  wait_response = True,
-                 remote_host_resolution = None):
-        self.static_base_url = static_base_url
+                 remote_host_resolution = None,
+                 min_poll=1,
+                 max_inline=1024,
+                 chunk_size=1048576):
+        self.base_url = self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
         self.static_remote_host = static_remote_host
@@ -92,12 +89,19 @@ class RestEndpoint(Filter):
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
         self.blob_id_map = blob_id_map
+
+        # xxx inflight waiting was for gw->router multi rcpt? dismantle?
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.wait_response = wait_response
         self.remote_host_resolution = None
 
+        self.min_poll = min_poll
+        self.max_inline = max_inline
+        self.chunk_size = chunk_size
+
     def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any]):
+        logging.debug('RestEndpoint._start %s', req_json)
         remote_host_disco = [None]
         next_hop = (self.static_remote_host if self.static_remote_host
                     else tx.remote_host)
@@ -123,44 +127,100 @@ class RestEndpoint(Filter):
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.start resp_json %s', resp_json)
 
-            if not resp_json or 'url' not in resp_json:
-                return Response.Internal(
-                    'RestEndpoint.start internal error (no json)')
+            assert resp_json.get('url', None) is not None
+            # XXX return type!
+            #if not resp_json or 'url' not in resp_json:
+            #    return Response.Internal(
+            #        'RestEndpoint.start internal error (no json)')
             with self.lock:
                 self.transaction_url = self.base_url + resp_json['url']
                 self.cv.notify_all()
 
-            return resp_json
+            return rest_resp
 
-    def on_update(self, tx : TransactionMetadata):
-        if self.static_base_url:
-            self.base_url = self.static_base_url
+    def _update(self, tx):
+        req_json = tx.to_json()
+        if self.remote_host:
+            req_json['remote_host'] = self.remote_host.to_tuple()
+        req_headers = { 'host': self.http_host }
+        if self.etag:
+            req_headers['if-match'] = self.etag
+        rest_resp = requests.patch(self.transaction_url,
+                                   json=req_json,
+                                   headers=req_headers,
+                                   timeout=self.timeout_start)
+
+        logging.info('RestEndpoint.on_update resp %s', rest_resp)
+        resp_json = get_resp_json(rest_resp)
+        logging.info('RestEndpoint.on_update resp_json %s', resp_json)
+
+        if rest_resp.status_code < 300:
+            self.rcpts += len(tx.rcpt_to)
+            self.etag = rest_resp.headers.get('etag', None)
+            return rest_resp
         else:
+            self.etag = None
+            # xxx err?
+
+    def on_update(self, tx : TransactionMetadata,
+                  timeout : Optional[float] = None):
+        if self.base_url is None and tx.rest_endpoint:
             self.base_url = tx.rest_endpoint
 
         if not self.transaction_url:
-            resp_json = self._start(tx, tx.to_json())
+            rest_resp = self._start(tx, tx.to_json())
             self.rcpts = len(tx.rcpt_to)
         else:
-            req_json = tx.to_json()
-            if self.remote_host:
-                req_json['remote_host'] = self.remote_host.to_tuple()
-            req_headers = { 'host': self.http_host }
-            if self.etag:
-                req_headers['if-match'] = self.etag
-            rest_resp = requests.patch(self.transaction_url,
-                                       json=req_json,
-                                       headers=req_headers,
-                                       timeout=self.timeout_start)
-            if rest_resp.status_code < 300:
-                self.rcpts += len(tx.rcpt_to)
-                self.etag = rest_resp.headers.get('etag', None)
-            else:
-                self.etag = None
-                # xxx err?
+            self._update(tx)
 
-        if self.wait_response:
-            self.get_tx_response(self.timeout_start, tx)
+        # XXX populate tx from resp, get_tx_response() look at tx
+        # contents before poll/wait
+        timeout = timeout if timeout is not None else self.timeout_start
+        if not self.wait_response:
+            return
+        self.get_tx_response(timeout, tx)
+
+    def _append_inline(self, chunk_id, last, blob : Blob):
+        req_headers = {'host': self.http_host}
+        if self.etag:
+            req_headers['if-match'] = self.etag
+
+        req_json = {'chunk_id': chunk_id,  # xxx mostly dead,
+                    'last': last}
+
+        try:
+            utf8 = blob.contents().decode('utf-8')
+        except UnicodeError:
+            pass  # i.e. skip if not text
+        else:
+            req_json['d'] = utf8
+        rest_resp = requests.post(self.transaction_url + '/appendData',
+                                  json=req_json,
+                                  headers=req_headers,
+                                  timeout=self.timeout_data)
+        if rest_resp.status_code < 300:
+            self.etag = rest_resp.headers.get('etag', None)
+
+        # XXX rest_resp.status_code or
+        #   'data_response' in rest_resp.json()
+        logging.info('RestEndpoint.append_data inline %s', rest_resp)
+        return rest_resp
+
+    def _append_blob(self, chunk_id, last, blob_uri):
+        req_headers = {'host': self.http_host}
+        if self.etag:
+            req_headers['if-match'] = self.etag
+
+        req_json = { 'chunk_id': chunk_id,  # xxx mostly dead
+                     'last': last,
+                     'uri': blob_uri }
+        rest_resp = requests.post(self.transaction_url + '/appendData',
+                                  json=req_json,
+                                  headers=req_headers,
+                                  timeout=self.timeout_data)
+        if rest_resp.status_code < 300:
+            self.etag = rest_resp.headers.get('etag', None)
+        return rest_resp
 
     def append_data(self, last : bool, blob : Blob,
                     mx_multi_rcpt=None) -> Optional[Response]:
@@ -173,48 +233,25 @@ class RestEndpoint(Filter):
 
         chunk_id = self.chunk_id
         self.chunk_id += 1
-        req_json = {
-            'chunk_id': chunk_id,
-            'last': last }
-        if mx_multi_rcpt: req_json['mx_multi_rcpt'] = True
+        #XXX if mx_multi_rcpt: req_json['mx_multi_rcpt'] = True  # xxx dead?
 
-        req_headers = {'host': self.http_host}
-        if self.etag:
-            req_headers['if-match'] = self.etag
-
-        if blob.len() < MAX_INLINE:
-            uri = False
-            try:
-                utf8 = blob.contents().decode('utf-8')
-            except UnicodeError:
-                pass  # i.e. skip if not text
-            else:
-                req_json['d'] = utf8
-            rest_resp = requests.post(self.transaction_url + '/appendData',
-                                      json=req_json,
-                                      headers=req_headers,
-                                      timeout=self.timeout_data)
-            # XXX rest_resp.status_code or
-            #   'data_response' in rest_resp.json()
-            logging.info('RestEndpoint.append_data inline %s', rest_resp)
+        if blob.len() < self.max_inline:
+            self._append_inline(chunk_id, last, blob)
             if not last:
                 return Response()
             else:
                 with self.lock:
                     self.appended_last = True
                     self.cv.notify_all()
+            # XXX -> get_tx_response()?
             return self.get_status(self.timeout_data)
 
         ext_id = None
         if blob.id() and self.blob_id_map:
             # XXX transaction_url??
             ext_id = self.blob_id_map.lookup_or_insert(self.base_url, blob.id())
-            req_json['uri'] = ext_id
 
-        rest_resp = requests.post(self.transaction_url + '/appendData',
-                                  json=req_json,
-                                  headers=req_headers,
-                                  timeout=self.timeout_data)
+        rest_resp = self._append_blob(chunk_id, last, ext_id)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.append_data POST resp %s %s',
                      rest_resp, resp_json)
@@ -224,10 +261,12 @@ class RestEndpoint(Filter):
         if resp_json is None:
             return Response(400, 'RestEndpoint.append_data POST failed: '
                             'no json')
-        if 'data_response' in resp_json:
-            return Response.from_json(resp_json['data_response'])
 
-        if 'uri' not in req_json and 'uri' not in resp_json:
+        if data_response := Response.from_json(
+                resp_json.get('data_response', {})):
+            return data_response
+
+        if not ext_id and 'uri' not in resp_json:
             return Response(400, 'RestEndpoint.append_data endpoint didn\'t'
                             ' return uri')
 
@@ -236,22 +275,7 @@ class RestEndpoint(Filter):
                          blob.id(), ext_id)
         else:
             # i.e. we didn't already have ext_id or server didn't accept
-            uri = resp_json['uri']
-            logging.info('RestEndpoint.append_data via uri %s', uri)
-
-            offset = 0
-            while offset < blob.len():
-                resp,offset = self.append_data_chunk(
-                    uri, offset=offset,
-                    d=blob.contents()[offset:offset+CHUNK_SIZE], last=True)
-                if resp.err():
-                    return resp
-            logging.info('RestEndpoint.append_data %s %d %s',
-                         last, offset, resp)
-            if blob.id() and self.blob_id_map:
-                # XXX transaction_url?
-                self.blob_id_map.finalize(
-                    self.base_url, blob.id(), resp_json['uri'])
+            resp = self._put_blob(blob, resp_json['uri'])
 
         if not last:
             return resp
@@ -263,14 +287,34 @@ class RestEndpoint(Filter):
         return self.get_status(self.timeout_data)
 
 
+    def _put_blob(self, blob, uri):
+        logging.info('RestEndpoint.append_data via uri %s', uri)
+
+        offset = 0
+        while offset < blob.len():
+            chunk = blob.contents()[offset:offset+self.chunk_size]
+            last = (offset + self.chunk_size) > len(chunk)
+            resp,offset = self._put_blob_chunk(
+                uri, offset=offset,
+                d=chunk,
+                last=last)  # XXX
+            if resp.err():
+                return resp
+        #logging.info('RestEndpoint.append_data %s %d %s',
+        #             last, offset, resp)
+        if blob.id() and self.blob_id_map:
+            # XXX transaction_url?
+            self.blob_id_map.finalize(self.base_url, blob.id(), uri)
+        return resp
+
     # -> (resp, len)
-    def append_data_chunk(self, chunk_uri, offset,
-                          d : bytes, last : bool):
+    def _put_blob_chunk(self, chunk_uri, offset,
+                         d : bytes, last : bool):
         logging.info('RestEndpoint.append_data_chunk %s %d %d %s',
                      chunk_uri, offset, len(d), last)
         headers = {}
         if d is not None:  # XXX when can this be None?
-            range = ContentRange('bytes', offset, len(d),
+            range = ContentRange('bytes', offset, offset + len(d),
                                  offset + len(d) if last else None)
             headers['content-range'] = range.to_header()
         headers['host'] = self.http_host
@@ -290,10 +334,10 @@ class RestEndpoint(Filter):
         if 'content-range' in rest_resp.headers:
             range = werkzeug.http.parse_content_range_header(
                 rest_resp.headers.get('content-range'))
-            if range is None or range.start != 0:
+            if range is None or range.start != offset:
                 return Response(
                     400, 'RestEndpoint.append_data_chunk bad range'), None
-            dlen = range.length
+            dlen = range.stop
 
         return Response(), dlen
 
@@ -312,6 +356,7 @@ class RestEndpoint(Filter):
             rest_resp = requests.get(self.transaction_url,
                                      headers={'host': self.http_host},
                                      timeout=timeout)
+            logging.debug('RestEndpoint.get_json %s', rest_resp)
         except Exception:
             return None
         if rest_resp.status_code < 300:
@@ -358,47 +403,48 @@ class RestEndpoint(Filter):
         return None
 
     def get_tx_response(self, timeout, tx : TransactionMetadata):
-        now = time.monotonic()
-        deadline = now + timeout
-        delta = 1
-        while now <= deadline:
+        deadline = time.monotonic() + timeout
+        prev = 0
+        while True:
+            now = time.monotonic()
             deadline_left = deadline - now
-            # retry at most once per second
-            if delta < 1:
-                if deadline_left < 1:
-                    break
-                wait = min(1 - delta, deadline_left)
-                logging.debug('RestEndpoint.get_tx_response wait %d', wait)
+            if deadline_left < self.min_poll:
+                break
+            delta = now - prev
+            prev = now
+            # retry at most once per self.min_poll
+            if delta < self.min_poll:
+                wait = self.min_poll - delta
                 time.sleep(wait)
             logging.info('RestEndpoint.get_tx_response %f', deadline_left)
-            start = time.monotonic()
 
             # TODO pass the deadline in a header?
             resp_json = self.get_json(deadline_left)
             logging.info('RestEndpoint.get_tx_response done %s', resp_json)
-            delta = time.monotonic() - start
-            assert(delta >= 0)
             if resp_json is None:
                 return Response(400, 'RestEndpoint.get_tx_response GET '
                                 'failed')
 
             done = True
             if tx.mail_from:
-                if resp_json.get('mail_response', None):
-                    tx.mail_response = Response.from_json(resp_json['mail_response'])
-                else:
+                tx.mail_response = Response.from_json(
+                    resp_json.get('mail_response', {}))
+                if tx.mail_response is None:
                     done = False
             if tx.rcpt_to:
                 logging.info('get_tx_response self.rcpts %d', self.rcpts)
-                # XXX rest returns the full vector but this returns the delta?
-                if len(resp_json.get('rcpt_response', [])) == self.rcpts:
-                    tx.rcpt_response = [Response.from_json(r) for r in resp_json['rcpt_response']]
-                else:
+                tx.rcpt_response = [
+                    Response.from_json(r)
+                    for r in resp_json.get('rcpt_response', []) ]
+                new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
+                tx.rcpt_response = tx.rcpt_response[new_rcpt_offset:]
+                logging.info('get_tx_response rcpt_resp %s', tx.rcpt_response)
+                if len([r for r in tx.rcpt_response if r is not None]
+                       ) < len(tx.rcpt_to):
                     done = False
             if done:
                 break
 
-            now = time.monotonic()
         return None
 
 

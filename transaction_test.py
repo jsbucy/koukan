@@ -26,17 +26,15 @@ class TransactionTest(unittest.TestCase):
             print(l)
 
     # xxx this should create a new RestServiceTransaction for every
-    # call since that's how it's invoked, clear out state in storage
-    # tx
+    # call since that's how it's invoked, clear out state in tx_cursor
     def test_rest_transaction(self):
         rest_tx = RestServiceTransaction.create_tx(
             self.storage, 'host')
         self.assertIsNotNone(rest_tx)
         rest_id = rest_tx.tx_rest_id()
-        rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
-                                          rcpt_to=[Mailbox('bob')]).to_json())
+        rest_resp = rest_tx.start(
+            TransactionMetadata(mail_from=Mailbox('alice')).to_json())
         self.assertTrue(self.storage.wait_created(None, timeout=1))
-
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
@@ -44,7 +42,30 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
-        self.assertFalse('data_response' in resp_json and resp_json['data_response'])
+        self.assertEqual(resp_json.get('mail_response', None), {})
+        self.assertNotIn('rcpt_response', resp_json)
+        self.assertNotIn('data_response', resp_json)
+
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
+        rest_resp = rest_tx.patch(
+            TransactionMetadata(rcpt_to=[Mailbox('bob')]).to_json())
+        self.assertEqual(rest_resp.status_code, 200)
+        resp_json = rest_resp.get_json()
+        self.assertIsNotNone(resp_json)
+        self.assertEqual(resp_json.get('mail_response', None), {})
+        self.assertEqual(resp_json.get('rcpt_response', None), [{}])
+        self.assertNotIn('data_response', resp_json)
+
+        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
+        self.assertIsNotNone(rest_tx)
+        rest_resp = rest_tx.get({})
+        self.assertEqual(rest_resp.status_code, 200)
+        resp_json = rest_resp.get_json()
+        self.assertIsNotNone(resp_json)
+        self.assertEqual(resp_json.get('mail_response'), {})
+        self.assertEqual(resp_json.get('rcpt_response'), [{}])
+        self.assertIsNone(resp_json.get('data_response', None))
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)

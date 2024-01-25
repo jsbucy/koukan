@@ -17,7 +17,6 @@ from blobs import Blob, BlobStorage
 from blob import InlineBlob
 from tags import Tag
 
-
 from response import Response as MailResponse
 
 from rest_service_handler import Handler, HandlerFactory
@@ -33,10 +32,13 @@ def create_app(handler_factory : HandlerFactory):
         resp.set_etag(etag)
 
     def validate_etag(request, handler) -> Optional[FlaskResponse]:
-        etag = request.headers.get('if-match', None)
-        if etag is None:
+        req_etag = request.headers.get('if-match', None)
+        if req_etag is None:
             return None
-        if handler.etag() != etag.strip('"'):
+        req_etag = req_etag.strip('"')
+        handler_etag = handler.etag()
+        if req_etag != handler_etag:
+            logging.debug('etag mismatch req %s db %s', req_etag, handler_etag)
             return FlaskResponse(status=412, response=['version mismatch'])
         return None
 
@@ -51,17 +53,15 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(
                 status=500,
                 response=['internal error creating transaction'])
-        resp : Optional[FlaskResponse] = handler.start(request.get_json())
-        if resp:
-            return resp
+        rest_resp : Optional[FlaskResponse] = handler.start(request.get_json())
+        if rest_resp.status_code > 299:
+            return rest_resp
+        resp_json = rest_resp.json
+        resp_json['url'] = '/transactions/' + handler.tx_rest_id()
 
-        resp_json = {
-            'url': '/transactions/' + handler.tx_rest_id()
-        }
-
-        rest_resp = FlaskResponse()
+        #rest_resp = FlaskResponse()
         rest_resp.set_data(json.dumps(resp_json))
-        rest_resp.content_type = 'application/json'
+        #rest_resp.content_type = 'application/json'
         set_etag(rest_resp, handler)
         # XXX 201 created and return uri in Location: header
         return rest_resp
@@ -69,6 +69,8 @@ def create_app(handler_factory : HandlerFactory):
     @app.route('/transactions/<tx_rest_id>',
                methods=['PATCH'])
     def update_transaction(tx_rest_id) -> FlaskResponse:
+        logging.info('rest service update_transaction %s %s',
+                     request, request.headers)
         handler = handler_factory.get_tx(tx_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['transaction not found'])
