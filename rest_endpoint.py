@@ -21,8 +21,8 @@ def get_resp_json(resp):
     except Exception:
         return None
 
-# TODO dedupe with implementation in RouterTransaction?
-# XXX or dismantle? was this only for blob sharing for gw -> router multi-rcpt?
+# This is a map from internal blob IDs to upstream so parallel sends
+# to the same place (i.e. smtp outbound gw) can reuse blobs.
 class BlobIdMap:
     def __init__(self):
         self.map = {}
@@ -85,14 +85,22 @@ class RestEndpoint(Filter):
         self.http_host = http_host
         self.transaction_url = transaction_url
         self.static_remote_host = static_remote_host
-        self.chunk_id = 0
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
         self.blob_id_map = blob_id_map
 
-        # xxx inflight waiting was for gw->router multi rcpt? dismantle?
+        # xxx at one point in smtp gw
+        # mail from -> 250 and buffer
+        # rcpt to -> start tx upstream
+        # which is really start; wait on tx
+        # msa could time out, return a 250 and continue "detach"
+        # this was to make it wait at least until the start part was done
+        # exploder does the detach part on the router side now so this
+        # should be dead
         self.lock = Lock()
         self.cv = Condition(self.lock)
+        # TODO this is only false in router_service test which needs
+        # to be ported to the raw request subset of the api.
         self.wait_response = wait_response
         self.remote_host_resolution = None
 
@@ -157,10 +165,11 @@ class RestEndpoint(Filter):
         if rest_resp.status_code < 300:
             self.rcpts += len(tx.rcpt_to)
             self.etag = rest_resp.headers.get('etag', None)
-            return rest_resp
         else:
             self.etag = None
             # xxx err?
+        return rest_resp
+
 
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
@@ -171,22 +180,24 @@ class RestEndpoint(Filter):
             rest_resp = self._start(tx, tx.to_json())
             self.rcpts = len(tx.rcpt_to)
         else:
-            self._update(tx)
+            rest_resp = self._update(tx)
 
-        # XXX populate tx from resp, get_tx_response() look at tx
-        # contents before poll/wait
         timeout = timeout if timeout is not None else self.timeout_start
         if not self.wait_response:
             return
-        self.get_tx_response(timeout, tx)
+        # xxx filter api needs to accomodate returning an error here
+        # or else stuff the http error in the response for the first
+        # inflight req field in tx?
+        if rest_resp.status_code >= 300:
+            return
+        self.get_tx_response(timeout, tx, rest_resp.json())
 
-    def _append_inline(self, chunk_id, last, blob : Blob):
+    def _append_inline(self, last, blob : Blob):
         req_headers = {'host': self.http_host}
         if self.etag:
             req_headers['if-match'] = self.etag
 
-        req_json = {'chunk_id': chunk_id,  # xxx mostly dead,
-                    'last': last}
+        req_json = {'last': last}
 
         try:
             utf8 = blob.contents().decode('utf-8')
@@ -206,13 +217,12 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint.append_data inline %s', rest_resp)
         return rest_resp
 
-    def _append_blob(self, chunk_id, last, blob_uri):
+    def _append_blob(self, last, blob_uri):
         req_headers = {'host': self.http_host}
         if self.etag:
             req_headers['if-match'] = self.etag
 
-        req_json = { 'chunk_id': chunk_id,  # xxx mostly dead
-                     'last': last,
+        req_json = { 'last': last,
                      'uri': blob_uri }
         rest_resp = requests.post(self.transaction_url + '/appendData',
                                   json=req_json,
@@ -222,8 +232,7 @@ class RestEndpoint(Filter):
             self.etag = rest_resp.headers.get('etag', None)
         return rest_resp
 
-    def append_data(self, last : bool, blob : Blob,
-                    mx_multi_rcpt=None) -> Optional[Response]:
+    def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
         # TODO revisit whether we should explicitly split waiting for
         # the post vs polling the json for the result in this api
         with self.lock:
@@ -231,12 +240,8 @@ class RestEndpoint(Filter):
 
         logging.info('RestEndpoint.append_data %s %d', last, blob.len())
 
-        chunk_id = self.chunk_id
-        self.chunk_id += 1
-        #XXX if mx_multi_rcpt: req_json['mx_multi_rcpt'] = True  # xxx dead?
-
         if blob.len() < self.max_inline:
-            self._append_inline(chunk_id, last, blob)
+            self._append_inline(last, blob)
             if not last:
                 return Response()
             else:
@@ -251,7 +256,7 @@ class RestEndpoint(Filter):
             # XXX transaction_url??
             ext_id = self.blob_id_map.lookup_or_insert(self.base_url, blob.id())
 
-        rest_resp = self._append_blob(chunk_id, last, ext_id)
+        rest_resp = self._append_blob(last, ext_id)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.append_data POST resp %s %s',
                      rest_resp, resp_json)
@@ -365,11 +370,11 @@ class RestEndpoint(Filter):
             self.etag = None
         return get_resp_json(rest_resp)
 
-
-    # TODO currently only used by router_service_test, port that to
-    # get_tx_response()
     # block until transaction json contains field and is non-null or timeout,
     # returns Response.from_json() from that field
+    # TODO used by router_service_test which should get off of this,
+    # get_status() which should be refactored with the rest of the
+    # Filter api around data to take tx?
     def get_json_response(self, timeout, field) -> Optional[Response]:
         # XXX verify this timeout code
         now = time.monotonic()
@@ -402,10 +407,40 @@ class RestEndpoint(Filter):
             now = time.monotonic()
         return None
 
-    def get_tx_response(self, timeout, tx : TransactionMetadata):
+    # update tx response fields per json
+    def _update_tx(self, tx, tx_json):
+        done = True
+        if tx.mail_from and tx.mail_response is None:
+            if mail_resp := Response.from_json(
+                    tx_json.get('mail_response', {})):
+                tx.mail_response = mail_resp
+            else:
+                done = False
+        if (len([r for r in tx.rcpt_response if r is not None]) !=
+            len(tx.rcpt_to)):
+            rcpt_resp = [
+                Response.from_json(r)
+                for r in tx_json.get('rcpt_response', []) ]
+            new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
+            rcpt_resp = rcpt_resp[new_rcpt_offset:]
+            if len([r for r in rcpt_resp if r is not None]
+                   ) == len(tx.rcpt_to):
+                tx.rcpt_response = rcpt_resp
+            else:
+                done = False
+        return done
+
+    # poll/GET the tx until all mail/rcpts in tx have corresponding
+    # responses or timeout
+    # if you already have tx json from a previous POST/PATCH, pass it
+    # in resp_json
+    def get_tx_response(self, timeout, tx : TransactionMetadata,
+                        tx_json={}):
         deadline = time.monotonic() + timeout
         prev = 0
         while True:
+            if self._update_tx(tx, tx_json):
+                break
             now = time.monotonic()
             deadline_left = deadline - now
             if deadline_left < self.min_poll:
@@ -416,34 +451,13 @@ class RestEndpoint(Filter):
             if delta < self.min_poll:
                 wait = self.min_poll - delta
                 time.sleep(wait)
-            logging.info('RestEndpoint.get_tx_response %f', deadline_left)
 
             # TODO pass the deadline in a header?
-            resp_json = self.get_json(deadline_left)
-            logging.info('RestEndpoint.get_tx_response done %s', resp_json)
-            if resp_json is None:
+            tx_json = self.get_json(deadline_left)
+            logging.info('RestEndpoint.get_tx_response done %s', tx_json)
+            if tx_json is None:
                 return Response(400, 'RestEndpoint.get_tx_response GET '
                                 'failed')
-
-            done = True
-            if tx.mail_from:
-                tx.mail_response = Response.from_json(
-                    resp_json.get('mail_response', {}))
-                if tx.mail_response is None:
-                    done = False
-            if tx.rcpt_to:
-                logging.info('get_tx_response self.rcpts %d', self.rcpts)
-                tx.rcpt_response = [
-                    Response.from_json(r)
-                    for r in resp_json.get('rcpt_response', []) ]
-                new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
-                tx.rcpt_response = tx.rcpt_response[new_rcpt_offset:]
-                logging.info('get_tx_response rcpt_resp %s', tx.rcpt_response)
-                if len([r for r in tx.rcpt_response if r is not None]
-                       ) < len(tx.rcpt_to):
-                    done = False
-            if done:
-                break
 
         return None
 

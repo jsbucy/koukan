@@ -41,6 +41,13 @@ class SmtpEndpoint:
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
 
+        self.creation = int(time.time() * 1000000)
+        self.version = 0
+
+    def etag(self):
+        # xxx hash
+        return '%d.%d' % (self.creation, self.version)
+
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
         # connection to a cache here if the previous transaction was
@@ -70,6 +77,7 @@ class SmtpEndpoint:
 
 
     def start(self, tx : TransactionMetadata):
+        self.version += 1
         self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.start %s %s', self.rest_id, tx.remote_host)
         resp = Response.from_smtp(
@@ -114,6 +122,7 @@ class SmtpEndpoint:
         return self.rcpt_resp
 
     def append_data(self, last : bool, blob : Blob):
+        self.version += 1
         self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.append_data last=%s len=%d',
                      last, blob.len())

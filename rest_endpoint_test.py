@@ -163,11 +163,11 @@ class RestEndpointTest(unittest.TestCase):
                                'data_response': {},
                                'last': True})))
 
-        rest_resp = rest_endpoint._append_inline(0, True, InlineBlob(b'hello'))
+        rest_resp = rest_endpoint._append_inline(True, InlineBlob(b'hello'))
         self.assertEqual(rest_resp.status_code, 200)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions/125/appendData')
-        resp_json = {'chunk_id': 0, 'last': True, 'd': 'hello'}
+        resp_json = {'last': True, 'd': 'hello'}
         self.assertEqual(
             req.body, json.dumps(resp_json).encode('utf-8'))
         self.assertEqual(req.content_type, 'application/json')
@@ -191,9 +191,9 @@ class RestEndpointTest(unittest.TestCase):
                                'last': True,
                                'uri': '/blob/127'})))
 
-        rest_resp = rest_endpoint._append_blob(0, True, None)
+        rest_resp = rest_endpoint._append_blob(True, None)
         self.assertEqual(rest_resp.status_code, 200)
-        resp_json = {'chunk_id': 0, 'last': True, 'uri': None}
+        resp_json = {'last': True, 'uri': None}
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions/126/appendData')
         self.assertEqual(req.body, json.dumps(resp_json).encode('utf-8'))
@@ -229,12 +229,10 @@ class RestEndpointTest(unittest.TestCase):
     def testFilterApi(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/123'})))
-        # XXX cf on_update(), shouldn't be doing get_tx_response() if
-        # no req fields inflight
+
+        # start tx w/empty envelope
+
+        # POST
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -243,7 +241,13 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata()
         rest_endpoint.on_update(tx)
 
-        # POST
+        req = self.requests.pop(0)  # POST
+        self.assertEqual(req.body, b'{}')
+
+
+        # on_update() w/mail_from
+
+        # PATCH
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -267,20 +271,29 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertEqual(tx.mail_response.code, 201)
 
-        req = self.requests.pop(0)  # POST
-        self.assertEqual(req.body, b'{}')
-
-        req = self.requests.pop(0)  # GET
-        self.assertEqual(req.body, None)
-
-        req_json = {'mail_from': {'m': 'alice'}}
         req = self.requests.pop(0)  # PATCH
-        self.assertEqual(req.body, json.dumps(req_json).encode('utf-8'))
+        self.assertEqual(req.body, b'{"mail_from": {"m": "alice"}}')
 
         req = self.requests.pop(0)  # GET
         self.assertEqual(req.body, None)
+
         req = self.requests.pop(0)  # GET
         self.assertEqual(req.body, None)
+
+        # on_update() w/rcpt_to with inline response
+        # POST
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps({'url': '/transactions/123',
+                               'rcpt_response': [{'code': 202, 'message': 'ok'}]})))
+        tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
+        rest_endpoint.on_update(tx)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+
+        req = self.requests.pop(0)  # PATCH
+        self.assertEqual(req.body, b'{"rcpt_to": [{"m": "bob"}]}')
+
 
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -292,7 +305,7 @@ class RestEndpointTest(unittest.TestCase):
                  'last': False})))
         rest_endpoint.append_data(False, InlineBlob(b'hello'))
         req = self.requests.pop(0)
-        req_json = {'chunk_id': 0, 'last': False, 'd': 'hello'}
+        req_json = {'last': False, 'd': 'hello'}
         self.assertEqual(req.body, json.dumps(req_json).encode('utf-8'))
 
 
@@ -329,15 +342,7 @@ class RestEndpointTest(unittest.TestCase):
     def testFilterApiMultiRcpt(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/123',
-                               'mail_response': {},
-                               'rcpt_response': [{}]})))
 
-        # XXX cf on_update(), shouldn't be doing get_tx_response() if
-        # POST/PATCH already returned response fields
         mail_resp = MailResponse(201)
         rcpt0_resp = MailResponse(202)
         rcpt1_resp = MailResponse(203)

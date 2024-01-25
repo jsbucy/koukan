@@ -202,9 +202,7 @@ class RestServiceTransaction(Handler):
 
         # smtp->rest gateway is a special/trusted/well-known client
         # that is allowed to async for mx because of multi-recipient
-        # cases, if it can be trusted to set the mx_multi_rcpt bit,
-        # it can be trusted to keep appending after tempfail or not
-        # appropriately
+        # cases
 
         # TODO for now, this always allows append even in
         # oneshot_temp, at such time as we want to accept rest mx

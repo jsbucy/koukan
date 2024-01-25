@@ -240,4 +240,3 @@ class Filter(ABC):
     @abstractmethod
     def abort(self):
         pass
-

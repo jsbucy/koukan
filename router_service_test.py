@@ -165,7 +165,7 @@ class RouterServiceTest(unittest.TestCase):
                       tx_json)
 
         rest_resp = rest_endpoint._append_inline(
-            chunk_id=0, last=False, blob=InlineBlob(b'hello'))
+            last=False, blob=InlineBlob(b'hello'))
         tx_json = rest_resp.json()
         logging.debug('RouterServiceTest.test_retry post append %s %s',
                       rest_resp, tx_json)
@@ -175,7 +175,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('last', None), False)
 
         rest_resp = rest_endpoint._append_blob(
-            chunk_id=0, last=True, blob_uri=None)
+            last=True, blob_uri=None)
         logging.debug('RouterServiceTest.test_retry append blob %s',
                       rest_resp)
         tx_json = rest_resp.json()

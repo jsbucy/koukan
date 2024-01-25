@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
 from abc import ABC, abstractmethod
 import logging
+import time
 
 from flask import Response as FlaskResponse, Request as FlaskRequest, jsonify
 from werkzeug.datastructures import ContentRange
@@ -10,9 +11,10 @@ from response import Response as MailResponse
 from blob import Blob, InlineBlob
 from blobs import BlobStorage
 from rest_service_handler import Handler, HandlerFactory
-from filter import TransactionMetadata
+from filter import TransactionMetadata, Filter
 
-
+# XXX this expects the endpoint to look like SmtpEndpoint which is now
+# completely different from the current Filter api
 class RestEndpointAdapter(Handler):
     endpoint : Any
     _tx_rest_id : str
@@ -60,27 +62,10 @@ class RestEndpointAdapter(Handler):
         return None
 
     def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        assert(isinstance(req_json['chunk_id'], int))
-        chunk_id : int = req_json['chunk_id']
         last : bool = req_json['last']
-        mx_multi_rcpt = False
-        if chunk_id == 0:
-            mx_multi_rcpt = bool(req_json.get('mx_multi_rcpt', False))
-
-        if self.endpoint.blobs_received == chunk_id:  # noop
-            # XXX this needs to just return the previous response
-            return FlaskResponse(status=400, response=['dupe appendData'])
-
-        if chunk_id != self.endpoint.blobs_received + 1:
-            return FlaskResponse(status=400,
-                            response=['bad blob num %d %d',
-                                      chunk_id, self.endpoint.blobs_received])
 
         if self.endpoint.received_last and last:
             return FlaskResponse(status=400, response=['bad last after last'])
-
-        if mx_multi_rcpt:
-            self.endpoint.set_mx_multi_rcpt()
 
         # (short) data inline in request
         if 'd' in req_json:
