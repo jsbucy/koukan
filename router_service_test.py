@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 from threading import Thread, Lock, Condition
 import logging
 import unittest
@@ -30,7 +30,7 @@ root_yaml = {
             'name': 'smtp-msa',
             'msa': True,
             'chain': [{'filter': 'exploder',
-                       'output_chain': 'outbound-gw',
+                       'output_chain': 'submission',
                        'msa': True}]
         },
         {
@@ -50,24 +50,28 @@ root_yaml = {
             'chain': [{'filter': 'sync'}]
         },
     ],
-    'endpoint': [
-        {
-            'name': 'outbound-gw',
-            'msa': True,
-            'chain': [{'filter': 'sync'}]
-        },
-        {
-            'name': 'inbound-gw',
-            'chain': [{'filter': 'sync'}]
-        },
-    ],
     'storage': {}
 }
 
 class RouterServiceTest(unittest.TestCase):
+    lock : Lock
+    cv : Condition
+    endpoints : List[SyncEndpoint]
+
     def get_endpoint(self):
-        return self.endpoint
+        with self.lock:
+            self.cv.wait_for(lambda: bool(self.endpoints))
+            return self.endpoints.pop(0)
+
+    def add_endpoint(self, endpoint):
+        with self.lock:
+            self.endpoints.append(endpoint)
+            self.cv.notify_all()
+
     def setUp(self):
+        self.lock = Lock()
+        self.cv = Condition(self.lock)
+
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
@@ -76,7 +80,7 @@ class RouterServiceTest(unittest.TestCase):
             self.port = s.server_address[1]
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         self.router_url = 'http://localhost:%d' % self.port
-        self.endpoint = SyncEndpoint()
+        self.endpoints = []
         self.config = Config()
         self.config.inject_yaml(root_yaml)
         self.config.inject_filter('sync', lambda yaml, next: self.get_endpoint())
@@ -87,11 +91,9 @@ class RouterServiceTest(unittest.TestCase):
         self.service_thread.start()
 
         # probe for startup
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response())
         for i in range(1,5):
             try:
-                # use an invalid host per Wiring so output will fail
+                # use an invalid host per config so output will fail
                 # immediately and not consume responses from endpoint
                 rest_endpoint = RestEndpoint(
                     static_base_url=self.router_url,
@@ -108,7 +110,6 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('service not ready')
 
-        self.endpoint = SyncEndpoint()
 
         # gc the probe request so it doesn't cause confusion later
         # TODO rest_endpoint.abort()
@@ -123,10 +124,12 @@ class RouterServiceTest(unittest.TestCase):
         for l in self.service.storage.db.iterdump():
             print(l)
 
+    # native rest
+    # first attempt tempfails at rcpt
+    # retry+success
     def test_retry(self):
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
+            static_base_url=self.router_url, http_host='submission')
         rest_resp = rest_endpoint._start(TransactionMetadata(), {})
         tx_json = rest_resp.json()
         logging.debug('RouterServiceTest.test_retry create %s %s',
@@ -189,11 +192,14 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(rest_endpoint.set_durable().ok())
 
 
-        # set upstream responses so output tempfails at rcpt
-        self.endpoint.set_mail_response(Response(201))
-        self.endpoint.add_rcpt_response(Response(456))
+        upstream_endpoint = SyncEndpoint()
+        self.add_endpoint(upstream_endpoint)
+        self.assertTrue(self.service._dequeue())
 
-        self.assertEqual(1, self.service._dequeue())
+        # set upstream responses so output tempfails at rcpt
+        upstream_endpoint.set_mail_response(Response(201))
+        upstream_endpoint.add_rcpt_response(Response(456))
+
 
         tx_json = rest_endpoint.get_json(1.2)
         logging.debug('RouterServiceTest.test_retry get after first attempt '
@@ -206,16 +212,16 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), {})
         self.assertEqual(tx_json.get('last', None), True)
 
-
-        # set upstream responses so output (retry) succeeds
-        self.endpoint = SyncEndpoint()
+        upstream_endpoint = SyncEndpoint()
+        self.add_endpoint(upstream_endpoint)
         self.assertTrue(self.service._dequeue())
 
+        # set upstream responses so output (retry) succeeds
         # upstream success, retry succeeds, propagates down to rest
-        self.endpoint.set_mail_response(Response(201))
-        self.endpoint.add_rcpt_response(Response(202))
-        self.endpoint.add_data_response(None)
-        self.endpoint.add_data_response(Response(203))
+        upstream_endpoint.set_mail_response(Response(201))
+        upstream_endpoint.add_rcpt_response(Response(202))
+        upstream_endpoint.add_data_response(None)
+        upstream_endpoint.add_data_response(Response(203))
 
         tx_json = rest_endpoint.get_json(1.2)
         logging.debug('RouterServiceTest.test_retry get after second attempt '
@@ -229,186 +235,65 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(mail_resp.code, 203)
         self.assertEqual(tx_json.get('last', None), True)
 
-    # TODO refactor the rest of these tests to use the "raw request"
-    # subset of RestEndpoint instead of the Filter
-    # api/protocol/personality
+    def _update_tx(self, endpoint, tx):
+        endpoint.on_update(tx)
 
-    # Moreover, many of these are testing set_durable() which was
-    # really a special hook for the smtp gw "multi-rcpt sync/same
-    # resp" optimization which has moved to the internal exploder
-    # flow. Native rest clients will probably always specify it in the
-    # initial POST/never need to PATCH it later?
-
-    # set durable after upstream ok/perm -> noop
-    def test_durable_after_upstream_success(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
-
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(234))
-        self.endpoint.add_data_response(Response(256))
-
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
-
-        self.assertEqual(1, self.service._dequeue())
-
-        resp = start_endpoint.get_json_response(3, 'data_response')
-        logging.info('test_durable_after_upstream_done resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(256, resp.code)
-
-        # DONE/DELIVERED -> noop
-        self.assertTrue(start_endpoint.set_durable().ok())
-
-    def test_durable_after_upstream_perm(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
-
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(234))
-        self.endpoint.add_data_response(Response(556))
-
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
-
-        self.assertEqual(1, self.service._dequeue())
-
-        resp = start_endpoint.get_json_response(3, 'data_response')
-        logging.info('test_durable_after_upstream_done resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(556, resp.code)
-
-        # DONE/PERMFAIL -> failed precondition
-        self.assertFalse(start_endpoint.set_durable().ok())
+    # exploder multi rcpt
+    def testExploderMultiRcpt(self):
+        logging.info('testExploderMultiRcpt')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='smtp-msa')
 
 
-    def test_durable_after_upstream_temp(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
+        t.start()
 
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(234))
-        self.endpoint.add_data_response(Response(456))
+        time.sleep(0.1)
+        # exploder tx
+        self.assertTrue(self.service._dequeue())
 
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
+        t.join(timeout=1)
+        self.assertFalse(t.is_alive())
 
-        self.assertEqual(1, self.service._dequeue())
-
-        resp = start_endpoint.get_json_response(2, 'data_response')
-        logging.info('test_durable_after_upstream_temp resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 456)
-        self.assertTrue(start_endpoint.set_durable().ok())
-
-    def test_durable_upstream_inflight(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
-
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(234))
-
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
-
-        self.assertEqual(1, self.service._dequeue())
-
-        resp = start_endpoint.get_json_response(2, 'rcpt_response')
-        logging.info('test_durable_upstream_inflight start resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp[0].code, 234)
-
-        self.assertTrue(start_endpoint.set_durable().ok())
-
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(245))
-        self.endpoint.add_data_response(Response(267))
-
-        resp = start_endpoint.get_json_response(2, 'data_response')
-        logging.info('test_durable_upstream_inflight final resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 267)
-
-    # set durable after ttl -> failed precondition
-    def test_idle_gc_oneshot_temp(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
-        transaction_url = start_endpoint.transaction_url
-
-        self.endpoint.set_mail_response(Response())
-        self.endpoint.add_rcpt_response(Response(234))
-        self.endpoint.add_data_response(Response(456))
-
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
-
-        self.assertEqual(1, self.service._dequeue())
-
-        resp = start_endpoint.get_json_response(5, 'data_response')
-        logging.info('test_idle_gc resp %s', resp)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 456)
-
-        logging.info('test_idle_gc set durable')
-
-        self.assertEqual(1, self.service._gc_inflight(0))
-        self.assertTrue(start_endpoint.set_durable().err())
+        # no rcpt -> buffered
+        self.assertEqual(tx.mail_response.code, 250)
 
 
-    # xxx this only aborts insert/oneshot_temp, not inflight
-    # do you want this to be the thing that makes output abort or
-    # should it time out itself?
-    def test_idle_gc_oneshot_inflight(self):
-        start_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='outbound-gw',
-            wait_response=False)
-        transaction_url = start_endpoint.transaction_url
+        tx = TransactionMetadata(rcpt_to=[Mailbox('bob')])
+        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
+        t.start()
 
-        self.endpoint.set_mail_response(Response(250))
-        self.endpoint.add_rcpt_response(Response(234))
-        # no data response -> output blocks
+        # upstream tx #1
+        upstream_endpoint = SyncEndpoint()
+        self.add_endpoint(upstream_endpoint)
+        self.assertTrue(self.service._dequeue())
 
-        # output blocks waiting on rcpt_to
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        start_resp = start_endpoint.on_update(tx)
-        start_endpoint.append_data(last=True, blob=InlineBlob(b'hello'))
+        upstream_endpoint.set_mail_response(Response(250))
+        upstream_endpoint.add_rcpt_response(Response(202))
 
-        self.assertEqual(1, self.service._dequeue())
+        t.join(timeout=1)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
-        # output waiting for rcpt_to so this never returns anything
-        resp = start_endpoint.get_json(2)
-        logging.info('test_idle_gc resp %s', resp)
-        self.assertNotIn('final_response', resp)
-        #self.assertEqual(resp.code, 400)
 
-        logging.info('test_idle_gc set durable')
+        tx = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
+        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
+        t.start()
 
-        self.assertEqual(1, self.service._gc_inflight(0))
-        self.assertTrue(start_endpoint.set_durable().err())
-        time.sleep(1)  # logging
+        # upstream tx #2
+        upstream_endpoint2 = SyncEndpoint()
+        self.add_endpoint(upstream_endpoint2)
+        self.assertTrue(self.service._dequeue())
+
+        upstream_endpoint2.set_mail_response(Response(250))
+        upstream_endpoint2.add_rcpt_response(Response(203))
+
+        t.join(timeout=1)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([r.code for r in tx.rcpt_response], [203])
+
+
 
 
 if __name__ == '__main__':
