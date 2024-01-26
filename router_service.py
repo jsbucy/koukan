@@ -138,9 +138,6 @@ class Service:
 
         #xxxtag = Tag.LOAD
 
-        # XXX there is a race that this can be selected
-        # between creation and writing the envelope
-        storage_tx.wait_attr_not_none('host')
         endpoint, msa = self.config.get_endpoint(storage_tx.tx.host)
         logging.info('_dequeue %s %s', endpoint, msa)
         tag = Tag.MSA if msa else Tag.MX

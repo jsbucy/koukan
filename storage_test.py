@@ -56,15 +56,21 @@ class StorageTest(unittest.TestCase):
 
         blob_writer = self.s.get_blob_writer()
         self.assertIsNotNone(blob_writer.create('blob_rest_id'))
-        blob_writer.append_data(b'blob1')
-        blob_writer.append_data(b'blob2', 10)
 
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.load(rest_id='tx_rest_id')
+        #tx_writer = self.s.get_transaction_cursor()
+        #tx_writer.load(rest_id='tx_rest_id')
+        tx_writer.load()
         self.assertEqual(tx_writer.append_blob(
             blob_rest_id='blob_rest_id', last=False),
                          tx_writer.APPEND_BLOB_OK)
+
+        blob_writer.append_data(b'blob1')
+        blob_writer.append_data(b'blob2', 10)
+        self.assertTrue(blob_writer.last)
+
         tx_writer.append_blob(d=b'qrs', last=True)
+        tx_writer.load()
+        self.assertTrue(tx_writer.input_done)
 
         self.assertTrue(tx_writer.append_action(Action.SET_DURABLE))
         #self.dump_db()
@@ -163,7 +169,10 @@ class StorageTest(unittest.TestCase):
             HostPort('local_host', 25), HostPort('remote_host', 2525),
             Mailbox('alice'),
             [Mailbox('bob')], 'host'))
-        self.assertEqual(self.s.gc_non_durable(min_age = 0), 1)
+        self.assertFalse(writer.input_done)
+        self.assertEqual(self.s.gc_non_durable(min_age = 1), 0)
+        time.sleep(1)
+        self.assertEqual(self.s.gc_non_durable(min_age = 1), 1)
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()
@@ -189,10 +198,6 @@ class StorageTest(unittest.TestCase):
         logging.info('test wait')
         rv[0] = reader.wait_for(fn, 5)
 
-    @staticmethod
-    def wait_attr(reader, rv, attr):
-        rv[0] = reader.wait_attr_not_none(attr, 5)
-
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
         tx_cursor.create('xyz')
@@ -208,30 +213,7 @@ class StorageTest(unittest.TestCase):
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
 
-        rv = [None]
-        t = Thread(target =
-                   lambda: StorageTest.wait_attr(reader, rv, 'mail_from'))
-        t.start()
-        time.sleep(0.1)
-
-        while True:
-            try:
-                tx_cursor.write_envelope(TransactionMetadata(
-                    HostPort('local_host', 25), HostPort('remote_host', 2525),
-                    mail_from=Mailbox('alice'),
-                    rcpt_to=[Mailbox('bob')]))
-                break
-            except VersionConflictException:
-                tx_cursor.load()
-
-        t.join(timeout=1)
-        self.assertFalse(t.is_alive())
-
-        self.assertTrue(rv[0])
-        self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(reader.tx.rcpt_to[0].mailbox, 'bob')
-
-        fn = lambda: (reader.max_i is not None)   #and (reader.max_i > 0)
+        fn = lambda: (reader.max_i is not None)
         self.assertFalse(reader.wait_for(fn, timeout=0.1))
 
         rv = [None]
@@ -239,6 +221,7 @@ class StorageTest(unittest.TestCase):
         t.start()
         time.sleep(1)
         logging.info('test append')
+        tx_cursor.load()
         tx_cursor.append_blob(d=b'hello, world!', last=True)
         t.join()
 

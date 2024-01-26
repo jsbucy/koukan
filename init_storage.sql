@@ -20,6 +20,11 @@ CREATE TABLE Transactions (
   status INTEGER,
   -- length INTEGER NOT NULL,
 
+  -- bool, basically payload is completely written
+  input_done int,
+  -- bool, max TransactionAttempts was final
+  output_done int,
+
   -- append(last=True) has been called, guarantees that TransactionContent
   -- not growing but not that all blobs are finalized
   last bool,
@@ -57,7 +62,7 @@ CREATE TABLE TransactionContent (
   i INTEGER NOT NULL,  -- 0,1,2,3
 
   inline BLOB,
-  blob_id TEXT,
+  blob_id INTEGER,
   length INTEGER,  -- xxx never read?
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
@@ -68,6 +73,8 @@ CREATE TABLE TransactionContent (
 
   PRIMARY KEY(transaction_id, i)
 );
+
+CREATE INDEX TxContentBlob on TransactionContent (blob_id);
 
 CREATE TABLE TransactionActions (
   transaction_id INTEGER,

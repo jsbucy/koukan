@@ -26,8 +26,11 @@ class TransactionCursor:
     last = None
     creation : Optional[int] = None
     status : Optional[Status] = None
+    input_done : Optional[bool] = None
+    output_done : Optional[bool] = None
 
     tx : Optional[TransactionMetadata] = None
+
 
     def __init__(self, storage):
         self.parent = storage
@@ -50,10 +53,10 @@ class TransactionCursor:
             self.version = 0
             cursor.execute(
                 'INSERT INTO Transactions '
-                '  (rest_id, inflight_session_id, creation, last_update, '
+                '  (rest_id, creation, last_update, '
                 'version, status, last) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
-                (rest_id, parent.session_id, self.creation, self.creation,
+                'VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+                (rest_id, self.creation, self.creation,
                  self.version, self.status, self.last))
             self.id = cursor.fetchone()[0]
             self.tx = TransactionMetadata()
@@ -174,6 +177,8 @@ class TransactionCursor:
     # message. That would allow the key to be the byte offset
     # (allowing pread) instead of the simple index/counter i we're
     # using now.
+    # TODO related, possibly we should require the blob to be
+    # finalized before reuse?
 
     APPEND_BLOB_OK = 0
     APPEND_BLOB_UNKNOWN = 1
@@ -181,6 +186,7 @@ class TransactionCursor:
     def append_blob(self, d : Optional[bytes] = None,
                     blob_rest_id : Optional[str] = None,
                     last : bool = False) -> int:
+        finalized = False
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             # TODO load-that's-not-a-load, cf write_envelope()
@@ -196,11 +202,7 @@ class TransactionCursor:
                           'status %s db last %s op last %s',
                           self.id, row[1], self.version, status.name, db_last,
                           last)
-            #xxx output side could have appended START action, etc.
-            #assert(version == self.version)
             assert(not db_last)
-            # XXX we may want to append this before the blob is
-            # finalized? in which case this isn't known yet.
 
             if blob_rest_id is not None:
                 cursor.execute(
@@ -234,8 +236,11 @@ class TransactionCursor:
             if (row := cursor.fetchone()) is None:
                 raise VersionConflictException()
             self.version = row[0]
+            self.last = last
+            finalized = self._maybe_finalize(cursor)
             self.parent.db.commit()
-        self.parent.tx_versions.update(self.id, self.version)
+        if not finalized:
+            self.parent.tx_versions.update(self.id, self.version)
         self.max_i = new_max_i
         return TransactionCursor.APPEND_BLOB_OK
 
@@ -262,7 +267,7 @@ class TransactionCursor:
             where_id = (rest_id,)
 
         cursor.execute('SELECT id,rest_id,creation,json,version,'
-                       'last,status '
+                       'last,input_done,output_done,status '
                        'FROM Transactions ' + where,
                        where_id)
         row = cursor.fetchone()
@@ -270,8 +275,9 @@ class TransactionCursor:
             return None
 
         (self.id, self.rest_id,
-         self.creation, json_str, self.version, self.last) = row[0:6]
-        self.status = Status(row[6])
+         self.creation, json_str, self.version, self.last,
+         self.input_done, self.output_done) = row[0:8]
+        self.status = Status(row[8])
 
         trans_json = json.loads(json_str) if json_str else {}
         logging.debug('TransactionCursor._load_db_locked %s %s',
@@ -327,21 +333,6 @@ class TransactionCursor:
                 timeout_left = timeout - (time.monotonic() - start)
         asset(not 'unreachable')  #return False
 
-    # or status -> not inflight
-    def wait_attr_not_none(self, attr, timeout=None):
-        not_inflight = lambda: (self.status not in [Status.INFLIGHT,
-                                                    Status.ONESHOT_INFLIGHT])
-        attr_not_none = (lambda:
-          self.tx and hasattr(self.tx, attr) and getattr(self.tx, attr) is not None)
-        if not self.wait_for(
-            lambda: not_inflight() or attr_not_none(), timeout):
-            return False
-        # probably abort
-        if not_inflight():
-            return False
-        assert(attr_not_none())
-        return True
-
     # -> (time, action, optional[response])
     def load_last_action(self, num_actions
                          ) -> List[Tuple[int, int, Optional[Response]]] :
@@ -377,15 +368,35 @@ class TransactionCursor:
         return r
 
     def _check_payload_done(self, cursor) -> bool:
+        # XXX this also needs to check Transaction.last?
         cursor.execute('SELECT COUNT(*) '
                        'FROM TransactionContent JOIN Blob '
                        'ON TransactionContent.blob_id = Blob.id '
                        'WHERE TransactionContent.transaction_id = ? '
-                       '  AND Blob.last != True',
+                       '  AND Blob.last != TRUE',
                        (self.id,))
         row = cursor.fetchone()
         assert(row is not None)
         return row[0] == 0
+
+    def _maybe_finalize(self, cursor):
+        if self.last and self._check_payload_done(cursor):
+            cursor.execute(
+                'UPDATE Transactions '
+                'SET input_done = TRUE, '
+                'version = (SELECT MAX(version)+1 '
+                '           FROM Transactions WHERE id = ?)'
+                'WHERE id = ? RETURNING version',
+            (self.id, self.id))
+            self.version = cursor.fetchone()[0]
+            self.parent.tx_versions.update(self.id, self.version)
+            return True
+        return False
+
+    # next: break up append_action into
+    # load / start attempt
+    # unload / complete attempt
+    # abort
 
     def append_action(self, action : Action,
                        response : Optional[Response] = None) -> bool:
@@ -408,7 +419,8 @@ class TransactionCursor:
                       self.id, self.version, self.status.name,
                       action.name)
 
-        if self.status not in transition or action not in transition[self.status]:
+        if (self.status not in transition or
+            action not in transition[self.status]):
             raise InvalidActionException(self.status, action)
         status = transition[self.status][action]
 
@@ -423,9 +435,13 @@ class TransactionCursor:
         cursor.execute(
             'UPDATE Transactions '
             'SET status = ?, last_update = ?, version = ?, '
-            'inflight_session_id = NULL '
+            'output_done = ?, '
+            'inflight_session_id = ? '
             'WHERE id = ? AND version = ? RETURNING version',
-            (status, now, new_version, self.id, self.version))
+            (status, now, new_version,
+             status in [Status.DONE, Status.ONESHOT_TEMP],
+             (self.parent.session_id if action == Action.LOAD else None),
+             self.id, self.version))
         if (row := cursor.fetchone()) is None:
             raise VersionConflictException()
         db_new_version = row[0]
@@ -550,18 +566,31 @@ class BlobWriter:
 
                 dd = dd[self.CHUNK_SIZE:]
                 self.offset += len(chunk)
-            logging.info('BlobWriter.append_data id=%d length=%s',
-                         self.id, length)
             last = length is not None and self.offset == length
+            logging.info('BlobWriter.append_data id=%d length=%s last=%s',
+                         self.id, length, last)
             cursor.execute(
                 'UPDATE Blob SET length = ?, last_update = ?, last = ? '
                 'WHERE id = ? AND ((length IS NULL) OR (length = ?))',
                 (length, int(time.time()), last,
                  self.id, length))
             assert(cursor.rowcount == 1)
-            self.parent.db.commit()
             self.length = length
             self.last = last
+
+            if self.last:
+                cursor = self.parent.db.cursor()
+                cursor.execute(
+                    'SELECT DISTINCT transaction_id '
+                    'FROM TransactionContent WHERE blob_id = ?', (self.id,))
+                for row in cursor:
+                    logging.debug('BlobWriter.append_data last %d tx %s',
+                                  self.id, row)
+                    tx = self.parent.get_transaction_cursor()
+                    tx._load_db_locked(row[0])
+                    tx._maybe_finalize(cursor)
+
+            self.parent.db.commit()
 
         self.parent.blob_versions.update(self.id, self.offset)
         return True
@@ -650,12 +679,14 @@ class BlobReader(Blob):
             self.wait_length(timeout)
 
 class IdVersion:
+    id : int
     lock : Lock
     cv : Condition
 
     version : int
     waiters : set[object]
-    def __init__(self, version):
+    def __init__(self, db_id, version):
+        self.id = db_id
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
@@ -666,7 +697,11 @@ class IdVersion:
             return self.cv.wait_for(lambda: self.version > version, timeout)
     def update(self, version):
         with self.lock:
-            assert version > self.version
+            if version <= self.version:
+                logging.critical('IdVersion.update precondition failure '
+                                 ' id=%d cur=%d new=%d',
+                                 self.id, self.version, version)
+                assert not 'IdVersion.update precondition failure '
             self.version = version
             self.cv.notify_all()
 
@@ -705,7 +740,7 @@ class IdVersionMap:
     def get_id_version(self, db_id, version, obj):
         with self.lock:
             if db_id not in self.id_version_map:
-                self.id_version_map[db_id] = IdVersion(version)
+                self.id_version_map[db_id] = IdVersion(db_id, version)
             waiter = self.id_version_map[db_id]
             waiter.waiters.add(obj)
             return waiter
@@ -791,6 +826,7 @@ class Storage:
         recovered = 0
         for row in cursor:
             (db_id,) = row
+            # ick this should use append_action?
             logging.info('Storage.recover orphaned transaction %d', db_id)
             cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
                            (Status.WAITING, db_id))
@@ -834,12 +870,14 @@ class Storage:
             # TODO this is currently a scan, probably want to bake the
             # next attempt time logic into the previous request completion so
             # you can index on it
+
+            # TODO maybe don't load !input_done until some request
+            # from the client
             cursor.execute('SELECT id,status from Transactions '
-                           'WHERE (status = ? OR '
-                           '(status = ? AND last_update <= ?)) AND '
+                           'WHERE inflight_session_id is NULL AND '
+                           'output_done IS NOT TRUE AND'
                            '(json_extract(json, "$.host") IS NOT NULL) '
-                           'LIMIT 1',
-                           (Status.INSERT, Status.WAITING, max_recent))
+                           'LIMIT 1')
             row = cursor.fetchone()
             if not row:
                 return None
@@ -864,20 +902,21 @@ class Storage:
     def _gc_non_durable_one(self, min_age):
         max_recent = int(time.time()) - min_age
         cursor = self.db.cursor()
-        # XXX refactor with TransactionCursor.append_action so this
-        # can be a single db transaction
+
         cursor.execute('SELECT id from Transactions '
                        'WHERE last_update <= ? AND '
-                       'status IN (?, ?, ?) LIMIT 1',
-                       (max_recent, Status.INSERT,
-                        Status.ONESHOT_INFLIGHT,
-                        Status.ONESHOT_TEMP))
+                       'input_done IS NOT TRUE AND '
+                       'output_done IS NOT TRUE '
+                       'LIMIT 1',
+                       (max_recent,))
         row = cursor.fetchone()
         if row is None: return False
 
         tx_cursor = self.get_transaction_cursor()
-        tx_cursor.load(db_id = row[0])
-        tx_cursor.append_action(Action.ABORT)
+        tx_cursor._load_db_locked(db_id = row[0])
+        tx_cursor._append_action_db(cursor, Action.ABORT)
+
+        self.db.commit()
 
         return True
 

@@ -3,7 +3,7 @@ from typing import Dict
 
 class Status(IntEnum):
     INSERT = 0  # uncommitted
-    WAITING = 1
+    WAITING = 1  # completely written
     INFLIGHT = 2
     DONE = 3
     ONESHOT_INFLIGHT = 5
@@ -30,6 +30,7 @@ class Action(IntEnum):
     START = 7  # inflight -> inflight (no change)
     SET_DURABLE = 8  # INSERT -> WAITING
                      # ONESHOT_INFLIGHT -> INFLIGHT
+                     # ONESHOT_TEMP -> WAITING
     # we don't persist this action but it's used with exceptions
     APPEND = 9
 
