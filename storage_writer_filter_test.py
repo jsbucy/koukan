@@ -35,14 +35,16 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testBasic(self):
         filter = StorageWriterFilter(self.storage)
         filter._create()
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.load(filter.tx_cursor.id)
-        tx_cursor.append_action(Action.LOAD)  # XXX
 
         tx = TransactionMetadata()
+        tx.host = 'outbound-gw'
         tx.mail_from = Mailbox('alice')
         t = Thread(target=lambda: self.update(filter, tx))
         t.start()
+
+        tx_cursor = self.storage.load_one()
+        self.assertIsNotNone(tx_cursor)
+
         time.sleep(0.1)
         while tx_cursor.tx.mail_from is None:
             tx_cursor.wait()

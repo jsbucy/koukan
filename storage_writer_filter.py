@@ -24,7 +24,6 @@ class StorageWriterFilter(Filter):
         rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         self.tx_cursor.create(rest_id)
 
-
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
         if self.tx_cursor is None:

@@ -112,14 +112,13 @@ class StorageTest(unittest.TestCase):
         r3 = self.s.get_transaction_cursor()
         r3.load(tx_writer.id)
         actions = r3.load_last_action(3)
-        self.assertEqual(Action.DELIVERED, actions[0][1])
-        resp = actions[0][2]
+        time,action,resp = actions.pop(0)
+        self.assertEqual(Action.DELIVERED, action)
         self.assertIsNotNone(resp)
         self.assertEqual(234, resp.code)
-        self.assertEqual(Action.LOAD, actions[1][1])
-        self.assertIsNone(actions[1][2])
-        self.assertEqual(Action.TEMP_FAIL, actions[2][1])
-        resp = actions[2][2]
+
+        time,action,resp = actions.pop(0)
+        self.assertEqual(Action.TEMP_FAIL, action)
         self.assertIsNotNone(resp)
         self.assertEqual(456, resp.code)
 
