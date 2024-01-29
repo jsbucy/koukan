@@ -333,6 +333,8 @@ def output(cursor, endpoint) -> Optional[Response]:
     last_tx = TransactionMetadata()
     err = None
     ok_rcpt = False
+    # TODO this needs to notice that the tx has aborted e.g. due to
+    # timing out on input cf Storage._gc_non_durable_one()
     while True:
         delta = last_tx.delta(cursor.tx)
         # XXX delta() outputs response fields
@@ -470,4 +472,5 @@ def cursor_to_endpoint(cursor, endpoint):
         action = Action.DELIVERED
     elif resp.perm():
         action = Action.PERM_FAIL
-    cursor.append_action(action, resp)
+    #cursor.append_action(action, resp)
+    cursor.finalize_attempt(not resp.temp())

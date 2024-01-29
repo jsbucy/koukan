@@ -77,7 +77,7 @@ class StorageTest(unittest.TestCase):
 
         tx_reader.load()
         tx_reader.add_rcpt_response([Response(456, 'busy')])
-        tx_reader.append_action(Action.TEMP_FAIL, Response(456))
+        tx_reader.finalize_attempt(False)
 
         # reader = self.s.get_transaction_cursor()
         # reader.load(db_id=tx_writer.id)
@@ -105,22 +105,9 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(r2.tx.rcpt_response, [])
         self.assertIsNone(r2.tx.data_response)
 
-        r2.append_action(Action.DELIVERED, Response(234))
+        r2.finalize_attempt(True)
 
         self.assertIsNone(self.s.load_one())
-
-        r3 = self.s.get_transaction_cursor()
-        r3.load(tx_writer.id)
-        actions = r3.load_last_action(3)
-        time,action,resp = actions.pop(0)
-        self.assertEqual(Action.DELIVERED, action)
-        self.assertIsNotNone(resp)
-        self.assertEqual(234, resp.code)
-
-        time,action,resp = actions.pop(0)
-        self.assertEqual(Action.TEMP_FAIL, action)
-        self.assertIsNotNone(resp)
-        self.assertEqual(456, resp.code)
 
         stale_append = self.s.get_transaction_cursor()
         stale_append.load(tx_writer.id)
@@ -151,7 +138,7 @@ class StorageTest(unittest.TestCase):
         self.assertIsNotNone(reader)
         self.assertEqual(reader.status, Status.ONESHOT_INFLIGHT)
 
-        reader.append_action(Action.TEMP_FAIL, Response(400))
+        reader.finalize_attempt(False)
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))

@@ -313,7 +313,7 @@ class TransactionCursor:
         # xxx keep this in a consistent state during the transition
         if Action.LOAD not in transition[status]:
             logging.critical('_start_attempt_db bad status id %d %s',
-                             db_id, str(status))
+                             db_id, status.name)
             assert not '_start_attempt_db precondition failure'
         new_status = transition[status][Action.LOAD]
         cursor.execute(
@@ -330,6 +330,30 @@ class TransactionCursor:
             (db_id, db_id))
         self._load_db_locked(cursor, db_id=db_id)
 
+    def finalize_attempt(self, output_done):
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            self._finalize_attempt(cursor, output_done)
+            self.parent.db.commit()
+
+    def _finalize_attempt(self, cursor, output_done):
+        action = Action.DELIVERED if output_done else Action.TEMP_FAIL
+        new_status = transition[self.status][action]
+        new_version = self.version + 1
+        now = time.time()
+        cursor.execute("""
+          UPDATE Transactions
+          SET inflight_session_id = NULL,
+          output_done = ?,
+          last_update = ?,
+          status = ?,
+          version = ?
+          WHERE id = ? AND version = ?
+          RETURNING version
+        """, (output_done, now, new_status, new_version, self.id, self.version))
+        row = cursor.fetchone()
+        if not row or row[0] != new_version:
+            raise VersionConflictException()
 
     def wait(self, timeout=None) -> bool:
         old = self.version
@@ -417,10 +441,6 @@ class TransactionCursor:
             return True
         return False
 
-    # next: break up append_action into
-    # unload / complete attempt
-    # abort
-
     def append_action(self, action : Action,
                        response : Optional[Response] = None) -> bool:
         with self.parent.db_write_lock:
@@ -433,7 +453,8 @@ class TransactionCursor:
     # appends a TransactionAttempts record and updates status
     def _append_action_db(self, cursor, action : Action,
                          response : Optional[Response] = None) -> bool:
-        assert action != Action.LOAD
+        assert action not in [
+            Action.LOAD, Action.DELIVERED, Action.TEMP_FAIL, Action.PERM_FAIL]
         now = int(time.time())
 
         # TODO load() here? cf write_envelope()
@@ -499,8 +520,6 @@ class TransactionCursor:
             (self.id, self.id, now, action) + resp_val)
 
 
-        # TODO gc payload on status DONE
-        # (or ttl, keep for ~1d after DONE?)
         self.status = status
         self.version = db_new_version
         self.attempt_id = attempt_id
@@ -889,15 +908,18 @@ class Storage:
 
             # TODO maybe don't load !input_done until some request
             # from the client
-            cursor.execute('SELECT id,status,version from Transactions '
-                           'WHERE inflight_session_id is NULL AND '
-                           'output_done IS NOT TRUE AND'
-                           '(json_extract(json, "$.host") IS NOT NULL) '
-                           'LIMIT 1')
+            cursor.execute("""
+              SELECT id,status,version from Transactions
+              WHERE inflight_session_id is NULL AND
+              output_done IS NOT TRUE AND
+              status != ? AND
+              (json_extract(json, "$.host") IS NOT NULL)
+              LIMIT 1""", (Status.ONESHOT_TEMP,))
             row = cursor.fetchone()
             if not row:
                 return None
-            db_id,status,version = row
+            db_id,s,version = row
+            status = Status(s)
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(cursor, db_id, status, version)
@@ -917,12 +939,17 @@ class Storage:
         max_recent = int(time.time()) - min_age
         cursor = self.db.cursor()
 
-        cursor.execute('SELECT id from Transactions '
-                       'WHERE last_update <= ? AND '
-                       'input_done IS NOT TRUE AND '
-                       'output_done IS NOT TRUE '
-                       'LIMIT 1',
-                       (max_recent,))
+        # TODO the way this is supposed to work is that
+        # cursor_to_endpoint() notices that this has been aborted and
+        # early returns but it doesn't actually do that. OTOH maybe it
+        # should implement the downstream timeout and this should be
+        # restricted to inflight_session_id IS NULL
+        cursor.execute("""
+          SELECT id from Transactions
+        WHERE last_update <= ? AND
+        input_done IS NOT TRUE AND
+        output_done IS NOT TRUE
+        LIMIT 1""", (max_recent,))
         row = cursor.fetchone()
         if row is None: return False
 

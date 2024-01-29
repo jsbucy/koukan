@@ -113,24 +113,6 @@ class TransactionTest(unittest.TestCase):
         rest_resp = rest_tx.set_durable({})
         self.assertEqual(rest_resp.status_code, 200)
 
-        # XXX fix or delete
-        # reader = self.storage.get_blob_reader()
-        # self.assertIsNotNone(reader.start(rest_id=blob_uri))
-        # self.assertEqual(reader.length, len(d))
-        # self.assertEqual(reader.contents(), d)
-
-        # tx_cursor.append_action(Action.DELIVERED, Response(245))
-        # rest_resp = rest_tx.get({})
-        # self.assertEqual(rest_resp.status_code, 200)
-        # resp_json = rest_resp.get_json()
-        # self.assertIsNotNone(resp_json)
-        # self.assertIn('start_response', resp_json)
-        # self.assertIn('data_response', resp_json)
-        # final_resp = Response.from_json(resp_json['data_response'])
-        # self.assertEqual(245, final_resp.code)
-
-        #self.dump_db()
-
 
     def put(self, blob_tx : RestServiceTransaction, offset, d, overall=None,
             expected_http_code=None, expected_resp_content=None,
@@ -165,18 +147,6 @@ class TransactionTest(unittest.TestCase):
 
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
-#        cursor = self.storage.load_one()
-#        self.assertIsNotNone(cursor)
-#        self.assertEqual(cursor.rest_id, rest_tx.rest_id)
-
-#        tx_cursor = self.storage.get_transaction_cursor()
-#        tx_cursor.load(rest_id = rest_id)
-#        tx_cursor.append_action(Action.START, Response(234))
-
-#        rest_tx_cursor = self.storage.get_transaction_cursor()
-#        rest_tx_cursor.load(rest_id = rest_id)
-#        rest_tx = RestServiceTransaction(self.storage, rest_id, rest_tx_cursor)
-#        del rest_tx_cursor
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
 
@@ -287,11 +257,6 @@ class TransactionTest(unittest.TestCase):
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
-        actions = reader.load_last_action(1)
-        time, action, resp = actions[0]
-        self.assertEqual(action, Action.DELIVERED)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.code, 256)
 
     def output(self, rest_id, endpoint):
         tx_cursor = self.storage.load_one()
