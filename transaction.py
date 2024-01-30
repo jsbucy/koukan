@@ -279,15 +279,6 @@ class RestServiceTransaction(Handler):
     def abort(self):
         pass
 
-    def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        try:
-            # xxx this eventually comes from tx json PATCH
-            self.tx_cursor.set_max_attempts(100)
-        except VersionConflictException:
-            return FlaskResponse(412, 'version conflict')
-
-        return FlaskResponse()
-
 
 # interface to top-level flask app
 class RestServiceTransactionFactory(HandlerFactory):

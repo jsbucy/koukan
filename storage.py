@@ -70,12 +70,14 @@ class TransactionCursor:
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             # TODO this should just load(), trying to save a single
-            # point read rfom the db isn't worth worrying about the
+            # point read from the db isn't worth worrying about the
             # state in the cursor getting out of sync with the db.
             tx_to_db = self.tx.merge(tx_delta)
+            # xxx this schema stuff belongs somewhere else
             tx_to_db.mail_response = None
             tx_to_db.rcpt_response = None
             tx_to_db.data_response = None
+            tx_to_db.max_attempts = None
             # e.g. overwriting an existing field
             # xxx return/throw
             assert tx_to_db is not None
@@ -84,12 +86,20 @@ class TransactionCursor:
             # TODO all updates '... WHERE inflight_session_id =
             #   self.parent.session' ?
             now = int(time.time())
+            set_max_attempts = ''
+            set_max_attempts_val = ()
+            if tx_delta.max_attempts:
+                set_max_attempts = ', max_attempts = ?'
+                set_max_attempts_val = (tx_delta.max_attempts,)
+
             cursor.execute("""
               UPDATE Transactions SET json = ?, version = ?,
               max_attempts = 1, attempt_count = 0, last_update = ?
+              """ + set_max_attempts + """
               WHERE id = ? AND version = ? RETURNING version""",
-              (json.dumps(tx_to_db.to_json()), new_version, now,
-               self.id, self.version))
+              (json.dumps(tx_to_db.to_json()), new_version, now) +
+              set_max_attempts_val +
+              (self.id, self.version))
 
             if (row := cursor.fetchone()) is None:
                 raise VersionConflictException()
@@ -246,12 +256,12 @@ class TransactionCursor:
         assert(db_id is not None or rest_id is not None)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            return self._load_db_locked(cursor, db_id, rest_id)
+            return self._load_db(cursor, db_id, rest_id)
 
-    def _load_db_locked(self, cursor,
-                        db_id : Optional[int] = None,
-                        rest_id : Optional[str] = None
-                        ) -> Optional[TransactionMetadata]:
+    def _load_db(self, cursor,
+                 db_id : Optional[int] = None,
+                 rest_id : Optional[str] = None
+                 ) -> Optional[TransactionMetadata]:
         where = None
         where_id = None
 
@@ -262,10 +272,11 @@ class TransactionCursor:
             where = 'WHERE rest_id = ?'
             where_id = (rest_id,)
 
-        cursor.execute('SELECT id,rest_id,creation,json,version,'
-                       'last,input_done,output_done '
-                       'FROM Transactions ' + where,
-                       where_id)
+        cursor.execute("""
+          SELECT id,rest_id,creation,json,version,
+          last,input_done,output_done
+          FROM Transactions """ + where,
+          where_id)
         row = cursor.fetchone()
         if not row:
             return None
@@ -275,20 +286,21 @@ class TransactionCursor:
          self.input_done, self.output_done) = row[0:8]
 
         trans_json = json.loads(json_str) if json_str else {}
-        logging.debug('TransactionCursor._load_db_locked %s %s',
+        logging.debug('TransactionCursor._load_db %s %s',
                       self.rest_id, trans_json)
         self.tx = TransactionMetadata.from_json(trans_json)
 
-        cursor.execute('SELECT max(i) '
-                       'FROM TransactionContent WHERE transaction_id = ?',
-                       (self.id,))
+        cursor.execute("""
+          SELECT max(i)
+          FROM TransactionContent WHERE transaction_id = ?""",
+          (self.id,))
         row = cursor.fetchone()
         self.max_i = row[0]
 
-        cursor.execute(
-            'SELECT attempt_id,mail_response,rcpt_response,data_response '
-            'FROM TransactionAttempts WHERE transaction_id = ? '
-            'ORDER BY attempt_id DESC LIMIT 1', (self.id,))
+        cursor.execute("""
+          SELECT attempt_id,mail_response,rcpt_response,data_response
+          FROM TransactionAttempts WHERE transaction_id = ?
+          ORDER BY attempt_id DESC LIMIT 1""", (self.id,))
         row = cursor.fetchone()
         if row is not None:
             self.attempt_id,mail_json,rcpt_json,data_json = row
@@ -318,7 +330,7 @@ class TransactionCursor:
             FROM (SELECT max(attempt_id) AS i from TransactionAttempts
             WHERE transaction_id = ?))) RETURNING attempt_id""",
             (db_id, db_id))
-        self._load_db_locked(cursor, db_id=db_id)
+        self._load_db(cursor, db_id=db_id)
 
     def _set_max_attempts(self, max_attempts, cursor):
         new_version = self.version + 1
@@ -544,7 +556,7 @@ class BlobWriter:
                     logging.debug('BlobWriter.append_data last %d tx %s',
                                   self.id, row)
                     tx = self.parent.get_transaction_cursor()
-                    tx._load_db_locked(cursor, row[0])
+                    tx._load_db(cursor, row[0])
                     tx._maybe_finalize(cursor)
 
             self.parent.db.commit()
@@ -849,7 +861,7 @@ class Storage:
         if row is None: return False
 
         tx_cursor = self.get_transaction_cursor()
-        tx_cursor._load_db_locked(cursor, db_id = row[0])
+        tx_cursor._load_db(cursor, db_id = row[0])
         tx_cursor._abort(cursor)
 
         self.db.commit()

@@ -439,18 +439,6 @@ class RestEndpoint(Filter):
         return None
 
 
-    def set_durable(self):
-        rest_resp = requests.post(self.transaction_url + '/smtpMode',
-                                  json={},
-                                  headers={'host': self.http_host},
-                                  timeout=self.timeout_data)
-        if rest_resp.status_code > 299:
-            logging.info('RestEndpoint.set_durable %s', rest_resp)
-            return Response(400, "RestEndpoint.set_durable")
-
-        return Response()
-
-
     def abort(self):
         # TODO
         pass

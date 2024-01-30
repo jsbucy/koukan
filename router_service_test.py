@@ -190,8 +190,10 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
-        self.assertTrue(rest_endpoint.set_durable().ok())
-
+        # propagate this timeout to the GET handler which currently
+        # uses static 1s!
+        rest_endpoint.get_json(1.1)
+        rest_endpoint.on_update(TransactionMetadata(max_attempts=100))
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)

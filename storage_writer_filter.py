@@ -28,10 +28,6 @@ class StorageWriterFilter(Filter):
                   timeout : Optional[float] = None):
         if self.tx_cursor is None:
             self._create()
-        if tx.durable:
-            # xxx retry params from yaml
-            self.tx_cursor.set_max_attempts(100)
-            return
         while True:
             try:
                 self.tx_cursor.write_envelope(tx)

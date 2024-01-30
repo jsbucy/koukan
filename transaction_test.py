@@ -110,7 +110,7 @@ class TransactionTest(unittest.TestCase):
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.set_durable({})
+        rest_resp = rest_tx.patch({'max_attempts': 100})
         self.assertEqual(rest_resp.status_code, 200)
 
 

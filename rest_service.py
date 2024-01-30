@@ -108,21 +108,6 @@ def create_app(handler_factory : HandlerFactory):
         logging.info('rest service append_data %s', rest_resp)
         return rest_resp
 
-    @app.route('/transactions/<tx_rest_id>/smtpMode',
-               methods=['POST'])
-    def smtp_mode(tx_rest_id):
-        logging.info("rest service smtp_mode %s %s",
-                     request, request.headers)
-        # TODO this should take a parameter in the json whether or not
-        # to emit a bounce. smtp gw wants this; first-class rest
-        # clients that are willing to poll the lro may not.
-        handler = handler_factory.get_tx(tx_rest_id)
-        if handler is None:
-            return FlaskResponse(status=404, response=['transaction not found'])
-        rest_resp = handler.set_durable({})
-        logging.info("rest service smtp_mode %s", rest_resp)
-        return rest_resp
-
     @app.route('/blob/<blob_rest_id>', methods=['PUT'])
     def append_data_chunk(blob_rest_id) -> FlaskResponse:
         logging.info("rest service append_data_chunk %s %s",

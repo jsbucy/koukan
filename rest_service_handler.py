@@ -29,10 +29,6 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        pass
-
-    @abstractmethod
     def tx_rest_id(self) -> str:
         pass
 

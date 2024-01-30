@@ -216,7 +216,9 @@ class Exploder(Filter):
         for i,async_rcpt in enumerate(self.async_rcpts):
             if not async_rcpt:
                 continue
-            self.upstream_chain[i].on_update(TransactionMetadata(durable=True))
+            # xxx retry params from yaml
+            self.upstream_chain[i].on_update(
+                TransactionMetadata(max_attempts=100))
 
         return Response(
             250, 'accepted (exploder async mixed upstream responses)')

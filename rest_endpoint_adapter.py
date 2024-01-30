@@ -145,25 +145,6 @@ class RestEndpointAdapter(Handler):
         return resp
 
 
-    def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        if not self.endpoint.received_last:
-            return FlaskResponse(
-                status=400,
-                response=['RouterTransaction.smtp_mode set_durable: have not '
-                          'received last append_data'])
-
-        resp = self.endpoint.set_durable()
-        if resp.ok():
-            return FlaskResponse()
-
-        # xxx code
-        rest_resp = FlaskResponse(
-            status=500,
-            response=['RouterTransaction.smtp_mode set_durable'])
-        logging.info('rest service Transaction.set_durable %s', rest_resp)
-        return rest_resp
-
-
 class EndpointFactory(ABC):
     @abstractmethod
     def create(self, http_host : str) -> Optional[object]:  # Endpoint

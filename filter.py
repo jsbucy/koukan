@@ -76,7 +76,8 @@ class TransactionMetadata:
         'mail_response': Response.from_json,
         'rcpt_to': lambda js: list_from_js(js, Mailbox.from_json),
         'rcpt_response': lambda js: list_from_js(js, Response.from_json),
-        'data_response': Response.from_json
+        'data_response': Response.from_json,
+        'max_attempts': lambda x: x,
         # XXX last?
     }
 
@@ -92,22 +93,22 @@ class TransactionMetadata:
     rcpt_response : List[Response]
     data_response : Optional[Response] = None
 
-    durable : Optional[bool] = None
+    max_attempts : Optional[int] = None
 
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
                  host : Optional[str] = None,
-                 durable : Optional[bool] = None):
+                 max_attempts : Optional[int] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.rcpt_to = rcpt_to if rcpt_to else []
         self.rcpt_response = []
         self.host = host
-        if durable is not None:
-            self.durable = durable
+        if max_attempts is not None:
+            self.max_attempts = max_attempts
 
 #    def __bool__(self):
 #        for f in TransactionMetadata.all_fields:
@@ -152,7 +153,7 @@ class TransactionMetadata:
                 if v is None:
                     continue
                 v_js = None
-                if isinstance(v, str):
+                if isinstance(v, str) or isinstance(v, int):
                     v_js = v
                 elif isinstance(v, list):
                     if v:
