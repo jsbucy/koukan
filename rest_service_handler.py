@@ -7,15 +7,18 @@ from werkzeug.datastructures import ContentRange
 
 class Handler(ABC):
     @abstractmethod
-    def start(self, req_json) -> Optional[FlaskResponse]:
+    def start(self, req_json,
+              timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         pass
 
     @abstractmethod
-    def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
+    def get(self, req_json : Dict[str, Any],
+            timeout : Optional[float] = None) -> FlaskResponse:
         pass
 
     @abstractmethod
-    def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
+    def patch(self, req_json : Dict[str, Any],
+              timeout : Optional[float] = None) -> FlaskResponse:
         pass
 
     @abstractmethod

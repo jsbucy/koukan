@@ -21,6 +21,7 @@ from response import Response as MailResponse
 
 from rest_service_handler import Handler, HandlerFactory
 
+MAX_TIMEOUT=30
 
 def create_app(handler_factory : HandlerFactory):
     app = Flask(__name__)
@@ -42,6 +43,18 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(status=412, response=['version mismatch'])
         return None
 
+    def _get_timeout(req) -> Tuple[Optional[int], FlaskResponse]:
+        # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
+        if not (timeout_header := request.headers.get('request-timeout', None)):
+            return None, None
+        timeout = None
+        try:
+            timeout = min(int(timeout_header), MAX_TIMEOUT)
+        except ValueError:
+            return None, FlaskResponse(status=400, response=[
+                'invalid request-timeout header'])
+        return timeout, None
+
     @app.route('/transactions', methods=['POST'])
     def start_transaction() -> FlaskResponse:
         logging.info('rest service start_transaction %s %s',
@@ -53,7 +66,11 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(
                 status=500,
                 response=['internal error creating transaction'])
-        rest_resp : Optional[FlaskResponse] = handler.start(request.get_json())
+        timeout, err = _get_timeout(request)
+        if err:
+            return err
+        rest_resp : Optional[FlaskResponse] = handler.start(
+            request.get_json(), timeout)
         if rest_resp.status_code > 299:
             return rest_resp
         resp_json = rest_resp.json
@@ -76,9 +93,13 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(status=404, response=['transaction not found'])
         if (err := validate_etag(request, handler)) is not None:
             return err
-        rest_resp = handler.patch(request.get_json())
+        timeout, err = _get_timeout(request)
+        if err:
+            return err
+        rest_resp = handler.patch(request.get_json(), timeout)
         set_etag(rest_resp, handler)
         return rest_resp
+
 
     @app.route('/transactions/<tx_rest_id>',
                methods=['GET'])
@@ -86,7 +107,11 @@ def create_app(handler_factory : HandlerFactory):
         handler = handler_factory.get_tx(tx_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['transaction not found'])
-        rest_resp = handler.get({})
+        timeout, err = _get_timeout(request)
+        if err:
+            return err
+
+        rest_resp = handler.get({}, timeout=timeout)
         set_etag(rest_resp, handler)
         return rest_resp
 

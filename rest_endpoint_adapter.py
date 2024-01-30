@@ -32,7 +32,8 @@ class RestEndpointAdapter(Handler):
 
     def tx_rest_id(self): return self._tx_rest_id
 
-    def start(self, req_json) -> Optional[FlaskResponse]:
+    def start(self, req_json,
+              timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
         self.endpoint.start(tx)
         # xxx inflight response fields per tx req fields
@@ -41,7 +42,8 @@ class RestEndpointAdapter(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    def get(self, req_json : Dict[str, Any]) -> FlaskResponse:
+    def get(self, req_json : Dict[str, Any],
+              timeout : Optional[float] = None) -> FlaskResponse:
         json_out = {}
 
         if self.endpoint.mail_resp:
@@ -55,7 +57,7 @@ class RestEndpointAdapter(Handler):
         return jsonify(json_out)
 
     def patch(self, req_json : Dict[str, Any],
-              etag : Optional[str] = None) -> FlaskResponse:
+              timeout : Optional[float] = None) -> FlaskResponse:
         raise NotImplementedError()
 
     def etag(self):

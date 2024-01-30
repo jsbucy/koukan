@@ -64,6 +64,10 @@ class RestEndpoint(Filter):
     # if we have all the responses.
     rcpts = 0
 
+    def _set_request_timeout(self, headers, timeout : Optional[float] = None):
+        if timeout:
+            headers['request-timeout'] = str(int(timeout))
+
     # static_remote_host overrides transaction remote_host to send all
     # traffic to a fixed next-hop
     # pass base_url/http_host or transaction_url
@@ -97,7 +101,8 @@ class RestEndpoint(Filter):
         self.max_inline = max_inline
         self.chunk_size = chunk_size
 
-    def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any]):
+    def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any],
+               timeout : Optional[float] = None):
         logging.debug('RestEndpoint._start %s', req_json)
         remote_host_disco = [None]
         next_hop = (self.static_remote_host if self.static_remote_host
@@ -114,9 +119,11 @@ class RestEndpoint(Filter):
                 req_json['remote_host'] = remote_host.to_tuple()
                 self.remote_host = remote_host
 
+            req_headers = {'host': self.http_host}
+            self._set_request_timeout(req_headers, timeout)
             rest_resp = requests.post(self.base_url + '/transactions',
                                       json=req_json,
-                                      headers={'host': self.http_host},
+                                      headers=req_headers,
                                       timeout=self.timeout_start)
             # XXX rest_resp.status_code?
             logging.info('RestEndpoint.start resp %s', rest_resp)
@@ -133,11 +140,12 @@ class RestEndpoint(Filter):
 
             return rest_resp
 
-    def _update(self, tx):
+    def _update(self, tx, timeout : Optional[float] = None):
         req_json = tx.to_json()
         if self.remote_host:
             req_json['remote_host'] = self.remote_host.to_tuple()
         req_headers = { 'host': self.http_host }
+        self._set_request_timeout(req_headers, timeout)
         if self.etag:
             req_headers['if-match'] = self.etag
         rest_resp = requests.patch(self.transaction_url,
@@ -333,13 +341,15 @@ class RestEndpoint(Filter):
 
     # XXX clearly distinguish internal, test methods
 
-    def get_json(self, timeout):
+    def get_json(self, timeout : Optional[float] = None):
         try:
+            req_headers = {'host': self.http_host}
+            self._set_request_timeout(req_headers, timeout)
             rest_resp = requests.get(self.transaction_url,
-                                     headers={'host': self.http_host},
+                                     headers=req_headers,
                                      timeout=timeout)
             logging.debug('RestEndpoint.get_json %s', rest_resp)
-        except Exception:
+        except requests.Timeout:
             return None
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)

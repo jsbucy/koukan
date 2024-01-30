@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import unittest
 import logging
 import socketserver
@@ -20,6 +20,7 @@ class Request:
     path = None
     content_type = None
     content_range = None
+    request_timeout : Optional[int] = None
     body = None
     def __init__(self,
                  path = None,
@@ -91,6 +92,8 @@ class RestEndpointTest(unittest.TestCase):
         if range_header := environ.get('HTTP_CONTENT_RANGE', None):
             req.content_range = (
                 werkzeug.http.parse_content_range_header(range_header))
+        if timeout_header := environ.get('HTTP_REQUEST_TIMEOUT', None):
+            req.request_timeout = int(timeout_header)
 
         if ((wsgi_input := environ.get('wsgi.input', None)) and
             (length := environ.get('CONTENT_LENGTH', None))):
@@ -127,6 +130,27 @@ class RestEndpointTest(unittest.TestCase):
 
         self.assertEqual(rest_endpoint.transaction_url,
                          self.static_base_url + '/transactions/123')
+
+        # check get_json() while we're at it
+        js = {'hello': 'world'}
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps(js)))
+        resp_json = rest_endpoint.get_json(timeout=None)
+        self.assertEqual(resp_json, js)
+        req = self.requests.pop(0)
+        self.assertIsNone(req.request_timeout)
+
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps(js)))
+        resp_json = rest_endpoint.get_json(timeout=1.2)
+        self.assertEqual(resp_json, js)
+        req = self.requests.pop(0)
+        self.assertEqual(req.request_timeout, 1)
+
 
     def testUpdate(self):
         rest_endpoint = RestEndpoint(

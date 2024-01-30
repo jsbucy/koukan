@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 from threading import Thread, Lock, Condition
 import logging
 import unittest
@@ -83,7 +83,8 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoints = []
         self.config = Config()
         self.config.inject_yaml(root_yaml)
-        self.config.inject_filter('sync', lambda yaml, next: self.get_endpoint())
+        self.config.inject_filter('sync',
+                                  lambda yaml, next: self.get_endpoint())
         self.service = Service(config=self.config)
         self.service_thread = Thread(
             daemon=True,
@@ -125,6 +126,16 @@ class RouterServiceTest(unittest.TestCase):
         for l in self.service.storage.db.iterdump():
             print(l)
 
+    def assertRcptCodesEqual(self, responses : List[Optional[Response]],
+                             expected_codes):
+        self.assertEqual([r.code if r else None for r in responses],
+                         expected_codes)
+
+    def assertRcptJsonCodesEqual(self, resp_json, expected_codes):
+        self.assertRcptCodesEqual(
+            [Response.from_json(r) for r in resp_json.get('rcpt_response', [])],
+            expected_codes)
+
     # native rest
     # first attempt tempfails at rcpt
     # retry+success
@@ -150,7 +161,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), None)
         self.assertEqual(tx_json.get('last', None), None)
 
-        tx_json = rest_endpoint.get_json(1.2)
+        tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
 
@@ -164,7 +175,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), None)
         self.assertEqual(tx_json.get('last', None), None)
 
-        tx_json = rest_endpoint.get_json(1.2)
+        tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
                       tx_json)
 
@@ -190,9 +201,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
-        # propagate this timeout to the GET handler which currently
-        # uses static 1s!
-        rest_endpoint.get_json(1.1)
+        rest_endpoint.get_json()
         rest_endpoint.on_update(TransactionMetadata(max_attempts=100))
 
         upstream_endpoint = SyncEndpoint()
@@ -209,9 +218,7 @@ class RouterServiceTest(unittest.TestCase):
                       '%s %s', rest_resp, tx_json)
         mail_resp = Response.from_json(tx_json.get('mail_response', None))
         self.assertEqual(mail_resp.code, 201)
-        rcpt_resp = [ Response.from_json(r).code
-                     for r in tx_json.get('rcpt_response', []) ]
-        self.assertEqual(rcpt_resp, [456])
+        self.assertRcptJsonCodesEqual(tx_json, [456])
         self.assertEqual(tx_json.get('data_response', None), {})
         self.assertEqual(tx_json.get('last', None), True)
 
@@ -231,9 +238,7 @@ class RouterServiceTest(unittest.TestCase):
                       '%s %s', rest_resp, tx_json)
         mail_resp = Response.from_json(tx_json.get('mail_response', None))
         self.assertEqual(mail_resp.code, 201)
-        rcpt_resp = [ Response.from_json(r).code
-                     for r in tx_json.get('rcpt_response', []) ]
-        self.assertEqual(rcpt_resp, [202])
+        self.assertRcptJsonCodesEqual(tx_json, [202])
         mail_resp = Response.from_json(tx_json.get('data_response', None))
         self.assertEqual(mail_resp.code, 203)
         self.assertEqual(tx_json.get('last', None), True)
@@ -241,31 +246,35 @@ class RouterServiceTest(unittest.TestCase):
     def _update_tx(self, endpoint, tx):
         endpoint.on_update(tx)
 
+    def start_tx_update(self, rest_endpoint, tx):
+        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
+        t.start()
+        return t
+
+    def join_tx_update(self, t):
+        t.join(timeout=1)
+        self.assertFalse(t.is_alive())
+
     # exploder multi rcpt
     def testExploderMultiRcpt(self):
         logging.info('testExploderMultiRcpt')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
-
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
-        t.start()
+        t = self.start_tx_update(rest_endpoint, tx)
 
         time.sleep(0.1)
         # exploder tx
         self.assertTrue(self.service._dequeue())
 
-        t.join(timeout=1)
-        self.assertFalse(t.is_alive())
+        self.join_tx_update(t)
 
         # no rcpt -> buffered
         self.assertEqual(tx.mail_response.code, 250)
 
-
         tx = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
-        t.start()
+        t = self.start_tx_update(rest_endpoint, tx)
 
         # upstream tx #1
         upstream_endpoint = SyncEndpoint()
@@ -275,14 +284,12 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.set_mail_response(Response(250))
         upstream_endpoint.add_rcpt_response(Response(202))
 
-        t.join(timeout=1)
-        self.assertFalse(t.is_alive())
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.join_tx_update(t)
+        self.assertRcptCodesEqual(tx.rcpt_response, [202])
 
 
         tx = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
-        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
-        t.start()
+        t = self.start_tx_update(rest_endpoint, tx)
 
         # upstream tx #2
         upstream_endpoint2 = SyncEndpoint()
@@ -292,10 +299,8 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint2.set_mail_response(Response(250))
         upstream_endpoint2.add_rcpt_response(Response(203))
 
-        t.join(timeout=1)
-        self.assertFalse(t.is_alive())
-        self.assertEqual([r.code for r in tx.rcpt_response], [203])
-
+        self.join_tx_update(t)
+        self.assertRcptCodesEqual(tx.rcpt_response, [203])
 
 
 

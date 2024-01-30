@@ -74,7 +74,8 @@ class RestServiceTransaction(Handler):
         return self._tx_rest_id
 
     # xxx don't allow setting resp fields?
-    def start(self, req_json) -> Optional[FlaskResponse]:
+    def start(self, req_json, timeout : Optional[float] = None
+              ) -> Optional[FlaskResponse]:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
         assert 'host' not in req_json
         js = req_json
@@ -87,10 +88,11 @@ class RestServiceTransaction(Handler):
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
         self.tx_cursor.load()
-        return self._get_tx_json()
+        return self._get_tx_json(timeout)
 
     # xxx don't allow setting resp fields?
-    def patch(self, req_json : Dict[str, Any]) -> FlaskResponse:
+    def patch(self, req_json : Dict[str, Any],
+              timeout : Optional[float] = None) -> FlaskResponse:
         resp_json = {}
         tx = TransactionMetadata.from_json(req_json)
         if tx is None:
@@ -100,9 +102,38 @@ class RestServiceTransaction(Handler):
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
         self.tx_cursor.load()
-        return self._get_tx_json()
+        return self._get_tx_json(timeout)
 
-    def _get_tx_json(self) -> FlaskResponse:
+    def _get_tx_json(self, timeout : Optional[float] = None) -> FlaskResponse:
+        start = time.monotonic()
+        while True:
+            deadline_left = None
+            if timeout:
+                deadline_left = timeout - (time.monotonic() - start)
+                if deadline_left <= 0:
+                    break
+            else:
+                break
+
+            # only wait if something is inflight upstream and we think the
+            # status might change soon
+            logging.info('RestServiceTransaction.get rcpt_to=%s rcpt_resp=%s',
+                         self.tx_cursor.tx.rcpt_to,
+                         self.tx_cursor.tx.rcpt_response)
+            wait_mail = (self.tx_cursor.tx.mail_from is not None and
+                         self.tx_cursor.tx.mail_response is None)
+            wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
+                         len(self.tx_cursor.tx.rcpt_to))
+            wait_data = (self.tx_cursor.last and
+                         self.tx_cursor.tx.data_response is None)
+            if not (wait_mail or wait_rcpt or wait_data):
+                break
+            logging.info('RestServiceTransaction.get wait '
+                         'mail=%s rcpt=%s data=%s deadline_left=%f',
+                         wait_mail, wait_rcpt, wait_data, deadline_left)
+            self.tx_cursor.wait(timeout=deadline_left)
+            logging.info('RestServiceTransaction.get wait done')
+
         resp_json = {}
         resp_js = lambda r: r.to_json() if r is not None else {}
         if (self.tx_cursor.tx.mail_from is not None or
@@ -128,34 +159,13 @@ class RestServiceTransaction(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    # TODO pass a timeout possibly from request-timeout header e.g.
-    # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
-    def get(self, req_json : Dict[str, Any], wait_inflight=1) -> FlaskResponse:
+    def get(self, req_json : Dict[str, Any], timeout : Optional[int] = None
+            ) -> FlaskResponse:
         logging.info('RestServiceTransaction.get %s', self._tx_rest_id)
-        start = time.monotonic()
-        while (time.monotonic() - start) < wait_inflight:
-            # only wait if something is inflight upstream and we think the
-            # status might change soon
-            logging.info('RestServiceTransaction.get rcpt_to=%s rcpt_resp=%s',
-                         self.tx_cursor.tx.rcpt_to,
-                         self.tx_cursor.tx.rcpt_response)
-            wait_mail = (self.tx_cursor.tx.mail_from is not None and
-                         self.tx_cursor.tx.mail_response is None)
-            wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
-                         len(self.tx_cursor.tx.rcpt_to))
-            wait_data = (self.tx_cursor.last and
-                         self.tx_cursor.tx.data_response is None)
-            if not (wait_mail or wait_rcpt or wait_data):
-                break
-            logging.info('RestServiceTransaction.get wait '
-                         'mail=%s rcpt=%s data=%s',
-                         wait_mail, wait_rcpt, wait_data)
-            self.tx_cursor.wait(timeout=1)
-            logging.info('RestServiceTransaction.get wait done')
 
         logging.info('RestServiceTransaction.get %s %s', self._tx_rest_id,
                      self.tx_cursor.tx)
-        return self._get_tx_json()
+        return self._get_tx_json(timeout=timeout)
 
 
     def append_blob(self, uri : Optional[str], last) -> FlaskResponse:

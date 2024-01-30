@@ -292,9 +292,10 @@ class TransactionTest(unittest.TestCase):
             logging.info('test_integrated start resp %s', resp_json)
             self.assertIsNotNone(resp_json)
             self.assertNotIn('data_response', resp_json)
-            if resp_json['rcpt_response']:
-                rcpt_resp = Response.from_json(resp_json['rcpt_response'][0])
-                self.assertEqual(234, rcpt_resp.code)
+            responses = [Response.from_json(r)
+                         for r in resp_json.get('rcpt_response', [])]
+            response_codes = [r.code if r else None for r in responses]
+            if response_codes == [234]:
                 break
             time.sleep(0.2)
         else:
