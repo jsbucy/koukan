@@ -5,7 +5,7 @@ import logging
 from threading import Condition, Lock, Thread
 import time
 
-from storage import Action, Storage, TransactionCursor
+from storage import Storage, TransactionCursor
 from response import Response
 from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata

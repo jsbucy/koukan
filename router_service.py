@@ -13,7 +13,7 @@ from blobs import BlobStorage
 from blob import InlineBlob
 from rest_endpoint import BlobIdMap as RestBlobIdMap
 
-from storage import Storage, Action, Status, TransactionCursor
+from storage import Storage, TransactionCursor
 from transaction import RestServiceTransactionFactory, cursor_to_endpoint
 from response import Response
 from tags import Tag

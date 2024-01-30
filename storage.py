@@ -11,12 +11,11 @@ import psutil
 
 from blob import Blob, InlineBlob
 from response import Response
-from storage_schema import Status, Action, transition, InvalidActionException, check_valid_append, VersionConflictException
+from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata
 
 class TransactionCursor:
     id : Optional[int] = None
-    status : Status = None
     attempt_id : Optional[int] = None
 
     length = None
@@ -25,7 +24,6 @@ class TransactionCursor:
     max_i = None
     last = None
     creation : Optional[int] = None
-    status : Optional[Status] = None
     input_done : Optional[bool] = None
     output_done : Optional[bool] = None
 
@@ -48,16 +46,15 @@ class TransactionCursor:
         self.creation = int(time.time())
         with parent.db_write_lock:
             cursor = parent.db.cursor()
-            self.status = Status.INSERT
             self.last = False
             self.version = 0
             cursor.execute(
                 'INSERT INTO Transactions '
                 '  (rest_id, creation, last_update, '
-                'version, status, last) '
-                'VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+                'version, last) '
+                'VALUES (?, ?, ?, ?, ?) RETURNING id',
                 (rest_id, self.creation, self.creation,
-                 self.version, self.status, self.last))
+                 self.version, self.last))
             self.id = cursor.fetchone()[0]
             self.tx = TransactionMetadata()
 
@@ -188,18 +185,18 @@ class TransactionCursor:
             cursor = self.parent.db.cursor()
             # TODO load-that's-not-a-load, cf write_envelope()
             cursor.execute(
-                'SELECT status,version,last From Transactions WHERE id = ?',
+                'SELECT version,last From Transactions WHERE id = ?',
                 (self.id,))
             row = cursor.fetchone()
-            status = Status(row[0])
-            version,db_last = row[1:]
-            check_valid_append(status)
+            version,db_last = row
+            if db_last:
+                raise InvalidActionException()
 
             logging.debug('Storage.append_blob version id=%d db %d new %d '
-                          'status %s db last %s op last %s',
-                          self.id, row[1], self.version, status.name, db_last,
+                          'db last %s op last %s',
+                          self.id, row[1], self.version, db_last,
                           last)
-            assert(not db_last)
+
 
             if blob_rest_id is not None:
                 cursor.execute(
@@ -266,7 +263,7 @@ class TransactionCursor:
             where_id = (rest_id,)
 
         cursor.execute('SELECT id,rest_id,creation,json,version,'
-                       'last,input_done,output_done,status '
+                       'last,input_done,output_done '
                        'FROM Transactions ' + where,
                        where_id)
         row = cursor.fetchone()
@@ -276,7 +273,6 @@ class TransactionCursor:
         (self.id, self.rest_id,
          self.creation, json_str, self.version, self.last,
          self.input_done, self.output_done) = row[0:8]
-        self.status = Status(row[8])
 
         trans_json = json.loads(json_str) if json_str else {}
         logging.debug('TransactionCursor._load_db_locked %s %s',
@@ -306,20 +302,14 @@ class TransactionCursor:
 
         return self.tx
 
-    def _start_attempt_db(self, cursor, db_id, status, version):
-        # xxx keep this in a consistent state during the transition
-        if Action.LOAD not in transition[status]:
-            logging.critical('_start_attempt_db bad status id %d %s',
-                             db_id, status.name)
-            assert not '_start_attempt_db precondition failure'
-        new_status = transition[status][Action.LOAD]
+    def _start_attempt_db(self, cursor, db_id, version):
         cursor.execute("""
             UPDATE Transactions
-            SET status = ?, version = ?, inflight_session_id = ?,
+            SET version = ?, inflight_session_id = ?,
             attempt_count = (SELECT COUNT(*) + 1 FROM TransactionAttempts
                              WHERE transaction_id = ?)
             WHERE id = ? AND version = ? RETURNING version""",
-            (new_status, version+1, self.parent.session_id, db_id, db_id,
+            (version+1, self.parent.session_id, db_id, db_id,
              version))
         assert cursor.fetchone()
         cursor.execute(
@@ -331,14 +321,12 @@ class TransactionCursor:
         self._load_db_locked(cursor, db_id=db_id)
 
     def _set_max_attempts(self, max_attempts, cursor):
-        # xxx keep this in a consistent state during the transition
-        new_status = transition[self.status][Action.SET_DURABLE]
         new_version = self.version + 1
         cursor.execute("""
           UPDATE Transactions
-          SET max_attempts = ?, last_update = ?, version = ?, status = ?
+          SET max_attempts = ?, last_update = ?, version = ?
           WHERE id = ? AND version = ? RETURNING version""",
-                       (max_attempts, time.time(), new_version, new_status,
+                       (max_attempts, time.time(), new_version,
                         self.id, self.version))
         row = cursor.fetchone()
         if not row or row[0] != new_version:
@@ -357,8 +345,6 @@ class TransactionCursor:
             self.parent.db.commit()
 
     def _finalize_attempt(self, cursor, output_done):
-        action = Action.DELIVERED if output_done else Action.TEMP_FAIL
-        new_status = transition[self.status][action]
         new_version = self.version + 1
         now = int(time.time())
         cursor.execute("""
@@ -366,12 +352,10 @@ class TransactionCursor:
           SET inflight_session_id = NULL,
           output_done = ?,
           last_update = ?,
-          status = ?,
           version = ?
           WHERE id = ? AND version = ?
           RETURNING version
-        """, (output_done, now, new_status, new_version, self.id,
-              self.version))
+        """, (output_done, now, new_version, self.id, self.version))
         row = cursor.fetchone()
         if not row or row[0] != new_version:
             raise VersionConflictException()
@@ -822,7 +806,7 @@ class Storage:
             # TODO maybe don't load !input_done until some request
             # from the client
             cursor.execute("""
-              SELECT id,status,version from Transactions
+              SELECT id,version from Transactions
               WHERE inflight_session_id is NULL AND
               attempt_count < max_attempts AND
               output_done IS NOT TRUE AND
@@ -831,11 +815,10 @@ class Storage:
             row = cursor.fetchone()
             if not row:
                 return None
-            db_id,s,version = row
-            status = Status(s)
+            db_id,version = row
 
             tx = self.get_transaction_cursor()
-            tx._start_attempt_db(cursor, db_id, status, version)
+            tx._start_attempt_db(cursor, db_id, version)
 
             self.tx_versions.update(tx.id, tx.version)
 

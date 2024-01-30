@@ -18,7 +18,6 @@ CREATE TABLE Transactions (
   json JSON,
 
   status INTEGER,
-  -- length INTEGER NOT NULL,
 
   -- bool, basically payload is completely written
   input_done int,

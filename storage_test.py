@@ -4,7 +4,7 @@ import unittest
 import logging
 
 from storage import Storage, TransactionCursor
-from storage_schema import Action, Status, InvalidActionException, VersionConflictException
+from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
@@ -135,14 +135,12 @@ class StorageTest(unittest.TestCase):
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(reader.status, Status.ONESHOT_INFLIGHT)
 
         reader.finalize_attempt(False)
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))
         #self.dump_db()
-        self.assertEqual(reader.status, Status.ONESHOT_TEMP)
 
         reader = self.s.load_one()
         self.assertIsNone(reader)

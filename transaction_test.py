@@ -6,7 +6,7 @@ import time
 from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
 
-from storage import Action, Storage, TransactionCursor
+from storage import Storage, TransactionCursor
 from response import Response
 from transaction import RestServiceTransaction, cursor_to_endpoint
 from fake_endpoints import SyncEndpoint

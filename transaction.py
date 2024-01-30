@@ -11,7 +11,7 @@ from werkzeug.datastructures import ContentRange
 from rest_service_handler import Handler, HandlerFactory
 
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
-from storage_schema import Action, Status, InvalidActionException, VersionConflictException
+from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
@@ -139,9 +139,6 @@ class RestServiceTransaction(Handler):
             logging.info('RestServiceTransaction.get rcpt_to=%s rcpt_resp=%s',
                          self.tx_cursor.tx.rcpt_to,
                          self.tx_cursor.tx.rcpt_response)
-            if self.tx_cursor.status not in [
-                    Status.INSERT, Status.INFLIGHT, Status.ONESHOT_INFLIGHT ]:
-                break
             wait_mail = (self.tx_cursor.tx.mail_from is not None and
                          self.tx_cursor.tx.mail_response is None)
             wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
@@ -283,31 +280,11 @@ class RestServiceTransaction(Handler):
         pass
 
     def set_durable(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        # TODO public rest mx: similar to append, disallow this in ONESHOT_TEMP
-
         try:
             # xxx this eventually comes from tx json PATCH
             self.tx_cursor.set_max_attempts(100)
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
-        except InvalidActionException:
-            if self.tx_cursor.status != Status.DONE:
-                return FlaskResponse(
-                    status=400, response=['failed precondition'])
-
-            # set durable in done state means that it raced with something
-            # else that terminated the transaction either upstream
-            # success/perm or idle gc/abort
-
-            # set durable succeeding is us "taking responsibility for the
-            # message" wrt rfc5321 so we can only treat this as a noop if
-            # it already succeeded
-
-            actions = self.tx_cursor.load_last_action(1)
-
-            if actions[0][1] != Action.DELIVERED:
-                return FlaskResponse(
-                    status=400, response=['failed precondition'])
 
         return FlaskResponse()
 
@@ -468,10 +445,4 @@ def cursor_to_endpoint(cursor, endpoint):
         logging.warning('cursor_to_endpoint %s abort', cursor.rest_id)
         return
     logging.info('cursor_to_endpoint %s done %s', cursor.rest_id, resp)
-    action = Action.TEMP_FAIL
-    if resp.ok():
-        action = Action.DELIVERED
-    elif resp.perm():
-        action = Action.PERM_FAIL
-    #cursor.append_action(action, resp)
     cursor.finalize_attempt(not resp.temp())
