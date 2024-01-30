@@ -286,7 +286,8 @@ class RestServiceTransaction(Handler):
         # TODO public rest mx: similar to append, disallow this in ONESHOT_TEMP
 
         try:
-            self.tx_cursor.append_action(Action.SET_DURABLE)
+            # xxx this eventually comes from tx json PATCH
+            self.tx_cursor.set_max_attempts(100)
         except VersionConflictException:
             return FlaskResponse(412, 'version conflict')
         except InvalidActionException:

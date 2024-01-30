@@ -29,7 +29,8 @@ class StorageWriterFilter(Filter):
         if self.tx_cursor is None:
             self._create()
         if tx.durable:
-            self.tx_cursor.append_action(Action.SET_DURABLE)
+            # xxx retry params from yaml
+            self.tx_cursor.set_max_attempts(100)
             return
         while True:
             try:

@@ -235,7 +235,7 @@ class TransactionTest(unittest.TestCase):
 
         tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=True)
 
-        self.assertTrue(tx_cursor.append_action(Action.SET_DURABLE))
+        tx_cursor.set_max_attempts(100)
         del tx_cursor
 
         endpoint = SyncEndpoint()

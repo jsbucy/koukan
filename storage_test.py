@@ -72,8 +72,7 @@ class StorageTest(unittest.TestCase):
         tx_writer.load()
         self.assertTrue(tx_writer.input_done)
 
-        self.assertTrue(tx_writer.append_action(Action.SET_DURABLE))
-        #self.dump_db()
+        tx_writer.set_max_attempts(100)
 
         tx_reader.load()
         tx_reader.add_rcpt_response([Response(456, 'busy')])
@@ -157,8 +156,10 @@ class StorageTest(unittest.TestCase):
             [Mailbox('bob')], 'host'))
         self.assertFalse(writer.input_done)
         self.assertEqual(self.s.gc_non_durable(min_age = 1), 0)
-        time.sleep(1)
+        time.sleep(2)
+#        self.dump_db()
         self.assertEqual(self.s.gc_non_durable(min_age = 1), 1)
+
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()

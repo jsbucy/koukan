@@ -110,6 +110,7 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('service not ready')
 
+        time.sleep(1)
 
         # gc the probe request so it doesn't cause confusion later
         # TODO rest_endpoint.abort()

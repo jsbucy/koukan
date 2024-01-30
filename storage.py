@@ -61,11 +61,6 @@ class TransactionCursor:
             self.id = cursor.fetchone()[0]
             self.tx = TransactionMetadata()
 
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action) '
-                'VALUES (?,?,?,?)',
-                (self.id, 0, int(time.time()), Action.INSERT))
             parent.db.commit()
 
         with parent.created_lock:
@@ -91,11 +86,13 @@ class TransactionCursor:
             new_version = self.version + 1
             # TODO all updates '... WHERE inflight_session_id =
             #   self.parent.session' ?
-            cursor.execute(
-                'UPDATE Transactions SET json = ?, version = ? '
-                'WHERE id = ? AND version = ? RETURNING version',
-                (json.dumps(tx_to_db.to_json()), new_version, self.id,
-                 self.version))
+            now = int(time.time())
+            cursor.execute("""
+              UPDATE Transactions SET json = ?, version = ?,
+              max_attempts = 1, attempt_count = 0, last_update = ?
+              WHERE id = ? AND version = ? RETURNING version""",
+              (json.dumps(tx_to_db.to_json()), new_version, now,
+               self.id, self.version))
 
             if (row := cursor.fetchone()) is None:
                 raise VersionConflictException()
@@ -316,19 +313,42 @@ class TransactionCursor:
                              db_id, status.name)
             assert not '_start_attempt_db precondition failure'
         new_status = transition[status][Action.LOAD]
-        cursor.execute(
-            'UPDATE Transactions '
-            'SET status = ?, version = ?, inflight_session_id = ? '
-            'WHERE id = ? AND version = ? RETURNING version',
-            (new_status, version+1, self.parent.session_id, db_id, version))
+        cursor.execute("""
+            UPDATE Transactions
+            SET status = ?, version = ?, inflight_session_id = ?,
+            attempt_count = (SELECT COUNT(*) + 1 FROM TransactionAttempts
+                             WHERE transaction_id = ?)
+            WHERE id = ? AND version = ? RETURNING version""",
+            (new_status, version+1, self.parent.session_id, db_id, db_id,
+             version))
         assert cursor.fetchone()
         cursor.execute(
-            'INSERT INTO TransactionAttempts (transaction_id, attempt_id) '
-            'VALUES (?, (SELECT iif(i IS NULL, 1, i+1) '
-            'FROM (SELECT max(attempt_id) AS i from TransactionAttempts '
-            'WHERE transaction_id = ?))) RETURNING attempt_id',
+            """INSERT INTO TransactionAttempts (transaction_id, attempt_id)
+            VALUES (?, (SELECT iif(i IS NULL, 1, i+1)
+            FROM (SELECT max(attempt_id) AS i from TransactionAttempts
+            WHERE transaction_id = ?))) RETURNING attempt_id""",
             (db_id, db_id))
         self._load_db_locked(cursor, db_id=db_id)
+
+    def _set_max_attempts(self, max_attempts, cursor):
+        # xxx keep this in a consistent state during the transition
+        new_status = transition[self.status][Action.SET_DURABLE]
+        new_version = self.version + 1
+        cursor.execute("""
+          UPDATE Transactions
+          SET max_attempts = ?, last_update = ?, version = ?, status = ?
+          WHERE id = ? AND version = ? RETURNING version""",
+                       (max_attempts, time.time(), new_version, new_status,
+                        self.id, self.version))
+        row = cursor.fetchone()
+        if not row or row[0] != new_version:
+            raise VersionConflictException()
+
+    def set_max_attempts(self, max_attempts : Optional[int] = None):
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            self._set_max_attempts(max_attempts, cursor)
+            self.parent.db.commit()
 
     def finalize_attempt(self, output_done):
         with self.parent.db_write_lock:
@@ -340,7 +360,7 @@ class TransactionCursor:
         action = Action.DELIVERED if output_done else Action.TEMP_FAIL
         new_status = transition[self.status][action]
         new_version = self.version + 1
-        now = time.time()
+        now = int(time.time())
         cursor.execute("""
           UPDATE Transactions
           SET inflight_session_id = NULL,
@@ -350,7 +370,8 @@ class TransactionCursor:
           version = ?
           WHERE id = ? AND version = ?
           RETURNING version
-        """, (output_done, now, new_status, new_version, self.id, self.version))
+        """, (output_done, now, new_status, new_version, self.id,
+              self.version))
         row = cursor.fetchone()
         if not row or row[0] != new_version:
             raise VersionConflictException()
@@ -381,24 +402,6 @@ class TransactionCursor:
                 timeout_left = timeout - (time.monotonic() - start)
         asset(not 'unreachable')  #return False
 
-    # -> (time, action, optional[response])
-    def load_last_action(self, num_actions
-                         ) -> List[Tuple[int, int, Optional[Response]]] :
-        cursor = self.parent.db.cursor()
-        cursor.execute('SELECT version FROM Transactions WHERE id = ?',
-                       (self.id,))
-        row = cursor.fetchone()
-        self.version = row[0]
-        cursor.execute('SELECT time, action, response_json '
-                       'FROM TransactionActions '
-                       'WHERE transaction_id = ? '
-                       'ORDER BY action_id DESC LIMIT ?',
-                       (self.id, num_actions))
-        out = []
-        for row in cursor:
-            resp = Response.from_json(json.loads(row[2])) if row[2] else None
-            out.append((row[0], row[1], resp))
-        return out
 
     def read_content(self, i) -> Optional[Blob]:
         cursor = self.parent.db.cursor()
@@ -441,89 +444,24 @@ class TransactionCursor:
             return True
         return False
 
-    def append_action(self, action : Action,
-                       response : Optional[Response] = None) -> bool:
+
+    def _abort(self, cursor):
+        new_version = self.version + 1
+        now = int(time.time())
+        cursor.execute("""
+          UPDATE Transactions
+          SET max_attempts = 0, last_update = ?, version = ?
+          WHERE id = ? AND version = ? RETURNING version""",
+          (now, new_version, self.id, self.version))
+        row = cursor.fetchone()
+        if not row or row[0] != new_version:
+            raise VersionConflictException()
+
+    def abort(self):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            self._append_action_db(cursor, action, response)
-            self.parent.db.commit()
-        self.parent.tx_versions.update(self.id, self.version)
-        return True
+            return self._abort(cursor)
 
-    # appends a TransactionAttempts record and updates status
-    def _append_action_db(self, cursor, action : Action,
-                         response : Optional[Response] = None) -> bool:
-        assert action not in [
-            Action.LOAD, Action.DELIVERED, Action.TEMP_FAIL, Action.PERM_FAIL]
-        now = int(time.time())
-
-        # TODO load() here? cf write_envelope()
-        logging.debug('TransactionCursor.append_action (pre) id=%d '
-                      'my version %d '
-                      'status=%s action=%s',
-                      self.id, self.version, self.status.name,
-                      action.name)
-
-        if (self.status not in transition or
-            action not in transition[self.status]):
-            raise InvalidActionException(self.status, action)
-        status = transition[self.status][action]
-
-        if action == Action.SET_DURABLE:
-            assert(self._check_payload_done(cursor))  # precondition
-
-        logging.info('TransactionCursor.append_action (post) id=%d '
-                     'now=%d action=%s i=%s length=%s status=%s',
-                     self.id, now, action.name, self.i, self.length,
-                     self.status.name)
-        new_version = self.version + 1
-        cursor.execute(
-            'UPDATE Transactions '
-            'SET status = ?, last_update = ?, version = ?, '
-            'output_done = ?, '
-            'inflight_session_id = ? '
-            'WHERE id = ? AND version = ? RETURNING version',
-            (status, now, new_version,
-             status in [Status.DONE, Status.ONESHOT_TEMP],
-             (self.parent.session_id if action == Action.LOAD else None),
-             self.id, self.version))
-        if (row := cursor.fetchone()) is None:
-            raise VersionConflictException()
-        db_new_version = row[0]
-
-        attempt_id = None
-        if action in [Action.ABORT, Action.SET_DURABLE]:
-            if status == Status.ONESHOT_INFLIGHT:
-                cursor.execute(
-                    'SELECT MAX(attempt_id) FROM TransactionAttempts '
-                    'WHERE transaction_id = ?', (self.id,))
-                attempt_id = cursor.fetchone()[0]
-        elif action != Action.INSERT:
-            assert(self.attempt_id is not None)
-            attempt_id = self.attempt_id
-
-        resp_col = ''
-        resp_val = ()
-        resp_bind = ''
-        if response is not None:
-            resp_col = ', response_json'
-            resp_val = (json.dumps(response.to_json()),)
-            resp_bind = ',?'
-        cursor.execute(
-            'INSERT INTO TransactionActions '
-            '(transaction_id, action_id, time, action' + resp_col + ') '
-            'VALUES ('
-            '  ?,'
-            '  (SELECT MAX(action_id) FROM TransactionActions '
-            '   WHERE transaction_id = ?) + 1,'
-            '  ?,?' + resp_bind + ')',
-            (self.id, self.id, now, action) + resp_val)
-
-
-        self.status = status
-        self.version = db_new_version
-        self.attempt_id = attempt_id
-        return True
 
 class BlobWriter:
     id = None
@@ -853,32 +791,7 @@ class Storage:
                 cursor.execute('DELETE FROM Sessions WHERE id = ?', (db_id,))
                 self.db.commit()
 
-        logging.info('recover transactions')
-        cursor.execute('SELECT id FROM Transactions '
-                       'WHERE status = ? AND inflight_session_id is NULL',
-                       (Status.INFLIGHT,))
-
-        recovered = 0
-        for row in cursor:
-            (db_id,) = row
-            # ick this should use append_action?
-            logging.info('Storage.recover orphaned transaction %d', db_id)
-            cursor.execute('UPDATE Transactions SET status = ? WHERE id = ?',
-                           (Status.WAITING, db_id))
-            cursor.execute(
-                'INSERT INTO TransactionActions '
-                '(transaction_id, action_id, time, action) '
-                'VALUES ('
-                '  ?,'
-                '  (SELECT MAX(action_id) FROM TransactionActions '
-                '   WHERE transaction_id = ?) + 1,'
-                '  ?,?)',
-                (db_id, db_id, int(time.time()), Action.RECOVER))
-            recovered += 1
-        logging.info('Storage.recover recovered %s transactions', recovered)
         self.db.commit()
-
-        # could probably DELETE FROM Transactions WHERE status = Status.INSERT
 
     @staticmethod
     def check_pid(pid, pid_create):
@@ -911,10 +824,10 @@ class Storage:
             cursor.execute("""
               SELECT id,status,version from Transactions
               WHERE inflight_session_id is NULL AND
+              attempt_count < max_attempts AND
               output_done IS NOT TRUE AND
-              status != ? AND
               (json_extract(json, "$.host") IS NOT NULL)
-              LIMIT 1""", (Status.ONESHOT_TEMP,))
+              LIMIT 1""")
             row = cursor.fetchone()
             if not row:
                 return None
@@ -934,7 +847,6 @@ class Storage:
             return tx
 
 
-    # abort non-durable transactions
     def _gc_non_durable_one(self, min_age):
         max_recent = int(time.time()) - min_age
         cursor = self.db.cursor()
@@ -946,16 +858,16 @@ class Storage:
         # restricted to inflight_session_id IS NULL
         cursor.execute("""
           SELECT id from Transactions
-        WHERE last_update <= ? AND
-        input_done IS NOT TRUE AND
-        output_done IS NOT TRUE
-        LIMIT 1""", (max_recent,))
+          WHERE input_done IS NOT TRUE AND
+          output_done IS NOT TRUE AND
+          (max_attempts = 1 AND last_update <= ?)
+          LIMIT 1""", (max_recent,))
         row = cursor.fetchone()
         if row is None: return False
 
         tx_cursor = self.get_transaction_cursor()
         tx_cursor._load_db_locked(cursor, db_id = row[0])
-        tx_cursor._append_action_db(cursor, Action.ABORT)
+        tx_cursor._abort(cursor)
 
         self.db.commit()
 

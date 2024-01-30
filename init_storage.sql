@@ -35,6 +35,9 @@ CREATE TABLE Transactions (
   last_update INTEGER,
   version INTEGER NOT NULL,
 
+  attempt_count INTEGER,
+  max_attempts INTEGER,
+
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
     ON UPDATE CASCADE  -- xxx moot?
     ON DELETE SET NULL
@@ -75,27 +78,6 @@ CREATE TABLE TransactionContent (
 );
 
 CREATE INDEX TxContentBlob on TransactionContent (blob_id);
-
-CREATE TABLE TransactionActions (
-  transaction_id INTEGER,
-  action_id INTEGER NOT NULL,
-  attempt_id INTEGER,
-  time INTEGER,
-  action INTEGER,
-
-  response_json TEXT,
-
-  FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
-    ON UPDATE CASCADE
-    ON DELETE CASCADE,
-
-  FOREIGN KEY(transaction_id, attempt_id)
-    REFERENCES TransactionAttempts(transaction_id, attempt_id)
-    ON UPDATE CASCADE
-    ON DELETE CASCADE,
-
-  PRIMARY KEY(transaction_id, action_id)
-);
 
 CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
