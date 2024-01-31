@@ -34,11 +34,9 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     def testBasic(self):
         filter = StorageWriterFilter(self.storage)
-        filter._create()
+        filter._create(TransactionMetadata(host = 'outbound-gw'))
 
-        tx = TransactionMetadata()
-        tx.host = 'outbound-gw'
-        tx.mail_from = Mailbox('alice')
+        tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = Thread(target=lambda: self.update(filter, tx))
         t.start()
 

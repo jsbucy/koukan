@@ -31,9 +31,9 @@ class TransactionTest(unittest.TestCase):
         rest_tx = RestServiceTransaction.create_tx(
             self.storage, 'host')
         self.assertIsNotNone(rest_tx)
-        rest_id = rest_tx.tx_rest_id()
         rest_resp = rest_tx.start(
             TransactionMetadata(mail_from=Mailbox('alice')).to_json())
+        rest_id = rest_tx.tx_rest_id()
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
@@ -141,9 +141,9 @@ class TransactionTest(unittest.TestCase):
     def test_rest_blob_ranges(self):
         rest_tx = RestServiceTransaction.create_tx(self.storage, 'host')
         self.assertIsNotNone(rest_tx)
-        rest_id = rest_tx.tx_rest_id()
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
                                           rcpt_to=[Mailbox('bob')]).to_json())
+        rest_id = rest_tx.tx_rest_id()
 
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
@@ -217,13 +217,12 @@ class TransactionTest(unittest.TestCase):
 
     def test_cursor_to_endpoint(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id')
+        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
         #tx_cursor = self.storage.load_one()
 
         tx_cursor.write_envelope(
             TransactionMetadata(
-                mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
-                host='outbound'))
+                mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')]))
         tx_cursor.append_blob(d=b'hello, ', last=False)
 
         blob_writer = self.storage.get_blob_writer()
@@ -267,9 +266,9 @@ class TransactionTest(unittest.TestCase):
         rest_tx = RestServiceTransaction.create_tx(
             self.storage, 'host')
         self.assertIsNotNone(rest_tx)
-        rest_id : str = rest_tx.tx_rest_id()
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
                                           rcpt_to=[Mailbox('bob')]).to_json())
+        rest_id : str = rest_tx.tx_rest_id()
         self.assertTrue(self.storage.wait_created(None, timeout=1))
 
         endpoint = SyncEndpoint()

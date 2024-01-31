@@ -12,7 +12,7 @@ import psutil
 from blob import Blob, InlineBlob
 from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
-from filter import TransactionMetadata
+from filter import TransactionMetadata, WhichJson
 
 class TransactionCursor:
     id : Optional[int] = None
@@ -41,22 +41,28 @@ class TransactionCursor:
         #return b64encode(
         #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
-    def create(self, rest_id):
+    def create(self, rest_id, tx : TransactionMetadata):
         parent = self.parent
         self.creation = int(time.time())
         with parent.db_write_lock:
             cursor = parent.db.cursor()
             self.last = False
             self.version = 0
-            cursor.execute(
-                'INSERT INTO Transactions '
-                '  (rest_id, creation, last_update, '
-                'version, last) '
-                'VALUES (?, ?, ?, ?, ?) RETURNING id',
+
+            max_attempts = tx.max_attempts if tx.max_attempts else 1
+            db_json = json.dumps(tx.to_json(WhichJson.DB))
+            logging.debug('TxCursor.create %s %s', rest_id, db_json)
+            cursor.execute("""
+                INSERT INTO Transactions
+                (rest_id, creation, last_update, version, last,
+                 json, attempt_count, max_attempts)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                RETURNING id""",
                 (rest_id, self.creation, self.creation,
-                 self.version, self.last))
+                 self.version, self.last, db_json,
+                 max_attempts))
             self.id = cursor.fetchone()[0]
-            self.tx = TransactionMetadata()
+            self.tx = tx
 
             parent.db.commit()
 
@@ -73,15 +79,10 @@ class TransactionCursor:
             # point read from the db isn't worth worrying about the
             # state in the cursor getting out of sync with the db.
             tx_to_db = self.tx.merge(tx_delta)
-            # xxx this schema stuff belongs somewhere else
-            tx_to_db.mail_response = None
-            tx_to_db.rcpt_response = None
-            tx_to_db.data_response = None
-            tx_to_db.max_attempts = None
             # e.g. overwriting an existing field
             # xxx return/throw
             assert tx_to_db is not None
-            logging.debug('write_envelope %s', tx_to_db.to_json())
+            logging.debug('write_envelope %s', tx_to_db.to_json(WhichJson.DB))
             new_version = self.version + 1
             # TODO all updates '... WHERE inflight_session_id =
             #   self.parent.session' ?
@@ -97,7 +98,7 @@ class TransactionCursor:
               max_attempts = 1, attempt_count = 0, last_update = ?
               """ + set_max_attempts + """
               WHERE id = ? AND version = ? RETURNING version""",
-              (json.dumps(tx_to_db.to_json()), new_version, now) +
+              (json.dumps(tx_to_db.to_json(WhichJson.DB)), new_version, now) +
               set_max_attempts_val +
               (self.id, self.version))
 
@@ -207,7 +208,6 @@ class TransactionCursor:
                           self.id, row[1], self.version, db_last,
                           last)
 
-
             if blob_rest_id is not None:
                 cursor.execute(
                     'SELECT id,length FROM Blob WHERE rest_id = ?',
@@ -288,7 +288,7 @@ class TransactionCursor:
         trans_json = json.loads(json_str) if json_str else {}
         logging.debug('TransactionCursor._load_db %s %s',
                       self.rest_id, trans_json)
-        self.tx = TransactionMetadata.from_json(trans_json)
+        self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
 
         cursor.execute("""
           SELECT max(i)
@@ -822,7 +822,7 @@ class Storage:
               WHERE inflight_session_id is NULL AND
               attempt_count < max_attempts AND
               output_done IS NOT TRUE AND
-              (json_extract(json, "$.host") IS NOT NULL)
+              json IS NOT NULL
               LIMIT 1""")
             row = cursor.fetchone()
             if not row:

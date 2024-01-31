@@ -64,23 +64,87 @@ class Mailbox:
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
+class WhichJson(IntEnum):
+    ALL = 0
+    REST_READ = 1,
+    REST_CREATE = 2,
+    REST_UPDATE = 3,
+    DB = 4
+
+class TxField:
+    json_field : str
+    accept = List[WhichJson]
+    emit = List[WhichJson]
+    def __init__(self,
+                 json_field : str,
+                 accept,
+                 emit,
+                 from_json=None,
+                 to_json=None):
+        self.json_field = json_field
+        self.accept = accept
+        self.emit = emit
+        # none here means identity i.e. plain old data/int/str
+        self.from_json = from_json
+        self.to_json = to_json
+
+    def valid_accept(self, which_json):
+        return which_json == WhichJson.ALL or which_json in self.accept
+    def valid_emit(self, which_json):
+        return which_json == WhichJson.ALL or which_json in self.emit
+
+_tx_fields = [
+    TxField('host',
+            accept = [WhichJson.DB],
+            emit = [WhichJson.DB]),
+    TxField('remote_host',
+            # xxx really only accept from gw
+            accept = [WhichJson.REST_CREATE,
+                      WhichJson.DB],
+            emit = [WhichJson.REST_READ,
+                    WhichJson.DB],
+            from_json=HostPort.from_seq),
+    TxField('local_host',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.DB],
+            emit=[],
+            from_json=HostPort.from_seq),
+    TxField('mail_from',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE,
+                    WhichJson.DB],
+            emit=[WhichJson.DB],
+            from_json=Mailbox.from_json),
+    TxField('mail_response',
+            accept=[],
+            emit=[WhichJson.REST_READ],
+            from_json=Response.from_json),
+    TxField('rcpt_to',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE,
+                    WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB],
+            from_json=lambda js: list_from_js(js, Mailbox.from_json)),
+    TxField('rcpt_response',
+            accept=[],
+            emit=[WhichJson.REST_READ],
+            from_json=lambda js: list_from_js(js, Response.from_json)),
+    TxField('data_response',
+            accept=[],
+            emit=[WhichJson.REST_READ],
+            from_json=Response.from_json),
+    TxField('max_attempts',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE],
+            emit=[WhichJson.REST_READ]),
+]
+tx_json_fields = { f.json_field : f for f in _tx_fields }
+
 # NOTE in the Filter api/stack, this is usually interpreted as a delta where
 # field == None means "not present in the delta". As such, there is
 # currently no representation of "set this field to None".
 class TransactionMetadata:
-    fields = {
-        'host': lambda x: x,
-        'remote_host': HostPort.from_seq,
-        'local_host': HostPort.from_seq,
-        'mail_from': Mailbox.from_json,
-        'mail_response': Response.from_json,
-        'rcpt_to': lambda js: list_from_js(js, Mailbox.from_json),
-        'rcpt_response': lambda js: list_from_js(js, Response.from_json),
-        'data_response': Response.from_json,
-        'max_attempts': lambda x: x,
-        # XXX last?
-    }
-
     host : Optional[str] = None
     rest_endpoint : Optional[str] = None
     remote_host : Optional[HostPort] = None
@@ -125,12 +189,19 @@ class TransactionMetadata:
         out += 'data_response=%s' % self.data_response
         return out
 
+    # err on resp fields
+    # from_rest_req()
+    # to_rest_resp()
+
+    # drop resp fields
+    # to_db_json()
+
     @staticmethod
-    def from_json(json):
+    def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
         for f in json.keys():
-            builder = TransactionMetadata.fields.get(f, None)
-            if not builder:
+            field  = tx_json_fields.get(f, None)
+            if not field or not field.valid_accept(which_js):
                 return None  # invalid
             js_v = json[f]
             if js_v is None:
@@ -139,17 +210,19 @@ class TransactionMetadata:
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
-            v = builder(js_v)
+            v = field.from_json(js_v) if field.from_json else js_v
             if not v:
                 return None
             setattr(tx, f, v)
         return tx
 
-    def to_json(self):
+    def to_json(self, which_js=WhichJson.ALL):
         json = {}
-        for f in TransactionMetadata.fields.keys():
-            if hasattr(self, f) and getattr(self, f) is not None:
-                v = getattr(self, f)
+        for name,field in tx_json_fields.items():
+            if not field.valid_emit(which_js):
+                continue
+            if hasattr(self, name) and getattr(self, name) is not None:
+                v = getattr(self, name)
                 if v is None:
                     continue
                 v_js = None
@@ -161,7 +234,7 @@ class TransactionMetadata:
                 else:
                     v_js = v.to_json()
                 if v_js is not None:
-                    json[f] = v_js
+                    json[name] = v_js
         return json
 
     # apply a delta to self -> next
@@ -169,7 +242,7 @@ class TransactionMetadata:
               ) -> Optional["TransactionMetadata"]:
         out = TransactionMetadata()
 
-        for f in TransactionMetadata.fields.keys():
+        for f in tx_json_fields.keys():
             old_v = getattr(self, f, None)
             new_v = getattr(delta, f, None)
             if old_v is None and new_v is not None:
@@ -195,7 +268,7 @@ class TransactionMetadata:
     def delta(self, successor : "TransactionMetadata"
               ) -> Optional["TransactionMetadata"]:
         out = TransactionMetadata()
-        for f in TransactionMetadata.fields.keys():
+        for f in tx_json_fields.keys():
             old_v = getattr(self, f, None)
             new_v = getattr(successor, f, None)
             if (old_v is not None) and (new_v is None):

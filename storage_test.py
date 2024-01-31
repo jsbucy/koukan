@@ -22,9 +22,7 @@ class StorageTest(unittest.TestCase):
 
     def test_basic(self):
         tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id')
-        logging.info('version %d', tx_writer.version)
-        tx_writer.write_envelope(TransactionMetadata(
+        tx_writer.create('tx_rest_id', TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host'))
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
@@ -127,11 +125,13 @@ class StorageTest(unittest.TestCase):
 
     def test_non_durable(self):
         writer = self.s.get_transaction_cursor()
-        writer.create('xyz')
+        writer.create('xyz', TransactionMetadata(
+            local_host=HostPort('local_host', 25),
+            remote_host=HostPort('remote_host', 2525),
+            host='host'))
         writer.write_envelope(TransactionMetadata(
-            HostPort('local_host', 25), HostPort('remote_host', 2525),
-            Mailbox('alice'),
-            [Mailbox('bob')], 'host'))
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -147,11 +147,13 @@ class StorageTest(unittest.TestCase):
 
     def test_gc_non_durable(self):
         writer = self.s.get_transaction_cursor()
-        writer.create('xyz')
+        writer.create('xyz', TransactionMetadata(
+            host='host',
+            local_host=HostPort('local_host', 25),
+            remote_host=HostPort('remote_host', 2525)))
         writer.write_envelope(TransactionMetadata(
-            HostPort('local_host', 25), HostPort('remote_host', 2525),
-            Mailbox('alice'),
-            [Mailbox('bob')], 'host'))
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],))
         self.assertFalse(writer.input_done)
         self.assertEqual(self.s.gc_non_durable(min_age = 1), 0)
         time.sleep(2)
@@ -161,8 +163,10 @@ class StorageTest(unittest.TestCase):
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()
-        writer.create('xyz')
-
+        writer.create('xyz', TransactionMetadata(
+            local_host=HostPort('local_host', 25),
+            remote_host=HostPort('remote_host', 2525),
+            host='host'))
         reader = self.s.get_transaction_cursor()
         self.assertIsNotNone(reader.load(writer.id))
         self.assertIsNone(reader.tx.mail_from)
@@ -170,9 +174,8 @@ class StorageTest(unittest.TestCase):
         self.assertFalse(reader.wait(1))
 
         writer.write_envelope(TransactionMetadata(
-            HostPort('local_host', 25), HostPort('remote_host', 2525),
-            Mailbox('alice'),
-            [Mailbox('bob')], 'host'))
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
 
         self.assertTrue(reader.wait(0))
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
@@ -185,11 +188,8 @@ class StorageTest(unittest.TestCase):
 
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
-        tx_cursor.create('xyz')
-
-        # must have http host to be loadable
-        tx_cursor.write_envelope(TransactionMetadata(
-            host='outbound'))
+        tx_cursor.create('xyz', TransactionMetadata(
+           host='outbound'))
 
         # needs to be inflight to wait
         reader = self.s.load_one()
@@ -229,7 +229,7 @@ class StorageTest(unittest.TestCase):
             time.sleep(0.1)
 
             writer = self.s.get_transaction_cursor()
-            writer.create('xyz%d' % i)
+            writer.create('xyz%d' % i, TransactionMetadata(host='host'))
 
             logging.info('StorageTest.test_wait_created join')
             t.join(timeout=2)

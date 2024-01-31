@@ -19,21 +19,23 @@ class StorageWriterFilter(Filter):
     def __init__(self, storage):
         self.storage = storage
 
-    def _create(self):
+    def _create(self, tx : TransactionMetadata):
+        assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = secrets.token_urlsafe(REST_ID_BYTES)
-        self.tx_cursor.create(rest_id)
+        self.tx_cursor.create(rest_id, tx)
 
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
         if self.tx_cursor is None:
-            self._create()
-        while True:
-            try:
-                self.tx_cursor.write_envelope(tx)
-                break
-            except VersionConflictException:
-                self.tx_cursor.load()
+            self._create(tx)
+        else:
+            while True:
+                try:
+                    self.tx_cursor.write_envelope(tx)
+                    break
+                except VersionConflictException:
+                    self.tx_cursor.load()
         start = time.monotonic()
         while True:
             done = True

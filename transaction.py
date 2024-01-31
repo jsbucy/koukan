@@ -13,7 +13,7 @@ from rest_service_handler import Handler, HandlerFactory
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
-from filter import HostPort, Mailbox, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
 
 REST_ID_BYTES = 4  # XXX configurable, use more in prod
 
@@ -46,10 +46,7 @@ class RestServiceTransaction(Handler):
         logging.debug('RestServiceTransaction.create_tx %s', http_host)
 
         cursor = storage.get_transaction_cursor()
-        rest_id = secrets.token_urlsafe(REST_ID_BYTES)
-        cursor.create(rest_id)
         return RestServiceTransaction(storage,
-                                      tx_rest_id=rest_id,
                                       http_host=http_host,
                                       tx_cursor=cursor)
 
@@ -64,6 +61,7 @@ class RestServiceTransaction(Handler):
     @staticmethod
     def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
         blob_rest_id = blob_uri.removeprefix('/blob/')  # XXX uri prefix
+
         blob_writer = storage.get_blob_writer()
         if blob_writer.load(rest_id=blob_rest_id) is None:
             return None
@@ -73,28 +71,23 @@ class RestServiceTransaction(Handler):
     def tx_rest_id(self):
         return self._tx_rest_id
 
-    # xxx don't allow setting resp fields?
     def start(self, req_json, timeout : Optional[float] = None
               ) -> Optional[FlaskResponse]:
         logging.debug('RestServiceTransaction.start %s', self.http_host)
-        assert 'host' not in req_json
-        js = req_json
-        js['host'] = self.http_host
-        tx = TransactionMetadata.from_json(js)
+        assert self._tx_rest_id is None
+        self._tx_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
+        tx.host = self.http_host
         if tx is None:
             return FlaskResponse(400, 'invalid transaction json')
-        try:
-            self.tx_cursor.write_envelope(tx)
-        except VersionConflictException:
-            return FlaskResponse(412, 'version conflict')
+        self.tx_cursor.create(self._tx_rest_id, tx)
         self.tx_cursor.load()
         return self._get_tx_json(timeout)
 
-    # xxx don't allow setting resp fields?
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
         resp_json = {}
-        tx = TransactionMetadata.from_json(req_json)
+        tx = TransactionMetadata.from_json(req_json, WhichJson.REST_UPDATE)
         if tx is None:
             return FlaskResponse(400, 'invalid transaction delta')
         try:
