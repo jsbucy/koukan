@@ -79,21 +79,40 @@ class RestServiceTransaction(Handler):
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         tx.host = self.http_host
         if tx is None:
-            return FlaskResponse(400, 'invalid transaction json')
-        self.tx_cursor.create(self._tx_rest_id, tx)
+            return FlaskResponse(status=400,
+                                 response=['invalid transaction json'])
+        create_body_rest_id = None
+        if tx.body:
+            tx.body = tx.body.removeprefix('/blob/')
+        elif 'body' in req_json and req_json['body'] is None:
+            create_body_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        self.tx_cursor.create(self._tx_rest_id, tx,
+                              create_body_rest_id = create_body_rest_id)
         self.tx_cursor.load()
         return self._get_tx_json(timeout)
 
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
+        logging.debug('RestServiceTransaction\.patch %s %s',
+                      self._tx_rest_id, req_json)
         resp_json = {}
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_UPDATE)
         if tx is None:
-            return FlaskResponse(400, 'invalid transaction delta')
+            return FlaskResponse(status=400,
+                                 response=['invalid transaction delta'])
+
+        create_body_rest_id = None
+        if tx.body:
+            tx.body = tx.body.removeprefix('/blob/')
+        elif 'body' in req_json and req_json['body'] == '':
+            create_body_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+
         try:
-            self.tx_cursor.write_envelope(tx)
+            self.tx_cursor.write_envelope(
+                tx, create_body_rest_id=create_body_rest_id)
         except VersionConflictException:
-            return FlaskResponse(412, 'version conflict')
+            return FlaskResponse(status=412,
+                                 response=['version conflict'])
         self.tx_cursor.load()
         return self._get_tx_json(timeout)
 
@@ -117,7 +136,7 @@ class RestServiceTransaction(Handler):
                          self.tx_cursor.tx.mail_response is None)
             wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
                          len(self.tx_cursor.tx.rcpt_to))
-            wait_data = (self.tx_cursor.last and
+            wait_data = ((self.tx_cursor.last or self.tx_cursor.tx.body) and
                          self.tx_cursor.tx.data_response is None)
             if not (wait_mail or wait_rcpt or wait_data):
                 break
@@ -137,10 +156,29 @@ class RestServiceTransaction(Handler):
             resp_json['rcpt_response'] = len(self.tx_cursor.tx.rcpt_to) * [{}]
             for i,r in enumerate(self.tx_cursor.tx.rcpt_response):
                 resp_json['rcpt_response'][i] = r.to_json()
+
+        # TODO surface more info about body here, finalized or not,
+        # len, sha1, etc
+
+        data_resp = False
+        if self.tx_cursor.tx.data_response:
+            data_resp = True
+        if self.tx_cursor.tx.body:
+            data_resp = True
         if self.tx_cursor.max_i is not None:
+            data_resp = True
+            resp_json['last'] = bool(self.tx_cursor.last)
+
+        if data_resp:
             resp_json['data_response'] = resp_js(
                 self.tx_cursor.tx.data_response)
-            resp_json['last'] = bool(self.tx_cursor.last)
+
+
+        if self.tx_cursor.tx.body:
+            resp_json['body'] = '/blob/' + self.tx_cursor.tx.body
+
+        # xxx this needs the inflight -> {} logic
+        #resp_json = self.tx_cursor.tx.to_json(WhichJson.REST_READ)
 
         logging.info('RestServiceTransaction.get done %s %s',
                      self._tx_rest_id, resp_json)
@@ -168,7 +206,8 @@ class RestServiceTransaction(Handler):
             try:
                 append = self.tx_cursor.append_blob(blob_rest_id=uri, last=last)
             except VersionConflictException:
-                return FlaskResponse(412, 'version conflict')
+                return FlaskResponse(status=412,
+                                     response=['version conflict'])
             if append == TransactionCursor.APPEND_BLOB_OK:
                 resp_json = {}
                 rest_resp = FlaskResponse()
@@ -183,9 +222,11 @@ class RestServiceTransaction(Handler):
             append = self.tx_cursor.append_blob(
                 blob_rest_id=blob_rest_id, last=last)
         except VersionConflictException:
-            return FlaskResponse(412, 'version conflict')
+            return FlaskResponse(status=412,
+                                 response=['version conflict'])
         if append != TransactionCursor.APPEND_BLOB_OK:
-            return FlaskResponse(500, 'internal error')
+            return FlaskResponse(status=500,
+                                 response=['internal error'])
         # XXX move to rest service?
         resp_json = {'uri': '/blob/' + blob_rest_id}
         rest_resp = FlaskResponse()
@@ -238,19 +279,19 @@ class RestServiceTransaction(Handler):
     @staticmethod
     def build_resp(code, msg, writer):
         resp = FlaskResponse(status=code, response=[msg] if msg else None)
-        logging.info('build_resp offset=%s length=%s',
-                     writer.offset, writer.length)
-        if writer.offset > 0:
+        logging.info('build_resp offset=%s content_length=%s',
+                     writer.length, writer.content_length)
+        if writer.length > 0:
             resp.headers.set(
                 'content-range',
-                ContentRange('bytes', 0, writer.offset, writer.length))
+                ContentRange('bytes', 0, writer.length, writer.content_length))
         return resp
 
     def put_blob(self, request : FlaskRequest,
                  content_range : ContentRange, range_in_headers : bool):
-        logging.info('put_blob loaded %s off=%d len=%s',
-                     self.blob_rest_id, self.blob_writer.offset,
-                     self.blob_writer.length)
+        logging.info('put_blob loaded %s len=%d content_length=%s',
+                     self.blob_rest_id, self.blob_writer.length,
+                     self.blob_writer.content_length)
 
         # being extremely persnickety: we would reject
         # !range_in_headers after a request with it populated even if
@@ -258,20 +299,20 @@ class RestServiceTransaction(Handler):
         # enforce?
 
         offset = content_range.start
-        if offset > self.blob_writer.offset:
+        if offset > self.blob_writer.length:
             return RestServiceTransaction.build_resp(
                 400, 'range start past the end', self.blob_writer)
 
-        if (self.blob_writer.length is not None and
-            content_range.length != self.blob_writer.length):
+        if (self.blob_writer.content_length is not None and
+            content_range.length != self.blob_writer.content_length):
             return RestServiceTransaction.build_resp(
                 400, 'append or !last after last', self.blob_writer)
 
-        if self.blob_writer.offset >= content_range.stop:
+        if self.blob_writer.length >= content_range.stop:
             return RestServiceTransaction.build_resp(
                 200, 'noop (range)', self.blob_writer)
 
-        d = request.data[self.blob_writer.offset - offset:]
+        d = request.data[self.blob_writer.length - offset:]
         assert len(d) > 0
         self.blob_writer.append_data(d, content_range.length)
 
@@ -322,6 +363,9 @@ def output(cursor, endpoint) -> Optional[Response]:
                      cursor.rest_id,
                      delta.mail_from, delta.rcpt_to, cursor.max_i)
         if delta.mail_from is None and not delta.rcpt_to:
+            if cursor.tx.body:
+                logging.debug('cursor_to_endpoint %s -> body', cursor.rest_id)
+                break
             if cursor.max_i is not None:
                 logging.debug('cursor_to_endpoint %s -> data', cursor.rest_id)
                 break
@@ -383,6 +427,24 @@ def output(cursor, endpoint) -> Optional[Response]:
         logging.debug('cursor_to_endpoint %s no rcpt', cursor.rest_id)
         return err
 
+    if cursor.tx.body:
+        blob_reader = cursor.parent.get_blob_reader()
+        blob_reader.load(rest_id = cursor.tx.body)
+        while blob_reader.content_length is None or (
+                blob_reader.length < blob_reader.content_length):
+            blob_reader.wait()
+        resp = endpoint.append_data(True, blob_reader)
+        assert resp is not None
+        logging.info('cursor_to_endpoint %s body %s', cursor.rest_id, resp)
+        while True:
+            try:
+                cursor.set_data_response(resp)
+            except VersionConflictException:
+                cursor.load()
+                continue
+            break
+        return resp
+
     i = 0
     last = False
     while not last:
@@ -439,4 +501,10 @@ def cursor_to_endpoint(cursor, endpoint):
         logging.warning('cursor_to_endpoint %s abort', cursor.rest_id)
         return
     logging.info('cursor_to_endpoint %s done %s', cursor.rest_id, resp)
-    cursor.finalize_attempt(not resp.temp())
+    while True:
+        try:
+            cursor.finalize_attempt(not resp.temp())
+        except VersionConflictException:
+            cursor.load()
+            continue
+        break

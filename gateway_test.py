@@ -9,27 +9,39 @@ from gateway import SmtpGateway
 from fake_smtpd import FakeSmtpd
 from blob import InlineBlob
 from rest_endpoint import RestEndpoint
+from filter import HostPort, Mailbox, TransactionMetadata
 
-# xxx -> yaml
-config_json = {
-    "rest_port": None,
-    "router_port": None,
-    "mx_port": None,
-    "msa_port": None,
-    "ehlo_host": "frylock",
-    "listen_host": "localhost",
-    "use_gunicorn": False,
-    'tx_idle_timeout': 1,
-    'tx_idle_gc': 1,
+from requests.exceptions import ConnectionError
+
+root_yaml = {
+    'global': {
+    },
+    'rest_listener': {
+        'use_gunicorn': False,
+        'tx_idle_timeout': 1,
+        'tx_idle_gc': 1,
+    },
+    'smtp_output': {
+        'ehlo_host': 'gateway_test',
+    },
+    'smtp_listener': {
+        'services': []
+    }
 }
-
 
 class GatewayTest(unittest.TestCase):
     def setUp(self):
         logging.info('GatewayTest.setUp')
-        for p in ["rest_port", "router_port", "mx_port", "msa_port"]:
-            config_json[p] = self.find_unused_port()
-        self.config = Config(js=config_json)
+
+        #for p in ["rest_port", "router_port", "mx_port", "msa_port"]:
+        #    config_json[p] = self.find_unused_port()
+
+        rest_port = self.find_unused_port()
+        root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
+
+        self.config = Config()
+        self.config.inject_yaml(root_yaml)
+
         self.gw = SmtpGateway(self.config)
 
         self.fake_smtpd_port = self.find_unused_port()
@@ -42,18 +54,20 @@ class GatewayTest(unittest.TestCase):
             target=lambda: self.gw.main())
         self.service_thread.start()
 
-        self.gw_rest_url = 'http://localhost:%d' % self.config.get_int('rest_port')
+        self.gw_rest_url = 'http://localhost:%d' % rest_port
 
-        while True:
+        for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')
             try:
                 rest_endpoint = RestEndpoint(
-                    base_url=self.gw_rest_url,
+                    static_base_url=self.gw_rest_url,
                     http_host='outbound')
-                start_resp = rest_endpoint.start(
-                    None, ('localhost', self.fake_smtpd_port),
-                    'probe', None, 'probe', None)
-            except:
+                tx = TransactionMetadata(
+                    remote_host=HostPort('localhost', self.fake_smtpd_port))
+                tx.mail_from = Mailbox('probe-from%d' % i)
+                tx.rcpt_to = [Mailbox('probe-to%d' % i)]
+                start_resp = rest_endpoint.on_update(tx)
+            except ConnectionError:
                 time.sleep(0.1)
             else:
                 break
@@ -72,12 +86,15 @@ class GatewayTest(unittest.TestCase):
 
     def test_rest_to_smtp_basic(self):
         rest_endpoint = RestEndpoint(
-            base_url=self.gw_rest_url,
+            static_base_url=self.gw_rest_url,
             http_host='outbound')
-        start_resp = rest_endpoint.start(
-            None, ('localhost', self.fake_smtpd_port),
-            'alice', None, 'bob', None)
-        self.assertEqual(start_resp.code, 250)
+        tx=TransactionMetadata(
+            remote_host=HostPort('localhost', self.fake_smtpd_port))
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        rest_endpoint.on_update(tx)
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertEqual([r.code for r in tx.rcpt_response], [250])
         final_resp = rest_endpoint.append_data(
             blob=InlineBlob('hello'), last=True)
         self.assertEqual(final_resp.code, 250)
@@ -85,12 +102,14 @@ class GatewayTest(unittest.TestCase):
 
     def test_rest_to_smtp_idle_gc(self):
         rest_endpoint = RestEndpoint(
-            base_url=self.gw_rest_url,
+            static_base_url=self.gw_rest_url,
             http_host='outbound')
-        start_resp = rest_endpoint.start(
-            None, ('localhost', self.fake_smtpd_port),
-            'alice', None, 'bob', None)
-        self.assertEqual(start_resp.code, 250)
+        tx=TransactionMetadata(
+            remote_host=HostPort('localhost', self.fake_smtpd_port))
+        tx.mail_from = Mailbox('alice')
+        rest_endpoint.on_update(tx)
+        self.assertEqual(tx.mail_response.code, 250)
+
         for i in range(0,5):
             resp_json = rest_endpoint.get_json(2)
             if resp_json is None:

@@ -45,6 +45,7 @@ class Exploder(Filter):
     # rcpts that tempfailed/timed out that we're accepting async for msa
     async_rcpts : List[bool]
     upstream_data_resp = List[Response]
+    #parent_body = None
 
     def __init__(self, output_chain : str,
                  factory : Callable[[], Filter],
@@ -79,6 +80,8 @@ class Exploder(Filter):
         tx_i = TransactionMetadata(host = self.output_chain,
                                    mail_from = self.mail_from,
                                    rcpt_to = [rcpt])
+        #tx_i.body = self.parent_body
+
         endpoint_i = self.factory()
         # fan this out if there were multiple though gw/smtplib
         # doesn't do pipelining so it will only send us one at
@@ -118,6 +121,9 @@ class Exploder(Filter):
 
     def on_update(self, delta):
         logging.info('Exploder.on_update %s', delta.to_json())
+
+        #if delta.body and self.parent_body is None:
+        #    self.parent_body = delta.body
 
         if delta.mail_from is not None:
             self._on_mail(delta)

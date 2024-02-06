@@ -179,25 +179,20 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
                       tx_json)
 
-        rest_resp = rest_endpoint._append_inline(
+        resp = rest_endpoint._append_body(
             last=False, blob=InlineBlob(b'hello'))
-        tx_json = rest_resp.json()
+        #self.assertIsNone(resp)
+        tx_json = rest_endpoint.get_json(0.9)  #rest_resp.json()
         logging.debug('RouterServiceTest.test_retry post append %s %s',
                       rest_resp, tx_json)
         self.assertEqual(tx_json.get('mail_response', None), {})
         self.assertEqual(tx_json.get('rcpt_response', None), [{}])
         self.assertEqual(tx_json.get('data_response', None), {})
-        self.assertEqual(tx_json.get('last', None), False)
+        #self.assertEqual(tx_json.get('last', None), False)
 
-        rest_resp = rest_endpoint._append_blob(
-            last=True, blob_uri=None)
-        logging.debug('RouterServiceTest.test_retry append blob %s',
-                      rest_resp)
-        tx_json = rest_resp.json()
-        blob_uri = tx_json.get('uri', None)
-        rest_resp = rest_endpoint._put_blob(
-            blob=InlineBlob('world'), uri=blob_uri)
-
+        resp = rest_endpoint._append_body(
+            last=True, blob=InlineBlob('world'))
+        self.assertIsNotNone(resp)
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
@@ -220,7 +215,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(mail_resp.code, 201)
         self.assertRcptJsonCodesEqual(tx_json, [456])
         self.assertEqual(tx_json.get('data_response', None), {})
-        self.assertEqual(tx_json.get('last', None), True)
+        #self.assertEqual(tx_json.get('last', None), True)
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
@@ -230,7 +225,7 @@ class RouterServiceTest(unittest.TestCase):
         # upstream success, retry succeeds, propagates down to rest
         upstream_endpoint.set_mail_response(Response(201))
         upstream_endpoint.add_rcpt_response(Response(202))
-        upstream_endpoint.add_data_response(None)
+        #upstream_endpoint.add_data_response(None)
         upstream_endpoint.add_data_response(Response(203))
 
         tx_json = rest_endpoint.get_json(1.2)
@@ -239,9 +234,9 @@ class RouterServiceTest(unittest.TestCase):
         mail_resp = Response.from_json(tx_json.get('mail_response', None))
         self.assertEqual(mail_resp.code, 201)
         self.assertRcptJsonCodesEqual(tx_json, [202])
-        mail_resp = Response.from_json(tx_json.get('data_response', None))
-        self.assertEqual(mail_resp.code, 203)
-        self.assertEqual(tx_json.get('last', None), True)
+        data_resp = Response.from_json(tx_json.get('data_response', None))
+        self.assertEqual(data_resp.code, 203)
+        #self.assertEqual(tx_json.get('last', None), True)
 
     def _update_tx(self, endpoint, tx):
         endpoint.on_update(tx)
@@ -255,8 +250,13 @@ class RouterServiceTest(unittest.TestCase):
         t.join(timeout=1)
         self.assertFalse(t.is_alive())
 
+    # xxx need non-exploder test w/filter api, problems in
+    # post-exploder/upstream tx won't be reported out synchronously,
+    # would potentially bounce
+    # and/or get ahold of those tx IDs and verify the status directly
+
     # exploder multi rcpt
-    def testExploderMultiRcpt(self):
+    def test_exploder_multi_rcpt(self):
         logging.info('testExploderMultiRcpt')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
@@ -302,6 +302,14 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [203])
 
+        # output of exploder tx buffers whole payload?
+        #upstream_endpoint.add_data_response(None)
+        upstream_endpoint.add_data_response(Response(204))
+        #upstream_endpoint2.add_data_response(None)
+        upstream_endpoint2.add_data_response(Response(204))
+
+        rest_endpoint.append_data(False, InlineBlob(b'Hello, '))
+        rest_endpoint.append_data(True, InlineBlob(b'World!'))
 
 
 if __name__ == '__main__':

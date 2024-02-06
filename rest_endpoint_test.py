@@ -82,7 +82,9 @@ class RestEndpointTest(unittest.TestCase):
         logging.info('RestEndpointTest server listening on %d', self.port)
 
     def assertEqualRange(self, lhs, rhs):
-        self.assertTrue(eq_range(lhs, rhs))
+        if not eq_range(lhs, rhs):
+            logging.debug('%s != %s', lhs, rhs)
+            self.fail()
 
     def wsgi_app(self, environ, start_response):
         #logging.debug(environ)
@@ -235,7 +237,8 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '200 ok'))
 
-        rest_endpoint._put_blob_chunk('/blob/127', 128, b'hello', False)
+        rest_endpoint._put_blob_chunk(self.static_base_url + '/blob/127',
+                                      128, b'hello', False)
         req = self.requests.pop(0)
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
@@ -243,7 +246,8 @@ class RestEndpointTest(unittest.TestCase):
 
         self.responses.append(Response(
             http_resp = '200 ok'))
-        rest_endpoint._put_blob_chunk('/blob/127', 128, b'hello', True)
+        rest_endpoint._put_blob_chunk(self.static_base_url + '/blob/127',
+                                      128, b'hello', True)
         req = self.requests.pop(0)
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
@@ -252,7 +256,8 @@ class RestEndpointTest(unittest.TestCase):
     # Filter api
     def testFilterApi(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1)
+                                     min_poll=0.1,
+                                     chunk_size=3)
 
         # start tx w/empty envelope
 
@@ -304,13 +309,17 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)  # GET
         self.assertEqual(req.body, None)
 
+        logging.debug('testFilterApi first write')
+
         # on_update() w/rcpt_to with inline response
         # POST
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/123',
-                               'rcpt_response': [{'code': 202, 'message': 'ok'}]})))
+            body = json.dumps(
+                {'url': '/transactions/123',
+                 'mail_response': {'code': 201, 'message': 'ok'},
+                 'rcpt_response': [{'code': 202, 'message': 'ok'}]})))
         tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
         rest_endpoint.on_update(tx)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
@@ -318,7 +327,7 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)  # PATCH
         self.assertEqual(req.body, b'{"rcpt_to": [{"m": "bob"}]}')
 
-
+        # PATCH 'body'
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -326,41 +335,66 @@ class RestEndpointTest(unittest.TestCase):
                 {'url': '/transactions/123',
                  'mail_response': {'code': 201, 'message': 'ok'},
                  'data_response': {},
-                 'last': False})))
-        rest_endpoint.append_data(False, InlineBlob(b'hello'))
-        req = self.requests.pop(0)
-        req_json = {'last': False, 'd': 'hello'}
-        self.assertEqual(req.body, json.dumps(req_json).encode('utf-8'))
-
-
-        rest_endpoint.max_inline = 0
-        rest_endpoint.chunk_size = 3
-        # POST
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps(
-                {'uri': '/blob/124'})))
+                 'body': '/blob/xyz'})))
         # PUT 0-3/*
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
             content_range=ContentRange('bytes',0,3,None)))
-        # PUT 3-6/5
+        # PUT 3-5/*
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            content_range=ContentRange('bytes',3,5,5)))
-        rest_endpoint.append_data(False, InlineBlob(b'world'))
+            content_range=ContentRange('bytes',3,5,None)))
+        rest_endpoint.append_data(False, InlineBlob(b'hello'))
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions/123/appendData')
+        req_json = {'body': ''}
+        self.assertEqual(req.body, json.dumps(req_json).encode('utf-8'))
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/blob/124')
+        self.assertEqual(req.path, '/blob/xyz')
         self.assertEqualRange(req.content_range,
                               ContentRange('bytes', 0, 3, None))
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/blob/124')
-        self.assertEqualRange(req.content_range, ContentRange('bytes', 3, 5, 5))
+        self.assertEqual(req.path, '/blob/xyz')
+        self.assertEqualRange(req.content_range,
+                              ContentRange('bytes', 3, 5, None))
+
+        logging.debug('testFilterApi second write')
+
+        # PUT 5-8/*
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            content_range=ContentRange('bytes',5,8,None)))
+        # PUT 8-10/10
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            content_range=ContentRange('bytes',8,10,10)))
+
+        # GET
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps(
+                {'url': '/transactions/123',
+                 'mail_response': {'code': 201, 'message': 'ok'},
+                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                 'data_response': {'code': 203, 'message': 'ok'}})))
+
+        resp = rest_endpoint.append_data(True, InlineBlob(b'world'))
+        self.assertEqual(resp.code, 203)
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/blob/xyz')
+        self.assertEqualRange(req.content_range,
+                              ContentRange('bytes', 5, 8, None))
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/blob/xyz')
+        self.assertEqualRange(req.content_range,
+                              ContentRange('bytes', 8, 10, 10))
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123')
 
 
     def testFilterApiMultiRcpt(self):

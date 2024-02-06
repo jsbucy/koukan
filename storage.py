@@ -14,6 +14,7 @@ from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
 
+
 class TransactionCursor:
     id : Optional[int] = None
     attempt_id : Optional[int] = None
@@ -41,7 +42,9 @@ class TransactionCursor:
         #return b64encode(
         #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
-    def create(self, rest_id, tx : TransactionMetadata):
+    # create_body_rest_id
+    def create(self, rest_id, tx : TransactionMetadata,
+               create_body_rest_id : Optional[str] = None):
         parent = self.parent
         self.creation = int(time.time())
         with parent.db_write_lock:
@@ -49,18 +52,21 @@ class TransactionCursor:
             self.last = False
             self.version = 0
 
+            body_blob_id, body_rest_id = self._set_body(
+                cursor, tx.body, create_body_rest_id)
+
             max_attempts = tx.max_attempts if tx.max_attempts else 1
             db_json = json.dumps(tx.to_json(WhichJson.DB))
             logging.debug('TxCursor.create %s %s', rest_id, db_json)
             cursor.execute("""
                 INSERT INTO Transactions
                 (rest_id, creation, last_update, version, last,
-                 json, attempt_count, max_attempts)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                 json, attempt_count, max_attempts, body_blob_id, body_rest_id)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                 RETURNING id""",
                 (rest_id, self.creation, self.creation,
                  self.version, self.last, db_json,
-                 max_attempts))
+                 max_attempts, body_blob_id, body_rest_id))
             self.id = cursor.fetchone()[0]
             self.tx = tx
 
@@ -72,7 +78,28 @@ class TransactionCursor:
                 parent.created_id = self.id
                 parent.created_cv.notify_all()
 
-    def write_envelope(self, tx_delta : TransactionMetadata):
+    def _set_body(self, cursor,
+                  reuse_body_rest_id=None, create_body_rest_id=None):
+        if reuse_body_rest_id:
+            cursor.execute(
+                'SELECT id,last FROM Blob WHERE rest_id = ?',
+                (reuse_body_rest_id,))
+            row = cursor.fetchone()
+            assert row
+            body_blob_id, last = row
+            # XXX allow sharing incomplete for exploder but not rest?
+            #assert last
+            return body_blob_id, reuse_body_rest_id
+        elif create_body_rest_id:
+            blob_writer = self.parent.get_blob_writer()
+            body_rest_id = create_body_rest_id
+            body_blob_id = blob_writer._create(
+                body_rest_id, cursor)
+            return body_blob_id, create_body_rest_id
+        return None, None
+
+    def write_envelope(self, tx_delta : TransactionMetadata,
+                       create_body_rest_id : Optional[str] = None):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             # TODO this should just load(), trying to save a single
@@ -93,13 +120,21 @@ class TransactionCursor:
                 set_max_attempts = ', max_attempts = ?'
                 set_max_attempts_val = (tx_delta.max_attempts,)
 
+            set_body = ''
+            set_body_val = ()
+            body_blob_id, body_rest_id = self._set_body(
+                cursor, tx_delta.body, create_body_rest_id)
+            if body_blob_id:
+                set_body = ', body_blob_id = ?, body_rest_id = ?'
+                set_body_val = (body_blob_id, body_rest_id)
+
             cursor.execute("""
               UPDATE Transactions SET json = ?, version = ?,
               max_attempts = 1, attempt_count = 0, last_update = ?
-              """ + set_max_attempts + """
+              """ + set_max_attempts + set_body + """
               WHERE id = ? AND version = ? RETURNING version""",
               (json.dumps(tx_to_db.to_json(WhichJson.DB)), new_version, now) +
-              set_max_attempts_val +
+              set_max_attempts_val + set_body_val +
               (self.id, self.version))
 
             if (row := cursor.fetchone()) is None:
@@ -274,7 +309,7 @@ class TransactionCursor:
 
         cursor.execute("""
           SELECT id,rest_id,creation,json,version,
-          last,input_done,output_done
+          last,input_done,output_done,body_rest_id
           FROM Transactions """ + where,
           where_id)
         row = cursor.fetchone()
@@ -283,12 +318,13 @@ class TransactionCursor:
 
         (self.id, self.rest_id,
          self.creation, json_str, self.version, self.last,
-         self.input_done, self.output_done) = row[0:8]
+         self.input_done, self.output_done, self.body_rest_id) = row[0:9]
 
         trans_json = json.loads(json_str) if json_str else {}
         logging.debug('TransactionCursor._load_db %s %s',
                       self.rest_id, trans_json)
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
+        self.tx.body = self.body_rest_id
 
         cursor.execute("""
           SELECT max(i)
@@ -330,6 +366,8 @@ class TransactionCursor:
             FROM (SELECT max(attempt_id) AS i from TransactionAttempts
             WHERE transaction_id = ?))) RETURNING attempt_id""",
             (db_id, db_id))
+        assert (row := cursor.fetchone())
+        self.attempt_id = row[0]
         self._load_db(cursor, db_id=db_id)
 
     def _set_max_attempts(self, max_attempts, cursor):
@@ -461,25 +499,29 @@ class TransactionCursor:
 
 class BlobWriter:
     id = None
-    offset = 0
-    length = None  # overall length from content-range
+    length = 0  # max offset+len from BlobContent, next offset to write
+    content_length = None  # overall length from content-range
     rest_id = None
     last = False
 
     def __init__(self, storage):
         self.parent = storage
 
+    def _create(self, rest_id, cursor):
+        cursor.execute(
+            'INSERT INTO Blob (last_update, rest_id, last) '
+            'VALUES (?, ?, false) RETURNING id',
+            (int(time.time()), rest_id))
+        self.id = cursor.fetchone()[0]
+        self.rest_id = rest_id
+        return self.id
+
     def create(self, rest_id):
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            cursor.execute(
-                'INSERT INTO Blob (last_update, rest_id, last) '
-                'VALUES (?, ?, false) RETURNING id',
-                (int(time.time()), rest_id))
-            self.id = cursor.fetchone()[0]
+            self._create(rest_id, cursor)
             self.parent.db.commit()
-            self.rest_id = rest_id
-        return self.id
+            return self.id
 
     def load(self, rest_id):
         cursor = self.parent.db.cursor()
@@ -488,14 +530,14 @@ class BlobWriter:
         row = cursor.fetchone()
         if not row:
             return None
-        self.id, self.length, self.last_update = row
+        self.id, self.content_length, self.last_update = row
         self.rest_id = rest_id
 
         cursor.execute('SELECT offset + LENGTH(content) FROM BlobContent '
                        'WHERE id = ? ORDER BY offset DESC LIMIT 1', (self.id,))
         row = cursor.fetchone()
         if row:
-            self.offset = row[0]
+            self.length = row[0]
 
         return self.id
 
@@ -505,12 +547,14 @@ class BlobWriter:
     # Note: as of python 3.11 sqlite.Connection.blobopen() returns a
     # file-like object blob reader handle so striping out the data may
     # be less necessary
-    def append_data(self, d : bytes, length=None):
-        logging.info('BlobWriter.append_data %d %s off=%d d.len=%d length=%s '
-                     'new length=%s',
-                     self.id, self.rest_id, self.offset, len(d), self.length,
-                     length)
-        assert(self.length is None or (self.length == length))
+    # moreover concat/substr on blobs appears to be standard SQL
+    def append_data(self, d : bytes, content_length=None):
+        logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
+                     'content_length=%s new content_length=%s',
+                     self.id, self.rest_id, self.length, len(d),\
+                     self.content_length, content_length)
+        assert self.content_length is None or (
+            self.content_length == content_length)
         assert(not self.last)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
@@ -522,33 +566,32 @@ class BlobWriter:
                                'ORDER BY offset DESC LIMIT 1',
                                (self.id,))
                 row = cursor.fetchone()
-                if self.offset == 0:
+                if self.length == 0:
                     assert(row is None)
                 else:
-                    assert(row[0] == self.offset)
+                    assert(row[0] == self.length)
 
                 cursor.execute(
                     'INSERT INTO BlobContent (id, offset, content) '
                     'VALUES (?,?,?)',
-                    (self.id, self.offset, chunk))
+                    (self.id, self.length, chunk))
                 self.parent.db.commit()  # XXX
 
                 dd = dd[self.CHUNK_SIZE:]
-                self.offset += len(chunk)
-            last = length is not None and self.offset == length
+                self.length += len(chunk)
+            last = content_length is not None and self.length == content_length
             logging.info('BlobWriter.append_data id=%d length=%s last=%s',
-                         self.id, length, last)
+                         self.id, content_length, last)
             cursor.execute(
                 'UPDATE Blob SET length = ?, last_update = ?, last = ? '
                 'WHERE id = ? AND ((length IS NULL) OR (length = ?))',
-                (length, int(time.time()), last,
-                 self.id, length))
+                (content_length, int(time.time()), last,
+                 self.id, content_length))
             assert(cursor.rowcount == 1)
-            self.length = length
+            self.content_length = content_length
             self.last = last
 
             if self.last:
-                cursor = self.parent.db.cursor()
                 cursor.execute(
                     'SELECT DISTINCT transaction_id '
                     'FROM TransactionContent WHERE blob_id = ?', (self.id,))
@@ -559,9 +602,9 @@ class BlobWriter:
                     tx._load_db(cursor, row[0])
                     tx._maybe_finalize(cursor)
 
+            self.parent.blob_versions.update(self.id, self.length)
             self.parent.db.commit()
 
-        self.parent.blob_versions.update(self.id, self.offset)
         return True
 
 
@@ -569,9 +612,10 @@ class BlobReader(Blob):
     blob_id : Optional[int]
     last = False
     blob_id = None
-    length = None
+    length = 0  # number of bytes currently readable
+    # final length declared by client in content-length header
+    content_length = None
     rest_id = None
-    offset : Optional[int] = None  # max offset in BlobContent
 
     def __init__(self, storage):
         self.parent = storage
@@ -583,8 +627,12 @@ class BlobReader(Blob):
         return 'storage_%s' % self.blob_id
 
     def load(self, db_id = None, rest_id = None):
+        with self.parent.db_write_lock:
+            cursor = self.parent.db.cursor()
+            return self._load(cursor, db_id, rest_id)
+
+    def _load(self, cursor, db_id = None, rest_id = None):
         self.blob_id = db_id
-        cursor = self.parent.db.cursor()
         where = ''
         where_val = ()
         if db_id is not None:
@@ -601,22 +649,21 @@ class BlobReader(Blob):
 
         self.blob_id = row[0]
         self.rest_id = row[1]
-        self.length = row[2]
+        self.content_length = row[2]
         self.last = row[3]
 
-        cursor.execute('SELECT offset '
+        cursor.execute('SELECT offset, LENGTH(content) '
                        'FROM BlobContent WHERE id = ? '
                        'ORDER BY offset DESC LIMIT 1',
                        (self.blob_id,))
         row = cursor.fetchone()
-        self.offset = row[0] if row is not None else None
+        if row:
+            self.length = row[0] + row[1]
 
         return self.length
 
-    # xxx clean this up, should probably just read sequentially per
-    # self.offset?
     def read_content(self, offset) -> Optional[bytes]:
-        if offset is None: return None
+        if offset is None: return None  # XXX wut?
 
         # TODO inflight waiter list thing
         cursor = self.parent.db.cursor()
@@ -624,28 +671,31 @@ class BlobReader(Blob):
                        'WHERE id = ? AND offset = ?',
                        (self.blob_id, offset))
         row = cursor.fetchone()
-        if not row: return None
+        if not row:
+            return None
         return row[0]
 
     def contents(self):
         dd = bytes()
-        while len(dd) < self.length:
+        while len(dd) < self.content_length:
             dd += self.read_content(len(dd))
-        assert(len(dd) == self.length)
+        assert(len(dd) == self.content_length)
         return dd
 
-    def wait_length(self, timeout):
-        old_len = self.offset if self.offset is not None else 0
+    # wait for self.offsetlength to increase or timeout
+    def wait(self, timeout=None):
+        # version is max offset+len in BlobContent
+        old_len = self.length
         if not self.parent.blob_versions.wait(
                 self, self.blob_id, old_len, timeout):
             return False
         self.load(self.blob_id)
-        return old_len is None or (self.length > old_len)
+        return self.length > old_len
 
     # wait until fully written
-    def wait(self, timeout=None):
+    def wait_last(self, timeout=None):
         while not self.last:
-            self.wait_length(timeout)
+            self.wait_length(self.offset, timeout)
 
 class IdVersion:
     id : int

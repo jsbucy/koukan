@@ -138,6 +138,10 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
             emit=[WhichJson.REST_READ]),
+    TxField('body',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE],
+            emit=[WhichJson.REST_READ]),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -158,6 +162,10 @@ class TransactionMetadata:
     data_response : Optional[Response] = None
 
     max_attempts : Optional[int] = None
+
+    # in rest, this is the url to the body blob, in-memory, it is the id
+    # suffix of the blob url
+    body : Optional[str] = None
 
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
@@ -200,7 +208,7 @@ class TransactionMetadata:
     def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
         for f in json.keys():
-            field  = tx_json_fields.get(f, None)
+            field = tx_json_fields.get(f, None)
             if not field or not field.valid_accept(which_js):
                 return None  # invalid
             js_v = json[f]
@@ -211,7 +219,8 @@ class TransactionMetadata:
             if isinstance(js_v, list) and not js_v:
                 return None
             v = field.from_json(js_v) if field.from_json else js_v
-            if not v:
+            # xxx v is None?
+            if v is None:
                 return None
             setattr(tx, f, v)
         return tx

@@ -241,7 +241,18 @@ class StorageTest(unittest.TestCase):
 
     @staticmethod
     def wait_blob(reader, rv):
-        rv[0] = reader.wait_length(5)
+        rv[0] = reader.wait(5)
+
+    def start_wait(self, reader, rv):
+        t = Thread(target =
+                   lambda: StorageTest.wait_blob(reader, rv))
+        t.start()
+        time.sleep(0.1)
+        return t
+
+    def join(self, t):
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive())
 
     def test_blob_waiting(self):
         blob_writer = self.s.get_blob_writer()
@@ -251,19 +262,37 @@ class StorageTest(unittest.TestCase):
         reader.load(blob_writer.id)
 
         rv = [False]
-        t = Thread(target =
-                   lambda: StorageTest.wait_blob(reader, rv))
-        t.start()
-        time.sleep(0.1)
+        t = self.start_wait(reader, rv)
 
-        blob_writer.append_data(b'xyz', 3)
+        blob_writer.append_data(b'xyz', None)
 
-        t.join(timeout=5)
-        self.assertFalse(t.is_alive())
+        self.join(t)
 
         self.assertTrue(rv[0])
         self.assertEqual(reader.length, 3)
+        self.assertIsNone(reader.content_length)
+        self.assertFalse(reader.last)
+
+        t = self.start_wait(reader, rv)
+
+        blob_writer.append_data(b'abc', 9)
+
+        self.join(t)
+        self.assertTrue(rv[0])
+        self.assertEqual(reader.length, 6)
+        self.assertEqual(reader.content_length, 9)
+        self.assertFalse(reader.last)
+
+        t = self.start_wait(reader, rv)
+
+        blob_writer.append_data(b'def', 9)
+
+        self.join(t)
+        self.assertTrue(rv[0])
+        self.assertEqual(reader.length, 9)
+        self.assertEqual(reader.content_length, 9)
         self.assertTrue(reader.last)
+
 
 if __name__ == '__main__':
     unittest.main()

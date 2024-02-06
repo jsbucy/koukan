@@ -1,7 +1,7 @@
 import unittest
 import logging
 
-from filter import HostPort, Mailbox, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
 
 class FilterTest(unittest.TestCase):
 
@@ -68,6 +68,9 @@ class FilterTest(unittest.TestCase):
         # not a prefix
         self.assertIsNone(tx.delta(succ))
 
+    def testEmptyStr(self):
+        tx = TransactionMetadata.from_json({'body': ''}, WhichJson.REST_UPDATE)
+        self.assertEqual(tx.body, '')
 
 if __name__ == '__main__':
     unittest.main()

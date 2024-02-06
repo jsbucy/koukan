@@ -61,9 +61,6 @@ class StorageWriterFilterTest(unittest.TestCase):
         t.join(timeout=1)
         self.assertEqual(tx.rcpt_response[0].code, 202)
 
-        filter.append_data(last=False, blob=InlineBlob(
-            'from: alice\r\nto: bob\r\nsubject: hello\r\n\r\n'))
-
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create('blob_rest_id')
         d = b'hello, world!\r\n'
@@ -78,7 +75,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         t.start()
         time.sleep(0.1)
 
-        while tx_cursor.max_i is None or tx_cursor.max_i < 1:
+        while not tx_cursor.tx.body:
             tx_cursor.wait()
         tx_cursor.set_data_response(Response(203))
         t.join(timeout=1)

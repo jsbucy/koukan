@@ -58,7 +58,14 @@ class RestEndpointAdapter(Handler):
 
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
-        raise NotImplementedError()
+        logging.debug('RestEndpointAdapter.patch %s %s',
+                      self._tx_rest_id, req_json)
+        if req_json != {'body': ''}:
+            raise NotImplementedError()
+        blob_done_cb = lambda blob: self.append_blob_upstream(True, blob)
+        blob_id = self.blob_storage.create(blob_done_cb)
+        resp_json = { 'body': '/blob/' + str(blob_id) }
+        return jsonify(resp_json)
 
     def etag(self):
         return None
@@ -130,6 +137,8 @@ class RestEndpointAdapter(Handler):
 
     def put_blob(self, request : FlaskRequest, content_range : ContentRange,
                  range_in_headers : bool) -> FlaskResponse:
+        logging.debug('RestEndpointAdapter.put_blob %s content-range: %s',
+                      self.blob_rest_id, content_range)
         offset = 0
         last = True
         offset = content_range.start

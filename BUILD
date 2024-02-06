@@ -215,8 +215,7 @@ py_test(name='gateway_test',
               ':rest_endpoint',
               ':fake_smtpd',
               ':blob',
-              ':config'],
-        tags=['broken'])
+              ':config'])
 
 test_suite(
     name='all_tests',

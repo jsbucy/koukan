@@ -25,7 +25,9 @@ class SmtpGateway(EndpointFactory):
 
         self.blob_id_map = BlobIdMap()
 
-        self.router_base_url = config.root_yaml['rest_output']['endpoint']
+        rest_output  = config.root_yaml.get('rest_output', None)
+        if rest_output:
+            self.router_base_url = rest_output.get('endpoint', None)
 
         self.blobs = BlobStorage()
         self.smtp_factory = SmtpFactory()
@@ -66,9 +68,11 @@ class SmtpGateway(EndpointFactory):
     def gc_inflight(self):
         last_gc = 0
         while not self.shutdown_gc:
+            rest_yaml = self.config.root_yaml['rest_listener']
             now = time.monotonic()
+            logging.debug('SmtpGateway.gc_inflight %f', now)
             delta = now - last_gc
-            tx_idle_gc = self.config.root_yaml['rest_listener'].get('tx_idle_gc', 5)
+            tx_idle_gc = rest_yaml.get('tx_idle_gc', 5)
             if delta < tx_idle_gc:
                 time.sleep(tx_idle_gc - delta)
             last_gc = now
@@ -76,7 +80,7 @@ class SmtpGateway(EndpointFactory):
             for (rest_id, tx) in self.inflight.items():
                 tx_idle = now - tx.idle_start if tx.idle_start else 0
                 # xxx doesn't work, pre-yaml api
-                if tx_idle > self.config.get_int('tx_idle_timeout', 5):
+                if tx_idle > rest_yaml.get('tx_idle_timeout', 5):
                     logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                                  tx.rest_id)
                     tx._shutdown()
@@ -121,10 +125,10 @@ class SmtpGateway(EndpointFactory):
                 cert=None, key=None,
                 app=flask_app)
         else:
-            # xxx doesn't work, pre-yaml api
-            self.wsgi_server = make_server('localhost',
-                                           self.config.get_int('rest_port'),
-                                           flask_app)
+            listener_yaml = self.config.root_yaml['rest_listener']
+            self.wsgi_server = make_server(
+                listener_yaml['addr'][0], listener_yaml['addr'][1],
+                flask_app)
             self.wsgi_server.serve_forever()
 
 

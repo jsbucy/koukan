@@ -58,6 +58,8 @@ class RestEndpoint(Filter):
     etag : Optional[str] = None
     max_inline : int
     chunk_size : int
+    body_url : Optional[str] = None
+    body_len : int = 0
 
     # PATCH sends rcpts to append but it sends back the responses for
     # all rcpts so far, need to remember how many we've sent to know
@@ -65,7 +67,7 @@ class RestEndpoint(Filter):
     rcpts = 0
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
-        if timeout:
+        if timeout and int(timeout):
             headers['request-timeout'] = str(int(timeout))
 
     # static_remote_host overrides transaction remote_host to send all
@@ -137,13 +139,19 @@ class RestEndpoint(Filter):
             #    return Response.Internal(
             #        'RestEndpoint.start internal error (no json)')
             self.transaction_url = self.base_url + resp_json['url']
+            if body := resp_json.get('body', None):
+                self.body_url = self.base_url + body
 
             return rest_resp
 
-    def _update(self, tx, timeout : Optional[float] = None):
-        req_json = tx.to_json()
-        if self.remote_host:
-            req_json['remote_host'] = self.remote_host.to_tuple()
+    def _update(self, tx=None, req_json=None, timeout : Optional[float] = None):
+        if tx:
+            req_json = tx.to_json()
+            if self.remote_host:
+                req_json['remote_host'] = self.remote_host.to_tuple()
+        else:
+            req_json = req_json
+
         req_headers = { 'host': self.http_host }
         self._set_request_timeout(req_headers, timeout)
         if self.etag:
@@ -158,8 +166,11 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint.on_update resp_json %s', resp_json)
 
         if rest_resp.status_code < 300:
-            self.rcpts += len(tx.rcpt_to)
+            if tx:
+                self.rcpts += len(tx.rcpt_to)
             self.etag = rest_resp.headers.get('etag', None)
+            if body := resp_json.get('body', None):
+                self.body_url = self.base_url + body
         else:
             self.etag = None
             # xxx err?
@@ -227,8 +238,26 @@ class RestEndpoint(Filter):
             self.etag = rest_resp.headers.get('etag', None)
         return rest_resp
 
+    def _append_body(self, last, blob):
+        logging.debug('RestEndpoint._append_body %s %s %s %d',
+                      self.transaction_url, self.body_url, last, blob.len())
+        if not self.body_url:
+            self._update(req_json={'body': ''})
+        assert self.body_url
+
+        d = blob.contents()
+        #self._put_blob_chunk(self.body_url, self.body_len, d, last)
+        self._put_blob(blob, last)
+
+        if not last:
+            return Response()
+        return self.get_status(self.timeout_data)
+
     def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
-        logging.info('RestEndpoint.append_data %s %d', last, blob.len())
+        logging.info('RestEndpoint.append_data %s %s %s %d',
+                     self.transaction_url, self.body_url, last, blob.len())
+
+        return self._append_body(last, blob)
 
         if blob.len() < self.max_inline:
             self._append_inline(last, blob)
@@ -277,30 +306,40 @@ class RestEndpoint(Filter):
         return self.get_status(self.timeout_data)
 
 
-    def _put_blob(self, blob, uri):
-        logging.info('RestEndpoint.append_data via uri %s', uri)
+    def _put_blob(self, blob, last):
+        logging.info('RestEndpoint._put_blob via uri %s blob.len=%d last %s',
+                     self.body_url, blob.len(), last)
 
         offset = 0
         while offset < blob.len():
             chunk = blob.contents()[offset:offset+self.chunk_size]
-            last = (offset + self.chunk_size) > len(chunk)
-            resp,offset = self._put_blob_chunk(
-                uri, offset=offset,
+            chunk_last = last and (offset + len(chunk) >= blob.len())
+            logging.debug('_put_blob chunk_offset %d chunk len %d '
+                          'body_len %d chunk_last %s',
+                          offset, len(chunk), self.body_len, chunk_last)
+
+            resp,body_offset = self._put_blob_chunk(
+                self.body_url,
+                offset=self.body_len,
                 d=chunk,
-                last=last)  # XXX
+                last=chunk_last)
             if resp.err():
                 return resp
-        #logging.info('RestEndpoint.append_data %s %d %s',
-        #             last, offset, resp)
+            # how many bytes from chunk were actually accepted?
+            chunk_out = body_offset - self.body_len
+            logging.debug('_put_blob body_offset %d chunk_out %d',
+                          body_offset, chunk_out)
+            offset += chunk_out
+            self.body_len += chunk_out
+
         if blob.id() and self.blob_id_map:
-            # XXX transaction_url?
-            self.blob_id_map.finalize(self.base_url, blob.id(), uri)
+            self.blob_id_map.finalize(self.base_url, blob.id(), self.body_url)
         return resp
 
     # -> (resp, len)
     def _put_blob_chunk(self, chunk_uri, offset,
                          d : bytes, last : bool):
-        logging.info('RestEndpoint.append_data_chunk %s %d %d %s',
+        logging.info('RestEndpoint._put_blob_chunk %s %d %d %s',
                      chunk_uri, offset, len(d), last)
         headers = {}
         if d is not None:  # XXX when can this be None?
@@ -308,10 +347,8 @@ class RestEndpoint(Filter):
                                  offset + len(d) if last else None)
             headers['content-range'] = range.to_header()
         headers['host'] = self.http_host
-        # XXX shouldn't chunk_uri be fully-qualified by this point?
         rest_resp = requests.put(
-            self.base_url + chunk_uri, headers=headers, data=d,
-            timeout=self.timeout_data)
+            chunk_uri, headers=headers, data=d, timeout=self.timeout_data)
         logging.info('RestEndpoint.append_data_chunk %s', rest_resp)
         # Most(all?) errors on blob put here means temp
         # transaction final status
@@ -324,6 +361,7 @@ class RestEndpoint(Filter):
         if 'content-range' in rest_resp.headers:
             range = werkzeug.http.parse_content_range_header(
                 rest_resp.headers.get('content-range'))
+            logging.debug('_put_blob_chunk resp range %s', range)
             if range is None or range.start != offset:
                 return Response(
                     400, 'RestEndpoint.append_data_chunk bad range'), None
@@ -377,7 +415,6 @@ class RestEndpoint(Filter):
             logging.info('RestEndpoint.get_json_response %f', deadline_left)
             start = time.monotonic()
 
-            # TODO pass the deadline in a header?
             resp_json = self.get_json(deadline_left)
             logging.info('RestEndpoint.get_json_response done %s', resp_json)
             delta = time.monotonic() - start
@@ -390,7 +427,8 @@ class RestEndpoint(Filter):
                 if field == 'rcpt_response':
                     # xxx wait until rcpt_response is expected length?
                     return [Response.from_json(r) for r in resp_json[field]]
-                return Response.from_json(resp_json[field])
+                if resp:= Response.from_json(resp_json[field]):
+                    return resp
             now = time.monotonic()
         return None
 

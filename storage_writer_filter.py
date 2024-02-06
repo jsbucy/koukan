@@ -48,7 +48,10 @@ class StorageWriterFilter(Filter):
                     done = False
             if done and (len(self.tx_cursor.tx.rcpt_response) ==
                 len(self.tx_cursor.tx.rcpt_to)):
-                tx.rcpt_response = self.tx_cursor.tx.rcpt_response[-len(tx.rcpt_to):]
+                # storage returns the full vector but we return the
+                # delta downstream
+                tx.rcpt_response = self.tx_cursor.tx.rcpt_response[
+                    -len(tx.rcpt_to):]
             else:
                 done = False
             if done:
@@ -61,21 +64,12 @@ class StorageWriterFilter(Filter):
 
     def append_data(self, last : bool, blob : Blob,
                     timeout : Optional[float] = None) -> Optional[Response]:
-        no_blob_id = True
-        if isinstance(blob, BlobReader):
-            if (self.tx_cursor.append_blob(
-                    blob_rest_id=blob.rest_id, last=last) ==
-                TransactionCursor.APPEND_BLOB_OK):
-                no_blob_id = False
-        # TODO this could hit a precondition failure if it failed
-        # upstream since the last append, need to check here
-        if no_blob_id and (
-                self.tx_cursor.append_blob(d=blob.contents(), last=last) !=
-            TransactionCursor.APPEND_BLOB_OK):
-            return Response.Internal('StorageWriterFilter append blob failed')
-
-        if not last:
-            return None
+        tx = TransactionMetadata()
+        # TODO this assumes cursor_to_endpoint buffers the entire
+        # payload and nothing between there and here re-chunks it
+        assert last and isinstance(blob, BlobReader)
+        tx.body = blob.rest_id
+        self.tx_cursor.write_envelope(tx)
 
         start = time.monotonic()
         while self.tx_cursor.tx.data_response is None:

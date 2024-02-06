@@ -9,7 +9,6 @@ CREATE TABLE Sessions (
   UNIQUE(pid, pid_create)
 );
 
--- XXX this should probably be named something like SendRequests instead?
 CREATE TABLE Transactions (
   id INTEGER PRIMARY KEY,  -- autoincrement?
   rest_id TEXT UNIQUE,
@@ -36,6 +35,17 @@ CREATE TABLE Transactions (
 
   attempt_count INTEGER,
   max_attempts INTEGER,
+
+  body_blob_id INTEGER,
+  body_rest_id TEXT,
+
+  FOREIGN KEY(body_blob_id) REFERENCES Blob(id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
+
+  FOREIGN KEY(body_rest_id) REFERENCES Blob(rest_id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
 
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
     ON UPDATE CASCADE  -- xxx moot?
@@ -81,8 +91,10 @@ CREATE INDEX TxContentBlob on TransactionContent (blob_id);
 CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
   rest_id TEXT UNIQUE,
-  length INTEGER,  -- null until we know the overall length
-  last bool NOT NULL,  -- True if length is not NULL and max BlobContent ==
+  -- final length declared by client in content-length header
+  length INTEGER,
+  -- True if length is not NULL and max BlobContent offset+len == length
+  last bool NOT NULL,
   last_update INTEGER NOT NULL
 );
 

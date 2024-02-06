@@ -223,16 +223,18 @@ class TransactionTest(unittest.TestCase):
         tx_cursor.write_envelope(
             TransactionMetadata(
                 mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')]))
-        tx_cursor.append_blob(d=b'hello, ', last=False)
+        tx_cursor.write_envelope(TransactionMetadata(),
+                                 create_body_rest_id='blob_rest_id')
 
         blob_writer = self.storage.get_blob_writer()
-        blob_rest_id = 'blob_rest_id'
-        blob_writer.create(blob_rest_id)
-        d = b'world!'
+        blob_writer.load(rest_id='blob_rest_id')
+        #blob_rest_id = 'blob_rest_id'
+        #blob_writer.create(blob_rest_id)
+        d = b'hello, world!'
         for i in range(0,len(d)):
             blob_writer.append_data(d[i:i+1], len(d))
 
-        tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=True)
+        #tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=True)
 
         tx_cursor.set_max_attempts(100)
         del tx_cursor
@@ -240,7 +242,7 @@ class TransactionTest(unittest.TestCase):
         endpoint = SyncEndpoint()
         endpoint.set_mail_response(Response())
         endpoint.add_rcpt_response(Response(234))
-        endpoint.add_data_response(None)
+        #endpoint.add_data_response(None)
         endpoint.add_data_response(Response(256))
 
         tx_cursor = self.storage.load_one()
@@ -250,9 +252,8 @@ class TransactionTest(unittest.TestCase):
 
         self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
         self.assertEqual(endpoint.tx.rcpt_to[0].mailbox, 'bob')
-        self.assertEqual(len(endpoint.blobs), 2)
-        self.assertEqual(endpoint.blobs[0].contents(), b'hello, ')
-        self.assertEqual(endpoint.blobs[1].contents(), b'world!')
+        self.assertEqual(len(endpoint.blobs), 1)
+        self.assertEqual(endpoint.blobs[0].contents(), b'hello, world!')
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')

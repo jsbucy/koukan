@@ -27,6 +27,7 @@ class InflightBlob:
             self.parent.unref(id, self)
 
 # TODO needs idle ttl/gc
+# TODO this should just use a temp file for now
 class BlobStorage:
     next = 0
     blobs : Dict[str, InflightBlob] = {}
@@ -52,11 +53,13 @@ class BlobStorage:
         if offset > blob_len:
             return blob_len
         blob.d += d[offset - blob_len:]
-        if last:
-            blob.b = InlineBlob(blob.d, str(id))
-            blob.d = None
-            for cb in blob.waiters:
-                cb(blob.b)
+        if not last:
+            return len(blob.d)
+
+        blob.b = InlineBlob(blob.d, str(id))
+        blob.d = None
+        for cb in blob.waiters:
+            cb(blob.b)
         return blob.b.len()
 
     def get(self, id) -> Optional[Blob]:
