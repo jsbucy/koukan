@@ -22,10 +22,6 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        pass
-
-    @abstractmethod
     def put_blob(self, request : FlaskRequest,
                  content_range : ContentRange,
                  range_in_headers : bool) -> FlaskResponse:

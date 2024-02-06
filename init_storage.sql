@@ -69,25 +69,6 @@ CREATE TABLE TransactionAttempts (
     ON DELETE CASCADE
 );
 
-CREATE TABLE TransactionContent (
-  transaction_id INTEGER,
-  i INTEGER NOT NULL,  -- 0,1,2,3
-
-  inline BLOB,
-  blob_id INTEGER,
-  length INTEGER,  -- xxx never read?
-
-  FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
-    ON UPDATE CASCADE
-    ON DELETE CASCADE,
-
-  FOREIGN KEY(blob_id) REFERENCES Blob(id),
-
-  PRIMARY KEY(transaction_id, i)
-);
-
-CREATE INDEX TxContentBlob on TransactionContent (blob_id);
-
 CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
   rest_id TEXT UNIQUE,

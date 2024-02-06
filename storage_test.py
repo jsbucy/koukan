@@ -43,30 +43,18 @@ class StorageTest(unittest.TestCase):
 
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.load(rest_id='tx_rest_id')
-        tx_writer.append_blob(d=b'abc', last=False)
-
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.load(rest_id='tx_rest_id')
-        tx_writer.append_blob(d=b'xyz', last=False)
-        self.assertEqual(tx_writer.append_blob(
-            blob_rest_id='blob_id', last=False),
-                         tx_writer.APPEND_BLOB_UNKNOWN)
-
+        tx_writer.write_envelope(TransactionMetadata(),
+                                 create_body_rest_id='blob_rest_id')
         blob_writer = self.s.get_blob_writer()
-        self.assertIsNotNone(blob_writer.create('blob_rest_id'))
+        blob_writer.load('blob_rest_id')
 
-        #tx_writer = self.s.get_transaction_cursor()
-        #tx_writer.load(rest_id='tx_rest_id')
-        tx_writer.load()
-        self.assertEqual(tx_writer.append_blob(
-            blob_rest_id='blob_rest_id', last=False),
-                         tx_writer.APPEND_BLOB_OK)
-
-        blob_writer.append_data(b'blob1')
-        blob_writer.append_data(b'blob2', 10)
+        blob_writer.append_data(d=b'abc')
+        self.assertFalse(blob_writer.last)
+        blob_writer.append_data(d=b'xyz', content_length=9)
+        self.assertFalse(blob_writer.last)
+        blob_writer.append_data(d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
-        tx_writer.append_blob(d=b'qrs', last=True)
         tx_writer.load()
         self.assertTrue(tx_writer.input_done)
 
@@ -76,24 +64,22 @@ class StorageTest(unittest.TestCase):
         tx_reader.add_rcpt_response([Response(456, 'busy')])
         tx_reader.finalize_attempt(False)
 
-        # reader = self.s.get_transaction_cursor()
-        # reader.load(db_id=tx_writer.id)
-        # self.assertEqual(reader.id, tx_writer.id)
-        # xxx self.assertEqual(reader.length, 23)
-        self.assertTrue(tx_reader.last)
-        self.assertEqual(tx_reader.max_i, 3)
+        self.dump_db()
 
         expected_content = [
             b'abc',
             b'xyz',
-            b'blob1blob2',
-            b'qrs'
+            b'uvw'
         ]
-        for i,c in enumerate(expected_content):
-            logging.info('%d', i)
-            blob = tx_reader.read_content(i)
-            self.assertIsNotNone(blob)
-            self.assertEqual(c, blob.contents())
+        blob_reader = self.s.get_blob_reader()
+        blob_reader.load(rest_id='blob_rest_id')
+        offset = 0
+        for c in expected_content:
+            logging.info('test_basic read body offset %d', offset)
+            b = blob_reader.read_content(offset)
+            self.assertIsNotNone(b)
+            self.assertEqual(c, b)
+            offset += len(b)
 
         r2 = self.s.load_one()
         self.assertIsNotNone(r2)
@@ -106,22 +92,41 @@ class StorageTest(unittest.TestCase):
 
         self.assertIsNone(self.s.load_one())
 
-        stale_append = self.s.get_transaction_cursor()
-        stale_append.load(tx_writer.id)
-        with self.assertRaises(InvalidActionException):
-            stale_append.append_blob(d=b'stale', last=True)
+
+    def test_blob_reuse(self):
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id', TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
+        tx_writer.write_envelope(TransactionMetadata(),
+                                 create_body_rest_id='body_rest_id')
+        blob_writer = self.s.get_blob_writer()
+        blob_writer.load('body_rest_id')
+        d = b'hello, world!'
+        blob_writer.append_data(d, len(d))
+
+        tx_writer = self.s.get_transaction_cursor()
+        tx = TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host',
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
+        tx.body = 'q'
+
+        with self.assertRaises(AssertionError):
+            tx_writer.create('tx_rest_id2', tx)
+
+        tx.body = 'body_rest_id'
+        tx_writer.create('tx_rest_id2', tx)
 
     def test_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
             self.s.db.cursor().executescript(f.read())
         self.s.recover()
-        # self.dump_db()
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        #self.assertEqual(12, reader.length)
         self.assertEqual(reader.id, 12345)
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice@example.com')
-        self.assertEqual(reader.max_i, 0)
 
     def test_non_durable(self):
         writer = self.s.get_transaction_cursor()
@@ -182,9 +187,9 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(reader.tx.rcpt_to[0].mailbox, 'bob')
 
     @staticmethod
-    def wait_for(reader, rv, fn):
+    def wait_for(reader, rv):
         logging.info('test wait')
-        rv[0] = reader.wait_for(fn, 5)
+        rv[0] = reader.wait(5)
 
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
@@ -198,20 +203,20 @@ class StorageTest(unittest.TestCase):
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
 
-        fn = lambda: (reader.max_i is not None)
-        self.assertFalse(reader.wait_for(fn, timeout=0.1))
-
         rv = [None]
-        t = Thread(target = lambda: StorageTest.wait_for(reader, rv, fn))
+        t = Thread(target = lambda: StorageTest.wait_for(reader, rv))
         t.start()
-        time.sleep(1)
+        time.sleep(0.1)
         logging.info('test append')
+
         tx_cursor.load()
-        tx_cursor.append_blob(d=b'hello, world!', last=True)
+        tx_cursor.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')]))
+
         t.join()
 
         self.assertTrue(rv[0])
-        # xxx self.assertEqual(13, reader.length)
+        self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
 
     @staticmethod
     def wait_created(s, rv, db_id):

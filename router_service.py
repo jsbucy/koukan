@@ -11,7 +11,6 @@ import gunicorn_main
 
 from blobs import BlobStorage
 from blob import InlineBlob
-from rest_endpoint import BlobIdMap as RestBlobIdMap
 
 from storage import Storage, TransactionCursor
 from transaction import RestServiceTransactionFactory, cursor_to_endpoint
@@ -50,8 +49,6 @@ class Service:
 
         self.config = config
 
-        self.rest_blob_id_map = RestBlobIdMap()
-
     def shutdown(self):
         logging.info("router_service shutdown()")
         self._shutdown = True
@@ -67,7 +64,7 @@ class Service:
 
     def main(self, config_filename=None):
         if config_filename:
-            config = Config(rest_blob_id_map=self.rest_blob_id_map)
+            config = Config()
             config.load_yaml(config_filename)
             self.config = config
 

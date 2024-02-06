@@ -4,7 +4,7 @@ import logging
 from threading import Thread
 import time
 
-from rest_endpoint import RestEndpoint, BlobIdMap
+from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from blobs import BlobStorage
 from smtp_service import service as smtp_service
@@ -22,8 +22,6 @@ class SmtpGateway(EndpointFactory):
 
     def __init__(self, config):
         self.config = config
-
-        self.blob_id_map = BlobIdMap()
 
         rest_output  = config.root_yaml.get('rest_output', None)
         if rest_output:
@@ -45,8 +43,7 @@ class SmtpGateway(EndpointFactory):
             self.gc_thread = None
 
     def mx_rest_factory(self):
-        return RestEndpoint(self.router_base_url, http_host='inbound-gw',
-                            blob_id_map=self.blob_id_map)
+        return RestEndpoint(self.router_base_url, http_host='inbound-gw')
 
     def msa_rest_factory(self):
         return RestEndpoint(self.router_base_url, http_host='outbound-gw')

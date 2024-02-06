@@ -70,50 +70,6 @@ class RestEndpointAdapter(Handler):
     def etag(self):
         return None
 
-    def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        last : bool = req_json['last']
-
-        if self.endpoint.received_last and last:
-            return FlaskResponse(status=400, response=['bad last after last'])
-
-        # (short) data inline in request
-        if 'd' in req_json:
-            logging.info('rest service %s append_data inline %d',
-                         self._tx_rest_id, len(req_json['d']))
-            d : bytes = req_json['d'].encode('utf-8')
-            self.append_blob_upstream(last, InlineBlob(d))
-            resp_json = {}
-            return jsonify(resp_json)
-
-        # (long) data via separate PUT
-
-        # at this point, we're either reusing an existing blob id (add waiter)
-        # or creating a new one and return the url
-
-        # we don't invoke the next-hop transaction append until the
-        # client has sent the whole blob
-
-        # the blob PUT response is just for the data tranfer, not the upstream
-
-        # but if the upstream had some error, that needs to propagate
-        # back to the transaction final_result and subsequent append
-        # will be failed precondition
-
-        blob_done_cb = lambda blob: self.append_blob_upstream(last, blob)
-
-        if 'uri' in req_json and req_json['uri'] is not None:
-            blob_id = req_json['uri'].removeprefix('/blob/')
-            if self.blob_storage.add_waiter(
-                    blob_id, self.endpoint, blob_done_cb):
-                return jsonify({})
-        blob_id = self.blob_storage.create(blob_done_cb)
-
-        resp_json = { 'uri': '/blob/' + str(blob_id) }
-        rest_resp = jsonify(resp_json)
-        logging.info('rest service %s %s', self._tx_rest_id, resp_json)
-        return rest_resp
-
-
     def append_blob_upstream(self, last : bool, blob : Blob):
         logging.info('%s rest service RestRequestHandler.append_data %s %d',
                      self._tx_rest_id, last, blob.len())

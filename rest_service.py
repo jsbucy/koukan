@@ -115,24 +115,6 @@ def create_app(handler_factory : HandlerFactory):
         set_etag(rest_resp, handler)
         return rest_resp
 
-    @app.route('/transactions/<tx_rest_id>/appendData',
-               methods=['POST'])
-    def append_data(tx_rest_id):
-        if not request.is_json:
-            return FlaskResponse(status=400, response=['not json'])
-        handler = handler_factory.get_tx(tx_rest_id)
-        if handler is None:
-            return FlaskResponse(status=404, response=['transaction not found'])
-        if (err := validate_etag(request, handler)) is not None:
-            return err
-
-        logging.info("rest service append_data %s %s %s",
-                     request, request.headers, request.get_json())
-        rest_resp = handler.append(request.get_json())
-        set_etag(rest_resp, handler)
-        logging.info('rest service append_data %s', rest_resp)
-        return rest_resp
-
     @app.route('/blob/<blob_rest_id>', methods=['PUT'])
     def append_data_chunk(blob_rest_id) -> FlaskResponse:
         logging.info("rest service append_data_chunk %s %s",

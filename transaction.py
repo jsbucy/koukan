@@ -165,9 +165,6 @@ class RestServiceTransaction(Handler):
             data_resp = True
         if self.tx_cursor.tx.body:
             data_resp = True
-        if self.tx_cursor.max_i is not None:
-            data_resp = True
-            resp_json['last'] = bool(self.tx_cursor.last)
 
         if data_resp:
             resp_json['data_response'] = resp_js(
@@ -197,83 +194,6 @@ class RestServiceTransaction(Handler):
         logging.info('RestServiceTransaction.get %s %s', self._tx_rest_id,
                      self.tx_cursor.tx)
         return self._get_tx_json(timeout=timeout)
-
-
-    def append_blob(self, uri : Optional[str], last) -> FlaskResponse:
-        logging.info('append_blob %s %s last=%s', self._tx_rest_id, uri, last)
-        if uri:
-            uri = uri.removeprefix('/blob/')  # XXX uri prefix
-            try:
-                append = self.tx_cursor.append_blob(blob_rest_id=uri, last=last)
-            except VersionConflictException:
-                return FlaskResponse(status=412,
-                                     response=['version conflict'])
-            if append == TransactionCursor.APPEND_BLOB_OK:
-                resp_json = {}
-                rest_resp = FlaskResponse()
-                rest_resp.set_data(json.dumps(resp_json))
-                rest_resp.content_type = 'application/json'
-                return rest_resp
-
-        blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
-        writer = self.storage.get_blob_writer()
-        writer.create(blob_rest_id)
-        try:
-            append = self.tx_cursor.append_blob(
-                blob_rest_id=blob_rest_id, last=last)
-        except VersionConflictException:
-            return FlaskResponse(status=412,
-                                 response=['version conflict'])
-        if append != TransactionCursor.APPEND_BLOB_OK:
-            return FlaskResponse(status=500,
-                                 response=['internal error'])
-        # XXX move to rest service?
-        resp_json = {'uri': '/blob/' + blob_rest_id}
-        rest_resp = FlaskResponse()
-        rest_resp.set_data(json.dumps(resp_json))
-        rest_resp.content_type = 'application/json'
-        return rest_resp
-
-    def append(self, req_json : Dict[str, Any]) -> FlaskResponse:
-        # storage enforces universal preconditions:
-        # insert/oneshot_inflight/oneshot_temp
-        # i.e. start didn't already permfail and haven't already set_durable
-
-        # public rest submission always async, mx always sync
-
-        # smtp->rest gateway is a special/trusted/well-known client
-        # that is allowed to async for mx because of multi-recipient
-        # cases
-
-        # TODO for now, this always allows append even in
-        # oneshot_temp, at such time as we want to accept rest mx
-        # directly, we need a flag whether this req is from the
-        # gateway and 400, etc.
-
-        logging.info('RestServiceTransaction.append %s %s',
-                     self._tx_rest_id, req_json)
-
-        last = False
-        if 'last' in req_json:
-            if not isinstance(req_json['last'], bool):
-                return FlaskResponse(status=400)
-            last = req_json['last']
-
-        # (short) inline
-        if 'd' in req_json:
-            # TODO investigate this further, this may be effectively
-            # round-tripping utf8 -> python str -> utf8
-            d : bytes = req_json['d'].encode('utf-8')
-            self.tx_cursor.append_blob(d=d, last=last)
-            self.tx_cursor.load()
-            return self._get_tx_json()
-
-        # if 'uri' in req_json:  # xxx this would be a protocol change
-        uri = req_json.get('uri', None)
-        if uri is not None and not isinstance(uri, str):
-            return FlaskResponse(status=400)
-
-        return self.append_blob(uri, last)
 
 
     @staticmethod
@@ -358,16 +278,11 @@ def output(cursor, endpoint) -> Optional[Response]:
         assert delta is not None
         logging.info('cursor_to_endpoint %s '
                      'mail_from = %s '
-                     'rcpt_to = %s '
-                     ' max_i=%s',
-                     cursor.rest_id,
-                     delta.mail_from, delta.rcpt_to, cursor.max_i)
+                     'rcpt_to = %s ',
+                     cursor.rest_id, delta.mail_from, delta.rcpt_to)
         if delta.mail_from is None and not delta.rcpt_to:
             if cursor.tx.body:
                 logging.debug('cursor_to_endpoint %s -> body', cursor.rest_id)
-                break
-            if cursor.max_i is not None:
-                logging.debug('cursor_to_endpoint %s -> data', cursor.rest_id)
                 break
             else:
                 cursor.wait()
@@ -427,72 +342,22 @@ def output(cursor, endpoint) -> Optional[Response]:
         logging.debug('cursor_to_endpoint %s no rcpt', cursor.rest_id)
         return err
 
-    if cursor.tx.body:
-        blob_reader = cursor.parent.get_blob_reader()
-        blob_reader.load(rest_id = cursor.tx.body)
-        while blob_reader.content_length is None or (
-                blob_reader.length < blob_reader.content_length):
-            blob_reader.wait()
-        resp = endpoint.append_data(True, blob_reader)
-        assert resp is not None
-        logging.info('cursor_to_endpoint %s body %s', cursor.rest_id, resp)
-        while True:
-            try:
-                cursor.set_data_response(resp)
-            except VersionConflictException:
-                cursor.load()
-                continue
-            break
-        return resp
-
-    i = 0
-    last = False
-    while not last:
-        # TODO this is working around some waiting bug
-        while True:
-            logging.info('cursor_to_endpoint %s cursor.last=%s max_i=%s',
-                         cursor.rest_id, cursor.last, cursor.max_i)
-
-            # xxx hide this wait in TransactionCursor.read_content() ?
-            if cursor.wait_for(lambda: (cursor.max_i is not None) and
-                               (cursor.max_i >= i), 1):
-                break
-
-        # XXX this should just be sequential?
-        blob = cursor.read_content(i)
-
-        # XXX probably move to BlobReader
-        if isinstance(blob, BlobReader):
-            logging.info('cursor_to_endpoint %s wait blob %d',
-                         cursor.rest_id, i)
-            blob.wait()
-
-        last = cursor.last and (i == cursor.max_i)
-        logging.info('cursor_to_endpoint %s i=%d blob_len=%d '
-                     'cursor.max_i=%s last=%s',
-                     cursor.rest_id,
-                     i, blob.len(), cursor.max_i, last)
-        i += 1
-        resp = endpoint.append_data(last, blob)
-        logging.info('cursor_to_endpoint %s %s', cursor.rest_id, resp)
-
-        if not last:
-            # non-last must only return error
-            assert(resp is None or resp.err())
-        else:
-            # last must return a response
-            assert resp is not None
-
-        if resp is not None:
-            while True:
-                try:
-                    cursor.set_data_response(resp)
-                except VersionConflictException:
-                    cursor.load()
-                    continue
-                break
-            return resp
-    assert False  # unreached
+    blob_reader = cursor.parent.get_blob_reader()
+    blob_reader.load(rest_id = cursor.tx.body)
+    while blob_reader.content_length is None or (
+            blob_reader.length < blob_reader.content_length):
+        blob_reader.wait()
+    resp = endpoint.append_data(True, blob_reader)
+    assert resp is not None
+    logging.info('cursor_to_endpoint %s body %s', cursor.rest_id, resp)
+    while True:
+        try:
+            cursor.set_data_response(resp)
+        except VersionConflictException:
+            cursor.load()
+            continue
+        break
+    return resp
 
 def cursor_to_endpoint(cursor, endpoint):
     logging.debug('cursor_to_endpoint %s', cursor.rest_id)

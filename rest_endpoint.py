@@ -21,36 +21,8 @@ def get_resp_json(resp):
     except Exception:
         return None
 
-# This is a map from internal blob IDs to upstream so parallel sends
-# to the same place (i.e. smtp outbound gw) can reuse blobs.
-class BlobIdMap:
-    def __init__(self):
-        self.map = {}
-        self.lock = Lock()
-        self.cv = Condition(self.lock)
-
-    def lookup_or_insert(self, host, blob_id):
-        key = (host, blob_id)
-        with self.lock:
-            if key not in self.map:
-                logging.info('BlobIdMap.lookup_or_insert inserted %s %s',
-                             host, blob_id)
-                self.map[key] = None
-                return None
-            logging.info('BlobIdMap.lookup_or_insert waiting for %s %s',
-                         host, blob_id)
-            self.cv.wait_for(lambda: self.map[key] is not None)
-            return self.map[key]
-
-    def finalize(self, host, blob_id, ext_blob_id):
-        key = (host, blob_id)
-        with self.lock:
-            self.map[key] = ext_blob_id
-            self.cv.notify_all()
-
 class RestEndpoint(Filter):
     transaction_url : Optional[str] = None
-    blob_id_map : BlobIdMap = None
     static_remote_host : Optional[HostPort] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -80,7 +52,6 @@ class RestEndpoint(Filter):
                  static_remote_host : Optional[HostPort] = None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 blob_id_map = None,
                  wait_response = True,
                  remote_host_resolution = None,
                  min_poll=1,
@@ -92,7 +63,6 @@ class RestEndpoint(Filter):
         self.static_remote_host = static_remote_host
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
-        self.blob_id_map = blob_id_map
 
         # TODO this is only false in router_service test which needs
         # to be ported to the raw request subset of the api.
@@ -246,7 +216,6 @@ class RestEndpoint(Filter):
         assert self.body_url
 
         d = blob.contents()
-        #self._put_blob_chunk(self.body_url, self.body_len, d, last)
         self._put_blob(blob, last)
 
         if not last:
@@ -258,52 +227,6 @@ class RestEndpoint(Filter):
                      self.transaction_url, self.body_url, last, blob.len())
 
         return self._append_body(last, blob)
-
-        if blob.len() < self.max_inline:
-            self._append_inline(last, blob)
-            if not last:
-                return Response()
-            # XXX -> get_tx_response()?
-            return self.get_status(self.timeout_data)
-
-        ext_id = None
-        if blob.id() and self.blob_id_map:
-            # XXX transaction_url??
-            ext_id = self.blob_id_map.lookup_or_insert(self.base_url, blob.id())
-
-        rest_resp = self._append_blob(last, ext_id)
-        resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint.append_data POST resp %s %s',
-                     rest_resp, resp_json)
-        # XXX http ok (and below)
-        if rest_resp.status_code > 299:
-            return Response(400, 'RestEndpoint.append_data POST failed: http')
-        if resp_json is None:
-            return Response(400, 'RestEndpoint.append_data POST failed: '
-                            'no json')
-
-        if data_response := Response.from_json(
-                resp_json.get('data_response', {})):
-            return data_response
-
-        if not ext_id and 'uri' not in resp_json:
-            return Response(400, 'RestEndpoint.append_data endpoint didn\'t'
-                            ' return uri')
-
-        if 'uri' not in resp_json:
-            logging.info('RestEndpoint.append_data reused blob %s -> %s',
-                         blob.id(), ext_id)
-        else:
-            # i.e. we didn't already have ext_id or server didn't accept
-            resp = self._put_blob(blob, resp_json['uri'])
-
-        if not last:
-            return resp
-        else:
-            with self.lock:
-                self.cv.notify_all()
-
-        return self.get_status(self.timeout_data)
 
 
     def _put_blob(self, blob, last):
@@ -332,8 +255,6 @@ class RestEndpoint(Filter):
             offset += chunk_out
             self.body_len += chunk_out
 
-        if blob.id() and self.blob_id_map:
-            self.blob_id_map.finalize(self.base_url, blob.id(), self.body_url)
         return resp
 
     # -> (resp, len)

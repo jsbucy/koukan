@@ -15,9 +15,8 @@ from exploder import Exploder
 from storage import Storage
 
 class Config:
-    rest_blob_id_map = None
     storage : Optional[Storage] = None
-    def __init__(self, rest_blob_id_map = None):
+    def __init__(self):
        self.router_policies = {
            'dest_domain': self.router_policy_dest_domain,
            'local_domain': self.router_policy_local_domain}
@@ -27,7 +26,6 @@ class Config:
            'dkim': self.dkim,
            'exploder': self.exploder,
        }
-       self.rest_blob_id_map = rest_blob_id_map
 
     def set_storage(self, storage : Storage):
         self.storage = storage
@@ -71,7 +69,6 @@ class Config:
             static_base_url = yaml['static_endpoint'],
             http_host = yaml['http_host'],
             static_remote_host = static_remote_host,
-            blob_id_map=self.rest_blob_id_map,
             remote_host_resolution = remote_host_disco)
 
     def router_policy_dest_domain(self, policy_yaml):

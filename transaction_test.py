@@ -7,6 +7,7 @@ from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
 
 from storage import Storage, TransactionCursor
+from storage_schema import VersionConflictException
 from response import Response
 from transaction import RestServiceTransaction, cursor_to_endpoint
 from fake_endpoints import SyncEndpoint
@@ -69,20 +70,13 @@ class TransactionTest(unittest.TestCase):
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.append({
-            'd': 'hello, ',
-            'last': False })
-        self.assertEqual(rest_resp.status_code, 200)
-
-        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
-        self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.append({
-            'uri': None })
+        rest_resp = rest_tx.patch({
+            'body': '' })
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
-        self.assertIn('uri', resp_json)
-        blob_uri = resp_json['uri']
+        self.assertIn('body', resp_json)
+        blob_uri = resp_json['body']
 
         d = b'world!'
         put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
@@ -97,21 +91,12 @@ class TransactionTest(unittest.TestCase):
         logging.info('%d %s', rest_resp.status_code, str(rest_resp.data))
         self.assertEqual(rest_resp.status_code, 200)
 
-        # re-append the previous blob
-        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
-        self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.append({
-            'uri': blob_uri,
-            'last': True })
-        self.assertEqual(rest_resp.status_code, 200)
-        resp_json = rest_resp.get_json()
-        self.assertIsNotNone(resp_json)
-        self.assertNotIn('uri', resp_json)
-
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.patch({'max_attempts': 100})
         self.assertEqual(rest_resp.status_code, 200)
+
+    # test resue blob
 
 
     def put(self, blob_tx : RestServiceTransaction, offset, d, overall=None,
@@ -134,7 +119,8 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(range)
         self.assertEqual(0, range.start)
         self.assertEqual(expected_length, range.stop)
-        self.assertEqual(expected_length if expected_last else None, range.length)
+        self.assertEqual(expected_length if expected_last else None,
+                         range.length)
         return expected_length
 
 
@@ -150,13 +136,13 @@ class TransactionTest(unittest.TestCase):
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
 
-        rest_resp = rest_tx.append({
-            'uri': None })
+        rest_resp = rest_tx.patch({
+            'body': '' })
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
-        self.assertIn('uri', resp_json)
-        blob_uri = resp_json['uri']
+        self.assertIn('body', resp_json)
+        blob_uri = resp_json['body']
 
         # bad uri
         self.assertIsNone(RestServiceTransaction.load_blob(self.storage, 'xyz'))
@@ -228,14 +214,11 @@ class TransactionTest(unittest.TestCase):
 
         blob_writer = self.storage.get_blob_writer()
         blob_writer.load(rest_id='blob_rest_id')
-        #blob_rest_id = 'blob_rest_id'
-        #blob_writer.create(blob_rest_id)
         d = b'hello, world!'
         for i in range(0,len(d)):
             blob_writer.append_data(d[i:i+1], len(d))
 
-        #tx_cursor.append_blob(blob_rest_id=blob_rest_id, last=True)
-
+        tx_cursor.load()
         tx_cursor.set_max_attempts(100)
         del tx_cursor
 
@@ -306,17 +289,9 @@ class TransactionTest(unittest.TestCase):
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.append({
-            'd': 'hello, '})
-
-        endpoint.add_data_response(None)
-
-        rest_resp = rest_tx.append({
-            'uri': None,
-            'last': True })
+        rest_resp = rest_tx.patch({'body': ''})
         self.assertEqual(rest_resp.status_code, 200)
-        blob_rest_id = rest_resp.json['uri']
-
+        blob_rest_id = rest_resp.json['body']
 
         d = b'world!'
         for i in range(0, len(d)):
@@ -357,9 +332,8 @@ class TransactionTest(unittest.TestCase):
         t.join(timeout=1)
         self.assertFalse(t.is_alive())
 
-        self.assertEqual(len(endpoint.blobs), 2)
-        self.assertEqual(endpoint.blobs[0].contents(), b'hello, ')
-        self.assertEqual(endpoint.blobs[1].contents(), b'world!')
+        self.assertEqual(len(endpoint.blobs), 1)
+        self.assertEqual(endpoint.blobs[0].contents(), b'world!')
         self.assertTrue(endpoint.last)
 
 

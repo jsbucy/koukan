@@ -19,11 +19,8 @@ class TransactionCursor:
     id : Optional[int] = None
     attempt_id : Optional[int] = None
 
-    length = None
-    i = 0  # TransactionContent index
     version : Optional[int] = None
-    max_i = None
-    last = None
+
     creation : Optional[int] = None
     input_done : Optional[bool] = None
     output_done : Optional[bool] = None
@@ -85,6 +82,7 @@ class TransactionCursor:
                 'SELECT id,last FROM Blob WHERE rest_id = ?',
                 (reuse_body_rest_id,))
             row = cursor.fetchone()
+            # xxx need proper reporting of this
             assert row
             body_blob_id, last = row
             # XXX allow sharing incomplete for exploder but not rest?
@@ -122,6 +120,7 @@ class TransactionCursor:
 
             set_body = ''
             set_body_val = ()
+            # xxx err if this was already set?
             body_blob_id, body_rest_id = self._set_body(
                 cursor, tx_delta.body, create_body_rest_id)
             if body_blob_id:
@@ -210,79 +209,6 @@ class TransactionCursor:
     def set_data_response(self, response : Response):
         self._set_response('data_response', response)
 
-
-    # TODO maybe this should be stricter and require the previous blob
-    # to at least have its length determined (i.e. PUT with the
-    # content-range overall length set) before you can do another append to the
-    # message. That would allow the key to be the byte offset
-    # (allowing pread) instead of the simple index/counter i we're
-    # using now.
-    # TODO related, possibly we should require the blob to be
-    # finalized before reuse?
-
-    APPEND_BLOB_OK = 0
-    APPEND_BLOB_UNKNOWN = 1
-
-    def append_blob(self, d : Optional[bytes] = None,
-                    blob_rest_id : Optional[str] = None,
-                    last : bool = False) -> int:
-        finalized = False
-        with self.parent.db_write_lock:
-            cursor = self.parent.db.cursor()
-            # TODO load-that's-not-a-load, cf write_envelope()
-            cursor.execute(
-                'SELECT version,last From Transactions WHERE id = ?',
-                (self.id,))
-            row = cursor.fetchone()
-            version,db_last = row
-            if db_last:
-                raise InvalidActionException()
-
-            logging.debug('Storage.append_blob version id=%d db %d new %d '
-                          'db last %s op last %s',
-                          self.id, row[1], self.version, db_last,
-                          last)
-
-            if blob_rest_id is not None:
-                cursor.execute(
-                    'SELECT id,length FROM Blob WHERE rest_id = ?',
-                    (blob_rest_id,))
-                row = cursor.fetchone()
-                if not row:
-                    return TransactionCursor.APPEND_BLOB_UNKNOWN
-                blob_id,blob_len = row
-
-            col = None
-            val = None
-            if d is not None:
-                col = 'inline'
-                val = (d,)
-            else:
-                col = 'blob_id'
-                val = (blob_id,)
-
-            new_max_i = self.max_i + 1 if self.max_i is not None else 0
-            cursor.execute(
-                'INSERT INTO TransactionContent '
-                '(transaction_id, i, ' + col + ') '
-                'VALUES (?, ?, ?)',
-                (self.id, new_max_i) + val)
-            new_version = version + 1
-            cursor.execute(
-                'UPDATE Transactions SET version = ?, last = ? '
-                'WHERE id = ? AND version = ? RETURNING version',
-                (new_version, last, self.id, version))
-            if (row := cursor.fetchone()) is None:
-                raise VersionConflictException()
-            self.version = row[0]
-            self.last = last
-            finalized = self._maybe_finalize(cursor)
-            self.parent.db.commit()
-        if not finalized:
-            self.parent.tx_versions.update(self.id, self.version)
-        self.max_i = new_max_i
-        return TransactionCursor.APPEND_BLOB_OK
-
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
         if self.id is not None:
@@ -325,13 +251,6 @@ class TransactionCursor:
                       self.rest_id, trans_json)
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         self.tx.body = self.body_rest_id
-
-        cursor.execute("""
-          SELECT max(i)
-          FROM TransactionContent WHERE transaction_id = ?""",
-          (self.id,))
-        row = cursor.fetchone()
-        self.max_i = row[0]
 
         cursor.execute("""
           SELECT attempt_id,mail_response,rcpt_response,data_response
@@ -422,62 +341,16 @@ class TransactionCursor:
         self.load()
         return self.version > old  # xxx assert?
 
-    def wait_for(self, fn, timeout=None):
-        if timeout is not None:
-            start = time.monotonic()
-        timeout_left = timeout
-        while True:
-            if fn(): return True
-            if timeout is not None and timeout_left <= 0:
-                return False
-            if not self.wait(timeout_left):
-                return False
-            if timeout is not None:
-                timeout_left = timeout - (time.monotonic() - start)
-        asset(not 'unreachable')  #return False
-
-
-    def read_content(self, i) -> Optional[Blob]:
-        cursor = self.parent.db.cursor()
-        cursor.execute('SELECT inline,blob_id FROM TransactionContent '
-                       'WHERE transaction_id = ? AND i = ?',
-                       (self.id, i))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        (inline, blob_id) = row
-        if inline:
-            return InlineBlob(inline)
-        r = self.parent.get_blob_reader()
-        r.load(db_id=blob_id)
-        return r
-
-    def _check_payload_done(self, cursor) -> bool:
-        # XXX this also needs to check Transaction.last?
-        cursor.execute('SELECT COUNT(*) '
-                       'FROM TransactionContent JOIN Blob '
-                       'ON TransactionContent.blob_id = Blob.id '
-                       'WHERE TransactionContent.transaction_id = ? '
-                       '  AND Blob.last != TRUE',
-                       (self.id,))
-        row = cursor.fetchone()
-        assert(row is not None)
-        return row[0] == 0
-
-    def _maybe_finalize(self, cursor):
-        if self.last and self._check_payload_done(cursor):
-            cursor.execute(
-                'UPDATE Transactions '
-                'SET input_done = TRUE, '
-                'version = (SELECT MAX(version)+1 '
-                '           FROM Transactions WHERE id = ?)'
-                'WHERE id = ? RETURNING version',
-            (self.id, self.id))
-            self.version = cursor.fetchone()[0]
-            self.parent.tx_versions.update(self.id, self.version)
-            return True
-        return False
-
+    def _set_input_done(self, cursor):
+        cursor.execute("""
+            UPDATE Transactions
+            SET input_done = TRUE,
+            version = (SELECT version + 1
+                       FROM Transactions WHERE id = ?)
+            WHERE id = ? RETURNING version """, (self.id, self.id))
+        self.version = cursor.fetchone()[0]
+        self.parent.tx_versions.update(self.id, self.version)
+        return True
 
     def _abort(self, cursor):
         new_version = self.version + 1
@@ -593,14 +466,14 @@ class BlobWriter:
 
             if self.last:
                 cursor.execute(
-                    'SELECT DISTINCT transaction_id '
-                    'FROM TransactionContent WHERE blob_id = ?', (self.id,))
+                    'SELECT id '
+                    'FROM Transactions WHERE body_blob_id = ?', (self.id,))
                 for row in cursor:
                     logging.debug('BlobWriter.append_data last %d tx %s',
                                   self.id, row)
                     tx = self.parent.get_transaction_cursor()
                     tx._load_db(cursor, row[0])
-                    tx._maybe_finalize(cursor)
+                    tx._set_input_done(cursor)
 
             self.parent.blob_versions.update(self.id, self.length)
             self.parent.db.commit()
@@ -665,7 +538,6 @@ class BlobReader(Blob):
     def read_content(self, offset) -> Optional[bytes]:
         if offset is None: return None  # XXX wut?
 
-        # TODO inflight waiter list thing
         cursor = self.parent.db.cursor()
         cursor.execute('SELECT content FROM BlobContent '
                        'WHERE id = ? AND offset = ?',
