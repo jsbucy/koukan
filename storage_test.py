@@ -95,6 +95,8 @@ class StorageTest(unittest.TestCase):
         blob_writer.create('blob_rest_id')
         # 32 random bytes, not valid utf8, etc.
         d = base64.b64decode('LNGxKynVCXMDfb6HD4PMryGN7/wb8WoAz1YcDgRBLdc=')
+        with self.assertRaises(UnicodeDecodeError):
+            s = d.decode('utf-8')
         blob_writer.append_data(d, len(d))
         del blob_writer
         blob_reader = self.s.get_blob_reader()
