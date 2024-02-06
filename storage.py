@@ -79,14 +79,13 @@ class TransactionCursor:
                   reuse_body_rest_id=None, create_body_rest_id=None):
         if reuse_body_rest_id:
             cursor.execute(
-                'SELECT id,last FROM Blob WHERE rest_id = ?',
+                'SELECT id FROM Blob WHERE rest_id = ?',
                 (reuse_body_rest_id,))
             row = cursor.fetchone()
             # xxx need proper reporting of this
             assert row
-            body_blob_id, last = row
+            body_blob_id = row[0]
             # XXX allow sharing incomplete for exploder but not rest?
-            #assert last
             return body_blob_id, reuse_body_rest_id
         elif create_body_rest_id:
             blob_writer = self.parent.get_blob_writer()
@@ -382,8 +381,8 @@ class BlobWriter:
 
     def _create(self, rest_id, cursor):
         cursor.execute(
-            'INSERT INTO Blob (last_update, rest_id, last) '
-            'VALUES (?, ?, false) RETURNING id',
+            'INSERT INTO Blob (last_update, rest_id, content) '
+            'VALUES (?, ?, "") RETURNING id',
             (int(time.time()), rest_id))
         self.id = cursor.fetchone()[0]
         self.rest_id = rest_id
@@ -398,76 +397,58 @@ class BlobWriter:
 
     def load(self, rest_id):
         cursor = self.parent.db.cursor()
-        cursor.execute('SELECT id, length, last_update FROM Blob WHERE '
+        cursor.execute('SELECT id, length, last_update, LENGTH(content) '
+                       ' FROM Blob WHERE '
                        'rest_id = ?', (rest_id,))
         row = cursor.fetchone()
         if not row:
             return None
-        self.id, self.content_length, self.last_update = row
+        self.id, self.content_length, self.last_update, self.length = row
         self.rest_id = rest_id
-
-        cursor.execute('SELECT offset + LENGTH(content) FROM BlobContent '
-                       'WHERE id = ? ORDER BY offset DESC LIMIT 1', (self.id,))
-        row = cursor.fetchone()
-        if row:
-            self.length = row[0]
+        self.last = (self.length == self.content_length)
 
         return self.id
 
-    CHUNK_SIZE = 1048576
-
-    # This verifies that noone else wrote to BlobContent since load()
-    # Note: as of python 3.11 sqlite.Connection.blobopen() returns a
-    # file-like object blob reader handle so striping out the data may
-    # be less necessary
-    # moreover concat/substr on blobs appears to be standard SQL
     def append_data(self, d : bytes, content_length=None):
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.rest_id, self.length, len(d),\
+                     self.id, self.rest_id, self.length, len(d),
                      self.content_length, content_length)
         assert self.content_length is None or (
             self.content_length == content_length)
-        assert(not self.last)
+        assert not self.last
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
-            dd = d
-            while dd:
-                chunk = dd[0:self.CHUNK_SIZE]
-                cursor.execute('SELECT offset + LENGTH(content) '
-                               'FROM BlobContent WHERE id = ? '
-                               'ORDER BY offset DESC LIMIT 1',
-                               (self.id,))
-                row = cursor.fetchone()
-                if self.length == 0:
-                    assert(row is None)
-                else:
-                    assert(row[0] == self.length)
+            cursor.execute('SELECT LENGTH(content) FROM Blob WHERE id = ?',
+                           (self.id,))
+            row = cursor.fetchone()
+            assert row[0] == self.length
 
-                cursor.execute(
-                    'INSERT INTO BlobContent (id, offset, content) '
-                    'VALUES (?,?,?)',
-                    (self.id, self.length, chunk))
-                self.parent.db.commit()  # XXX
+            # TODO cf BlobReader.read_content() regarding this CAST,
+            # seems like the result of || is TEXT even with BLOB operands
+            cursor.execute("""
+                UPDATE Blob SET content = CAST((content || ?) AS BLOB),
+                  length = ?, last_update = ?
+                WHERE id = ? AND LENGTH(content) = ? AND
+                  ((length IS NULL) OR (length = ?))
+                RETURNING LENGTH(content)
+                """,
+                (d, content_length, int(time.time()),
+                 self.id, self.length, content_length))
+            row = cursor.fetchone()
+            logging.debug('append_data %d', row[0])
+            assert row[0] == (self.length + len(d))
 
-                dd = dd[self.CHUNK_SIZE:]
-                self.length += len(chunk)
-            last = content_length is not None and self.length == content_length
-            logging.info('BlobWriter.append_data id=%d length=%s last=%s',
-                         self.id, content_length, last)
-            cursor.execute(
-                'UPDATE Blob SET length = ?, last_update = ?, last = ? '
-                'WHERE id = ? AND ((length IS NULL) OR (length = ?))',
-                (content_length, int(time.time()), last,
-                 self.id, content_length))
-            assert(cursor.rowcount == 1)
+            self.parent.db.commit()
+            self.length = row[0]
             self.content_length = content_length
-            self.last = last
+            logging.debug('append_data %d %s', self.length, self.content_length)
+            self.last = (self.length == self.content_length)
 
             if self.last:
                 cursor.execute(
-                    'SELECT id '
-                    'FROM Transactions WHERE body_blob_id = ?', (self.id,))
+                    'SELECT id FROM Transactions WHERE body_blob_id = ?',
+                    (self.id,))
                 for row in cursor:
                     logging.debug('BlobWriter.append_data last %d tx %s',
                                   self.id, row)
@@ -514,8 +495,10 @@ class BlobReader(Blob):
         elif rest_id is not None:
             where = 'rest_id = ?'
             where_val = (rest_id,)
-        cursor.execute('SELECT id,rest_id,length,last FROM Blob WHERE ' + where,
-                       where_val)
+        cursor.execute("""
+            SELECT id,rest_id,length, LENGTH(content) FROM Blob
+            WHERE """ + where,
+            where_val)
         row = cursor.fetchone()
         if not row:
             return None
@@ -523,25 +506,20 @@ class BlobReader(Blob):
         self.blob_id = row[0]
         self.rest_id = row[1]
         self.content_length = row[2]
-        self.last = row[3]
-
-        cursor.execute('SELECT offset, LENGTH(content) '
-                       'FROM BlobContent WHERE id = ? '
-                       'ORDER BY offset DESC LIMIT 1',
-                       (self.blob_id,))
-        row = cursor.fetchone()
-        if row:
-            self.length = row[0] + row[1]
-
+        self.length = row[3]
+        self.last = (self.length == self.content_length)
         return self.length
 
-    def read_content(self, offset) -> Optional[bytes]:
-        if offset is None: return None  # XXX wut?
-
+    def read_content(self, offset, length=None) -> Optional[bytes]:
         cursor = self.parent.db.cursor()
-        cursor.execute('SELECT content FROM BlobContent '
-                       'WHERE id = ? AND offset = ?',
-                       (self.blob_id, offset))
+        # TODO substr(blob) returns str here, this is an issue with
+        # the python wrappers? AFAICT from the sqlite documentation, this
+        # CAST is a no-op?
+        cursor.execute(
+            """ SELECT CAST(SUBSTR(content, ?, ?) AS BLOB)
+                FROM Blob WHERE id = ? """,
+            (offset + 1, length if length else self.length - offset,
+             self.blob_id))
         row = cursor.fetchone()
         if not row:
             return None

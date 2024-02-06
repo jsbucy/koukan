@@ -2,6 +2,7 @@ from threading import Thread
 import time
 import unittest
 import logging
+import base64
 
 from storage import Storage, TransactionCursor
 from storage_schema import InvalidActionException, VersionConflictException
@@ -64,22 +65,19 @@ class StorageTest(unittest.TestCase):
         tx_reader.add_rcpt_response([Response(456, 'busy')])
         tx_reader.finalize_attempt(False)
 
-        self.dump_db()
-
         expected_content = [
             b'abc',
             b'xyz',
             b'uvw'
         ]
         blob_reader = self.s.get_blob_reader()
-        blob_reader.load(rest_id='blob_rest_id')
-        offset = 0
-        for c in expected_content:
-            logging.info('test_basic read body offset %d', offset)
-            b = blob_reader.read_content(offset)
-            self.assertIsNotNone(b)
-            self.assertEqual(c, b)
-            offset += len(b)
+        self.assertEqual(blob_reader.load(rest_id='blob_rest_id'), 9)
+        b = blob_reader.read_content(0, 3)
+        self.assertEqual(b'abc', b)
+        b = blob_reader.read_content(3)
+        self.assertEqual(b'xyzuvw', b)
+        b = blob_reader.read_content(4, 3)
+        self.assertEqual(b'yzu', b)
 
         r2 = self.s.load_one()
         self.assertIsNotNone(r2)
@@ -91,6 +89,17 @@ class StorageTest(unittest.TestCase):
         r2.finalize_attempt(True)
 
         self.assertIsNone(self.s.load_one())
+
+    def test_blob_8bitclean(self):
+        blob_writer = self.s.get_blob_writer()
+        blob_writer.create('blob_rest_id')
+        # 32 random bytes, not valid utf8, etc.
+        d = base64.b64decode('LNGxKynVCXMDfb6HD4PMryGN7/wb8WoAz1YcDgRBLdc=')
+        blob_writer.append_data(d, len(d))
+        del blob_writer
+        blob_reader = self.s.get_blob_reader()
+        blob_reader.load(rest_id='blob_rest_id')
+        self.assertEqual(blob_reader.read_content(0), d)
 
 
     def test_blob_reuse(self):

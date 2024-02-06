@@ -74,22 +74,11 @@ CREATE TABLE Blob (
   rest_id TEXT UNIQUE,
   -- final length declared by client in content-length header
   length INTEGER,
-  -- True if length is not NULL and max BlobContent offset+len == length
-  last bool NOT NULL,
-  last_update INTEGER NOT NULL
+  last_update INTEGER NOT NULL,
+  content BLOB
 );
 
 CREATE INDEX BlobRestId on Blob (rest_id);
-
--- this should be striped out at the granularity you want to read back
--- into memory later ~1MiB
-CREATE TABLE BlobContent (
-  id TEXT,
-  offset INTEGER,
-  content BLOB,
-  FOREIGN KEY (id) REFERENCES Blob(id) ON DELETE CASCADE,
-  PRIMARY KEY(id, offset)
-);
 
 /*
 gc:
