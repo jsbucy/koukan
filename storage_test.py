@@ -72,11 +72,11 @@ class StorageTest(unittest.TestCase):
         ]
         blob_reader = self.s.get_blob_reader()
         self.assertEqual(blob_reader.load(rest_id='blob_rest_id'), 9)
-        b = blob_reader.read_content(0, 3)
+        b = blob_reader.read(0, 3)
         self.assertEqual(b'abc', b)
-        b = blob_reader.read_content(3)
+        b = blob_reader.read(3)
         self.assertEqual(b'xyzuvw', b)
-        b = blob_reader.read_content(4, 3)
+        b = blob_reader.read(4, 3)
         self.assertEqual(b'yzu', b)
 
         r2 = self.s.load_one()
@@ -101,7 +101,7 @@ class StorageTest(unittest.TestCase):
         del blob_writer
         blob_reader = self.s.get_blob_reader()
         blob_reader.load(rest_id='blob_rest_id')
-        self.assertEqual(blob_reader.read_content(0), d)
+        self.assertEqual(blob_reader.read(0), d)
 
 
     def test_blob_reuse(self):

@@ -8,6 +8,10 @@
 py_library(name='blob',
            srcs=['blob.py'])
 
+py_test(name='blob_test',
+        srcs=['blob_test.py'],
+        deps=[':blob'])
+
 py_library(name='response',
            srcs=['response.py'])
 py_library(name='filter',

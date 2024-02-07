@@ -177,60 +177,6 @@ class RestEndpointTest(unittest.TestCase):
                          {'url': '/transactions/124',
                           'mail_response': {}})
 
-    def testAppendInline(self):
-        rest_endpoint = RestEndpoint(
-            transaction_url=self.static_base_url + '/transactions/125')
-
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/124',
-                               'mail_response': {},
-                               'data_response': {},
-                               'last': True})))
-
-        rest_resp = rest_endpoint._append_inline(True, InlineBlob(b'hello'))
-        self.assertEqual(rest_resp.status_code, 200)
-        req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions/125/appendData')
-        resp_json = {'last': True, 'd': 'hello'}
-        self.assertEqual(
-            req.body, json.dumps(resp_json).encode('utf-8'))
-        self.assertEqual(req.content_type, 'application/json')
-
-        self.assertEqual(rest_resp.json(), {
-            'url': '/transactions/124',
-            'mail_response': {},
-            'data_response': {},
-            'last': True})
-
-    def testAppendBlob(self):
-        rest_endpoint = RestEndpoint(
-            transaction_url=self.static_base_url + '/transactions/126')
-
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/124',
-                               'mail_response': {},
-                               'data_response': {},
-                               'last': True,
-                               'uri': '/blob/127'})))
-
-        rest_resp = rest_endpoint._append_blob(True, None)
-        self.assertEqual(rest_resp.status_code, 200)
-        resp_json = {'last': True, 'uri': None}
-        req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions/126/appendData')
-        self.assertEqual(req.body, json.dumps(resp_json).encode('utf-8'))
-        self.assertEqual(req.content_type, 'application/json')
-        self.assertEqual(rest_resp.json(), {
-            'url': '/transactions/124',
-            'mail_response': {},
-            'data_response': {},
-            'last': True,
-            'uri': '/blob/127'})
-
     def testPutBlobChunk(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
 

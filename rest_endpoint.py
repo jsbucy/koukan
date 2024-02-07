@@ -168,46 +168,6 @@ class RestEndpoint(Filter):
             return
         self.get_tx_response(timeout, tx, rest_resp.json())
 
-    def _append_inline(self, last, blob : Blob):
-        req_headers = {'host': self.http_host}
-        if self.etag:
-            req_headers['if-match'] = self.etag
-
-        req_json = {'last': last}
-
-        try:
-            utf8 = blob.contents().decode('utf-8')
-        except UnicodeError:
-            pass  # i.e. skip if not text
-        else:
-            req_json['d'] = utf8
-        rest_resp = requests.post(self.transaction_url + '/appendData',
-                                  json=req_json,
-                                  headers=req_headers,
-                                  timeout=self.timeout_data)
-        if rest_resp.status_code < 300:
-            self.etag = rest_resp.headers.get('etag', None)
-
-        # XXX rest_resp.status_code or
-        #   'data_response' in rest_resp.json()
-        logging.info('RestEndpoint.append_data inline %s', rest_resp)
-        return rest_resp
-
-    def _append_blob(self, last, blob_uri):
-        req_headers = {'host': self.http_host}
-        if self.etag:
-            req_headers['if-match'] = self.etag
-
-        req_json = { 'last': last,
-                     'uri': blob_uri }
-        rest_resp = requests.post(self.transaction_url + '/appendData',
-                                  json=req_json,
-                                  headers=req_headers,
-                                  timeout=self.timeout_data)
-        if rest_resp.status_code < 300:
-            self.etag = rest_resp.headers.get('etag', None)
-        return rest_resp
-
     def _append_body(self, last, blob):
         logging.debug('RestEndpoint._append_body %s %s %s %d',
                       self.transaction_url, self.body_url, last, blob.len())
@@ -215,7 +175,6 @@ class RestEndpoint(Filter):
             self._update(req_json={'body': ''})
         assert self.body_url
 
-        d = blob.contents()
         self._put_blob(blob, last)
 
         if not last:
@@ -235,7 +194,7 @@ class RestEndpoint(Filter):
 
         offset = 0
         while offset < blob.len():
-            chunk = blob.contents()[offset:offset+self.chunk_size]
+            chunk = blob.read(offset, self.chunk_size)
             chunk_last = last and (offset + len(chunk) >= blob.len())
             logging.debug('_put_blob chunk_offset %d chunk len %d '
                           'body_len %d chunk_last %s',

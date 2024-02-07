@@ -236,7 +236,7 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(endpoint.tx.mail_from.mailbox, 'alice')
         self.assertEqual(endpoint.tx.rcpt_to[0].mailbox, 'bob')
         self.assertEqual(len(endpoint.blobs), 1)
-        self.assertEqual(endpoint.blobs[0].contents(), b'hello, world!')
+        self.assertEqual(endpoint.blobs[0].read(0), b'hello, world!')
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
@@ -333,7 +333,7 @@ class TransactionTest(unittest.TestCase):
         self.assertFalse(t.is_alive())
 
         self.assertEqual(len(endpoint.blobs), 1)
-        self.assertEqual(endpoint.blobs[0].contents(), b'world!')
+        self.assertEqual(endpoint.blobs[0].read(0), b'world!')
         self.assertTrue(endpoint.last)
 
 

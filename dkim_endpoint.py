@@ -24,7 +24,7 @@ class DkimEndpoint(Filter):
     def sign(self):
         data = b''
         for blob in self.blobs:
-            data += blob.contents()
+            data += blob.read(0)
         # TODO dkimpy wants to get the entire message as a single
         # bytes value, a better interface for this would be to push
         # chunks into it, I don't think that would be a huge change

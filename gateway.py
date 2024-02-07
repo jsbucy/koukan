@@ -76,7 +76,6 @@ class SmtpGateway(EndpointFactory):
             dele = []
             for (rest_id, tx) in self.inflight.items():
                 tx_idle = now - tx.idle_start if tx.idle_start else 0
-                # xxx doesn't work, pre-yaml api
                 if tx_idle > rest_yaml.get('tx_idle_timeout', 5):
                     logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                                  tx.rest_id)

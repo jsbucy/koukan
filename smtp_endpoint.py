@@ -104,7 +104,8 @@ class SmtpEndpoint:
                 return ehlo_resp
 
         # TODO buffer partial here
-        self.mail_resp = Response.from_smtp(self.smtp.mail(tx.mail_from.mailbox))
+        self.mail_resp = Response.from_smtp(
+            self.smtp.mail(tx.mail_from.mailbox))
         if self.mail_resp.err():
             self._shutdown()
             return self.mail_resp
@@ -126,7 +127,7 @@ class SmtpEndpoint:
         self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.append_data last=%s len=%d',
                      last, blob.len())
-        self.data += blob.contents()
+        self.data += blob.read(0)
         self.blobs_received += 1
         if not last:
             return None

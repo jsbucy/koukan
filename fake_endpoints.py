@@ -118,5 +118,5 @@ class SyncEndpoint(Filter):
     def get_data(self):
         out = b''
         for blob in self.blobs:
-            out += blob.contents()
+            out += blob.read(0)
         return out

@@ -232,6 +232,9 @@ class RestServiceTransaction(Handler):
             return RestServiceTransaction.build_resp(
                 200, 'noop (range)', self.blob_writer)
 
+        # xxx on second thought I'm not sure why we would accept an
+        # append that isn't exactly at the current end, just return a
+        # 4xx with the current content-range
         d = request.data[self.blob_writer.length - offset:]
         assert len(d) > 0
         self.blob_writer.append_data(d, content_range.length)

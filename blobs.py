@@ -50,6 +50,9 @@ class BlobStorage:
             return None
         blob = self.blobs[id]
         blob_len = len(blob.d)
+        # xxx on second thought I'm not sure why we would accept an
+        # append that isn't exactly at the current end, just return a
+        # 4xx with the current content-range
         if offset > blob_len:
             return blob_len
         blob.d += d[offset - blob_len:]

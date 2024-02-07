@@ -510,7 +510,7 @@ class BlobReader(Blob):
         self.last = (self.length == self.content_length)
         return self.length
 
-    def read_content(self, offset, length=None) -> Optional[bytes]:
+    def read(self, offset, length=None) -> Optional[bytes]:
         cursor = self.parent.db.cursor()
         # TODO substr(blob) returns str here, this is an issue with
         # the python wrappers? AFAICT from the sqlite documentation, this
@@ -524,13 +524,6 @@ class BlobReader(Blob):
         if not row:
             return None
         return row[0]
-
-    def contents(self):
-        dd = bytes()
-        while len(dd) < self.content_length:
-            dd += self.read_content(len(dd))
-        assert(len(dd) == self.content_length)
-        return dd
 
     # wait for self.offsetlength to increase or timeout
     def wait(self, timeout=None):
