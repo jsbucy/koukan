@@ -17,9 +17,13 @@ class BlobTest(unittest.TestCase):
 
     def test_composite(self):
         b = CompositeBlob()
+        self.assertEqual(b.content_length(), None)
         b.append(InlineBlob(b'aabcc'), 1, 3)
+        self.assertEqual(b.content_length(), None)
         b.append(InlineBlob(b'ddeff'), 1, 3)
-        b.append(InlineBlob(b'gghii'), 1, 3)
+        self.assertEqual(b.content_length(), None)
+        b.append(InlineBlob(b'gghii'), 1, 3, True)
+        self.assertEqual(b.content_length(), 9)
 
         self.assertEqual(b.read(0, 3), b'abc')
 

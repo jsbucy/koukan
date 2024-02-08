@@ -117,10 +117,8 @@ class RestEndpoint(Filter):
     def _update(self, tx=None, req_json=None, timeout : Optional[float] = None):
         if tx:
             req_json = tx.to_json()
-            if self.remote_host:
-                req_json['remote_host'] = self.remote_host.to_tuple()
-        else:
-            req_json = req_json
+            if not req_json:
+                return  # noop
 
         req_headers = { 'host': self.http_host }
         self._set_request_timeout(req_headers, timeout)
@@ -158,15 +156,22 @@ class RestEndpoint(Filter):
         else:
             rest_resp = self._update(tx)
 
-        timeout = timeout if timeout is not None else self.timeout_start
-        if not self.wait_response:
-            return
-        # xxx filter api needs to accomodate returning an error here
-        # or else stuff the http error in the response for the first
-        # inflight req field in tx?
-        if rest_resp.status_code >= 300:
-            return
-        self.get_tx_response(timeout, tx, rest_resp.json())
+        if rest_resp is not None:
+            timeout = timeout if timeout is not None else self.timeout_start
+            if not self.wait_response:
+                return
+            # xxx filter api needs to accomodate returning an error here
+            # or else stuff the http error in the response for the first
+            # inflight req field in tx?
+            if rest_resp.status_code >= 300:
+                return
+            self.get_tx_response(timeout, tx, rest_resp.json())
+
+        # TODO once we've dismantled the old path, this can trickle
+        # out the blob as it grows
+        if tx.body_blob and tx.body_blob.len() == tx.body_blob.content_length():
+            self._append_body(True, tx.body_blob)
+            self.get_tx_response(self.timeout_data, tx)
 
     def _append_body(self, last, blob):
         logging.debug('RestEndpoint._append_body %s %s %s %d',
@@ -177,16 +182,15 @@ class RestEndpoint(Filter):
 
         self._put_blob(blob, last)
 
-        if not last:
-            return Response()
-        return self.get_status(self.timeout_data)
 
     def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
         logging.info('RestEndpoint.append_data %s %s %s %d',
                      self.transaction_url, self.body_url, last, blob.len())
 
-        return self._append_body(last, blob)
-
+        self._append_body(last, blob)
+        if not last:
+            return Response()
+        return self.get_status(self.timeout_data)
 
     def _put_blob(self, blob, last):
         logging.info('RestEndpoint._put_blob via uri %s blob.len=%d last %s',
@@ -333,12 +337,20 @@ class RestEndpoint(Filter):
                 tx.rcpt_response = rcpt_resp
             else:
                 done = False
+        if tx.body_blob and (
+                tx.body_blob.len() == tx.body_blob.content_length()):
+            if data_resp := Response.from_json(
+                    tx_json.get('data_response', {})):
+                tx.data_response = data_resp
+            else:
+                done = False
+
         return done
 
     # poll/GET the tx until all mail/rcpts in tx have corresponding
     # responses or timeout
     # if you already have tx json from a previous POST/PATCH, pass it
-    # in resp_json
+    # in tx_json
     def get_tx_response(self, timeout, tx : TransactionMetadata,
                         tx_json={}):
         deadline = time.monotonic() + timeout

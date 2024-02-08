@@ -13,7 +13,7 @@ import werkzeug.http
 
 from rest_endpoint import RestEndpoint
 from filter import TransactionMetadata, Mailbox
-from blob import InlineBlob
+from blob import CompositeBlob, InlineBlob
 from response import Response as MailResponse
 
 class Request:
@@ -341,6 +341,71 @@ class RestEndpointTest(unittest.TestCase):
                               ContentRange('bytes', 8, 10, 10))
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions/123')
+
+    def testFilterApiBlob(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     min_poll=0.1)
+
+        # POST
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps({
+                'url': '/transactions/123',
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]})))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+        rest_endpoint.on_update(tx)
+
+        req = self.requests.pop(0)  # POST
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+
+        # incomplete -> noop
+        tx = TransactionMetadata()
+        body_blob = CompositeBlob()
+        b = InlineBlob(b'hello, ')
+        body_blob.append(b, 0, b.len())
+        tx.body_blob = body_blob
+        rest_endpoint.on_update(tx)
+
+
+        b = InlineBlob(b'world!')
+        body_blob.append(b, 0, b.len(), True)
+
+        # PATCH 'body'
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps(
+                {'url': '/transactions/123',
+                 'mail_response': {'code': 201, 'message': 'ok'},
+                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                 'data_response': {},
+                 'body': '/blob/xyz'})))
+        # PUT 0-11/12
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            content_range=ContentRange(
+                'bytes', 0, body_blob.len(), body_blob.len())))
+
+        # GET
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps(
+                {'url': '/transactions/123',
+                 'mail_response': {'code': 201, 'message': 'ok'},
+                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                 'data_response': {'code': 203, 'message': 'ok'}})))
+
+        rest_endpoint.on_update(tx)
+        self.assertEqual(tx.data_response.code, 203)
+
 
 
     def testFilterApiMultiRcpt(self):

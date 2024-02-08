@@ -463,12 +463,11 @@ class BlobWriter:
 
 
 class BlobReader(Blob):
-    blob_id : Optional[int]
+    blob_id : Optional[int] = None
     last = False
-    blob_id = None
     length = 0  # number of bytes currently readable
     # final length declared by client in content-length header
-    content_length = None
+    _content_length = None
     rest_id = None
 
     def __init__(self, storage):
@@ -476,6 +475,9 @@ class BlobReader(Blob):
 
     def len(self):
         return self.length
+
+    def content_length(self):
+        return self._content_length
 
     def id(self):
         return 'storage_%s' % self.blob_id
@@ -486,7 +488,8 @@ class BlobReader(Blob):
             return self._load(cursor, db_id, rest_id)
 
     def _load(self, cursor, db_id = None, rest_id = None):
-        self.blob_id = db_id
+        if self.blob_id:
+            db_id = self.blob_id
         where = ''
         where_val = ()
         if db_id is not None:
@@ -505,9 +508,9 @@ class BlobReader(Blob):
 
         self.blob_id = row[0]
         self.rest_id = row[1]
-        self.content_length = row[2]
+        self._content_length = row[2]
         self.length = row[3]
-        self.last = (self.length == self.content_length)
+        self.last = (self.length == self._content_length)
         return self.length
 
     def read(self, offset, length=None) -> Optional[bytes]:

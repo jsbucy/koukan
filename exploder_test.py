@@ -10,7 +10,7 @@ from response import Response
 from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
-from blob import InlineBlob
+from blob import CompositeBlob, InlineBlob
 
 from exploder import Exploder
 #from storage_writer_filter import StorageWriterFilter
@@ -92,6 +92,57 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual(rresp[0].code, 250)
         for endpoint in self.upstream_endpoints:
             self.assertEqual(endpoint.get_data(), b'hello, world!')
+
+    def testSuccessBlob(self):
+        exploder = Exploder('output-chain', lambda: self.factory())
+
+        tx = TransactionMetadata()
+        tx.mail_from = Mailbox('alice')
+        exploder.on_update(tx)
+        self.assertEqual(tx.mail_response.code, 250)
+
+        tx = TransactionMetadata()
+        tx.rcpt_to = [ Mailbox('bob'), Mailbox('bob2') ]
+
+        t = Thread(target=lambda: self.update(exploder, tx))
+        t.start()
+
+        with self.mu:
+            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 1)
+        self.upstream_endpoints[0].set_mail_response(Response(250))
+        self.upstream_endpoints[0].add_rcpt_response(Response(201))
+        with self.mu:
+            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 2)
+        self.upstream_endpoints[1].set_mail_response(Response(250))
+        self.upstream_endpoints[1].add_rcpt_response(Response(202))
+
+        t.join(timeout=1)
+
+        body_blob = CompositeBlob()
+        b = InlineBlob(b'hello, ')
+        body_blob.append(b, 0, b.len())
+        tx = TransactionMetadata()
+        tx.body_blob = body_blob
+
+        t = Thread(target=lambda: self.update(exploder, tx))
+        t.start()
+        t.join(timeout=1)
+
+        b = InlineBlob(b'world!')
+        body_blob.append(b, 0, b.len(), True)
+
+        t = Thread(target=lambda: self.update(exploder, tx))
+        t.start()
+
+        self.upstream_endpoints[0].add_data_response(Response(250))
+        self.upstream_endpoints[1].add_data_response(Response(250))
+        t.join(timeout=1)
+        self.assertEqual(tx.data_response.code, 250)
+        for endpoint in self.upstream_endpoints:
+            self.assertEqual(endpoint.get_data(), b'hello, world!')
+
+
+
 
     def testMsaRcptTimeout(self):
         exploder = Exploder('output-chain', lambda: self.factory(),

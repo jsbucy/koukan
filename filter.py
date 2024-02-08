@@ -167,6 +167,11 @@ class TransactionMetadata:
     # suffix of the blob url
     body : Optional[str] = None
 
+    # filter chain only
+    # this object will not change across successive calls to
+    # Filter.on_update() but may grow
+    body_blob : Optional[Blob] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,

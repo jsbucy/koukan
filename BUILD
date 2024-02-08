@@ -78,6 +78,7 @@ py_library(name='router',
            deps=[':filter',
                  ':response',
                  ':blob'])
+
 py_library(name='local_domain_policy',
            srcs=['local_domain_policy.py'],
            deps=[':router',
@@ -89,8 +90,22 @@ py_library(name='dest_domain_policy',
                  ':address',
                  ':response',
                  ':filter'])
+
+py_test(name='router_test',
+        srcs=['router_test.py'],
+        deps=[':router',
+              ':dest_domain_policy',
+              ':fake_endpoints'])
+
 py_library(name='dkim_endpoint',
            srcs=['dkim_endpoint.py'])
+py_test(name='dkim_endpoint_test',
+        srcs=['dkim_endpoint_test.py'],
+        deps=[':dkim_endpoint',
+              ':dest_domain_policy',
+              ':fake_endpoints'])
+
+
 py_library(name='mx_resolution',
            srcs=['mx_resolution.py'])
 py_library(name='storage_writer_filter',

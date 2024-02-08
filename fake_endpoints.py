@@ -100,6 +100,13 @@ class SyncEndpoint(Filter):
                     deadline_left)
                 self.tx.rcpt_response = self.rcpt_response
                 self.rcpt_response = []
+        if tx.body_blob:
+            self.body_blob = tx.body_blob
+            with self.lock:
+                if not self.cv.wait_for(lambda: bool(self.data_resp), timeout):
+                    return None
+                tx.data_response = self.data_resp.pop(0)
+
 
     def append_data(self, last, blob,
                     timeout : Optional[float] = None):

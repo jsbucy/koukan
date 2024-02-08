@@ -77,10 +77,11 @@ class Exploder(Filter):
         logging.info('Exploder._on_rcpt %s', rcpt)
 
         # just send the envelope, we'll deal with any data below
+        # TODO copy.copy() here?
         tx_i = TransactionMetadata(host = self.output_chain,
                                    mail_from = self.mail_from,
-                                   rcpt_to = [rcpt])
-        #tx_i.body = self.parent_body
+                                   rcpt_to = [rcpt],
+                                   remote_host = delta.remote_host)
 
         endpoint_i = self.factory()
         # fan this out if there were multiple though gw/smtplib
@@ -122,14 +123,15 @@ class Exploder(Filter):
     def on_update(self, delta):
         logging.info('Exploder.on_update %s', delta.to_json())
 
-        #if delta.body and self.parent_body is None:
-        #    self.parent_body = delta.body
-
         if delta.mail_from is not None:
             self._on_mail(delta)
 
         for i,rcpt in enumerate(delta.rcpt_to):
             self._on_rcpt(delta, i, rcpt)
+
+        if delta.body_blob and (
+                delta.body_blob.len() == delta.body_blob.content_length()):
+            delta.data_response = self.append_data(True, delta.body_blob)
 
     def _append_upstream(self, i, endpoint_i, last, blob, timeout):
         logging.debug('Exploder.append_data %d %s %s timeout=%s', i,
@@ -140,7 +142,6 @@ class Exploder(Filter):
         logging.info('Exploder.append_data %d %s', i, resp)
         if resp is not None:
             self.upstream_data_resp[i] = resp
-
 
     def append_data(self, last : bool, blob : Blob) -> Response:
         logging.info('Exploder.append_data %s %s', last, self.async_rcpts)

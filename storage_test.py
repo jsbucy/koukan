@@ -286,7 +286,7 @@ class StorageTest(unittest.TestCase):
 
         self.assertTrue(rv[0])
         self.assertEqual(reader.length, 3)
-        self.assertIsNone(reader.content_length)
+        self.assertIsNone(reader.content_length())
         self.assertFalse(reader.last)
 
         t = self.start_wait(reader, rv)
@@ -296,7 +296,7 @@ class StorageTest(unittest.TestCase):
         self.join(t)
         self.assertTrue(rv[0])
         self.assertEqual(reader.length, 6)
-        self.assertEqual(reader.content_length, 9)
+        self.assertEqual(reader.content_length(), 9)
         self.assertFalse(reader.last)
 
         t = self.start_wait(reader, rv)
@@ -306,7 +306,7 @@ class StorageTest(unittest.TestCase):
         self.join(t)
         self.assertTrue(rv[0])
         self.assertEqual(reader.length, 9)
-        self.assertEqual(reader.content_length, 9)
+        self.assertEqual(reader.content_length(), 9)
         self.assertTrue(reader.last)
 
 

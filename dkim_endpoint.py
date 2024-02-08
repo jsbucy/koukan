@@ -1,9 +1,11 @@
 from typing import Any, Optional, Tuple
+import copy
+import logging
 
 import dkim
 
 from response import Response, Esmtp
-from blob import Blob, InlineBlob
+from blob import Blob, InlineBlob, CompositeBlob
 from filter import Filter, TransactionMetadata
 
 class DkimEndpoint(Filter):
@@ -17,9 +19,24 @@ class DkimEndpoint(Filter):
         self.next = next
         self.blobs = []
 
-    def start(self, tx : TransactionMetadata):
+    def on_update(self, tx : TransactionMetadata):
         self.ok_resp = False
-        return self.next.on_update(tx)
+        if tx.body_blob is None or (
+                tx.body_blob.len() != tx.body_blob.content_length()):
+            return self.next_on_update(tx)
+
+        upstream_tx = copy.copy(tx)
+        self.blobs = [tx.body_blob]
+        upstream_body = CompositeBlob()
+        sig = InlineBlob(self.sign())
+        upstream_body.append(sig, 0, sig.len())
+        upstream_body.append(tx.body_blob, 0, tx.body_blob.len(), True)
+        upstream_tx.body_blob = upstream_body
+
+        self.next.on_update(upstream_tx)
+        tx.mail_response = upstream_tx.mail_response
+        tx.rcpt_response = upstream_tx.rcpt_response
+        tx.data_response = upstream_tx.data_response
 
     def sign(self):
         data = b''
@@ -33,9 +50,9 @@ class DkimEndpoint(Filter):
         # signature_algorithm='rsa-sha256', include_headers=None,
         # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
-        return dkim.sign(data, self.selector, self.domain, self.privkey,
+        sig = dkim.sign(data, self.selector, self.domain, self.privkey,
                         include_headers=[b'From', b'Date', b'Message-ID'])
-        
+        return sig
 
     def append_data(self, last : bool, blob : Blob) -> Response:
         self.blobs.append(blob)

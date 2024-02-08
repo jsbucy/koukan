@@ -53,6 +53,7 @@ CREATE TABLE Transactions (
 );
 
 CREATE INDEX TxRestId on Transactions (rest_id);
+CREATE INDEX TxBodyBlobId on Transactions (body_blob_id);
 
 CREATE TABLE TransactionAttempts (
   transaction_id INTEGER,

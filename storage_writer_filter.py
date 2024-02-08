@@ -36,6 +36,21 @@ class StorageWriterFilter(Filter):
                     break
                 except VersionConflictException:
                     self.tx_cursor.load()
+
+        wait_data_resp = False
+        if tx.body_blob:
+            logging.debug('on_update len %d content %s',
+                          tx.body_blob.len(), tx.body_blob.content_length())
+        if tx.body_blob and (
+                tx.body_blob.len() == tx.body_blob.content_length()):
+            # TODO this assumes cursor_to_endpoint buffers the entire
+            # payload and nothing between there and here re-chunks it
+            assert isinstance(tx.body_blob, BlobReader)
+            body_tx = TransactionMetadata()
+            body_tx.body = tx.body_blob.rest_id
+            self.tx_cursor.write_envelope(body_tx)
+            wait_data_resp = True
+
         start = time.monotonic()
         while True:
             done = True
@@ -54,6 +69,12 @@ class StorageWriterFilter(Filter):
                     -len(tx.rcpt_to):]
             else:
                 done = False
+
+            if done and wait_data_resp:
+                if self.tx_cursor.tx.data_response:
+                    tx.data_response = self.tx_cursor.tx.data_response
+                else:
+                    done = False
             if done:
                 break
             deadline_left = None

@@ -46,9 +46,16 @@ class SmtpHandler:
         envelope.endpoint = self.endpoint_factory()
         envelope.tx = TransactionMetadata()
 
-        # XXX fix
-        #envelope.tx.remote_host = HostPort.from_seq(remote) if remote else None
-        #envelope.tx.local_host = HostPort.from_seq(local) if remote else None
+        # TODO propagate session.host_name into tx ehlo host
+        logging.debug('handle_MAIL %s %s', session.host_name, session.peer)
+        if session.peer:
+            # TODO this is always an ascii IP? try to reverse resolve
+            # and pass along for Received: headers if nothing else
+            envelope.tx.remote_host = HostPort.from_seq(session.peer)
+
+        # can't quite dig
+        # session.transport.get_extra_info('sockname') out of aiosmtpd
+        # envelope.tx.local_host = HostPort.from_seq(...)
         envelope.tx.mail_from = Mailbox(mail_from, mail_esmtp)
         fut = server.loop.run_in_executor(
             None, lambda: self._update_tx(envelope.endpoint, envelope.tx))

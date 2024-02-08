@@ -13,7 +13,7 @@ from response import Response
 from blob import InlineBlob
 from config import Config
 from fake_endpoints import SyncEndpoint
-from filter import Mailbox, TransactionMetadata
+from filter import HostPort, Mailbox, TransactionMetadata
 
 # XXX exercise exploder flows
 root_yaml = {
@@ -190,8 +190,9 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), {})
         #self.assertEqual(tx_json.get('last', None), False)
 
-        resp = rest_endpoint._append_body(
+        rest_endpoint._append_body(
             last=True, blob=InlineBlob('world'))
+        resp = rest_endpoint.get_status(5)
         self.assertIsNotNone(resp)
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
@@ -261,7 +262,10 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            remote_host=HostPort('1.2.3.4', 12345))
         t = self.start_tx_update(rest_endpoint, tx)
 
         time.sleep(0.1)

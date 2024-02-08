@@ -13,17 +13,26 @@ class Blob:
     def read(offset, len=None) -> bytes:
         pass
 
+    def content_length(self) -> Optional[int]:
+        pass
+
 class InlineBlob(Blob):
+    # TODO this id is vestigal?
     def __init__(self, d : bytes, id : Optional[str] = None):
         self.d = d
         self.blob_id = id
 
-    def len(self): return len(self.d)
+    def len(self):
+        return len(self.d)
 
-    def id(self): return self.blob_id
+    def id(self):
+        return self.blob_id
 
     def read(self, offset, len=None):
         return self.d[offset : offset + len if len is not None else None]
+
+    def content_length(self):
+        return len(self.d)
 
 class Chunk:
     # byte offset in CompositeBlob
@@ -38,32 +47,34 @@ class Chunk:
         self.offset = offset
         self.blob_offset = blob_offset
         self.length = length
-        print('chunk init %d %d %d' % (self.offset, self.blob_offset, length))
 
     def read(self, offset, length):
-        print('read %d %d %d %s' % (self.offset, self.blob_offset, offset, length))
         offset -= self.offset
         offset += self.blob_offset
         if length is not None:
             length = min(length, self.length - offset + self.blob_offset)
         else:
             length = self.length
-        print('read %d %s' % (offset, length))
         return self.blob.read(offset, length)
 
 class CompositeBlob(Blob):
     chunks : List[Chunk]
+    last = False
 
     def __init__(self):
         self.chunks = []
 
-    def append(self, blob, blob_offset, length):
+    def append(self, blob, blob_offset, length, last : Optional[bool] = False):
+        assert not self.last
+        if last:
+            self.last = True
         offset = 0
         if self.chunks:
-            last = self.chunks[-1]
-            offset = last.offset + last.length
+            last_chunk = self.chunks[-1]
+            offset = last_chunk.offset + last_chunk.length
         self.chunks.append(Chunk(blob, offset, blob_offset, length))
 
+        # TODO coalesce contiguous ranges into the same blob
         # TODO for bonus points, if isinstance(blob, CompositeBlob)
         # copy the chunks directly
 
@@ -83,3 +94,14 @@ class CompositeBlob(Blob):
                 if length == 0:
                     break
         return out
+
+    def len(self):
+        if not self.chunks:
+            return 0
+        last_chunk = self.chunks[-1]
+        return last_chunk.offset + last_chunk.length
+
+    def content_length(self):
+        if not self.last:
+            return None
+        return self.len()

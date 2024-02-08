@@ -73,7 +73,8 @@ class RestServiceTransaction(Handler):
 
     def start(self, req_json, timeout : Optional[float] = None
               ) -> Optional[FlaskResponse]:
-        logging.debug('RestServiceTransaction.start %s', self.http_host)
+        logging.debug('RestServiceTransaction.start %s %s',
+                      self.http_host, req_json)
         assert self._tx_rest_id is None
         self._tx_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
@@ -93,7 +94,7 @@ class RestServiceTransaction(Handler):
 
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
-        logging.debug('RestServiceTransaction\.patch %s %s',
+        logging.debug('RestServiceTransaction.patch %s %s',
                       self._tx_rest_id, req_json)
         resp_json = {}
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_UPDATE)
@@ -347,8 +348,8 @@ def output(cursor, endpoint) -> Optional[Response]:
 
     blob_reader = cursor.parent.get_blob_reader()
     blob_reader.load(rest_id = cursor.tx.body)
-    while blob_reader.content_length is None or (
-            blob_reader.length < blob_reader.content_length):
+    while blob_reader.content_length() is None or (
+            blob_reader.length < blob_reader.content_length()):
         blob_reader.wait()
     resp = endpoint.append_data(True, blob_reader)
     assert resp is not None
