@@ -22,8 +22,7 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-# TODO rename RecipientRouterFilter
-class Router(Filter):
+class RecipientRouterFilter(Filter):
     endpoint: Filter
     received_ascii : bytes = None
     policy : RoutingPolicy

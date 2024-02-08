@@ -73,27 +73,27 @@ py_test(name='transaction_test',
 py_library(name='address',
            srcs=['address.py'])
 
-py_library(name='router',
-           srcs=['router.py'],
+py_library(name='recipient_router_filter',
+           srcs=['recipient_router_filter.py'],
            deps=[':filter',
                  ':response',
                  ':blob'])
 
 py_library(name='local_domain_policy',
            srcs=['local_domain_policy.py'],
-           deps=[':router',
+           deps=[':recipient_router_filter',
                  ':address',
                  ':response'])
 py_library(name='dest_domain_policy',
            srcs=['dest_domain_policy.py'],
-           deps=[':router',
+           deps=[':recipient_router_filter',
                  ':address',
                  ':response',
                  ':filter'])
 
-py_test(name='router_test',
-        srcs=['router_test.py'],
-        deps=[':router',
+py_test(name='recipient_router_filter_test',
+        srcs=['recipient_router_filter_test.py'],
+        deps=[':recipient_router_filter',
               ':dest_domain_policy',
               ':fake_endpoints'])
 
@@ -140,7 +140,7 @@ py_library(name='config',
                  ':rest_endpoint',
                  ':local_domain_policy',
                  ':dest_domain_policy',
-                 ':router',
+                 ':recipient_router_filter',
                  ':dkim_endpoint',
                  ':mx_resolution',
                  ':storage_writer_filter',

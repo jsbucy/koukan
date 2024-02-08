@@ -321,10 +321,5 @@ class Filter(ABC):
         pass
 
     @abstractmethod
-    def append_data(self, last : bool, blob : Blob,
-                    timeout : Optional[float] = None) -> Response:
-        pass
-
-    @abstractmethod
     def abort(self):
         pass

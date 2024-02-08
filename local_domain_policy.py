@@ -4,7 +4,7 @@ from filter import HostPort
 
 from address import domain_from_address
 from response import Response
-from router import RoutingPolicy
+from recipient_router_filter import RoutingPolicy
 
 class LocalDomainPolicy(RoutingPolicy):
     # domain -> rest endpoint url

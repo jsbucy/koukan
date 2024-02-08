@@ -5,7 +5,7 @@ import sys
 from yaml import load, CLoader as Loader
 from local_domain_policy import LocalDomainPolicy
 from dest_domain_policy import DestDomainPolicy
-from router import Router
+from recipient_router_filter import RecipientRouterFilter
 from rest_endpoint import RestEndpoint
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
@@ -85,7 +85,7 @@ class Config:
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)
-        return Router(policy, next)
+        return RecipientRouterFilter(policy, next)
 
     def dkim(self, yaml, next):
         if 'key' not in yaml:

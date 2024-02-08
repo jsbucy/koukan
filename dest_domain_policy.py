@@ -1,7 +1,7 @@
 
 from address import domain_from_address
 from response import Response
-from router import RoutingPolicy
+from recipient_router_filter import RoutingPolicy
 from filter import HostPort
 
 class DestDomainPolicy(RoutingPolicy):

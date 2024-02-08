@@ -3,13 +3,13 @@ import logging
 from datetime import datetime, timezone
 
 from blob import InlineBlob
-from router import Router, RoutingPolicy
+from recipient_router_filter import RecipientRouterFilter, RoutingPolicy
 from dest_domain_policy import DestDomainPolicy
 from filter import HostPort, Mailbox, TransactionMetadata
 from fake_endpoints import SyncEndpoint
 from response import Response
 
-class RouterTest(unittest.TestCase):
+class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
@@ -17,9 +17,9 @@ class RouterTest(unittest.TestCase):
     def test_basic(self):
         next = SyncEndpoint()
         policy = DestDomainPolicy()
-        r = Router(policy, next,
-                   inject_time =
-                     datetime.fromtimestamp(1234567890, timezone.utc))
+        r = RecipientRouterFilter(
+            policy, next,
+            inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
 
         next.set_mail_response(Response(201))
         next.add_rcpt_response(Response(202))

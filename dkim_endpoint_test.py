@@ -7,7 +7,6 @@ from dkim import dknewkey
 
 from blob import InlineBlob
 from dkim_endpoint import DkimEndpoint
-from dest_domain_policy import DestDomainPolicy
 from filter import HostPort, Mailbox, TransactionMetadata
 from fake_endpoints import SyncEndpoint
 from response import Response
@@ -29,7 +28,6 @@ class DkimEndpointTest(unittest.TestCase):
 
     def test_basic(self):
         next = SyncEndpoint()
-        policy = DestDomainPolicy()
         dkim_endpoint = DkimEndpoint(b'example.com', b'selector123',
                                      self.privkey, next)
 
