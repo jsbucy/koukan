@@ -3,6 +3,7 @@ from threading import Lock, Condition
 import logging
 import time
 
+from blob import Blob
 from response import Response, Esmtp
 from filter import Filter, Mailbox, TransactionMetadata
 
@@ -47,6 +48,7 @@ class SyncEndpoint(Filter):
     lock : Lock
     cv : Condition
     tx : Optional[TransactionMetadata] = None
+    body_blob : Optional[Blob] = None
 
     def __init__(self):
         self.rcpt_to = []
@@ -92,6 +94,9 @@ class SyncEndpoint(Filter):
 
         if timeout:
             deadline_left = timeout - (time.monotonic() - start)
+        if tx.mail_from:
+#            assert self.mail_from is None
+            self.mail_from = tx.mail_from
         if tx.rcpt_to:
             self.rcpt_to.extend(tx.rcpt_to)
             with self.lock:
@@ -101,6 +106,7 @@ class SyncEndpoint(Filter):
                 self.tx.rcpt_response = self.rcpt_response
                 self.rcpt_response = []
         if tx.body_blob:
+            assert self.body_blob is None or self.body_blob == tx.body_blob
             self.body_blob = tx.body_blob
             with self.lock:
                 if not self.cv.wait_for(lambda: bool(self.data_resp), timeout):

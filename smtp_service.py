@@ -97,10 +97,12 @@ class SmtpHandler:
             #XXX envelope.rcpt_options.append(rcpt_esmtp)
         return rcpt_resp.to_smtp_resp()
 
-    def append_data(self, envelope, last : bool, blob : Blob):
-        logging.info('SmtpHandler.append_data last=%s len=%d',
-                     last, blob.len())
-        envelope.tx.data_response = envelope.endpoint.append_data(last, blob)
+    def append_data(self, envelope, blob : Blob):
+        logging.info('SmtpHandler.append_data len=%d', blob.len())
+        tx = TransactionMetadata()
+        tx.body_blob = blob
+        envelope.endpoint.on_update(tx)
+        envelope.tx.data_response = tx.data_response
         logging.info('SmtpHandler.append_data %s', envelope.tx.data_response)
 
     def get_blob_id(self):
@@ -115,7 +117,7 @@ class SmtpHandler:
         blob = InlineBlob(envelope.content, id=self.get_blob_id())
 
         fut = server.loop.run_in_executor(
-                None, lambda: self.append_data(envelope, last=True, blob=blob))
+                None, lambda: self.append_data(envelope, blob=blob))
         await asyncio.wait([fut], timeout=self.timeout_data)
         return envelope.tx.data_response.to_smtp_resp()
 

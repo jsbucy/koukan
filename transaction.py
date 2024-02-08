@@ -351,17 +351,20 @@ def output(cursor, endpoint) -> Optional[Response]:
     while blob_reader.content_length() is None or (
             blob_reader.length < blob_reader.content_length()):
         blob_reader.wait()
-    resp = endpoint.append_data(True, blob_reader)
-    assert resp is not None
-    logging.info('cursor_to_endpoint %s body %s', cursor.rest_id, resp)
+    body_tx = TransactionMetadata()
+    body_tx.body_blob = blob_reader
+    endpoint.on_update(body_tx)
+    data_resp = body_tx.data_response
+    assert data_resp is not None
+    logging.info('cursor_to_endpoint %s body %s', cursor.rest_id, data_resp)
     while True:
         try:
-            cursor.set_data_response(resp)
+            cursor.set_data_response(data_resp)
         except VersionConflictException:
             cursor.load()
             continue
         break
-    return resp
+    return data_resp
 
 def cursor_to_endpoint(cursor, endpoint):
     logging.debug('cursor_to_endpoint %s', cursor.rest_id)
@@ -373,7 +376,6 @@ def cursor_to_endpoint(cursor, endpoint):
     while True:
         try:
             cursor.finalize_attempt(not resp.temp())
+            break
         except VersionConflictException:
             cursor.load()
-            continue
-        break
