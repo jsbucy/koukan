@@ -177,7 +177,8 @@ class TransactionMetadata:
                  mail_from : Optional[Mailbox] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
                  host : Optional[str] = None,
-                 max_attempts : Optional[int] = None):
+                 max_attempts : Optional[int] = None,
+                 body_blob : Optional[Blob] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -186,6 +187,7 @@ class TransactionMetadata:
         self.host = host
         if max_attempts is not None:
             self.max_attempts = max_attempts
+        self.body_blob = body_blob
 
 #    def __bool__(self):
 #        for f in TransactionMetadata.all_fields:

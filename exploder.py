@@ -126,25 +126,28 @@ class Exploder(Filter):
         if delta.mail_from is not None:
             self._on_mail(delta)
 
+        # xxx parallelize
         for i,rcpt in enumerate(delta.rcpt_to):
             self._on_rcpt(delta, i, rcpt)
 
         if delta.body_blob and (
                 delta.body_blob.len() == delta.body_blob.content_length()):
-            delta.data_response = self.append_data(True, delta.body_blob)
+            delta.data_response = self._append_data(True, delta.body_blob)
 
     def _append_upstream(self, i, endpoint_i, last, blob, timeout):
-        logging.debug('Exploder.append_data %d %s %s timeout=%s', i,
+        logging.debug('Exploder._append_upstream %d %s %s timeout=%s', i,
                       self.ok_rcpts[i], self.upstream_data_resp[i], timeout)
         prev_resp = self.upstream_data_resp[i]
         assert prev_resp is None or not prev_resp.perm()
-        resp = endpoint_i.append_data(last, blob, timeout)
-        logging.info('Exploder.append_data %d %s', i, resp)
-        if resp is not None:
-            self.upstream_data_resp[i] = resp
+        body_tx = TransactionMetadata()
+        body_tx.body_blob = blob
+        endpoint_i.on_update(body_tx, timeout)
+        logging.info('Exploder.append_data %d %s', i, body_tx.data_response)
+        if body_tx.data_response is not None:
+            self.upstream_data_resp[i] = body_tx.data_response
 
-    def append_data(self, last : bool, blob : Blob) -> Response:
-        logging.info('Exploder.append_data %s %s', last, self.async_rcpts)
+    def _append_data(self, last : bool, blob : Blob) -> Response:
+        logging.info('Exploder._append_data %s %s', last, self.async_rcpts)
         assert self.ok_rcpt
         if not self.upstream_data_resp:
             self.upstream_data_resp = len(self.ok_rcpts) * [None]

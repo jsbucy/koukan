@@ -82,26 +82,5 @@ class StorageWriterFilter(Filter):
                 timeout = (time.monotonic() - start)
             self.tx_cursor.wait(deadline_left)
 
-
-    def append_data(self, last : bool, blob : Blob,
-                    timeout : Optional[float] = None) -> Optional[Response]:
-        tx = TransactionMetadata()
-        # TODO this assumes cursor_to_endpoint buffers the entire
-        # payload and nothing between there and here re-chunks it
-        assert last and isinstance(blob, BlobReader)
-        tx.body = blob.rest_id
-        self.tx_cursor.write_envelope(tx)
-
-        start = time.monotonic()
-        while self.tx_cursor.tx.data_response is None:
-            timeout_left = None
-            if timeout is not None:
-                timeout_left = timeout - (time.monotonic() - start)
-                if timeout_left <= 0:
-                    break
-            self.tx_cursor.wait(timeout_left)
-
-        return self.tx_cursor.tx.data_response
-
     def abort(self):
         pass

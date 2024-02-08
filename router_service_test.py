@@ -190,10 +190,11 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), {})
         #self.assertEqual(tx_json.get('last', None), False)
 
+        tx = TransactionMetadata(body_blob=InlineBlob('world'))
         rest_endpoint._append_body(
-            last=True, blob=InlineBlob('world'))
-        resp = rest_endpoint.get_status(5)
-        self.assertIsNotNone(resp)
+            last=True, blob=tx.body_blob)
+        rest_endpoint.get_tx_response(5, tx)
+        self.assertIsNone(tx.data_response)
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
@@ -312,8 +313,10 @@ class RouterServiceTest(unittest.TestCase):
         #upstream_endpoint2.add_data_response(None)
         upstream_endpoint2.add_data_response(Response(204))
 
-        rest_endpoint.append_data(False, InlineBlob(b'Hello, '))
-        rest_endpoint.append_data(True, InlineBlob(b'World!'))
+        tx = TransactionMetadata(
+            body_blob=InlineBlob(b'Hello, World!'))
+        rest_endpoint.on_update(tx)
+        self.assertEqual(tx.data_response.code, 204)
 
 
 if __name__ == '__main__':

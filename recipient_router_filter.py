@@ -99,14 +99,5 @@ class RecipientRouterFilter(Filter):
         tx.data_response = self.upstream_tx.data_response
 
 
-    def append_data(self, last : bool, blob : Blob):
-        if self.received_ascii:
-            resp = self.endpoint.append_data(
-                last=False, blob=InlineBlob(self.received_ascii))
-            if resp.err():
-                return resp
-            self.received_ascii = None
-        return self.endpoint.append_data(last, blob)
-
     def abort(self):
         if self.endpoint: self.endpoint.abort()

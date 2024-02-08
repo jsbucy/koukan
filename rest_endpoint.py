@@ -183,14 +183,6 @@ class RestEndpoint(Filter):
         self._put_blob(blob, last)
 
 
-    def append_data(self, last : bool, blob : Blob) -> Optional[Response]:
-        logging.info('RestEndpoint.append_data %s %s %s %d',
-                     self.transaction_url, self.body_url, last, blob.len())
-
-        self._append_body(last, blob)
-        if not last:
-            return Response()
-        return self.get_status(self.timeout_data)
 
     def _put_blob(self, blob, last):
         logging.info('RestEndpoint._put_blob via uri %s blob.len=%d last %s',
@@ -253,13 +245,6 @@ class RestEndpoint(Filter):
 
         return Response(), dlen
 
-    def get_status(self, timeout) -> Optional[Response]:
-        if not self.wait_response: return None
-        resp = self.get_json_response(timeout, 'data_response')
-        if not resp:
-            return Response(400, 'RestEndpoint.get_status timeout')
-        return resp
-
 
     # XXX clearly distinguish internal, test methods
 
@@ -279,42 +264,6 @@ class RestEndpoint(Filter):
             self.etag = None
         return get_resp_json(rest_resp)
 
-    # block until transaction json contains field and is non-null or timeout,
-    # returns Response.from_json() from that field
-    # TODO used by router_service_test which should get off of this,
-    # get_status() which should be refactored with the rest of the
-    # Filter api around data to take tx?
-    def get_json_response(self, timeout, field) -> Optional[Response]:
-        # XXX verify this timeout code
-        now = time.monotonic()
-        deadline = now + timeout
-        delta = 1
-        while now <= deadline:
-            deadline_left = deadline - now
-            # retry at most once per second
-            if delta < 1:
-                if deadline_left < 1:
-                    break
-                time.sleep(min(1 - delta, deadline_left))
-            logging.info('RestEndpoint.get_json_response %f', deadline_left)
-            start = time.monotonic()
-
-            resp_json = self.get_json(deadline_left)
-            logging.info('RestEndpoint.get_json_response done %s', resp_json)
-            delta = time.monotonic() - start
-            assert(delta >= 0)
-            if resp_json is None:
-                return Response(400, 'RestEndpoint.get_json_response GET '
-                                'failed')
-
-            if resp_json.get(field, None) is not None:
-                if field == 'rcpt_response':
-                    # xxx wait until rcpt_response is expected length?
-                    return [Response.from_json(r) for r in resp_json[field]]
-                if resp:= Response.from_json(resp_json[field]):
-                    return resp
-            now = time.monotonic()
-        return None
 
     # update tx response fields per json
     def _update_tx(self, tx, tx_json):

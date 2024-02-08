@@ -54,17 +54,6 @@ class DkimEndpoint(Filter):
                         include_headers=[b'From', b'Date', b'Message-ID'])
         return sig
 
-    def append_data(self, last : bool, blob : Blob) -> Response:
-        self.blobs.append(blob)
-        if not last:
-            return Response()
-        sig = self.sign()
-
-        blobs = [ InlineBlob(sig) ] + self.blobs
-        for i,blob in enumerate(blobs):
-            last = (i == len(blobs)-1)
-            resp = self.next.append_data(last=last, blob=blob)
-            if resp.err() or last: return resp
 
     def abort(self):
         if self.next: self.next.abort()

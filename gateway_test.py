@@ -95,9 +95,9 @@ class GatewayTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
-        final_resp = rest_endpoint.append_data(
-            blob=InlineBlob('hello'), last=True)
-        self.assertEqual(final_resp.code, 250)
+        tx = TransactionMetadata(body_blob=InlineBlob('hello'))
+        rest_endpoint.on_update(tx)
+        self.assertEqual(tx.data_response.code, 250)
 
 
     def test_rest_to_smtp_idle_gc(self):
