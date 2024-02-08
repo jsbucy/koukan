@@ -74,7 +74,7 @@ class Exploder(Filter):
             delta.mail_response = Response(250)
 
     def _on_rcpt(self, delta, i : int, rcpt : Mailbox):
-        logging.info('Exploder._on_rcpt %s', rcpt)
+        logging.info('Exploder._on_rcpt %d %s', i, rcpt)
 
         # just send the envelope, we'll deal with any data below
         # TODO copy.copy() here?
@@ -99,25 +99,40 @@ class Exploder(Filter):
             mail_resp = Response(250, 'MAIL ok (exploder async upstream)')
             rcpt_resp = Response(250, 'RCPT ok (exploder async upstream)')
             async_rcpt = True
-        self.async_rcpts.append(async_rcpt)
+        self.async_rcpts[i] = async_rcpt
         logging.info('Exploder._on_rcpt upstream %s %s',
                      mail_resp, rcpt_resp)
 
-        self.upstream_chain.append(endpoint_i)
+        self.upstream_chain[i] = endpoint_i
 
         if delta.mail_from and not delta.mail_response:
             delta.mail_response = mail_resp
 
         # hopefully rare
         if mail_resp.err():
-            delta.rcpt_response.append(tx_i.mail_response)
-            self.ok_rcpts.append(False)
+            delta.rcpt_response[i] = tx_i.mail_response
+            self.ok_rcpts[i] = False
             return
 
-        delta.rcpt_response.append(rcpt_resp)
-        self.ok_rcpts.append(rcpt_resp.ok())
+        delta.rcpt_response[i] = rcpt_resp
+        self.ok_rcpts[i] = rcpt_resp.ok()
         if rcpt_resp.ok():
             self.ok_rcpt = True
+
+
+    def _on_rcpts(self, delta):
+        threads = []
+        delta.rcpt_response = [None] * len(delta.rcpt_to)
+        self.async_rcpts.extend([None] * len(delta.rcpt_to))
+        self.upstream_chain.extend([None] * len(delta.rcpt_to))
+        self.ok_rcpts.extend([None] * len(delta.rcpt_to))
+        for i,rcpt in enumerate(delta.rcpt_to):
+            t = Thread(target=lambda: self._on_rcpt(delta, i, rcpt))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            logging.debug('_on_rcpts_parallel join')
+            t.join()
 
 
     def on_update(self, delta):
@@ -127,8 +142,7 @@ class Exploder(Filter):
             self._on_mail(delta)
 
         # xxx parallelize
-        for i,rcpt in enumerate(delta.rcpt_to):
-            self._on_rcpt(delta, i, rcpt)
+        self._on_rcpts(delta)
 
         if delta.body_blob and (
                 delta.body_blob.len() == delta.body_blob.content_length()):

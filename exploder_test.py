@@ -33,12 +33,18 @@ class ExploderTest(unittest.TestCase):
         for l in self.storage.db.iterdump():
             print(l)
 
-    def factory(self):
+    def add_endpoint(self):
         endpoint = SyncEndpoint()
         with self.mu:
             self.upstream_endpoints.append(endpoint)
             self.cv.notify_all()
         return endpoint
+
+    def factory(self):
+        endpoint = SyncEndpoint()
+        with self.mu:
+            self.cv.wait_for(lambda: self.upstream_endpoints)
+            return self.upstream_endpoints.pop(0)
 
     def start_update(self, filter, tx):
         t = Thread(target=lambda: filter.on_update(tx), daemon=True)
@@ -61,16 +67,15 @@ class ExploderTest(unittest.TestCase):
         tx = TransactionMetadata()
         tx.rcpt_to = [ Mailbox('bob'), Mailbox('bob2') ]
 
+        up0 = self.add_endpoint()
+        up1 = self.add_endpoint()
+
         t = self.start_update(exploder, tx)
 
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 1)
-        self.upstream_endpoints[0].set_mail_response(Response(250))
-        self.upstream_endpoints[0].add_rcpt_response(Response(201))
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 2)
-        self.upstream_endpoints[1].set_mail_response(Response(250))
-        self.upstream_endpoints[1].add_rcpt_response(Response(202))
+        up0.set_mail_response(Response(250))
+        up0.add_rcpt_response(Response(201))
+        up1.set_mail_response(Response(250))
+        up1.add_rcpt_response(Response(202))
 
         self.join(t)
 
@@ -89,8 +94,8 @@ class ExploderTest(unittest.TestCase):
 
         t = self.start_update(exploder, tx)
 
-        self.upstream_endpoints[0].add_data_response(Response(250))
-        self.upstream_endpoints[1].add_data_response(Response(250))
+        up0.add_data_response(Response(250))
+        up1.add_data_response(Response(250))
         self.join(t)
         self.assertEqual(tx.data_response.code, 250)
         for endpoint in self.upstream_endpoints:
@@ -105,13 +110,14 @@ class ExploderTest(unittest.TestCase):
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
 
+        up0 = self.add_endpoint()
         t = self.start_update(exploder, tx)
         self.join(t)
 
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual(tx.rcpt_response[0].code, 250)
 
-        self.upstream_endpoints[0].add_data_response(None)
+        up0.add_data_response(None)
 
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)
@@ -126,16 +132,15 @@ class ExploderTest(unittest.TestCase):
             rcpt_to = [Mailbox('bob'),
                        Mailbox('bob2')])
 
+        up0 = self.add_endpoint()
+        up1 = self.add_endpoint()
+
         t = self.start_update(exploder, tx)
 
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 1)
-        self.upstream_endpoints[0].set_mail_response(Response(250))
-        self.upstream_endpoints[0].add_rcpt_response(Response(201))
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 2)
-        self.upstream_endpoints[1].set_mail_response(Response(250))
-        self.upstream_endpoints[1].add_rcpt_response(Response(450))
+        up0.set_mail_response(Response(250))
+        up0.add_rcpt_response(Response(201))
+        up1.set_mail_response(Response(250))
+        up1.add_rcpt_response(Response(450))
 
         self.join(t)
 
@@ -143,7 +148,7 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual(tx.rcpt_response[0].code, 201)
         self.assertEqual(tx.rcpt_response[1].code, 450)
 
-        self.upstream_endpoints[0].add_data_response(None)
+        up0.add_data_response(None)
 
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)
@@ -157,21 +162,21 @@ class ExploderTest(unittest.TestCase):
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob'), Mailbox('bob2')])
 
+        up0 = self.add_endpoint()
+        up1 = self.add_endpoint()
+
+
         t = self.start_update(exploder, tx)
 
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 1)
-        self.upstream_endpoints[0].set_mail_response(Response(250))
-        self.upstream_endpoints[0].add_rcpt_response(Response(201))
-        with self.mu:
-            self.cv.wait_for(lambda: len(self.upstream_endpoints) == 2)
-        self.upstream_endpoints[1].set_mail_response(Response(250))
-        self.upstream_endpoints[1].add_rcpt_response(Response(202))
+        up0.set_mail_response(Response(250))
+        up0.add_rcpt_response(Response(201))
+        up1.set_mail_response(Response(250))
+        up1.add_rcpt_response(Response(202))
 
         self.join(t)
 
-        self.upstream_endpoints[0].add_data_response(Response(250))
-        #self.upstream_endpoints[1].add_data_response(Response(250))
+        up0.add_data_response(Response(250))
+        #up1.add_data_response(Response(250))
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)
         self.assertEqual(tx.data_response.code, 250)
