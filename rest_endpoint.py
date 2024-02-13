@@ -16,6 +16,11 @@ TIMEOUT_START=5
 TIMEOUT_DATA=5
 
 def get_resp_json(resp):
+    # xxx all of these conditions are errors, should propagate, not
+    # swallow other exceptions
+    # if resp.headers.get('content-type', None) != 'application/json' or
+    #    not resp.content
+    # requests.Response.json() raises requests.exceptions.JSONDecodeError
     try:
         return resp.json()
     except Exception:

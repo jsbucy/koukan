@@ -7,7 +7,8 @@ from filter import Filter, Mailbox, TransactionMetadata
 from blob import Blob
 from response import Response
 
-# Fan-out multi-rcpt from smtp gw and fan responses back in
+# Fan-out multi-rcpt from smtp gw and fan responses back in. Convert
+# certain upstream temp errors to success for store&forward.
 
 # This provides opportunistic waiting for the upstream to return a
 # fast result so you don't accept if it would permfail upstream
@@ -33,34 +34,39 @@ from response import Response
 # return a 250, durably retry any temp failures, and emit bounces for
 # all the ones that don't eventually succeed.
 
+class Recipient:
+    # error or final data response
+    status : Optional[Response] = None
+    upstream : Optional[Filter] = None
+    mail_response : Optional[Response] = None
+    rcpt_response : Optional[Response] = None
+    thread : Optional[Thread] = None
+
+    def __init__(self):
+        pass
+
 class Exploder(Filter):
     output_chain : str
     factory : Callable[[str], Filter]
 
-    upstream_chain : List[Filter]
     rcpt_ok = False
     mail_from : Mailbox = None
-    ok_rcpt = False
-    ok_rcpts : List[bool]
-    # rcpts that tempfailed/timed out that we're accepting async for msa
-    async_rcpts : List[bool]
-    upstream_data_resp = List[Response]
-    #parent_body = None
+
+    recipients : List[Recipient]
 
     def __init__(self, output_chain : str,
                  factory : Callable[[], Filter],
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
-                 msa : Optional[bool] = None):
+                 msa : Optional[bool] = None,
+                 max_attempts : Optional[int] = None):
         self.output_chain = output_chain
         self.factory = factory
-        self.upstream_chain = []
-        self.ok_rcpts = []
-        self.async_rcpts = []
-        self.upstream_data_resp = []
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.msa = msa
+        self.max_attempts = max_attempts
+        self.recipients = []
 
     def _on_mail(self, delta):
         # because of the way SMTP works, you have to return a response
@@ -73,66 +79,118 @@ class Exploder(Filter):
         if not delta.rcpt_to:
             delta.mail_response = Response(250)
 
-    def _on_rcpt(self, delta, i : int, rcpt : Mailbox):
-        logging.info('Exploder._on_rcpt %d %s', i, rcpt)
+    def _on_rcpt(self, delta, rcpt : Mailbox, recipient : Recipient):
+        logging.info('Exploder._on_rcpt %s', rcpt)
 
         # just send the envelope, we'll deal with any data below
         # TODO copy.copy() here?
-        tx_i = TransactionMetadata(host = self.output_chain,
+        upstream_tx = TransactionMetadata(host = self.output_chain,
                                    mail_from = self.mail_from,
                                    rcpt_to = [rcpt],
                                    remote_host = delta.remote_host)
+        recipient.upstream = self.factory()
+        recipient.upstream.on_update(upstream_tx, self.rcpt_timeout)
 
-        endpoint_i = self.factory()
-        # fan this out if there were multiple though gw/smtplib
-        # doesn't do pipelining so it will only send us one at
-        # a time
+        # we accept upstream temp errors on mail/rcpt for
+        # store&forward for msa but not mx here
+        assert recipient.mail_response is None
+        recipient.mail_response = upstream_tx.mail_response
+        resps = len(upstream_tx.rcpt_response)
+        assert resps == 0 or resps == 1
+        assert recipient.rcpt_response is None
+        recipient.rcpt_response = (
+            upstream_tx.rcpt_response[0] if resps else None)
 
-        # this is where we do the "accept" part of "accept&bounce"
-        # for msa (or multi-rcpt mx) i.e. convert a 4xx or timeout
-        # to 250 in the hope that it will succeed later
-        endpoint_i.on_update(tx_i, self.rcpt_timeout)
-        mail_resp = tx_i.mail_response
-        rcpt_resp = tx_i.rcpt_response[0] if tx_i.rcpt_response else None
-        async_rcpt = False
-        if self.msa and (rcpt_resp is None or rcpt_resp.temp()):
-            mail_resp = Response(250, 'MAIL ok (exploder async upstream)')
-            rcpt_resp = Response(250, 'RCPT ok (exploder async upstream)')
-            async_rcpt = True
-        self.async_rcpts[i] = async_rcpt
-        logging.info('Exploder._on_rcpt upstream %s %s',
-                     mail_resp, rcpt_resp)
-
-        self.upstream_chain[i] = endpoint_i
-
-        if delta.mail_from and not delta.mail_response:
-            delta.mail_response = mail_resp
-
-        # hopefully rare
-        if mail_resp.err():
-            delta.rcpt_response[i] = tx_i.mail_response
-            self.ok_rcpts[i] = False
-            return
-
-        delta.rcpt_response[i] = rcpt_resp
-        self.ok_rcpts[i] = rcpt_resp.ok()
-        if rcpt_resp.ok():
-            self.ok_rcpt = True
+        # TODO storage writer filter should return Response(450) for
+        # timeouts, not None
 
 
     def _on_rcpts(self, delta):
-        threads = []
-        delta.rcpt_response = [None] * len(delta.rcpt_to)
-        self.async_rcpts.extend([None] * len(delta.rcpt_to))
-        self.upstream_chain.extend([None] * len(delta.rcpt_to))
-        self.ok_rcpts.extend([None] * len(delta.rcpt_to))
+        rcpts = []
         for i,rcpt in enumerate(delta.rcpt_to):
-            t = Thread(target=lambda: self._on_rcpt(delta, i, rcpt))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            logging.debug('_on_rcpts_parallel join')
-            t.join()
+            recipient = Recipient()
+            self.recipients.append(recipient)
+            rcpts.append(recipient)
+        delta.rcpt_response = [None] * len(delta.rcpt_to)
+
+        # NOTE smtplib/gateway don't currently don't support SMTP
+        # PIPELINING so it will only send one at a time here
+        if len(delta.rcpt_to) == 1:
+            self._on_rcpt(delta, delta.rcpt_to[0], rcpts[0])
+        else:
+            for i,rcpt in enumerate(delta.rcpt_to):
+                recipient = rcpts[i]
+                recipient.thread = Thread(
+                    target=lambda: self._on_rcpt(
+                        delta, rcpt, self.recipients[i]))
+                recipient.thread.start()
+                for r in self.recipients:
+                    logging.debug('_on_rcpts_parallel join')
+                    if not r.thread:
+                        continue
+                    # NOTE: we don't set a timeout on this join()
+                    # because we expect the next hop is something
+                    # internal (i.e. storage writer filter) that
+                    # respects the timeout
+                    r.thread.join()
+                    r.thread = None
+
+        for i, recipient in enumerate(rcpts):
+            mail_resp = recipient.mail_response
+            rcpt_resp = recipient.rcpt_response
+
+            # mail timeout
+            if mail_resp is None:
+                assert rcpt_resp is None
+                mail_resp = Response(450, 'exploder upstream MAIL timeout')
+
+            # Probably the most likely reason for MAIL to fail in 2024 is SPF?
+            if mail_resp.err():
+                assert rcpt_resp is None or rcpt_resp.err()
+                recipient.status = mail_resp
+                if self.msa and mail_resp.temp():
+                    mail_resp = (
+                        Response(250, 'MAIL ok (exploder async upstream)'))
+                else:
+                    delta.rcpt_response[i] = mail_resp
+
+            # Return the best MAIL response we've seen so far
+            # upstream.  Again, without pipelining in the current
+            # smtplib gateway implementation, we will always return a
+            # placeholder 250 in _on_mail() so this is mostly moot.
+
+            # It seems possible to get mixed upstream MAIL responses
+            # due to differing levels of SPF enforcement for say a
+            # multi-rcpt msa transaction to different destination
+            # domains. If the client pipelined multiple recipients
+            # (which again, the gateway doesn't currently support),
+            # you could see nondeterminstic behavior here depending on
+            # the ordering.
+
+            # In that case the real problem is that the client is
+            # sending mail that fails SPF and the MSA is accepting
+            # it.
+            if ((delta.mail_response is None) or
+                (delta.mail_response.perm() and mail_resp.temp()) or
+                (delta.mail_response.temp() and mail_resp.ok())):
+                delta.mail_response = mail_resp
+
+            if delta.mail_response.err():
+                return
+
+            # rcpt timeout
+            if rcpt_resp is None:
+                rcpt_resp = Response(450, 'exploder upstream RCPT timeout')
+
+            # rcpt err
+            if rcpt_resp.err():
+                recipient.status = rcpt_resp
+                if self.msa and rcpt_resp.temp():
+                    delta.rcpt_response[i] = (
+                        Response(250, 'RCPT ok (exploder async upstream)'))
+                    continue
+            delta.rcpt_response[i] = rcpt_resp
+
 
 
     def on_update(self, delta):
@@ -141,108 +199,101 @@ class Exploder(Filter):
         if delta.mail_from is not None:
             self._on_mail(delta)
 
-        # xxx parallelize
         self._on_rcpts(delta)
 
-        if delta.body_blob and (
-                delta.body_blob.len() == delta.body_blob.content_length()):
-            delta.data_response = self._append_data(True, delta.body_blob)
+        if delta.body_blob:
+            delta.data_response = self._append_data(delta.body_blob)
 
-    def _append_upstream(self, i, endpoint_i, last, blob, timeout):
-        logging.debug('Exploder._append_upstream %d %s %s timeout=%s', i,
-                      self.ok_rcpts[i], self.upstream_data_resp[i], timeout)
-        prev_resp = self.upstream_data_resp[i]
+    def _append_upstream(self, recipient : Recipient, blob, timeout):
+        prev_resp = recipient.status
+        logging.debug('Exploder._append_upstream %s timeout=%s',
+                      prev_resp, timeout)
         assert prev_resp is None or not prev_resp.perm()
         body_tx = TransactionMetadata()
         body_tx.body_blob = blob
-        endpoint_i.on_update(body_tx, timeout)
-        logging.info('Exploder.append_data %d %s', i, body_tx.data_response)
-        if body_tx.data_response is not None:
-            self.upstream_data_resp[i] = body_tx.data_response
+        recipient.upstream.on_update(body_tx, timeout)
+        data_resp = body_tx.data_response
+        logging.info('Exploder.append_data %s', data_resp)
+        last = blob.len() == blob.content_length()
+        assert last or data_resp is None or not data_resp.ok()
+        # TODO cf _on_rcpt(), possibly the upstream filter
+        # (StorageWriterFilter) should return Response(450) for
+        # timeouts, as it is we can't tell the difference between
+        # no-early-response and timeout for !last here
+        if last and data_resp is None:  # upstream timeout
+            data_resp = (
+                Response(450, 'exploder upstream timeout data'))
+        if data_resp is not None and prev_resp is None:
+            recipient.status = data_resp
 
-    def _append_data(self, last : bool, blob : Blob) -> Response:
-        logging.info('Exploder._append_data %s %s', last, self.async_rcpts)
-        assert self.ok_rcpt
-        if not self.upstream_data_resp:
-            self.upstream_data_resp = len(self.ok_rcpts) * [None]
+    def _append_data(self, blob : Blob) -> Response:
+        logging.info('Exploder._append_data %d %s',
+                     blob.len(), blob.content_length())
 
-        threads = []
-        for i,endpoint_i in enumerate(self.upstream_chain):
-            if not self.ok_rcpts[i]:
+        if self.msa:
+            # at least one recipient hasn't permfailed
+            assert any([r.status is None or not r.status.perm()
+                        for r in self.recipients])
+        else:
+            # at least one recipient hasn't failed
+            assert any([r.status is None for r in self.recipients])
+
+        for recipient in self.recipients:
+            rcpt_status = recipient.status
+            if rcpt_status and rcpt_status.perm():
                 continue
             timeout = self.data_timeout
-            if self.async_rcpts[i]:
+            if rcpt_status and rcpt_status.temp():
+                # TODO don't wait for a status since it's already
+                # failed, but maybe storage writer filter, etc, should
+                # know that and not wait?
                 timeout = 0
-            t = Thread(target = lambda: self._append_upstream(
-                i, endpoint_i, last, blob, timeout),
-                       daemon = True)
-            t.start()
-            threads.append(t)
+            recipient.thread = Thread(
+                target = lambda: self._append_upstream(
+                    recipient, blob, timeout),
+                daemon = True)
+            recipient.thread.start()
+
+        last = blob.len() == blob.content_length()
 
         start = time.monotonic()
-        for t in threads:
+        for recipient in self.recipients:
+            t = recipient.thread
+            if t is None:
+                continue
             deadline_left = None
             if self.data_timeout is not None:
                 deadline_left = self.data_timeout - (time.monotonic() - start)
-            # TODO we expect the upstream StorageWriterFilter to
-            # respect the timeouts so it is unexpected for this to
-            # time out
-            t.join(timeout=deadline_left)
-        logging.debug('upstream data resp %s', self.upstream_data_resp)
+            # NOTE: we don't set a timeout on this join()
+            # because we expect the next hop is something
+            # internal (i.e. storage writer filter) that
+            # respects the timeout
+            t.join()
+            assert not (last and recipient.status is None)
+
+        r0 = self.recipients[0].status
+        codes = [ int(r.status.code/100) if r.status is not None else None
+                  for r in self.recipients]
+        if len([c for c in codes if c == codes[0]]) == len(codes):
+            # same status for all recipients
+            if self.msa:
+                if r0 is None or r0.ok() or r0.perm():
+                    logging.debug('Exploder msa same resp')
+                    return r0
+            else:
+                logging.debug('Exploder mx same resp')
+                return r0
 
         if not last:
-            for i,endpoint_i in enumerate(self.upstream_chain):
-                resp = self.upstream_data_resp[i]
-                if resp is not None:
-                    if resp.perm():
-                        self.ok_rcpts[i] = False
-                    elif resp.temp():
-                        self.async_rcpts[i] = True
-                    else:
-                        # TODO not sure if this is ever expected
-                        logging.warn(
-                            'Exploder.append_data unexpected early response')
+            return None
 
-            if any(self.ok_rcpts):
-                return None
+        # TODO when we add bounce emission, we need to enable bounces
+        # for mx if we didn't return a sync error above.
 
-        r0 = None
-        for i,ok_rcpt in enumerate(self.ok_rcpts):
-            if not ok_rcpt:
-                continue
-            data_resp = self.upstream_data_resp[i]
-            if data_resp is None:
-                if self.async_rcpts[i]:
-                    data_resp = Response(250, 'exploder async resp')
-                else:
-                    data_resp = Response(450, 'exploder upstream timeout data')
-
-            if data_resp.temp():
-                self.async_rcpts[i] = True
-
-            if r0 is None:
-                r0 = data_resp
-                logging.debug('Exploder i=%d r0 %s', i, r0)
-                continue
-            if data_resp.code/100 != r0.code/100:
-                logging.debug('Exploder i=%d resp %s', i, data_resp)
-                break
-        else:
-            if not any(self.async_rcpts):
-                if self.msa:
-                    if r0.ok() or r0.perm():
-                        logging.debug('Exploder msa same resp')
-                        return r0
-                else:
-                    logging.debug('Exploder mx same resp')
-                    return r0
-
-        for i,async_rcpt in enumerate(self.async_rcpts):
-            if not async_rcpt:
-                continue
-            # xxx retry params from yaml
-            self.upstream_chain[i].on_update(
-                TransactionMetadata(max_attempts=100))
+        for recipient in [r for r in self.recipients if r.status.temp()]:
+            if self.max_attempts:
+                recipient.upstream.on_update(
+                    TransactionMetadata(max_attempts=self.max_attempts))
 
         return Response(
             250, 'accepted (exploder async mixed upstream responses)')

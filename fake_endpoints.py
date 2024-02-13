@@ -113,18 +113,6 @@ class SyncEndpoint(Filter):
                     return None
                 tx.data_response = self.data_resp.pop(0)
 
-
-    def append_data(self, last, blob,
-                    timeout : Optional[float] = None):
-        logging.info('SyncEndpoint.append_data %d %s', blob.len(), last)
-        assert(not self.last)
-        self.last = last
-        self.blobs.append(blob)
-        with self.lock:
-            if not self.cv.wait_for(lambda: bool(self.data_resp), timeout):
-                return None
-            return self.data_resp.pop(0)
-
     def abort(self):
         self.aborted = True
 

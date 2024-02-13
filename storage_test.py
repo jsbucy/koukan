@@ -129,6 +129,7 @@ class StorageTest(unittest.TestCase):
 
         tx.body = 'body_rest_id'
         tx_writer.create('tx_rest_id2', tx)
+        self.assertTrue(tx_writer.input_done)
 
     def test_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:

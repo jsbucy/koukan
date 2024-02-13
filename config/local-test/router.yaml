@@ -16,6 +16,7 @@ endpoint:
   - filter: exploder
     output_chain: msa-output
     msa: true
+    max_attempts: 3
 
 - name: msa-output
   msa: true
@@ -40,6 +41,7 @@ endpoint:
   chain:
   - filter: exploder
     output_chain: mx-out
+    max_attempts: 3
 
 - name: mx-out
   msa: false

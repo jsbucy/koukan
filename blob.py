@@ -4,6 +4,7 @@ class Blob:
     def len(self) -> int:
         raise NotImplementedError
 
+    # TODO this id is vestigal?
     def id(self) -> Optional[str]:
         return None
 
@@ -17,9 +18,15 @@ class Blob:
         pass
 
 class InlineBlob(Blob):
+    d : bytes
+    _content_length : Optional[int] = None
+
     # TODO this id is vestigal?
-    def __init__(self, d : bytes, id : Optional[str] = None):
+    def __init__(self, d : bytes,
+                 content_length : Optional[int] = None,
+                 id : Optional[str] = None):
         self.d = d
+        self._content_length = content_length
         self.blob_id = id
 
     def len(self):
@@ -32,7 +39,11 @@ class InlineBlob(Blob):
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
-        return len(self.d)
+        return self._content_length if self._content_length is not None else len(self.d)
+
+    def append(self, dd : bytes):
+        self.d += dd
+        assert self.len() <= self.content_length()
 
 class Chunk:
     # byte offset in CompositeBlob

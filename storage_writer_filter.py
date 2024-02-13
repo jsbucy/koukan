@@ -79,7 +79,9 @@ class StorageWriterFilter(Filter):
                 break
             deadline_left = None
             if timeout is not None:
-                timeout = (time.monotonic() - start)
+                deadline_left = timeout - (time.monotonic() - start)
+                if deadline_left <= 0:
+                    break
             self.tx_cursor.wait(deadline_left)
 
     def abort(self):

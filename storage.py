@@ -40,6 +40,8 @@ class TransactionCursor:
         #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
     # create_body_rest_id
+    # XXX maybe this should be refactored into
+    # insert; update in the same db tx
     def create(self, rest_id, tx : TransactionMetadata,
                create_body_rest_id : Optional[str] = None):
         parent = self.parent
@@ -49,7 +51,7 @@ class TransactionCursor:
             self.last = False
             self.version = 0
 
-            body_blob_id, body_rest_id = self._set_body(
+            body_blob_id, body_rest_id, input_done = self._set_body(
                 cursor, tx.body, create_body_rest_id)
 
             max_attempts = tx.max_attempts if tx.max_attempts else 1
@@ -58,15 +60,16 @@ class TransactionCursor:
             cursor.execute("""
                 INSERT INTO Transactions
                 (rest_id, creation, last_update, version, last,
-                 json, attempt_count, max_attempts, body_blob_id, body_rest_id)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                 json, attempt_count, max_attempts, body_blob_id, body_rest_id,
+                 input_done)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 RETURNING id""",
                 (rest_id, self.creation, self.creation,
                  self.version, self.last, db_json,
-                 max_attempts, body_blob_id, body_rest_id))
+                 max_attempts, body_blob_id, body_rest_id, input_done))
             self.id = cursor.fetchone()[0]
             self.tx = tx
-
+            self.input_done = input_done
             parent.db.commit()
 
         with parent.created_lock:
@@ -76,24 +79,27 @@ class TransactionCursor:
                 parent.created_cv.notify_all()
 
     def _set_body(self, cursor,
-                  reuse_body_rest_id=None, create_body_rest_id=None):
+                  reuse_body_rest_id=None, create_body_rest_id=None
+                  ) -> Tuple[int, str, bool]:
+                  # -> id, rest_id, input_done
         if reuse_body_rest_id:
             cursor.execute(
-                'SELECT id FROM Blob WHERE rest_id = ?',
+                'SELECT id,length(content),length FROM Blob WHERE rest_id = ?',
                 (reuse_body_rest_id,))
             row = cursor.fetchone()
             # xxx need proper reporting of this
             assert row
-            body_blob_id = row[0]
+            body_blob_id,length,content_length = row
+            done = (length == content_length)
             # XXX allow sharing incomplete for exploder but not rest?
-            return body_blob_id, reuse_body_rest_id
+            return body_blob_id, reuse_body_rest_id, done
         elif create_body_rest_id:
             blob_writer = self.parent.get_blob_writer()
             body_rest_id = create_body_rest_id
             body_blob_id = blob_writer._create(
                 body_rest_id, cursor)
-            return body_blob_id, create_body_rest_id
-        return None, None
+            return body_blob_id, create_body_rest_id, False
+        return None, None, None
 
     def write_envelope(self, tx_delta : TransactionMetadata,
                        create_body_rest_id : Optional[str] = None):
@@ -120,11 +126,12 @@ class TransactionCursor:
             set_body = ''
             set_body_val = ()
             # xxx err if this was already set?
-            body_blob_id, body_rest_id = self._set_body(
+            body_blob_id, body_rest_id, input_done = self._set_body(
                 cursor, tx_delta.body, create_body_rest_id)
             if body_blob_id:
-                set_body = ', body_blob_id = ?, body_rest_id = ?'
-                set_body_val = (body_blob_id, body_rest_id)
+                set_body = (', body_blob_id = ?, body_rest_id = ?, '
+                            'input_done = ?')
+                set_body_val = (body_blob_id, body_rest_id, input_done)
 
             cursor.execute("""
               UPDATE Transactions SET json = ?, version = ?,
@@ -138,6 +145,7 @@ class TransactionCursor:
             if (row := cursor.fetchone()) is None:
                 raise VersionConflictException()
             self.version = row[0]
+            self.input_done = input_done
 
             # XXX need to catch exceptions and db.rollback()? (throughout)
             self.parent.db.commit()
@@ -409,6 +417,8 @@ class BlobWriter:
 
         return self.id
 
+    # TODO this should probably just take Blob and share the data
+    # under the hood if isinstance(blob, BlobReader), etc
     def append_data(self, d : bytes, content_length=None):
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',

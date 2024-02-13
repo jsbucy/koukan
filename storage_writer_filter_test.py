@@ -26,20 +26,18 @@ class StorageWriterFilterTest(unittest.TestCase):
         for l in self.storage.db.iterdump():
             print(l)
 
-    def update(self, filter, tx):
-        filter.on_update(tx)
+    def update(self, filter, tx, timeout):
+        filter.on_update(tx, timeout)
 
-    def append(self, rresp : List[Optional[Response]], filter, blob, last):
-        rresp.append(filter.append_data(last=last, blob=blob))
-
-    def start_update(self, filter, tx):
-        t = Thread(target=lambda: self.update(filter, tx), daemon=True)
+    def start_update(self, filter, tx, timeout=None):
+        t = Thread(target=lambda: self.update(filter, tx, timeout=timeout),
+                   daemon=True)
         t.start()
         time.sleep(0.1)
         return t
 
-    def join(self, t):
-        t.join(timeout=1)
+    def join(self, t, timeout=1):
+        t.join(timeout=timeout)
         self.assertFalse(t.is_alive())
 
     def testBlob(self):
@@ -99,6 +97,13 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         self.assertEqual(tx.data_response.code, 203)
 
+    def testTimeout(self):
+        filter = StorageWriterFilter(self.storage)
+        filter._create(TransactionMetadata(host = 'outbound-gw'))
+
+        tx = TransactionMetadata(mail_from = Mailbox('alice'))
+        t = self.start_update(filter, tx, timeout=1)
+        self.join(t, 2)
 
 if __name__ == '__main__':
     unittest.main()
