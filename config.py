@@ -67,11 +67,15 @@ class Config:
         remote_host_disco = None
         if yaml.get('remote_host_discovery', '') == 'mx':
                 remote_host_disco = resolve_mx
+        rcpt_timeout = 30
+        data_timeout = 300
         return RestEndpoint(
             static_base_url = yaml['static_endpoint'],
             http_host = yaml['http_host'],
             static_remote_host = static_remote_host,
-            remote_host_resolution = remote_host_disco)
+            remote_host_resolution = remote_host_disco,
+            timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
+            timeout_data=yaml.get('data_timeout', data_timeout))
 
     def router_policy_dest_domain(self, policy_yaml):
         return DestDomainPolicy()

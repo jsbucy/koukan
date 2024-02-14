@@ -10,7 +10,7 @@ from requests.exceptions import ConnectionError
 from router_service import Service
 from rest_endpoint import RestEndpoint
 from response import Response
-from blob import InlineBlob
+from blob import CompositeBlob, InlineBlob
 from config import Config
 from fake_endpoints import SyncEndpoint
 from filter import HostPort, Mailbox, TransactionMetadata
@@ -151,8 +151,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), None)
         self.assertEqual(tx_json.get('last', None), None)
 
-        rest_resp = rest_endpoint._update(
-            TransactionMetadata(mail_from=Mailbox('alice')))
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_resp = rest_endpoint._update(tx.to_json())
         tx_json = rest_resp.json()
         logging.debug('RouterServiceTest.test_retry patch mail_from %s %s',
                       rest_resp, tx_json)
@@ -164,9 +164,8 @@ class RouterServiceTest(unittest.TestCase):
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
-
-        rest_resp = rest_endpoint._update(
-            TransactionMetadata(rcpt_to = [Mailbox('bob')]))
+        tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
+        rest_resp = rest_endpoint._update(tx.to_json())
         tx_json = rest_resp.json()
         logging.debug('RouterServiceTest.test_retry patch rcpt_to %s %s',
                       rest_resp, tx_json)
@@ -179,21 +178,17 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
                       tx_json)
 
-        resp = rest_endpoint._append_body(
-            last=False, blob=InlineBlob(b'hello'))
-        #self.assertIsNone(resp)
-        tx_json = rest_endpoint.get_json(0.9)  #rest_resp.json()
-        logging.debug('RouterServiceTest.test_retry post append %s %s',
-                      rest_resp, tx_json)
-        self.assertEqual(tx_json.get('mail_response', None), {})
-        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
-        self.assertEqual(tx_json.get('data_response', None), {})
-        #self.assertEqual(tx_json.get('last', None), False)
+        body_blob = CompositeBlob()
+        b = InlineBlob(b'hello')
+        body_blob.append(b, 0, b.len())
+        tx = TransactionMetadata(body_blob=body_blob)
+        rest_endpoint.on_update(tx)
+        self.assertIsNone(tx.data_response)
 
-        tx = TransactionMetadata(body_blob=InlineBlob('world'))
-        rest_endpoint._append_body(
-            last=True, blob=tx.body_blob)
-        rest_endpoint.get_tx_response(5, tx)
+        b = InlineBlob(b'world')
+        body_blob.append(b, 0, b.len(), True)
+        tx = TransactionMetadata(body_blob=body_blob)
+        rest_endpoint.on_update(tx)
         self.assertTrue(tx.data_response.temp())
 
         logging.debug('RouterServiceTest.test_retry get after append %s',

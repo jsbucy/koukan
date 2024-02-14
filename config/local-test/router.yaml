@@ -17,6 +17,8 @@ endpoint:
     output_chain: msa-output
     msa: true
     max_attempts: 3
+    rcpt_timeout: 4
+    data_timeout: 4
 
 - name: msa-output
   msa: true
@@ -35,6 +37,8 @@ endpoint:
     static_remote_host:
       host: 127.0.0.1
       port: 3025
+    rcpt_timeout: 5
+    data_timeout: 5
 
 - name: inbound-gw
   msa: false
@@ -42,6 +46,8 @@ endpoint:
   - filter: exploder
     output_chain: mx-out
     max_attempts: 3
+    rcpt_timeout: 4
+    data_timeout: 4
 
 - name: mx-out
   msa: false
@@ -57,6 +63,8 @@ endpoint:
     static_remote_host:
       host: 127.0.0.1
       port: 3025
+    rcpt_timeout: 5
+    data_timeout: 5
 
 
 storage:

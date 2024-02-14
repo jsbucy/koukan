@@ -42,6 +42,10 @@ class RestEndpoint(Filter):
     # if we have all the responses.
     rcpts = 0
 
+    # true if we've sent all of the data upstream and should wait for
+    # the data_response
+    data_last = False
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout):
             headers['request-timeout'] = str(int(timeout))
@@ -97,49 +101,45 @@ class RestEndpoint(Filter):
 
             req_headers = {'host': self.http_host}
             self._set_request_timeout(req_headers, timeout)
-            rest_resp = requests.post(self.base_url + '/transactions',
-                                      json=req_json,
-                                      headers=req_headers,
-                                      timeout=self.timeout_start)
+            try:
+                rest_resp = requests.post(self.base_url + '/transactions',
+                                          json=req_json,
+                                          headers=req_headers,
+                                          timeout=self.timeout_start)
+            except requests.Timeout:
+                return None
             # XXX rest_resp.status_code?
             logging.info('RestEndpoint.start resp %s', rest_resp)
             self.etag = rest_resp.headers.get('etag', None)
             resp_json = get_resp_json(rest_resp)
             logging.info('RestEndpoint.start resp_json %s', resp_json)
-
-            assert resp_json.get('url', None) is not None
-            # XXX return type!
-            #if not resp_json or 'url' not in resp_json:
-            #    return Response.Internal(
-            #        'RestEndpoint.start internal error (no json)')
+            if not resp_json:
+                return rest_resp
             self.transaction_url = self.base_url + resp_json['url']
             if body := resp_json.get('body', None):
                 self.body_url = self.base_url + body
 
             return rest_resp
 
-    def _update(self, tx=None, req_json=None, timeout : Optional[float] = None):
-        if tx:
-            req_json = tx.to_json()
-            if not req_json:
-                return  # noop
-
+    def _update(self, req_json, timeout : Optional[float] = None):
         req_headers = { 'host': self.http_host }
         self._set_request_timeout(req_headers, timeout)
         if self.etag:
             req_headers['if-match'] = self.etag
-        rest_resp = requests.patch(self.transaction_url,
-                                   json=req_json,
-                                   headers=req_headers,
-                                   timeout=self.timeout_start)
-
+        try:
+            rest_resp = requests.patch(self.transaction_url,
+                                       json=req_json,
+                                       headers=req_headers,
+                                       timeout=self.timeout_start)
+        except requests.Timeout:
+            return None
         logging.info('RestEndpoint.on_update resp %s', rest_resp)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.on_update resp_json %s', resp_json)
+        if not resp_json:
+            return None
 
         if rest_resp.status_code < 300:
-            if tx:
-                self.rcpts += len(tx.rcpt_to)
             self.etag = rest_resp.headers.get('etag', None)
             if body := resp_json.get('body', None):
                 self.body_url = self.base_url + body
@@ -154,41 +154,48 @@ class RestEndpoint(Filter):
         if self.base_url is None and tx.rest_endpoint:
             self.base_url = tx.rest_endpoint
 
-        if not self.transaction_url:
-            rest_resp = self._start(tx, tx.to_json())
-            self.rcpts = len(tx.rcpt_to)
-        else:
-            rest_resp = self._update(tx)
+        req_json = tx.to_json()
+        body_last = tx.body_blob and (
+            tx.body_blob.len() == tx.body_blob.content_length())
+        if body_last and not self.body_url:
+            req_json['body'] = ''
 
-        if rest_resp is not None:
+        if req_json:
+            if not self.transaction_url:
+                rest_resp = self._start(tx, req_json)
+            else:
+                rest_resp = self._update(req_json)
+
+            # xxx think a little more carefully about errors here, if
+            # we see a timeout on response but the server handled it,
+            # we'll get an etag failure on the next req?
+            if len(tx.rcpt_response) == len(tx.rcpt_to):
+                self.rcpts += len(tx.rcpt_to)
+
             timeout = timeout if timeout is not None else self.timeout_start
+            # TODO test hook is only used in startup probing in router
+            # service test, should be able to remove
             if not self.wait_response:
                 return
             # xxx filter api needs to accomodate returning an error here
             # or else stuff the http error in the response for the first
             # inflight req field in tx?
-            if rest_resp.status_code >= 300:
-                return
-            self.get_tx_response(timeout, tx, rest_resp.json())
+            resp_json = get_resp_json(rest_resp) if rest_resp else None
+            http_err = rest_resp is None or rest_resp.status_code >= 300 or resp_json is None
+            resp_json = resp_json if resp_json else {}
+            self.get_tx_response(timeout, tx, resp_json, http_err)
 
-        # TODO once we've dismantled the old path, this can trickle
-        # out the blob as it grows
-        if tx.body_blob and tx.body_blob.len() == tx.body_blob.content_length():
-            self._append_body(True, tx.body_blob)
-            self.get_tx_response(self.timeout_data, tx)
+        # TODO this can trickle out the blob as it grows
+        if body_last:
+            logging.debug('RestEndpoint.on_update body_blob')
+            assert self.body_url
+            data_resp = self._put_blob(tx.body_blob, last=True)
+            logging.debug('on_update %s', data_resp)
+            http_err = (data_resp is None)
+            self.data_last = True
+            self.get_tx_response(self.timeout_data, tx, {}, http_err)
 
-    def _append_body(self, last, blob):
-        logging.debug('RestEndpoint._append_body %s %s %s %d',
-                      self.transaction_url, self.body_url, last, blob.len())
-        if not self.body_url:
-            self._update(req_json={'body': ''})
-        assert self.body_url
-
-        self._put_blob(blob, last)
-
-
-
-    def _put_blob(self, blob, last):
+    def _put_blob(self, blob, last) -> Optional[Response]:
         logging.info('RestEndpoint._put_blob via uri %s blob.len=%d last %s',
                      self.body_url, blob.len(), last)
 
@@ -205,7 +212,7 @@ class RestEndpoint(Filter):
                 offset=self.body_len,
                 d=chunk,
                 last=chunk_last)
-            if resp.err():
+            if resp is None or resp.err():
                 return resp
             # how many bytes from chunk were actually accepted?
             chunk_out = body_offset - self.body_len
@@ -213,7 +220,7 @@ class RestEndpoint(Filter):
                           body_offset, chunk_out)
             offset += chunk_out
             self.body_len += chunk_out
-
+        logging.debug('_put_blob %s', resp)
         return resp
 
     # -> (resp, len)
@@ -227,15 +234,18 @@ class RestEndpoint(Filter):
                                  offset + len(d) if last else None)
             headers['content-range'] = range.to_header()
         headers['host'] = self.http_host
-        rest_resp = requests.put(
-            chunk_uri, headers=headers, data=d, timeout=self.timeout_data)
-        logging.info('RestEndpoint.append_data_chunk %s', rest_resp)
+        try:
+            rest_resp = requests.put(
+                chunk_uri, headers=headers, data=d, timeout=self.timeout_data)
+        except requests.Timeout:
+            return None, None
+        logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
         # Most(all?) errors on blob put here means temp
         # transaction final status
         # IOW blob upload is not the place to reject the content, etc.
         if rest_resp.status_code > 299:
             return Response(
-                400, 'RestEndpoint.append_data_chunk PUT err'), None
+                400, 'RestEndpoint._put_blob_chunk PUT err'), None
 
         dlen = len(d)
         if 'content-range' in rest_resp.headers:
@@ -244,7 +254,7 @@ class RestEndpoint(Filter):
             logging.debug('_put_blob_chunk resp range %s', range)
             if range is None or range.start != offset:
                 return Response(
-                    400, 'RestEndpoint.append_data_chunk bad range'), None
+                    400, 'RestEndpoint._put_blob_chunk bad range'), None
             dlen = range.stop
 
         return Response(), dlen
@@ -294,18 +304,17 @@ class RestEndpoint(Filter):
                 tx.rcpt_response.append(None)
             if tx.rcpt_response[i] is not None:
                 continue
+            elif timeout:
+                tx.rcpt_response[i] = Response(
+                    400, 'RestEndpoint upstream timeout RCPT')
             elif i >= len(rcpt_resp):
                 done = False
             elif rcpt_resp[i] is not None:
                 tx.rcpt_response[i] = rcpt_resp[i]
-            elif timeout:
-                tx.rcpt_response[i] = Response(
-                    400, 'RestEndpoint upstream timeout RCPT')
             else:
                 done = False
 
-        if tx.data_response is None and tx.body_blob and (
-                tx.body_blob.len() == tx.body_blob.content_length()):
+        if tx.data_response is None and self.data_last:
             if data_resp := Response.from_json(
                     tx_json.get('data_response', {})):
                 tx.data_response = data_resp
@@ -322,10 +331,11 @@ class RestEndpoint(Filter):
     # if you already have tx json from a previous POST/PATCH, pass it
     # in tx_json
     def get_tx_response(self, timeout, tx : TransactionMetadata,
-                        tx_json={}):
+                        tx_json={}, http_err : bool = False):
+        logging.debug('get_tx_response %s %s', tx_json, http_err)
         deadline = time.monotonic() + timeout
         prev = 0
-        timedout = False
+        timedout = http_err
         while True:
             if self._update_tx(tx, tx_json, timedout):
                 break
@@ -344,8 +354,8 @@ class RestEndpoint(Filter):
             tx_json = self.get_json(deadline_left)
             logging.info('RestEndpoint.get_tx_response done %s', tx_json)
             if tx_json is None:
-                return Response(400, 'RestEndpoint.get_tx_response GET '
-                                'failed')
+                tx_json = {}
+                timedout = True
 
         return None
 
