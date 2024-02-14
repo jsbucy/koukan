@@ -15,15 +15,14 @@ from blob import Blob
 TIMEOUT_START=5
 TIMEOUT_DATA=5
 
+# TODO maybe distinguish empty resp.content vs wrong content-type/invalid json?
 def get_resp_json(resp):
-    # xxx all of these conditions are errors, should propagate, not
-    # swallow other exceptions
-    # if resp.headers.get('content-type', None) != 'application/json' or
-    #    not resp.content
-    # requests.Response.json() raises requests.exceptions.JSONDecodeError
+    if (resp.headers.get('content-type', None) != 'application/json' or
+        not resp.content):
+        return None
     try:
         return resp.json()
-    except Exception:
+    except requests.exceptions.JSONDecodeError:
         return None
 
 class RestEndpoint(Filter):
@@ -271,31 +270,48 @@ class RestEndpoint(Filter):
 
 
     # update tx response fields per json
-    def _update_tx(self, tx, tx_json):
+    # timeout: have we reached the deadline and need to fill in temp
+    # error responses for any unpopulated req fields
+    def _update_tx(self, tx, tx_json, timeout : bool):
         done = True
         if tx.mail_from and tx.mail_response is None:
             if mail_resp := Response.from_json(
                     tx_json.get('mail_response', {})):
                 tx.mail_response = mail_resp
+            elif timeout:
+                tx.mail_response = Response(
+                    400, 'RestEndpoint upstream timeout MAIL')
             else:
                 done = False
-        if (len([r for r in tx.rcpt_response if r is not None]) !=
-            len(tx.rcpt_to)):
-            rcpt_resp = [
-                Response.from_json(r)
-                for r in tx_json.get('rcpt_response', []) ]
-            new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
-            rcpt_resp = rcpt_resp[new_rcpt_offset:]
-            if len([r for r in rcpt_resp if r is not None]
-                   ) == len(tx.rcpt_to):
-                tx.rcpt_response = rcpt_resp
+
+        rcpt_resp = [
+            Response.from_json(r)
+            for r in tx_json.get('rcpt_response', []) ]
+        new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
+        rcpt_resp = rcpt_resp[new_rcpt_offset:]
+        for i in range(0,len(tx.rcpt_to)):
+            if len(tx.rcpt_response) <= i:
+                tx.rcpt_response.append(None)
+            if tx.rcpt_response[i] is not None:
+                continue
+            elif i >= len(rcpt_resp):
+                done = False
+            elif rcpt_resp[i] is not None:
+                tx.rcpt_response[i] = rcpt_resp[i]
+            elif timeout:
+                tx.rcpt_response[i] = Response(
+                    400, 'RestEndpoint upstream timeout RCPT')
             else:
                 done = False
-        if tx.body_blob and (
+
+        if tx.data_response is None and tx.body_blob and (
                 tx.body_blob.len() == tx.body_blob.content_length()):
             if data_resp := Response.from_json(
                     tx_json.get('data_response', {})):
                 tx.data_response = data_resp
+            elif timeout:
+                tx.data_response = Response(
+                    400, 'RestEndpoint upstream timeout DATA')
             else:
                 done = False
 
@@ -309,13 +325,15 @@ class RestEndpoint(Filter):
                         tx_json={}):
         deadline = time.monotonic() + timeout
         prev = 0
+        timedout = False
         while True:
-            if self._update_tx(tx, tx_json):
+            if self._update_tx(tx, tx_json, timedout):
                 break
             now = time.monotonic()
             deadline_left = deadline - now
             if deadline_left < self.min_poll:
-                break
+                timedout = True
+                continue
             delta = now - prev
             prev = now
             # retry at most once per self.min_poll
@@ -323,7 +341,6 @@ class RestEndpoint(Filter):
                 wait = self.min_poll - delta
                 time.sleep(wait)
 
-            # TODO pass the deadline in a header?
             tx_json = self.get_json(deadline_left)
             logging.info('RestEndpoint.get_tx_response done %s', tx_json)
             if tx_json is None:

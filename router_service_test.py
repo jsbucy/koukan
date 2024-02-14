@@ -194,7 +194,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint._append_body(
             last=True, blob=tx.body_blob)
         rest_endpoint.get_tx_response(5, tx)
-        self.assertIsNone(tx.data_response)
+        self.assertTrue(tx.data_response.temp())
 
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)

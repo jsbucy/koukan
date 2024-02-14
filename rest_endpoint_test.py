@@ -220,7 +220,7 @@ class RestEndpointTest(unittest.TestCase):
 
         req = self.requests.pop(0)  # POST
         self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual([r.code if r else None for r in tx.rcpt_response], [202])
 
         # incomplete -> noop
         tx = TransactionMetadata()
