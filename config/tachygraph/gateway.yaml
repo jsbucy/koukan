@@ -1,0 +1,30 @@
+# rest -> smtp
+rest_listener:
+  use_gunicorn: true
+  addr: ["[::0]", 8001]
+
+smtp_output:
+  ehlo_host: tachygraph.gloop.org
+
+# smtp -> rest
+smtp_listener:
+  services:
+    - addr: ["[::0]", 25]
+      endpoint: mx
+      cert: /etc/letsencrypt/live/tachygraph.gloop.org/fullchain.pem
+      key: /etc/letsencrypt/live/tachygraph.gloop.org/privkey.pem
+    - addr: ["[::0]", 587]
+      endpoint: msa
+      auth_secrets: secrets.json
+      cert: /etc/letsencrypt/live/tachygraph.gloop.org/fullchain.pem
+      key: /etc/letsencrypt/live/tachygraph.gloop.org/privkey.pem
+
+rest_output:
+  - name: mx
+    host: inbound-gw
+    endpoint: http://localhost:8000/
+  - name: msa
+    host: outbound-gw
+    endpoint: http://localhost:8000/
+
+

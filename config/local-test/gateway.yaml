@@ -2,8 +2,6 @@
 rest_listener:
   use_gunicorn: true
   addr: ["[::0]", 8001]
-  # cert:
-  # key:
 
 smtp_output:
   ehlo_host: frylock
@@ -12,13 +10,16 @@ smtp_output:
 smtp_listener:
   services:
     - addr: [localhost, 1025]
-      type: mx
+      endpoint: mx
     - addr: [localhost, 1587]
-      type: msa
-
-  # auth_secrets
+      endpoint: msa
 
 rest_output:
-  endpoint: http://localhost:8000/
+  - name: mx
+    host: inbound-gw
+    endpoint: http://localhost:8000/
+  - name: msa
+    host: outbound-gw
+    endpoint: http://localhost:8000/
 
 

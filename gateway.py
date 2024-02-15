@@ -24,8 +24,6 @@ class SmtpGateway(EndpointFactory):
         self.config = config
 
         rest_output  = config.root_yaml.get('rest_output', None)
-        if rest_output:
-            self.router_base_url = rest_output.get('endpoint', None)
 
         self.blobs = BlobStorage()
         self.smtp_factory = SmtpFactory()
@@ -42,11 +40,18 @@ class SmtpGateway(EndpointFactory):
             self.gc_thread.join()
             self.gc_thread = None
 
-    def mx_rest_factory(self):
-        return RestEndpoint(self.router_base_url, http_host='inbound-gw')
+    def rest_factory(self, yaml):
+        return RestEndpoint(
+            yaml['endpoint'],
+            http_host=yaml['host'],
+            timeout_start=yaml.get('rcpt_timeout', 30),
+            timeout_data=yaml.get('data_timeout', 60))
 
-    def msa_rest_factory(self):
-        return RestEndpoint(self.router_base_url, http_host='outbound-gw')
+    def rest_endpoint_yaml(self, name):
+        for endpoint_yaml in self.config.root_yaml['rest_output']:
+            if endpoint_yaml['name'] == name:
+                return endpoint_yaml
+        return None
 
     # EndpointFactory
     def create(self, host):
@@ -89,11 +94,8 @@ class SmtpGateway(EndpointFactory):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:
             factory = None
             msa = False
-            if service_yaml['type'] == 'mx':
-                factory = lambda: self.mx_rest_factory()
-            elif service_yaml['type'] == 'msa':
-                factory = lambda: self.msa_rest_factory()
-                msa = True
+            endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
+            factory = lambda: self.rest_factory(endpoint_yaml)
 
             # cf router config.Config.exploder()
             rcpt_timeout=40
@@ -107,7 +109,6 @@ class SmtpGateway(EndpointFactory):
                 factory, hostname=addr[0], port=addr[1],
                 cert=service_yaml.get('cert', None),
                 key=service_yaml.get('key', None),
-                msa=msa,
                 auth_secrets_path=service_yaml.get('auth_secrets', None),
                 rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 data_timeout=service_yaml.get('data_timeout', data_timeout))

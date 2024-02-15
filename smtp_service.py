@@ -15,12 +15,11 @@ from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
 class SmtpHandler:
-    def __init__(self, endpoint_factory, msa, max_rcpt=None,
+    def __init__(self, endpoint_factory, max_rcpt=None,
                  timeout_mail=10,
                  timeout_rcpt=60,
                  timeout_data=330):
         self.endpoint_factory = endpoint_factory
-        self.msa = msa
         self.max_rcpt = max_rcpt
         self.next_blob_id = 0
         self.timeout_mail = timeout_mail
@@ -135,7 +134,7 @@ class ControllerTls(Controller):
                     authenticator=self.auth)
 
 
-def service(endpoint, msa,
+def service(endpoint,
             hostname="localhost", port=9025, cert=None, key=None,
             auth_secrets_path=None, max_rcpt=None,
             rcpt_timeout=None, data_timeout=None):
@@ -149,7 +148,7 @@ def service(endpoint, msa,
     else:
         ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    handler = SmtpHandler(endpoint, msa, max_rcpt, rcpt_timeout, data_timeout)
+    handler = SmtpHandler(endpoint, max_rcpt, rcpt_timeout, data_timeout)
     controller = ControllerTls(handler,
                                hostname, port, ssl_context,
                                auth)
