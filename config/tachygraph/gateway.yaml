@@ -9,11 +9,11 @@ smtp_output:
 # smtp -> rest
 smtp_listener:
   services:
-    - addr: ["[::0]", 25]
+    - addr: ["", 25]
       endpoint: mx
       cert: /etc/letsencrypt/live/tachygraph.gloop.org/fullchain.pem
       key: /etc/letsencrypt/live/tachygraph.gloop.org/privkey.pem
-    - addr: ["[::0]", 587]
+    - addr: ["", 587]
       endpoint: msa
       auth_secrets: secrets.json
       cert: /etc/letsencrypt/live/tachygraph.gloop.org/fullchain.pem
