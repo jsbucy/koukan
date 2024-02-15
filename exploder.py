@@ -77,6 +77,7 @@ class Exploder(Filter):
         assert self.mail_from is None
         self.mail_from = delta.mail_from
         if not delta.rcpt_to:
+            # otherwise we'll take care of it in _on_rcpt()
             delta.mail_response = Response(250)
 
     def _on_rcpt(self, delta, rcpt : Mailbox, recipient : Recipient):
@@ -95,15 +96,10 @@ class Exploder(Filter):
         # store&forward for msa but not mx here
         assert recipient.mail_response is None
         recipient.mail_response = upstream_tx.mail_response
-        resps = len(upstream_tx.rcpt_response)
-        assert resps == 0 or resps == 1
-        assert recipient.rcpt_response is None
-        recipient.rcpt_response = (
-            upstream_tx.rcpt_response[0] if resps else None)
-
-        # TODO storage writer filter should return Response(450) for
-        # timeouts, not None
-
+        rcpt_resp = upstream_tx.rcpt_response
+        assert len(rcpt_resp) == 1 and rcpt_resp[0] is not None
+        recipient.rcpt_response = rcpt_resp[0]
+        logging.debug('_on_rcpt %s %s', upstream_tx.mail_response, rcpt_resp[0])
 
     def _on_rcpts(self, delta):
         rcpts = []
@@ -139,10 +135,15 @@ class Exploder(Filter):
             mail_resp = recipient.mail_response
             rcpt_resp = recipient.rcpt_response
 
-            # mail timeout
-            if mail_resp is None:
-                assert rcpt_resp is None
-                mail_resp = Response(450, 'exploder upstream MAIL timeout')
+            # In the absence of pipelining, we returned a noop 2xx to
+            # MAIL downstream in _on_mail(). If mail failed upstream
+            # for a rcpt, if rcpt had a response at all, it's
+            # something like failed precondition/invalid sequence of
+            # commands. In this case, return the upstream mail err as
+            # the rcpt response here which is the real error and
+            # ignore the rcpt response which is moot.
+
+            logging.debug('_on_rcpt %d %s %s', i, mail_resp, rcpt_resp)
 
             # Probably the most likely reason for MAIL to fail in 2024 is SPF?
             if mail_resp.err():
@@ -151,6 +152,9 @@ class Exploder(Filter):
                 if self.msa and mail_resp.temp():
                     mail_resp = (
                         Response(250, 'MAIL ok (exploder async upstream)'))
+                    rcpt_resp = (
+                        Response(250, 'RCPT ok '
+                                 '(exploder async upstream after MAIL temp)'))
                 else:
                     delta.rcpt_response[i] = mail_resp
 
@@ -170,26 +174,21 @@ class Exploder(Filter):
             # In that case the real problem is that the client is
             # sending mail that fails SPF and the MSA is accepting
             # it.
-            if ((delta.mail_response is None) or
-                (delta.mail_response.perm() and mail_resp.temp()) or
-                (delta.mail_response.temp() and mail_resp.ok())):
-                delta.mail_response = mail_resp
-
-            if delta.mail_response.err():
-                return
-
-            # rcpt timeout
-            if rcpt_resp is None:
-                rcpt_resp = Response(450, 'exploder upstream RCPT timeout')
+            if delta.mail_from is not None:
+                if (delta.mail_response is None or
+                    (delta.mail_response.perm() and mail_resp.temp()) or
+                    (delta.mail_response.temp() and mail_resp.ok())):
+                    delta.mail_response = mail_resp
 
             # rcpt err
-            if rcpt_resp.err():
+            if recipient.status is None and rcpt_resp.err():
                 recipient.status = rcpt_resp
                 if self.msa and rcpt_resp.temp():
                     delta.rcpt_response[i] = (
                         Response(250, 'RCPT ok (exploder async upstream)'))
                     continue
-            delta.rcpt_response[i] = rcpt_resp
+            if delta.rcpt_response[i] is None:
+                delta.rcpt_response[i] = rcpt_resp
 
 
 
@@ -216,13 +215,7 @@ class Exploder(Filter):
         logging.info('Exploder.append_data %s', data_resp)
         last = blob.len() == blob.content_length()
         assert last or data_resp is None or not data_resp.ok()
-        # TODO cf _on_rcpt(), possibly the upstream filter
-        # (StorageWriterFilter) should return Response(450) for
-        # timeouts, as it is we can't tell the difference between
-        # no-early-response and timeout for !last here
-        if last and data_resp is None:  # upstream timeout
-            data_resp = (
-                Response(450, 'exploder upstream timeout data'))
+        assert not (last and data_resp is None)
         if data_resp is not None and prev_resp is None:
             recipient.status = data_resp
 
@@ -256,14 +249,10 @@ class Exploder(Filter):
 
         last = blob.len() == blob.content_length()
 
-        start = time.monotonic()
         for recipient in self.recipients:
             t = recipient.thread
             if t is None:
                 continue
-            deadline_left = None
-            if self.data_timeout is not None:
-                deadline_left = self.data_timeout - (time.monotonic() - start)
             # NOTE: we don't set a timeout on this join()
             # because we expect the next hop is something
             # internal (i.e. storage writer filter) that

@@ -7,7 +7,6 @@ import time
 
 from storage import Storage, TransactionCursor
 from response import Response
-from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
 from blob import InlineBlob
@@ -97,13 +96,64 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         self.assertEqual(tx.data_response.code, 203)
 
-    def testTimeout(self):
+    def testTimeoutMail(self):
         filter = StorageWriterFilter(self.storage)
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = self.start_update(filter, tx, timeout=1)
         self.join(t, 2)
+        self.assertEqual(tx.mail_response.code, 400)
+
+    def testTimeoutRcpt(self):
+        filter = StorageWriterFilter(self.storage)
+        filter._create(TransactionMetadata(host = 'outbound-gw'))
+
+        tx = TransactionMetadata(mail_from = Mailbox('alice'),
+                                 rcpt_to = [Mailbox('bob')])
+        t = self.start_update(filter, tx, timeout=1)
+
+        tx_cursor = self.storage.load_one()
+        self.assertIsNotNone(tx_cursor)
+
+        while tx_cursor.tx.mail_from is None:
+            tx_cursor.wait()
+        tx_cursor.set_mail_response(Response(201))
+
+        self.join(t, 2)
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [400])
+
+    def testTimeoutData(self):
+        filter = StorageWriterFilter(self.storage)
+        filter._create(TransactionMetadata(host = 'outbound-gw'))
+
+        blob_writer = self.storage.get_blob_writer()
+        blob_writer.create('blob_rest_id')
+        d = b'hello, world!'
+        blob_writer.append_data(d, len(d))
+
+        blob_reader = self.storage.get_blob_reader()
+        self.assertIsNotNone(blob_reader.load(rest_id='blob_rest_id'))
+
+        tx = TransactionMetadata(mail_from = Mailbox('alice'),
+                                 rcpt_to = [Mailbox('bob')],
+                                 body_blob=blob_reader)
+        t = self.start_update(filter, tx, timeout=1)
+
+        tx_cursor = self.storage.load_one()
+        self.assertIsNotNone(tx_cursor)
+
+        while tx_cursor.tx.mail_from is None:
+            tx_cursor.wait()
+        tx_cursor.set_mail_response(Response(201))
+        tx_cursor.add_rcpt_response([Response(202)])
+
+        self.join(t, 2)
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 400)
+
 
 if __name__ == '__main__':
     unittest.main()

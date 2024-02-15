@@ -52,36 +52,53 @@ class StorageWriterFilter(Filter):
             wait_data_resp = True
 
         start = time.monotonic()
+        timed_out = False
         while True:
             done = True
             if self.tx_cursor.tx is None:
                 done = False
-            if done and self.tx_cursor.tx.mail_from is not None:
+            if done and tx.mail_from is not None and tx.mail_response is None:
                 if self.tx_cursor.tx.mail_response is not None:
                     tx.mail_response = self.tx_cursor.tx.mail_response
+                elif timed_out:
+                    tx.mail_response = Response(
+                        400, 'storage writer filter upstream timeout MAIL')
                 else:
                     done = False
-            if done and (len(self.tx_cursor.tx.rcpt_response) ==
-                len(self.tx_cursor.tx.rcpt_to)):
-                # storage returns the full vector but we return the
-                # delta downstream
-                tx.rcpt_response = self.tx_cursor.tx.rcpt_response[
-                    -len(tx.rcpt_to):]
-            else:
-                done = False
+            # storage returns the full vector but we return the delta
+            rcpt_response = self.tx_cursor.tx.rcpt_response[-len(tx.rcpt_to):]
+            for i in range(0, len(tx.rcpt_to)):
+                if len(tx.rcpt_response) <= i:
+                    tx.rcpt_response.append(None)
+                if tx.rcpt_response[i] is not None:
+                    continue
+                elif timed_out:
+                    tx.rcpt_response[i] = Response(
+                        400, 'storage writer filter upstream timeout RCPT')
+                elif i >= len(rcpt_response):
+                    done = False
+                elif rcpt_response[i] is not None:
+                    tx.rcpt_response[i] = rcpt_response[i]
+                else:
+                    done = False
 
             if done and wait_data_resp:
                 if self.tx_cursor.tx.data_response:
                     tx.data_response = self.tx_cursor.tx.data_response
+                elif timed_out:
+                    tx.data_response = Response(
+                        400, 'storage writer filter upstream timeout DATA')
                 else:
                     done = False
             if done:
                 break
             deadline_left = None
             if timeout is not None:
+                assert not timed_out
                 deadline_left = timeout - (time.monotonic() - start)
                 if deadline_left <= 0:
-                    break
+                    timed_out = True
+                    continue
             self.tx_cursor.wait(deadline_left)
 
     def abort(self):

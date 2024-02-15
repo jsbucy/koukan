@@ -55,22 +55,12 @@ class Test:
 
 vec_mx = [
     # single recipient
-    # mail timeout reported via rcpt
-    Test(
-        'alice',
-        [ Rcpt('bob', None, None, []) ],
-        [],
-        Response(250),  # injected
-        [Response(450)],  # injected
-        None,
-    ),
-
     # mail perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(501), None, []) ],
+        [ Rcpt('bob', Response(501), Response(502), []) ],
         [],
-        Response(250),  # injected
+        Response(250),  # noop mail/injected
         [Response(501)],  # upstream
         None,
     ),
@@ -78,20 +68,10 @@ vec_mx = [
     # mail temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(401), None, []) ],
+        [ Rcpt('bob', Response(401), Response(500), []) ],
         [],
         Response(250),  # injected
         [Response(401)],  # upstream
-        None,
-    ),
-
-    # mail success, rcpt timeout
-    Test(
-        'alice',
-        [ Rcpt('bob', Response(201), None, []) ],
-        [],
-        Response(250),  # injected
-        [Response(450)],  # injected resp
         None,
     ),
 
@@ -105,7 +85,6 @@ vec_mx = [
         None,
     ),
 
-
     # mail success, rcpt temp
     Test(
         'alice',
@@ -115,17 +94,6 @@ vec_mx = [
         [Response(401)],  # upstreawm
         None,
     ),
-
-    # mail, rcpt success, data !last timeout
-    # Test(
-    #     'alice',
-    #     [ Rcpt('bob', Response(201), Response(201), [None]) ],
-    #     [b'hello, ', b'world!'],
-    #     Response(250),  # injected
-    #     [Response(201)],  # upstream
-    #     [Response(450)],  # injected
-    # ),
-
 
     # mail, rcpt success, data !last perm
     Test(
@@ -145,16 +113,6 @@ vec_mx = [
         Response(250),  # injected
         [Response(202)],  # upstream
         [Response(401)],  # upstream
-    ),
-
-    # mail, rcpt success, data !last success, last timeout
-    Test(
-        'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, None]) ],
-        [b'hello, ', b'world!'],
-        Response(250),  # injected
-        [Response(202)],  # upstream
-        [None, Response(450)],  # injected
     ),
 
     # mail, rcpt success, data !last success, last perm
@@ -190,22 +148,12 @@ vec_mx = [
 
 vec_msa = [
     # single recipient
-    # mail timeout reported via rcpt
-    Test(
-        'alice',
-        [ Rcpt('bob', None, None, []) ],
-        [],
-        Response(250),  # injected
-        [Response(250)],  # injected/upgraded
-        None,
-    ),
-
     # mail perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(501), None, []) ],
+        [ Rcpt('bob', Response(501), Response(502), []) ],
         [],
-        Response(250),  # injected
+        Response(250),  # noop mail/injected
         [Response(501)],  # upstream
         None,
     ),
@@ -213,19 +161,9 @@ vec_msa = [
     # mail temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(401), None, []) ],
+        [ Rcpt('bob', Response(401), Response(500), []) ],
         [],
-        Response(250),  # injected
-        [Response(250)],  # injected/upgraded
-        None,
-    ),
-
-    # mail success, rcpt timeout
-    Test(
-        'alice',
-        [ Rcpt('bob', Response(201), None, []) ],
-        [],
-        Response(250),  # injected
+        Response(250),  # noop mail/injected
         [Response(250)],  # injected/upgraded
         None,
     ),
@@ -250,16 +188,6 @@ vec_msa = [
         None,
     ),
 
-    # mail, rcpt success, data !last timeout
-    # Test(
-    #     'alice',
-    #     [ Rcpt('bob', Response(201), Response(202), [None]) ],
-    #     [b'hello, world!'],
-    #     Response(250),  # injected
-    #     [Response(202)],  # upstream
-    #     [Response(250)],  # injected/upgraded
-    # ),
-
     # mail, rcpt success, data !last perm
     Test(
         'alice',
@@ -274,16 +202,6 @@ vec_msa = [
     Test(
         'alice',
         [ Rcpt('bob', Response(201), Response(202), [Response(401)]) ],
-        [b'hello, ', b'world!'],
-        Response(250),  # injected
-        [Response(202)],  # upstream
-        [None, Response(250)],  # injected/upgraded
-    ),
-
-    # mail, rcpt success, data !last ok, last timeout
-    Test(
-        'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, None]) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -325,7 +243,7 @@ vec_msa = [
     Test(
         'alice',
         [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(501), None, [])],
+          Rcpt('bob2', Response(501), Response(502), [])],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(501)],  # upstream mail err -> rcpt resp
@@ -509,27 +427,6 @@ class ExploderTest(unittest.TestCase):
         for endpoint in self.upstream_endpoints:
             self.assertEqual(endpoint.body_blob.read(0), b'hello, world!')
 
-    def testMsaRcptTimeout(self):
-        exploder = Exploder('output-chain', lambda: self.factory(),
-                            rcpt_timeout=1, msa=True)
-
-        tx = TransactionMetadata(
-            mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob')])
-
-        up0 = self.add_endpoint()
-        t = self.start_update(exploder, tx)
-        self.join(t)
-
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertEqual(tx.rcpt_response[0].code, 250)
-
-        up0.add_data_response(None)
-
-        tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
-        exploder.on_update(tx)
-        self.assertEqual(tx.data_response.code, 250)
-
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', lambda: self.factory(),
                             rcpt_timeout=1, msa=False,
@@ -558,7 +455,7 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual(tx.rcpt_response[1].code, 450)
 
         up0.add_data_response(Response(202))
-        up1.add_data_response(None)
+        up1.add_data_response(Response(400))
 
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)
@@ -567,33 +464,6 @@ class ExploderTest(unittest.TestCase):
         # and didn't on the one that succeeded
         self.assertIsNone(up0.tx.max_attempts)
         self.assertEqual(up1.tx.max_attempts, 3)
-
-    def testDataTimeout(self):
-        exploder = Exploder('output-chain', lambda: self.factory(),
-                            rcpt_timeout=1, data_timeout=1, msa=True)
-
-        tx = TransactionMetadata(
-            mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob'), Mailbox('bob2')])
-
-        up0 = self.add_endpoint()
-        up1 = self.add_endpoint()
-
-
-        t = self.start_update(exploder, tx)
-
-        up0.set_mail_response(Response(250))
-        up0.add_rcpt_response(Response(201))
-        up1.set_mail_response(Response(250))
-        up1.add_rcpt_response(Response(202))
-
-        self.join(t)
-
-        up0.add_data_response(Response(250))
-        #up1.add_data_response(Response(250))
-        tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
-        exploder.on_update(tx)
-        self.assertEqual(tx.data_response.code, 250)
 
 
 if __name__ == '__main__':
