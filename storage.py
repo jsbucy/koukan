@@ -142,7 +142,7 @@ class TransactionCursor:
               set_max_attempts_val + set_body_val +
               (self.id, self.version))
 
-            if (row := cursor.fetchone()) is None:
+            if (row := cursor.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
             self.version = row[0]
             self.input_done = input_done
@@ -173,7 +173,7 @@ class TransactionCursor:
             cursor.execute('UPDATE Transactions SET version = ? '
                            'WHERE version = ? AND id = ? RETURNING version',
                            (new_version, self.version, self.id))
-            if (row := cursor.fetchone()) is None:
+            if (row := cursor.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
             self.parent.db.commit()
             self.version = row[0]
@@ -207,7 +207,7 @@ class TransactionCursor:
             cursor.execute('UPDATE Transactions SET version = ? '
                            'WHERE version = ? AND id = ? RETURNING version',
                            (new_version, self.version, self.id))
-            if (row := cursor.fetchone()) is None:
+            if (row := cursor.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
             self.version = row[0]
             self.parent.db.commit()
@@ -304,9 +304,10 @@ class TransactionCursor:
           WHERE id = ? AND version = ? RETURNING version""",
                        (max_attempts, time.time(), new_version,
                         self.id, self.version))
-        row = cursor.fetchone()
-        if not row or row[0] != new_version:
+        if (row := cursor.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
+        self.version = new_version
+        self.parent.tx_versions.update(self.id, self.version)
 
     def set_max_attempts(self, max_attempts : Optional[int] = None):
         with self.parent.db_write_lock:
@@ -332,9 +333,11 @@ class TransactionCursor:
           WHERE id = ? AND version = ?
           RETURNING version
         """, (output_done, now, new_version, self.id, self.version))
-        row = cursor.fetchone()
-        if not row or row[0] != new_version:
+
+        if (row := cursor.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
+        self.version = new_version
+        self.parent.tx_versions.update(self.id, self.version)
 
     def wait(self, timeout=None) -> bool:
         old = self.version
@@ -360,6 +363,7 @@ class TransactionCursor:
         return True
 
     def _abort(self, cursor):
+        logging.info('TransactionCursor.abort %d %s', self.id, self.rest_id)
         new_version = self.version + 1
         now = int(time.time())
         cursor.execute("""
@@ -367,9 +371,11 @@ class TransactionCursor:
           SET max_attempts = 0, last_update = ?, version = ?
           WHERE id = ? AND version = ? RETURNING version""",
           (now, new_version, self.id, self.version))
-        row = cursor.fetchone()
-        if not row or row[0] != new_version:
+        if (row := cursor.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
+        self.version = new_version
+        self.parent.tx_versions.update(self.id, self.version)
+
 
     def abort(self):
         with self.parent.db_write_lock:

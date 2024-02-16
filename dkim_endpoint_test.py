@@ -28,7 +28,7 @@ class DkimEndpointTest(unittest.TestCase):
 
     def test_basic(self):
         next = SyncEndpoint()
-        dkim_endpoint = DkimEndpoint(b'example.com', b'selector123',
+        dkim_endpoint = DkimEndpoint('example.com', 'selector123',
                                      self.privkey, next)
 
         next.set_mail_response(Response(201))

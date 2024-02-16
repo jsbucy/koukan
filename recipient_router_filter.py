@@ -61,7 +61,7 @@ class RecipientRouterFilter(Filter):
         # TODO validate that other mailboxes route to the same place
         # else -> internal error?
         if resp and resp.err():
-            tx.rcpt_response = resp
+            tx.rcpt_response = [resp]
             return
         self.upstream_tx = TransactionMetadata()
         self.upstream_tx.rest_endpoint = rest_endpoint

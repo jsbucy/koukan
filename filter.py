@@ -24,6 +24,12 @@ class HostPort:
     def to_json(self):
         return self.to_tuple()
 
+    def __str__(self):
+        return '%s:%d' % (self.host, self.port)
+    def __repr__(self):
+        return '%s:%d' % (self.host, self.port)
+
+
 class Esmtp:
     # from aiosmtpd
     # TODO parse out into keyword and key/value

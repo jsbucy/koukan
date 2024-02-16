@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
+import json.decoder
 
 import requests
 from werkzeug.datastructures import ContentRange
@@ -22,7 +23,7 @@ def get_resp_json(resp):
         return None
     try:
         return resp.json()
-    except requests.exceptions.JSONDecodeError:
+    except json.decoder.JSONDecodeError:
         return None
 
 class RestEndpoint(Filter):
@@ -75,7 +76,7 @@ class RestEndpoint(Filter):
         # TODO this is only false in router_service test which needs
         # to be ported to the raw request subset of the api.
         self.wait_response = wait_response
-        self.remote_host_resolution = None
+        self.remote_host_resolution = remote_host_resolution
 
         self.min_poll = min_poll
         self.max_inline = max_inline
@@ -87,15 +88,19 @@ class RestEndpoint(Filter):
         remote_host_disco = [None]
         next_hop = (self.static_remote_host if self.static_remote_host
                     else tx.remote_host)
-
+        logging.debug('RestEndpoint._start next_hop %s', next_hop)
         if next_hop:
             if self.remote_host_resolution is not None:
-                remote_host_disco = self.remote_host_resolution(next_hop)
+                remote_host_disco = self.remote_host_resolution(next_hop.host)
             else:
-                remote_host_disco = [next_hop]
+                remote_host_disco = [next_hop.host]
 
-        for remote_host in remote_host_disco:
-            if remote_host is not None:  # none if no remote_host/disco (above)
+        for host in remote_host_disco:
+            remote_host : Optional[HostPort] = (
+                HostPort(host, next_hop.port) if host else None)
+            logging.debug('RestEndpoint._start remote_host %s', remote_host)
+            # none if no remote_host/disco (above)
+            if remote_host is not None:
                 req_json['remote_host'] = remote_host.to_tuple()
                 self.remote_host = remote_host
 
@@ -106,7 +111,7 @@ class RestEndpoint(Filter):
                                           json=req_json,
                                           headers=req_headers,
                                           timeout=self.timeout_start)
-            except requests.Timeout:
+            except requests.RequestException:
                 return None
             # XXX rest_resp.status_code?
             logging.info('RestEndpoint.start resp %s', rest_resp)
@@ -131,7 +136,7 @@ class RestEndpoint(Filter):
                                        json=req_json,
                                        headers=req_headers,
                                        timeout=self.timeout_start)
-        except requests.Timeout:
+        except requests.RequestException:
             return None
         logging.info('RestEndpoint.on_update resp %s', rest_resp)
         resp_json = get_resp_json(rest_resp)
@@ -237,7 +242,7 @@ class RestEndpoint(Filter):
         try:
             rest_resp = requests.put(
                 chunk_uri, headers=headers, data=d, timeout=self.timeout_data)
-        except requests.Timeout:
+        except requests.RequestException:
             return None, None
         logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
         # Most(all?) errors on blob put here means temp
@@ -270,7 +275,7 @@ class RestEndpoint(Filter):
                                      headers=req_headers,
                                      timeout=timeout)
             logging.debug('RestEndpoint.get_json %s', rest_resp)
-        except requests.Timeout:
+        except requests.RequestException:
             return None
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)

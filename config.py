@@ -61,8 +61,10 @@ class Config:
 
 
     def rest_output(self, yaml, next):
+        logging.debug('Config.rest_output %s', yaml)
         assert next is None
-        static_remote_host = HostPort.from_yaml(yaml['static_remote_host'])
+        static_remote_host_yaml = yaml.get('static_remote_host', None)
+        static_remote_host = HostPort.from_yaml(static_remote_host_yaml) if static_remote_host_yaml else None
         logging.info('Factory.rest_output %s', static_remote_host)
         remote_host_disco = None
         if yaml.get('remote_host_discovery', '') == 'mx':

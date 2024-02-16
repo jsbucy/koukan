@@ -11,7 +11,7 @@ from filter import Filter, TransactionMetadata
 class DkimEndpoint(Filter):
     data : bytes = None
 
-    def __init__(self, domain, selector, privkey, next : Filter):
+    def __init__(self, domain : str, selector : str, privkey, next : Filter):
         f = open(privkey, "rb")
         self.domain = domain
         self.selector = selector
@@ -23,7 +23,7 @@ class DkimEndpoint(Filter):
         self.ok_resp = False
         if tx.body_blob is None or (
                 tx.body_blob.len() != tx.body_blob.content_length()):
-            return self.next_on_update(tx)
+            return self.next.on_update(tx)
 
         upstream_tx = copy.copy(tx)
         self.blobs = [tx.body_blob]
@@ -50,7 +50,10 @@ class DkimEndpoint(Filter):
         # signature_algorithm='rsa-sha256', include_headers=None,
         # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
-        sig = dkim.sign(data, self.selector, self.domain, self.privkey,
+        # TODO need to handle IDN here?
+        sig = dkim.sign(data, self.selector.encode('us-ascii'),
+                        self.domain.encode('us-ascii'),
+                        self.privkey,
                         include_headers=[b'From', b'Date', b'Message-ID'])
         return sig
 

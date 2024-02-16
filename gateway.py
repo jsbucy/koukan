@@ -41,6 +41,7 @@ class SmtpGateway(EndpointFactory):
             self.gc_thread = None
 
     def rest_factory(self, yaml):
+        logging.debug('rest_factory %s', yaml)
         return RestEndpoint(
             yaml['endpoint'],
             http_host=yaml['host'],
@@ -74,6 +75,8 @@ class SmtpGateway(EndpointFactory):
             now = time.monotonic()
             logging.debug('SmtpGateway.gc_inflight %f', now)
             delta = now - last_gc
+            # XXX this may need to get wired into blobs to know that
+            # the data upload is making forward progress?
             tx_idle_gc = rest_yaml.get('tx_idle_gc', 5)
             if delta < tx_idle_gc:
                 time.sleep(tx_idle_gc - delta)
@@ -95,7 +98,7 @@ class SmtpGateway(EndpointFactory):
             factory = None
             msa = False
             endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
-            factory = lambda: self.rest_factory(endpoint_yaml)
+            factory = lambda y=endpoint_yaml: self.rest_factory(y)
 
             # cf router config.Config.exploder()
             rcpt_timeout=40

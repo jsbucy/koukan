@@ -30,6 +30,7 @@ def create_app(handler_factory : HandlerFactory):
         etag = handler.etag()
         if etag is None:
             return
+        logging.debug('rest service set_etag %s', etag)
         resp.set_etag(etag)
 
     def validate_etag(request, handler) -> Optional[FlaskResponse]:
