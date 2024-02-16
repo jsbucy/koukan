@@ -2,6 +2,7 @@
 rest_listener:
   use_gunicorn: true
   addr: ["[::0]", 8001]
+  tx_idle_timeout: 60
 
 smtp_output:
   ehlo_host: tachygraph.gloop.org

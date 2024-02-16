@@ -1,7 +1,7 @@
 global:
   dequeue: true
   gc_interval: 5
-  tx_idle_timeout: 5
+  tx_idle_timeout: 60
 
 rest_listener:
   use_gunicorn: false
