@@ -770,7 +770,8 @@ class Storage:
           (max_attempts = 1 AND last_update <= ?)
           LIMIT 1""", (max_recent,))
         row = cursor.fetchone()
-        if row is None: return False
+        if row is None:
+            return False
 
         tx_cursor = self.get_transaction_cursor()
         tx_cursor._load_db(cursor, db_id = row[0])
@@ -783,7 +784,8 @@ class Storage:
     def gc_non_durable(self, min_age):
         count = 0
         while True:
-            if not self._gc_non_durable_one(min_age): break
+            if not self._gc_non_durable_one(min_age):
+                break
             count += 1
         return count
 

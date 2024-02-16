@@ -47,6 +47,7 @@ root_yaml = {
         },
         {
             'name': 'inbound-gw',
+            'msa': True,
             'chain': [{'filter': 'sync'}]
         },
     ],
@@ -92,31 +93,31 @@ class RouterServiceTest(unittest.TestCase):
         self.service_thread.start()
 
         # probe for startup
-        for i in range(1,5):
-            try:
-                # use an invalid host per config so output will fail
-                # immediately and not consume responses from endpoint
-                rest_endpoint = RestEndpoint(
-                    static_base_url=self.router_url,
-                    http_host='probe',
-                    wait_response=False)
-                tx = TransactionMetadata()
-                tx.mail_from = Mailbox('probe-from%d' % i)
-                tx.rcpt_to = [Mailbox('probe-to%d' % i)]
-                start_resp = rest_endpoint.on_update(tx)
-            except ConnectionError:
-                    time.sleep(0.1)
-            else:
+        s = SyncEndpoint()
+        s.set_mail_response(Response())
+        self.add_endpoint(s)
+
+        for i in range(1,3):
+            rest_endpoint = RestEndpoint(
+                static_base_url=self.router_url,
+                http_host='inbound-gw')
+            tx = TransactionMetadata(
+                mail_from = Mailbox('probe-from%d' % i))
+            t = self.start_tx_update(rest_endpoint, tx)
+            logging.info('setUp %s', tx.mail_response)
+            self.service._dequeue()
+            self.join_tx_update(t)
+            if tx.mail_response.ok():
                 break
+            time.sleep(0.1)
         else:
             self.fail('service not ready')
 
-        time.sleep(1)
+        self.assertFalse(self.endpoints)
 
         # gc the probe request so it doesn't cause confusion later
         # TODO rest_endpoint.abort()
         self.assertEqual(1, self.service._gc_inflight(0))
-
 
     def tearDown(self):
         self.service.shutdown()

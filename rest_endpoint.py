@@ -61,7 +61,6 @@ class RestEndpoint(Filter):
                  static_remote_host : Optional[HostPort] = None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 wait_response = True,
                  remote_host_resolution = None,
                  min_poll=1,
                  max_inline=1024,
@@ -73,9 +72,6 @@ class RestEndpoint(Filter):
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
 
-        # TODO this is only false in router_service test which needs
-        # to be ported to the raw request subset of the api.
-        self.wait_response = wait_response
         self.remote_host_resolution = remote_host_resolution
 
         self.min_poll = min_poll
@@ -178,10 +174,6 @@ class RestEndpoint(Filter):
                 self.rcpts += len(tx.rcpt_to)
 
             timeout = timeout if timeout is not None else self.timeout_start
-            # TODO test hook is only used in startup probing in router
-            # service test, should be able to remove
-            if not self.wait_response:
-                return
             # xxx filter api needs to accomodate returning an error here
             # or else stuff the http error in the response for the first
             # inflight req field in tx?

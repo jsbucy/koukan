@@ -20,8 +20,7 @@ class SmtpServiceTest(unittest.TestCase):
 
         logging.basicConfig(level=logging.DEBUG)
         self.handler = SmtpHandler(
-            lambda: self.endpoint,
-            msa=True, max_rcpt=100)
+            lambda: self.endpoint, max_rcpt=100)
         self.controller = Controller(self.handler)
         self.controller.start()
 
