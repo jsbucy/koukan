@@ -184,13 +184,18 @@ class TransactionCursor:
         # XXX enforce that req field is populated
         self._set_response('mail_response', response)
 
-    # xxx this is append responses?
-    # enforce that this doesn't add more responses than len(rcpt_to)?
     def add_rcpt_response(self, response : List[Response]):
         assert(self.attempt_id is not None)
         with self.parent.db_write_lock:
             cursor = self.parent.db.cursor()
             # TODO load-that's-not-a-load, cf write_envelope()
+            cursor.execute(
+                'SELECT version,json FROM Transactions WHERE id = ?',
+                (self.id,))
+            db_version,tx_json_str = cursor.fetchone()
+            tx_json = json.loads(tx_json_str)
+            if db_version != self.version:
+                raise VersionConflictException()
             cursor.execute('SELECT rcpt_response FROM TransactionAttempts '
                            'WHERE transaction_id = ? AND attempt_id = ?',
                            (self.id, self.attempt_id))
@@ -199,6 +204,8 @@ class TransactionCursor:
             if row and row[0]:
                 old_resp = json.loads(row[0])
             old_resp.extend([r.to_json() for r in response])
+            assert len(old_resp) <= len(tx_json['rcpt_to'])
+
             cursor.execute('UPDATE TransactionAttempts SET rcpt_response = ?'
                            'WHERE transaction_id = ? AND attempt_id = ?',
                            (json.dumps(old_resp),

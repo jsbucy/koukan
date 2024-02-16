@@ -153,14 +153,15 @@ class RestServiceTransaction(Handler):
             self.tx_cursor.tx.mail_response is not None):
             resp_json['mail_response'] = resp_js(
                 self.tx_cursor.tx.mail_response)
-        if (self.tx_cursor.tx.rcpt_to or self.tx_cursor.tx.rcpt_response):
-            # XXX should
-            # len(cursor.tx.rcpt_to) == len(cursor.tx.rcpt_response) ??
-            resp_json['rcpt_response'] = len(self.tx_cursor.tx.rcpt_to) * [{}]
-            for i,r in enumerate(self.tx_cursor.tx.rcpt_response):
-                if i >= len(resp_json['rcpt_response']):
-                    resp_json['rcpt_response'].append(None)
-                resp_json['rcpt_response'][i] = r.to_json()
+        if self.tx_cursor.tx.rcpt_to:
+            rcpt_resp = self.tx_cursor.tx.rcpt_response
+            rcpt_resp_json = resp_json['rcpt_response'] = []
+            for i,r in enumerate(self.tx_cursor.tx.rcpt_to):
+                if i < len(rcpt_resp):
+                    rcpt_resp_json.append(rcpt_resp[i].to_json())
+                else:
+                    rcpt_resp_json.append({})
+
 
         # TODO surface more info about body here, finalized or not,
         # len, sha1, etc
