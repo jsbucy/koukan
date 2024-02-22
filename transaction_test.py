@@ -19,8 +19,7 @@ class TransactionTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-        self.storage = Storage()
-        self.storage.connect(db=Storage.get_inmemory_for_test())
+        self.storage = Storage.get_inmemory_for_test()
 
     def dump_db(self):
         for l in self.storage.db.iterdump():
@@ -294,6 +293,7 @@ class TransactionTest(unittest.TestCase):
 
         d = b'world!'
         for i in range(0, len(d)):
+            logging.info('test_integrated put blob %d', i)
             blob_tx = RestServiceTransaction.load_blob(
                 self.storage, blob_rest_id)
             self.assertIsNotNone(blob_tx)

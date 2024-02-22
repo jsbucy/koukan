@@ -51,7 +51,8 @@ root_yaml = {
             'chain': [{'filter': 'sync'}]
         },
     ],
-    'storage': {}
+    'storage': {
+    }
 }
 
 class RouterServiceTest(unittest.TestCase):
@@ -91,6 +92,9 @@ class RouterServiceTest(unittest.TestCase):
             daemon=True,
             target=lambda: self.service.main())
         self.service_thread.start()
+
+
+        self.assertTrue(self.service.wait_started(1))
 
         # probe for startup
         s = SyncEndpoint()
@@ -259,7 +263,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
-
+        logging.info('testExploderMultiRcpt start tx')
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             remote_host=HostPort('1.2.3.4', 12345))
@@ -274,6 +278,7 @@ class RouterServiceTest(unittest.TestCase):
         # no rcpt -> buffered
         self.assertEqual(tx.mail_response.code, 250)
 
+        logging.info('testExploderMultiRcpt patch rcpt1')
         tx = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         t = self.start_tx_update(rest_endpoint, tx)
 
@@ -288,7 +293,7 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [202])
 
-
+        logging.info('testExploderMultiRcpt patch rcpt2')
         tx = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
         t = self.start_tx_update(rest_endpoint, tx)
 
@@ -308,6 +313,8 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_data_response(Response(204))
         #upstream_endpoint2.add_data_response(None)
         upstream_endpoint2.add_data_response(Response(204))
+
+        logging.info('testExploderMultiRcpt patch body_blob')
 
         tx = TransactionMetadata(
             body_blob=InlineBlob(b'Hello, World!'))

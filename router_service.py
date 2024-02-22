@@ -20,7 +20,9 @@ from executor import Executor
 from config import Config
 
 class Service:
-    lock : Lock = None
+    lock : Lock
+    cv : Condition
+    storage : Optional[Storage] = None
     last_gc = 0
 
     rest_tx_factory : RestServiceTransactionFactory = None
@@ -35,8 +37,11 @@ class Service:
 
     config : Optional[Config] = None
 
+    started = False
+
     def __init__(self, config=None):
         self.lock = Lock()
+        self.cv = Condition(self.lock)
 
         self.executor = Executor(10, {
             Tag.LOAD: 1,
@@ -44,7 +49,6 @@ class Service:
             Tag.MSA : 5,
             Tag.DATA: 10 })
 
-        self.storage = Storage()
         self.blobs = None
 
         self.config = config
@@ -62,22 +66,27 @@ class Service:
         if self.wsgi_server:
             self.wsgi_server.shutdown()
 
+    def wait_started(self, timeout=None):
+        with self.lock:
+            return self.cv.wait_for(lambda: self.started, timeout)
+
     def main(self, config_filename=None):
         if config_filename:
             config = Config()
             config.load_yaml(config_filename)
             self.config = config
 
-        self.config.set_storage(self.storage)
-
         db_filename = self.config.root_yaml['storage'].get(
             'db_filename', None)
         if not db_filename:
             logging.warning("*** using in-memory/non-durable storage")
-            self.storage.connect(db=Storage.get_inmemory_for_test())
+            self.storage = Storage.get_inmemory_for_test()
         else:
-            self.storage.connect(filename=db_filename)
+            self.storage = Storage.connect(db_filename)
 
+        self.storage.recover()
+
+        self.config.set_storage(self.storage)
 
         self.blobs = BlobStorage()
 
@@ -99,11 +108,19 @@ class Service:
         self.rest_tx_factory = RestServiceTransactionFactory(self.storage)
         handler_factory = self.rest_tx_factory
 
+        with self.lock:
+            self.started = True
+            self.cv.notify_all()
+
         flask_app = rest_service.create_app(handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_gunicorn', False):
-            # XXX gunicorn always forks, need to get all our startup code
-            # into the worker e.g. post_worker_init() hook
+            # XXX gunicorn always forks, need to get all our startup
+            # code into the worker e.g. post_worker_init() hook. May
+            # be possible to run gunicorn.workers.ThreadWorker
+            # directly?
+            # Alternatively, hypercorn appears to support configuring
+            # num_workers=0 and running in the same process.
             gunicorn_main.run(
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),
@@ -132,8 +149,6 @@ class Service:
         if self.created_id is None or (
                 storage_tx.id > self.created_id):
             self.created_id = storage_tx.id
-
-        #xxxtag = Tag.LOAD
 
         endpoint, msa = self.config.get_endpoint(storage_tx.tx.host)
         logging.info('_dequeue %s %s', endpoint, msa)

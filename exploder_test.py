@@ -296,8 +296,7 @@ class ExploderTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-        self.storage = Storage()
-        self.storage.connect(db=Storage.get_inmemory_for_test())
+        self.storage = Storage.get_inmemory_for_test()
         self.upstream_endpoints = []
 
     def dump_db(self):

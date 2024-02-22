@@ -13,13 +13,13 @@ class StorageTest(unittest.TestCase):
 
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
-        self.s = Storage()
-        self.s.connect(db=Storage.get_inmemory_for_test())
+                            format='%(asctime)s [%(thread)d] %(message)s')
+        self.s = Storage.get_inmemory_for_test()
 
     def dump_db(self):
-        for l in self.s.db.iterdump():
-            print(l)
+        with self.s.conn() as conn:
+            for l in conn.connection.iterdump():
+                logging.debug(l)
 
     def test_basic(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -56,6 +56,7 @@ class StorageTest(unittest.TestCase):
         blob_writer.append_data(d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
+        logging.info('test_basic check tx input done')
         tx_writer.load()
         self.assertTrue(tx_writer.input_done)
 
@@ -95,13 +96,15 @@ class StorageTest(unittest.TestCase):
         blob_writer.create('blob_rest_id')
         # 32 random bytes, not valid utf8, etc.
         d = base64.b64decode('LNGxKynVCXMDfb6HD4PMryGN7/wb8WoAz1YcDgRBLdc=')
+        self.assertEqual(d[23], 0)  # contains null octets
         with self.assertRaises(UnicodeDecodeError):
             s = d.decode('utf-8')
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(d, len(d)*2)
+        blob_writer.append_data(d, len(d)*2)
         del blob_writer
         blob_reader = self.s.get_blob_reader()
         blob_reader.load(rest_id='blob_rest_id')
-        self.assertEqual(blob_reader.read(0), d)
+        self.assertEqual(blob_reader.read(0), d+d)
 
 
     def test_blob_reuse(self):
@@ -133,7 +136,8 @@ class StorageTest(unittest.TestCase):
 
     def test_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
-            self.s.db.cursor().executescript(f.read())
+            with self.s.conn() as conn:
+                conn.connection.cursor().executescript(f.read())
         self.s.recover()
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -271,45 +275,49 @@ class StorageTest(unittest.TestCase):
         t.join(timeout=5)
         self.assertFalse(t.is_alive())
 
-    def test_blob_waiting(self):
+    def reader(self, reader, wait, dd):
+        d = bytes()
+        while (reader.content_length() is None or
+               reader.len() < reader.content_length()):
+            logging.info('reader %d', len(d))
+            if wait:
+                reader.wait()
+            else:
+                reader.load()
+            d += reader.read(len(d))
+        dd[0] = d
+
+    def _test_blob_waiting(self, wait):
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('blob_rest_id')
 
         reader = self.s.get_blob_reader()
         reader.load(blob_writer.id)
 
-        rv = [False]
-        t = self.start_wait(reader, rv)
+        dd = [None]
+        # xxx both ways
+        t = Thread(target = lambda: self.reader(reader, wait, dd), daemon=True)
+        t.start()
 
-        blob_writer.append_data(b'xyz', None)
+        d = None
+        with open('/dev/urandom', 'rb') as f:
+            d = f.read(1024)
 
-        self.join(t)
+        for i in range(0, len(d)):
+            logging.info('test_blob_waiting2 %d', i)
+            blob_writer.append_data(d[i:i+1], len(d))
+            self.assertEqual(blob_writer.length, i+1)
 
-        self.assertTrue(rv[0])
-        self.assertEqual(reader.length, 3)
-        self.assertIsNone(reader.content_length())
-        self.assertFalse(reader.last)
+        t.join()
+        self.assertFalse(t.is_alive())
+        self.assertEqual(dd[0], d)
+        self.assertEqual(reader.content_length(), len(d))
+        self.assertEqual(reader.len(), len(d))
 
-        t = self.start_wait(reader, rv)
-
-        blob_writer.append_data(b'abc', 9)
-
-        self.join(t)
-        self.assertTrue(rv[0])
-        self.assertEqual(reader.length, 6)
-        self.assertEqual(reader.content_length(), 9)
-        self.assertFalse(reader.last)
-
-        t = self.start_wait(reader, rv)
-
-        blob_writer.append_data(b'def', 9)
-
-        self.join(t)
-        self.assertTrue(rv[0])
-        self.assertEqual(reader.length, 9)
-        self.assertEqual(reader.content_length(), 9)
-        self.assertTrue(reader.last)
-
+    def test_blob_waiting_wait(self):
+        self._test_blob_waiting(True)
+    def test_blob_waiting_poll(self):
+        self._test_blob_waiting(False)
 
 if __name__ == '__main__':
     unittest.main()

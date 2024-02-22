@@ -205,8 +205,8 @@ class RestServiceTransaction(Handler):
     @staticmethod
     def build_resp(code, msg, writer):
         resp = FlaskResponse(status=code, response=[msg] if msg else None)
-        logging.info('build_resp offset=%s content_length=%s',
-                     writer.length, writer.content_length)
+        logging.info('build_resp code=%d msg=%s offset=%s content_length=%s',
+                     code, msg, writer.length, writer.content_length)
         if writer.length > 0:
             resp.headers.set(
                 'content-range',
@@ -215,9 +215,10 @@ class RestServiceTransaction(Handler):
 
     def put_blob(self, request : FlaskRequest,
                  content_range : ContentRange, range_in_headers : bool):
-        logging.info('put_blob loaded %s len=%d content_length=%s',
+        logging.info('put_blob loaded %s len=%d content_length=%s range %s',
                      self.blob_rest_id, self.blob_writer.length,
-                     self.blob_writer.content_length)
+                     self.blob_writer.content_length,
+                     content_range)
 
         # being extremely persnickety: we would reject
         # !range_in_headers after a request with it populated even if
@@ -270,7 +271,7 @@ class RestServiceTransactionFactory(HandlerFactory):
 
 
 def output(cursor, endpoint) -> Optional[Response]:
-    logging.debug('cursor_to_endpoint %s', cursor.rest_id)
+    logging.debug('cursor_to_endpoint output() %s', cursor.rest_id)
 
     last_tx = TransactionMetadata()
     err = None
@@ -372,7 +373,7 @@ def output(cursor, endpoint) -> Optional[Response]:
     return data_resp
 
 def cursor_to_endpoint(cursor, endpoint):
-    logging.debug('cursor_to_endpoint %s', cursor.rest_id)
+    logging.debug('cursor_to_endpoint() %s', cursor.rest_id)
     resp = output(cursor, endpoint)
     if resp is None:
         logging.warning('cursor_to_endpoint %s abort', cursor.rest_id)
