@@ -10,7 +10,7 @@ from base64 import b64encode
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlalchemy import LargeBinary, MetaData, Table, cast, func, insert, or_, select, update
+from sqlalchemy import LargeBinary, MetaData, Table, cast, case as sa_case, delete, func, insert, or_, select, true as sa_true, update
 
 
 import psutil
@@ -54,30 +54,34 @@ class TransactionCursor:
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
             self.last = False
             self.version = 0
 
             body_blob_id, body_rest_id, input_done = self._set_body(
-                cursor, conn, tx.body, create_body_rest_id)
+                conn, tx.body, create_body_rest_id)
 
             max_attempts = tx.max_attempts if tx.max_attempts else 1
-            db_json = json.dumps(tx.to_json(WhichJson.DB))
+            db_json = tx.to_json(WhichJson.DB)
             logging.debug('TxCursor.create %s %s', rest_id, db_json)
-            cursor.execute("""
-                INSERT INTO Transactions
-                (rest_id, creation, last_update, version, last,
-                 json, attempt_count, max_attempts, body_blob_id, body_rest_id,
-                 input_done)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-                RETURNING id""",
-                (rest_id, self.creation, self.creation,
-                 self.version, self.last, db_json,
-                 max_attempts, body_blob_id, body_rest_id, input_done))
-            self.id = cursor.fetchone()[0]
+            ins = insert(self.parent.tx_table).values(
+                rest_id = rest_id,
+                creation = self.creation,
+                last_update = self.creation,
+                version = self.version,
+                last = self.last,
+                json = db_json,
+                attempt_count = 0,
+                max_attempts =  max_attempts,
+                body_blob_id = body_blob_id,
+                body_rest_id = body_rest_id,
+                input_done = input_done
+            ).returning(self.parent.tx_table.c.id)
+            res = conn.execute(ins)
+            row = res.fetchone()
+            self.id = row[0]
             self.tx = tx
             self.input_done = input_done
-            conn.connection.commit()
+            conn.commit()
 
         with parent.created_lock:
             logging.debug('TransactionCursor.create id %d', self.id)
@@ -85,15 +89,19 @@ class TransactionCursor:
                 parent.created_id = self.id
                 parent.created_cv.notify_all()
 
-    def _set_body(self, cursor, conn,
+    def _set_body(self, conn,
                   reuse_body_rest_id=None, create_body_rest_id=None
                   ) -> Tuple[Optional[int], Optional[str], Optional[bool]]:
                   # -> id, rest_id, input_done
         if reuse_body_rest_id:
-            cursor.execute(
-                'SELECT id,length(content),length FROM Blob WHERE rest_id = ?',
-                (reuse_body_rest_id,))
-            row = cursor.fetchone()
+            # TODO refactor with BlobReader?
+            sel = (select(self.parent.blob_table.c.id,
+                          func.length(self.parent.blob_table.c.content),
+                          self.parent.blob_table.c.length)
+                   .where(self.parent.blob_table.c.rest_id == reuse_body_rest_id))
+
+            res = conn.execute(sel)
+            row = res.fetchone()
             # xxx need proper reporting of this
             assert row
             body_blob_id,length,content_length = row
@@ -111,7 +119,7 @@ class TransactionCursor:
     def write_envelope(self, tx_delta : TransactionMetadata,
                        create_body_rest_id : Optional[str] = None):
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
+            #cursor = conn.connection.cursor()
             # TODO this should just load(), trying to save a single
             # point read from the db isn't worth worrying about the
             # state in the cursor getting out of sync with the db.
@@ -125,39 +133,38 @@ class TransactionCursor:
             # TODO all updates '... WHERE inflight_session_id =
             #   self.parent.session' ?
             now = int(time.time())
-            set_max_attempts = ''
-            set_max_attempts_val = ()
-            if tx_delta.max_attempts:
-                set_max_attempts = ', max_attempts = ?'
-                set_max_attempts_val = (tx_delta.max_attempts,)
 
-            set_body = ''
-            set_body_val = ()
             # xxx err if this was already set?
             body_blob_id, body_rest_id, input_done = self._set_body(
-                cursor, conn, tx_delta.body, create_body_rest_id)
+                conn, tx_delta.body, create_body_rest_id)
+
+            upd = (update(self.parent.tx_table)
+                   .where(self.parent.tx_table.c.id == self.id)
+                   .where(self.parent.tx_table.c.version == self.version)
+                   .values(json = tx_to_db.to_json(WhichJson.DB),
+                           version = new_version,
+                           max_attempts = 1,
+                           attempt_count = 0,
+                           last_update = now)
+                   .returning(self.parent.tx_table.c.version))
+            if tx_delta.max_attempts:
+                upd = upd.values(max_attempts = tx_delta.max_attempts)
 
             if body_blob_id:
-                set_body = (', body_blob_id = ?, body_rest_id = ?, '
-                            'input_done = ?')
-                set_body_val = (body_blob_id, body_rest_id, input_done)
+                upd = upd.values(body_blob_id = body_blob_id,
+                                 body_rest_id = body_rest_id,
+                                 input_done = input_done)
 
-            cursor.execute("""
-              UPDATE Transactions SET json = ?, version = ?,
-              max_attempts = 1, attempt_count = 0, last_update = ?
-              """ + set_max_attempts + set_body + """
-              WHERE id = ? AND version = ? RETURNING version""",
-              (json.dumps(tx_to_db.to_json(WhichJson.DB)), new_version, now) +
-              set_max_attempts_val + set_body_val +
-              (self.id, self.version))
+            res = conn.execute(upd)
+            row = res.fetchone()
 
-            if (row := cursor.fetchone()) is None or row[0] != new_version:
+            if row is None or row[0] != new_version:
                 raise VersionConflictException()
             self.version = row[0]
             self.input_done = input_done
 
             # XXX need to catch exceptions and db.rollback()? (throughout)
-            conn.connection.commit()
+            conn.commit()
 
             # TODO or RETURNING json
             # XXX doesn't include response fields? tx.merge() should
@@ -173,18 +180,23 @@ class TransactionCursor:
     def _set_response(self, col : str, response : Response):
         assert(self.attempt_id is not None)
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
-            cursor.execute('UPDATE TransactionAttempts SET ' + col + ' = ? '
-                           'WHERE transaction_id = ? AND attempt_id = ?',
-                           (json.dumps(response.to_json()),
-                            self.id, self.attempt_id))
+            upd_att = (update(self.parent.attempt_table)
+                   .where(self.parent.attempt_table.c.transaction_id == self.id,
+                          self.parent.attempt_table.c.attempt_id ==
+                          self.attempt_id)
+                   .values({col: response.to_json()}))
+            res = conn.execute(upd_att)
+
             new_version = self.version + 1
-            cursor.execute('UPDATE Transactions SET version = ? '
-                           'WHERE version = ? AND id = ? RETURNING version',
-                           (new_version, self.version, self.id))
-            if (row := cursor.fetchone()) is None or row[0] != new_version:
+            upd_tx = (update(self.parent.tx_table)
+                      .where(self.parent.tx_table.c.id == self.id,
+                             self.parent.tx_table.c.version == self.version)
+                      .values(version = new_version)
+                      .returning(self.parent.tx_table.c.version))
+            res = conn.execute(upd_tx)
+            if (row := res.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
-            conn.connection.commit()
+            conn.commit()
             self.version = row[0]
             self.parent.tx_versions.update(self.id, new_version)
 
@@ -196,22 +208,26 @@ class TransactionCursor:
     def add_rcpt_response(self, response : List[Response]):
         assert(self.attempt_id is not None)
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
             # TODO load-that's-not-a-load, cf write_envelope()
-            cursor.execute(
-                'SELECT version,json FROM Transactions WHERE id = ?',
-                (self.id,))
-            db_version,tx_json_str = cursor.fetchone()
-            tx_json = json.loads(tx_json_str)
+            sel = (select(self.parent.tx_table.c.version,
+                          self.parent.tx_table.c.json)
+                   .where(self.parent.tx_table.c.id == self.id))
+            res = conn.execute(sel)
+            db_version,tx_json = res.fetchone()
             if db_version != self.version:
                 raise VersionConflictException()
-            cursor.execute('SELECT rcpt_response FROM TransactionAttempts '
-                           'WHERE transaction_id = ? AND attempt_id = ?',
-                           (self.id, self.attempt_id))
+
+            sel = (select(self.parent.attempt_table.c.rcpt_response)
+                   .where(self.parent.attempt_table.c.transaction_id == self.id,
+                          self.parent.attempt_table.c.attempt_id ==
+                          self.attempt_id))
+            res = conn.execute(sel)
+
             old_resp = []
-            row = cursor.fetchone()
+            row = res.fetchone()
             if row and row[0]:
-                old_resp = json.loads(row[0])
+                old_resp = row[0]
+
             old_resp.extend([r.to_json() for r in response])
             if len(old_resp) > len(tx_json['rcpt_to']):
                 logging.critical(
@@ -219,18 +235,24 @@ class TransactionCursor:
                     self.id, self.rest_id, old_resp, tx_json['rcpt_to'])
                 assert False
 
-            cursor.execute('UPDATE TransactionAttempts SET rcpt_response = ?'
-                           'WHERE transaction_id = ? AND attempt_id = ?',
-                           (json.dumps(old_resp),
-                            self.id, self.attempt_id))
+            upd = (update(self.parent.attempt_table)
+                   .where(self.parent.attempt_table.c.transaction_id == self.id,
+                          self.parent.attempt_table.c.attempt_id ==
+                          self.attempt_id)
+                   .values(rcpt_response = old_resp))
+            res = conn.execute(upd)
+
             new_version = self.version + 1
-            cursor.execute('UPDATE Transactions SET version = ? '
-                           'WHERE version = ? AND id = ? RETURNING version',
-                           (new_version, self.version, self.id))
-            if (row := cursor.fetchone()) is None or row[0] != new_version:
+            upd = (update(self.parent.tx_table)
+                   .where(self.parent.tx_table.c.id == self.id,
+                          self.parent.tx_table.c.version == self.version)
+                   .values(version = new_version)
+                   .returning(self.parent.tx_table.c.version))
+            res = conn.execute(upd)
+            if (row := res.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
             self.version = row[0]
-            conn.connection.commit()
+            conn.commit()
             self.parent.tx_versions.update(self.id, new_version)
 
     def set_data_response(self, response : Response):
@@ -243,168 +265,199 @@ class TransactionCursor:
             db_id = self.id
         assert(db_id is not None or rest_id is not None)
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
-            return self._load_db(cursor, db_id, rest_id)
+            #cursor = conn.connection.cursor()
+            return self._load_db(conn, db_id, rest_id)
 
-    def _load_db(self, cursor,
+    def _load_db(self, conn,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None
                  ) -> Optional[TransactionMetadata]:
         where = None
         where_id = None
 
-        if db_id is not None:
-            where = 'WHERE id = ?'
-            where_id = (db_id,)
-        elif rest_id is not None:
-            where = 'WHERE rest_id = ?'
-            where_id = (rest_id,)
+        sel = select(self.parent.tx_table.c.id,
+                     self.parent.tx_table.c.rest_id,
+                     self.parent.tx_table.c.creation,
+                     self.parent.tx_table.c.json,
+                     self.parent.tx_table.c.version,
+                     self.parent.tx_table.c.last,
+                     self.parent.tx_table.c.input_done,
+                     self.parent.tx_table.c.output_done,
+                     self.parent.tx_table.c.body_rest_id,
+                     self.parent.tx_table.c.max_attempts)
 
-        cursor.execute("""
-          SELECT id,rest_id,creation,json,version,
-          last,input_done,output_done,body_rest_id
-          FROM Transactions """ + where,
-          where_id)
-        row = cursor.fetchone()
+        if db_id is not None:
+            sel = sel.where(self.parent.tx_table.c.id == db_id)
+        elif rest_id is not None:
+            sel = sel.where(self.parent.tx_table.c.rest_id == rest_id)
+        res = conn.execute(sel)
+        row = res.fetchone()
         if not row:
             return None
 
         (self.id, self.rest_id,
-         self.creation, json_str, self.version, self.last,
-         self.input_done, self.output_done, self.body_rest_id) = row[0:9]
+         self.creation, trans_json, self.version, self.last,
+         self.input_done, self.output_done, self.body_rest_id,
+         self.max_attempts) = row[0:10]
 
-        trans_json = json.loads(json_str) if json_str else {}
-        logging.debug('TransactionCursor._load_db %s %s',
-                      self.rest_id, row)
+        logging.debug('TransactionCursor._load_db %s %s %s',
+                      self.rest_id, row, trans_json)
+
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         self.tx.body = self.body_rest_id
 
-        cursor.execute("""
-          SELECT attempt_id,mail_response,rcpt_response,data_response
-          FROM TransactionAttempts WHERE transaction_id = ?
-          ORDER BY attempt_id DESC LIMIT 1""", (self.id,))
-        row = cursor.fetchone()
+        sel = (select(self.parent.attempt_table.c.attempt_id,
+                     self.parent.attempt_table.c.mail_response,
+                     self.parent.attempt_table.c.rcpt_response,
+                     self.parent.attempt_table.c.data_response)
+               .where(self.parent.attempt_table.c.transaction_id == self.id)
+               .order_by(self.parent.attempt_table.c.attempt_id.desc())
+               .limit(1))
+        res = conn.execute(sel)
+        row = res.fetchone()
         if row is not None:
             self.attempt_id,mail_json,rcpt_json,data_json = row
             if mail_json:
-                self.tx.mail_response = Response.from_json(json.loads(mail_json))
+                self.tx.mail_response = Response.from_json(mail_json)
             if rcpt_json:
                 self.tx.rcpt_response = [
-                    Response.from_json(r) for r in json.loads(rcpt_json)]
+                    Response.from_json(r) for r in rcpt_json]
             if data_json:
-                self.tx.data_response = Response.from_json(json.loads(data_json))
+                self.tx.data_response = Response.from_json(data_json)
 
         return self.tx
 
-    def _start_attempt_db(self, cursor, db_id, version):
+    def _start_attempt_db(self, conn, db_id, version):
         assert self.parent.session_id is not None
-        cursor.execute("""
-            UPDATE Transactions
-            SET version = ?, inflight_session_id = ?,
-            attempt_count = (SELECT COUNT(*) + 1 FROM TransactionAttempts
-                             WHERE transaction_id = ?)
-            WHERE id = ? AND version = ? RETURNING version""",
-            (version+1, self.parent.session_id, db_id, db_id,
-             version))
-        assert cursor.fetchone()
-        cursor.execute(
-            """INSERT INTO TransactionAttempts (transaction_id, attempt_id)
-            VALUES (?, (SELECT iif(i IS NULL, 1, i+1)
-            FROM (SELECT max(attempt_id) AS i from TransactionAttempts
-            WHERE transaction_id = ?))) RETURNING attempt_id""",
-            (db_id, db_id))
-        assert (row := cursor.fetchone())
-        self.attempt_id = row[0]
-        self._load_db(cursor, db_id=db_id)
+        new_version = version + 1
+        subq = (select(func.count(self.parent.attempt_table.c.attempt_id))
+               .where(self.parent.attempt_table.c.transaction_id == db_id)
+                .scalar_subquery())
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == db_id,
+                      self.parent.tx_table.c.version == version)
+               .values(version = new_version,
+                       attempt_count = subq + 1,
+                       inflight_session_id = self.parent.session_id)
+               .returning(self.parent.tx_table.c.version))
+        res = conn.execute(upd)
+        assert res.fetchone()[0] == new_version
 
-    def _set_max_attempts(self, max_attempts, cursor):
+        max_attempt_id = (
+            select(func.max(self.parent.attempt_table.c.attempt_id)
+                   .label('max'))
+            .where(self.parent.attempt_table.c.transaction_id == db_id)
+            .subquery())
+        new_attempt_id = select(
+            sa_case((max_attempt_id.c.max == None, 1),
+                    else_=max_attempt_id.c.max + 1)
+        ).scalar_subquery()
+
+        ins = (insert(self.parent.attempt_table)
+               .values(transaction_id = db_id,
+                       attempt_id = new_attempt_id)
+               .returning(self.parent.attempt_table.c.attempt_id))
+        res = conn.execute(ins)
+
+        assert (row := res.fetchone())
+        self.attempt_id = row[0]
+        self._load_db(conn, db_id=db_id)
+
+    def _set_max_attempts(self, max_attempts, conn):
         new_version = self.version + 1
-        cursor.execute("""
-          UPDATE Transactions
-          SET max_attempts = ?, last_update = ?, version = ?
-          WHERE id = ? AND version = ? RETURNING version""",
-                       (max_attempts, time.time(), new_version,
-                        self.id, self.version))
-        if (row := cursor.fetchone()) is None or row[0] != new_version:
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == self.id,
+                      self.parent.tx_table.c.version == self.version)
+               .values(max_attempts = max_attempts,
+                       last_update = int(time.time()),
+                       version = new_version)
+               .returning(self.parent.tx_table.c.version))
+        res = conn.execute(upd)
+        if (row := res.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
         self.version = new_version
         self.parent.tx_versions.update(self.id, self.version)
 
     def set_max_attempts(self, max_attempts : Optional[int] = None):
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
-            self._set_max_attempts(max_attempts, cursor)
-            conn.connection.commit()
+            self._set_max_attempts(max_attempts, conn)
+            conn.commit()
 
     def finalize_attempt(self, output_done):
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
-            self._finalize_attempt(cursor, output_done)
-            conn.connection.commit()
+            #cursor = conn.connection.cursor()
+            self._finalize_attempt(conn, output_done)
+            conn.commit()
 
-    def _finalize_attempt(self, cursor, output_done):
+    def _finalize_attempt(self, conn, output_done):
         new_version = self.version + 1
         now = int(time.time())
-        cursor.execute("""
-          UPDATE Transactions
-          SET inflight_session_id = NULL,
-          output_done = ?,
-          last_update = ?,
-          version = ?
-          WHERE id = ? AND version = ?
-          RETURNING version
-        """, (output_done, now, new_version, self.id, self.version))
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == self.id,
+                      self.parent.tx_table.c.version == self.version)
+               .values(inflight_session_id = None,
+                       output_done = output_done,
+                       last_update = now,
+                       version = new_version)
+               .returning(self.parent.tx_table.c.version))
+        res = conn.execute(upd)
 
-        if (row := cursor.fetchone()) is None or row[0] != new_version:
+        if (row := res.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
         self.version = new_version
         self.parent.tx_versions.update(self.id, self.version)
 
     def wait(self, timeout=None) -> bool:
-        old = self.version
-        self.load()
-        if self.version > old:
-            return True
+        with Waiter(self.parent.tx_versions, self.id, self.version, self
+                    ) as id_version:
+            old = self.version
+            self.load()
+            if self.version > old:
+                return True
+            old = self.version
 
-        if not self.parent.tx_versions.wait(self, self.id, old, timeout):
-            logging.debug('TransactionCursor.wait timed out')
-            return False
-        self.load()
-        return self.version > old  # xxx assert?
+            if not id_version.wait(old, timeout):
+                logging.debug('TransactionCursor.wait timed out')
+                return False
+            self.load()
+            return self.version > old  # xxx assert?
 
-    def _set_input_done(self, cursor):
-        cursor.execute("""
-            UPDATE Transactions
-            SET input_done = TRUE,
-            version = (SELECT version + 1
-                       FROM Transactions WHERE id = ?)
-            WHERE id = ? RETURNING version """, (self.id, self.id))
-        self.version = cursor.fetchone()[0]
+    def _set_input_done(self, conn):
+        new_version = (select(self.parent.tx_table.c.version + 1)
+                .where(self.parent.tx_table.c.id == self.id).scalar_subquery())
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == self.id)
+               .values(input_done = True,
+                       version = new_version)
+               .returning(self.parent.tx_table.c.version))
+        res = conn.execute(upd)
+        self.version = res.fetchone()[0]
         logging.debug('_set_input_done id=%d version=%d', self.id, self.version)
         # xxx defer until after commit
         self.parent.tx_versions.update(self.id, self.version)
         self.input_done = True
         return True
 
-    def _abort(self, cursor):
+    def _abort(self, conn):
         logging.info('TransactionCursor.abort %d %s', self.id, self.rest_id)
         new_version = self.version + 1
         now = int(time.time())
-        cursor.execute("""
-          UPDATE Transactions
-          SET max_attempts = 0, last_update = ?, version = ?
-          WHERE id = ? AND version = ? RETURNING version""",
-          (now, new_version, self.id, self.version))
-        if (row := cursor.fetchone()) is None or row[0] != new_version:
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == self.id,
+                      self.parent.tx_table.c.version == self.version)
+               .values(max_attempts = 0,
+                       last_update = now,
+                       version = new_version)
+               .returning(self.parent.tx_table.c.version))
+        res = conn.execute(upd)
+        if (row := res.fetchone()) is None or row[0] != new_version:
             raise VersionConflictException()
         self.version = new_version
         self.parent.tx_versions.update(self.id, self.version)
 
-
     def abort(self):
         with self.parent.conn() as conn:
-            cursor = conn.connection.cursor()
-            return self._abort(cursor)
+            return self._abort(conn)
 
 
 class BlobWriter:
@@ -460,6 +513,12 @@ class BlobWriter:
     # TODO this should probably just take Blob and share the data
     # under the hood if isinstance(blob, BlobReader), etc
     def append_data(self, d : bytes, content_length=None):
+        # TODO allowing a 0-length write that sets content_length has some
+        # implications for the waiting protocol that I don't want to
+        # deal with right now. We're currently using the length as the
+        # version but may need to bump that, etc.
+        assert len(d) > 0
+
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.id, self.rest_id, self.length, len(d),
@@ -476,22 +535,22 @@ class BlobWriter:
             row = res.fetchone()
             assert row[0] == self.length
 
-            stmt = (update(self.parent.blob_table)
-                    .where(self.parent.blob_table.c.id == self.id)
-                    .where(func.length(self.parent.blob_table.c.content) ==
-                           self.length)
-                    .where(or_(self.parent.blob_table.c.length == None,
-                               self.parent.blob_table.c.length ==
-                               content_length))
-                    # in sqlite, the result of blob||blob seems to be text
-                    .values(content =
-                            cast(self.parent.blob_table.c.content.concat(d),
-                                 LargeBinary),
-                            length = content_length,
-                            last_update = int(time.time()))
-                    .returning(func.length(self.parent.blob_table.c.content)))
+            upd = (update(self.parent.blob_table)
+                   .where(self.parent.blob_table.c.id == self.id)
+                   .where(func.length(self.parent.blob_table.c.content) ==
+                          self.length)
+                   .where(or_(self.parent.blob_table.c.length == None,
+                              self.parent.blob_table.c.length ==
+                              content_length))
+                   # in sqlite, the result of blob||blob seems to be text
+                   .values(content =
+                           cast(self.parent.blob_table.c.content.concat(d),
+                                LargeBinary),
+                           length = content_length,
+                           last_update = int(time.time()))
+                   .returning(func.length(self.parent.blob_table.c.content)))
 
-            res = conn.execute(stmt)
+            res = conn.execute(upd)
             row = res.fetchone()
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
@@ -506,17 +565,16 @@ class BlobWriter:
 
         if self.last:
             with self.parent.conn() as conn:
-                cursor = conn.connection.cursor()
-                cursor.execute(
-                    'SELECT id FROM Transactions WHERE body_blob_id = ?',
-                    (self.id,))
-                for row in cursor:
+                sel = (select(self.parent.tx_table.c.id)
+                       .where(self.parent.tx_table.c.body_blob_id == self.id))
+                res = conn.execute(sel)
+                for row in res:
                     logging.debug('BlobWriter.append_data last %d tx %s',
                                   self.id, row)
                     tx = self.parent.get_transaction_cursor()
-                    tx._load_db(cursor, row[0])
-                    tx._set_input_done(cursor)
-                conn.connection.commit()
+                    tx._load_db(conn, row[0])
+                    tx._set_input_done(conn)
+                conn.commit()
         return True
 
 
@@ -544,18 +602,18 @@ class BlobReader(Blob):
         if self.blob_id:
             db_id = self.blob_id
 
-        stmt = select(
+        sel = select(
             self.parent.blob_table.c.id,
             self.parent.blob_table.c.rest_id,
             self.parent.blob_table.c.length,
             func.length(self.parent.blob_table.c.content))
         if db_id is not None:
-            stmt = stmt.where(self.parent.blob_table.c.id == db_id)
+            sel = sel.where(self.parent.blob_table.c.id == db_id)
         elif rest_id is not None:
-            stmt = stmt.where(self.parent.blob_table.c.rest_id == rest_id)
+            sel = sel.where(self.parent.blob_table.c.rest_id == rest_id)
 
-        with self.parent.conn() as conn: # self.parent.engine.connect() as conn:
-            res = conn.execute(stmt)
+        with self.parent.conn() as conn:
+            res = conn.execute(sel)
             row = res.fetchone()
             if not row:
                 return None
@@ -584,16 +642,22 @@ class BlobReader(Blob):
                 return bytes()
             return row[0]
 
-    # wait for self.offsetlength to increase or timeout
+    # wait for self.length to increase or timeout
     def wait(self, timeout=None):
-        # version is max offset+len in BlobContent
-        old_len = self.length
-        if not self.parent.blob_versions.wait(
-                self, self.blob_id, old_len, timeout):
-            return False
-        self.load(self.blob_id)
-        return self.length > old_len
-
+        # version is len(content) in BlobContent
+        with Waiter(self.parent.blob_versions, self.blob_id, self.length, self
+                    ) as id_version:
+            old_len = self.length
+            self.load()
+            if self.length > old_len:
+                return True
+            if self.last:
+                return False
+            old_len = self.length
+            if not id_version.wait(old_len, timeout):
+                return False
+            self.load()
+            return self.length > old_len
 
 class IdVersion:
     id : int
@@ -609,11 +673,20 @@ class IdVersion:
 
         self.waiters = set()
         self.version = version
+
     def wait(self, version, timeout):
         with self.lock:
-            return self.cv.wait_for(lambda: self.version > version, timeout)
+            logging.debug('IdVersion.wait %d %d %d %d',
+                          id(self), self.id, self.version, version)
+            rv = self.cv.wait_for(lambda: self.version > version, timeout)
+            logging.debug('IdVersion.wait done %d %d %d %d',
+                          self.id, self.version, version, rv)
+            return rv
+
     def update(self, version):
         with self.lock:
+            logging.debug('IdVersion.update %d id=%d version=%d new %d',
+                          id(self), self.id, self.version, version)
             # There is an expected edge case case where a waiter reads
             # the db and updates this in between a write commiting to
             # the db and updating this so == is expected
@@ -634,9 +707,7 @@ class Waiter:
     def __enter__(self):
         return self.id_version
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.id_version.waiters.remove(self.obj)
-        if not self.id_version.waiters:
-            self.parent.del_id(self.db_id)
+        self.parent.del_waiter(self.db_id, self.id_version, self.obj)
 
 class IdVersionMap:
     lock : Lock
@@ -646,14 +717,18 @@ class IdVersionMap:
         self.id_version_map = {}
         self.lock = Lock()
 
-    def del_id(self, id):
+    def del_waiter(self, id, id_version, obj):
         with self.lock:
-            del self.id_version_map[id]
+            id_version.waiters.remove(obj)
+            if not id_version.waiters:
+                del self.id_version_map[id]
 
     def update(self, db_id, version):
-        logging.debug('IdVersionMap.update id=%d version=%d', db_id, version)
         with self.lock:
-            if db_id not in self.id_version_map: return
+            if db_id not in self.id_version_map:
+                logging.debug('IdVersionMap.update id=%d version %d no waiters',
+                              db_id, version)
+                return
             waiter = self.id_version_map[db_id]
             waiter.update(version)
 
@@ -664,12 +739,6 @@ class IdVersionMap:
             waiter = self.id_version_map[db_id]
             waiter.waiters.add(obj)
             return waiter
-
-    def wait(self, obj : object, db_id : int, version : int,
-             timeout=None) -> bool:
-        logging.debug('_wait id=%d version=%s', db_id, version)
-        with Waiter(self, db_id, version, obj) as id_version:
-            return id_version.wait(version, timeout)
 
 # sqlalchemy StaticPool used in-memory/tests just returns the same
 # connection to everyone but doesn't limit to one at a time as one
@@ -709,7 +778,7 @@ class Storage:
         self.created_cv = Condition(self.created_lock)
 
     @staticmethod
-    def get_inmemory_for_test():
+    def get_sqlite_inmemory_for_test():
         engine = create_engine("sqlite+pysqlite://",
                                connect_args={'check_same_thread':False},
                                poolclass=StaticPool)
@@ -729,7 +798,7 @@ class Storage:
         return s
 
     @staticmethod
-    def connect(filename):
+    def connect_sqlite(filename):
         engine = create_engine("sqlite+pysqlite:///" + filename)
         with engine.connect() as conn:
             cursor = conn.connection.cursor()
@@ -746,6 +815,24 @@ class Storage:
         s._init_session()
         return s
 
+    @staticmethod
+    def connect_postgres(db_user=None, db_name=None, host=None, port=None,
+                         unix_socket_dir=None):
+        db_url = 'postgresql+psycopg://' + db_user + '@'
+        if host:
+            db_url += '%s:%d' % (host, port)
+        db_url += '/' + db_name
+        if unix_socket_dir:
+            db_url += ('?host=' + unix_socket_dir)
+            if port:
+                db_url += ('&port=%d' % port)
+        logging.info('Storage.connect_postgres %s', db_url)
+        engine = create_engine(db_url)
+        s = Storage(engine)
+        s._init_session()
+        return s
+
+
     def conn(self):
         if self.inmemory:
             return ConnLock(self)
@@ -753,36 +840,47 @@ class Storage:
 
     def _init_session(self):
         self.metadata = MetaData()
+        self.metadata.reflect(bind=self.engine)
+        # the tablenames seem to be lowercased for postgres, sqlite
+        # doesn't care?
+        self.session_table = Table(
+            'sessions', self.metadata, autoload_with=self.engine)
         self.blob_table = Table(
-            'Blob', self.metadata, autoload_with=self.engine)
+            'blob', self.metadata, autoload_with=self.engine)
+        self.tx_table = Table(
+            'transactions', self.metadata, autoload_with=self.engine)
+        self.attempt_table = Table(
+            'transactionattempts', self.metadata, autoload_with=self.engine)
 
         with self.conn() as conn:
-            cursor = conn.connection.cursor()
             # for the moment, we only evict sessions that the pid no
             # longer exists but as this evolves, we might also
             # periodically check that our own session hasn't been evicted
             proc_self = psutil.Process()
-            cursor.execute("""
-                INSERT INTO Sessions (pid, pid_create) VALUES (?,?)
-                RETURNING id""",
-                (proc_self.pid, int(proc_self.create_time())))
-            self.session_id = cursor.fetchone()[0]
-            conn.connection.commit()
+            ins = (insert(self.session_table).values(
+                pid = proc_self.pid,
+                pid_create = int(proc_self.create_time()))
+                   .returning(self.session_table.c.id))
+            res = conn.execute(ins)
+            self.session_id = res.fetchone()[0]
+            conn.commit()
 
     def recover(self):
         with self.conn() as conn:
-            cursor = conn.connection.cursor()
-            cursor.execute('SELECT id, pid, pid_create FROM Sessions')
-            for row in cursor:
+            sel = select(self.session_table.c.id,
+                         self.session_table.c.pid,
+                         self.session_table.c.pid_create)
+            res = conn.execute(sel)
+            for row in res:
                 (db_id, pid, pid_create) = row
                 if not Storage.check_pid(pid, pid_create):
                     logging.info('deleting stale session %s %s %s',
                                  db_id, pid, pid_create)
-                    cursor.execute(
-                        'DELETE FROM Sessions WHERE id = ?', (db_id,))
-                    conn.connection.commit()
+                    dele = (delete(self.session_table)
+                            .where(self.session_table.c.id == db_id))
+                    conn.execute(dele)
 
-            conn.connection.commit()
+            conn.commit()
 
     @staticmethod
     def check_pid(pid, pid_create):
@@ -804,7 +902,6 @@ class Storage:
 
     def load_one(self, min_age=0):
         with self.conn() as conn:
-            cursor = conn.connection.cursor()
             max_recent = int(time.time()) - min_age
             # TODO this is currently a scan, probably want to bake the
             # next attempt time logic into the previous request completion so
@@ -812,20 +909,22 @@ class Storage:
 
             # TODO maybe don't load !input_done until some request
             # from the client
-            cursor.execute("""
-              SELECT id,version from Transactions
-              WHERE inflight_session_id is NULL AND
-              attempt_count < max_attempts AND
-              output_done IS NOT TRUE AND
-              json IS NOT NULL
-              LIMIT 1""")
-            row = cursor.fetchone()
+            sel = (select(self.tx_table.c.id,
+                          self.tx_table.c.version)
+                   .where(self.tx_table.c.inflight_session_id.is_(None),
+                          self.tx_table.c.attempt_count <
+                          self.tx_table.c.max_attempts,
+                          self.tx_table.c.output_done.is_not(sa_true()),
+                          self.tx_table.c.json.is_not(None))
+                   .limit(1))
+            res = conn.execute(sel)
+            row = res.fetchone()
             if not row:
                 return None
             db_id,version = row
 
             tx = self.get_transaction_cursor()
-            tx._start_attempt_db(cursor, db_id, version)
+            tx._start_attempt_db(conn, db_id, version)
 
             self.tx_versions.update(tx.id, tx.version)
 
@@ -833,7 +932,7 @@ class Storage:
             # load/recover, this transaction may be crashing the system ->
             # quarantine
 
-            conn.connection.commit()
+            conn.commit()
             return tx
 
 
@@ -841,28 +940,27 @@ class Storage:
         max_recent = int(time.time()) - min_age
 
         with self.conn() as conn:
-            cursor = conn.connection.cursor()
-
             # TODO the way this is supposed to work is that
             # cursor_to_endpoint() notices that this has been aborted and
             # early returns but it doesn't actually do that. OTOH maybe it
             # should implement the downstream timeout and this should be
             # restricted to inflight_session_id IS NULL
-            cursor.execute("""
-            SELECT id from Transactions
-            WHERE input_done IS NOT TRUE AND
-            output_done IS NOT TRUE AND
-            (max_attempts = 1 AND last_update <= ?)
-            LIMIT 1""", (max_recent,))
-            row = cursor.fetchone()
+            sel = (select(self.tx_table.c.id)
+                   .where(self.tx_table.c.input_done.is_not(sa_true()),
+                          self.tx_table.c.output_done.is_not(sa_true()),
+                          self.tx_table.c.max_attempts == 1,
+                          self.tx_table.c.last_update <= max_recent)
+                   .limit(1))
+            res = conn.execute(sel)
+            row = res.fetchone()
             if row is None:
                 return False
 
             tx_cursor = self.get_transaction_cursor()
-            tx_cursor._load_db(cursor, db_id = row[0])
-            tx_cursor._abort(cursor)
+            tx_cursor._load_db(conn, db_id = row[0])
+            tx_cursor._abort(conn)
 
-            conn.connection.commit()
+            conn.commit()
 
         return True
 
@@ -880,11 +978,3 @@ class Storage:
             fn = lambda: self.created_id is not None and (
                 db_id is None or self.created_id > db_id)
             return self.created_cv.wait_for(fn, timeout)
-
-
-# forward path
-# set_durable() will typically be concurrent with a transaction?
-# have the data in ephemeral blob storage (possibly mem)
-
-
-

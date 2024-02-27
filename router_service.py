@@ -3,6 +3,7 @@ import time
 import logging
 from threading import Lock, Condition, Thread
 import json
+import os
 
 from wsgiref.simple_server import make_server
 
@@ -76,13 +77,26 @@ class Service:
             config.load_yaml(config_filename)
             self.config = config
 
-        db_filename = self.config.root_yaml['storage'].get(
-            'db_filename', None)
-        if not db_filename:
+        storage_yaml = self.config.root_yaml['storage']
+        engine = storage_yaml.get('engine', None)
+        if engine == 'sqlite_memory':
             logging.warning("*** using in-memory/non-durable storage")
-            self.storage = Storage.get_inmemory_for_test()
-        else:
-            self.storage = Storage.connect(db_filename)
+            self.storage = Storage.get_sqlite_inmemory_for_test()
+        elif engine == 'sqlite':
+            self.storage = Storage.connect_sqlite(
+                storage_yaml['sqlite_db_filename'])
+        elif engine == 'postgres':
+            args = {}
+            arg_map = {'postgres_user': 'db_user',
+                       'postgres_db_name': 'db_name',
+                       'unix_socket_dir': 'unix_socket_dir',
+                       'port': 'port'}
+            for (k,v) in arg_map.items():
+                if k in storage_yaml:
+                    args[v] = storage_yaml[k]
+            if 'db_user' not in args:
+                args['db_user'] = os.getlogin()
+            self.storage = Storage.connect_postgres(**args)
 
         self.storage.recover()
 

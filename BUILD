@@ -41,13 +41,23 @@ py_library(name='storage_schema',
 
 py_library(name='storage',
            srcs=['storage.py'],
-           data=['init_storage.sql'],
+           data=['init_storage.sql',
+                 'init_storage_postgres.sql'],
            deps=[':storage_schema',
                  ':blob',
                  ':response',
                  ':filter'])
 
-py_test(name='storage_test',
+py_test(name='storage_test_sqlite',
+        args=['StorageTestSqlite'],
+        main='storage_test.py',
+        srcs=['storage_test.py'],
+        data=['storage_test_recovery.sql'],
+        deps=[':storage'])
+
+py_test(name='storage_test_postgres',
+        args=['StorageTestPostgres'],
+        main='storage_test.py',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
         deps=[':storage'])

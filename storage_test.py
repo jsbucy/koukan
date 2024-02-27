@@ -3,18 +3,36 @@ import time
 import unittest
 import logging
 import base64
+import tempfile
+import os
 
+import testing.postgresql
+
+import psycopg
+import psycopg.errors
 from storage import Storage, TransactionCursor
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
-class StorageTest(unittest.TestCase):
+def setUpModule():
+    global pg_factory
+    pg_factory = testing.postgresql.PostgresqlFactory(cache_initialized_db=True)
 
+
+def tearDownModule():
+    global pg_factory
+    pg_factory.clear_cache()
+
+
+class StorageTestBase(unittest.TestCase):
+    sqlite : bool
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(thread)d] %(message)s')
-        self.s = Storage.get_inmemory_for_test()
+
+    def tearDown(self):
+        self.s.engine.dispose()
 
     def dump_db(self):
         with self.s.conn() as conn:
@@ -63,6 +81,7 @@ class StorageTest(unittest.TestCase):
         tx_writer.set_max_attempts(100)
 
         tx_reader.load()
+        self.assertEqual(tx_reader.max_attempts, 100)
         tx_reader.add_rcpt_response([Response(456, 'busy')])
         tx_reader.finalize_attempt(False)
 
@@ -135,13 +154,11 @@ class StorageTest(unittest.TestCase):
         self.assertTrue(tx_writer.input_done)
 
     def test_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.conn() as conn:
-                conn.connection.cursor().executescript(f.read())
+        self.load_recovery()
         self.s.recover()
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(reader.id, 12345)
+        self.assertEqual(reader.creation, 1707248590)
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice@example.com')
 
     def test_non_durable(self):
@@ -220,7 +237,7 @@ class StorageTest(unittest.TestCase):
         self.assertFalse(bool(reader.tx.rcpt_to))
 
         rv = [None]
-        t = Thread(target = lambda: StorageTest.wait_for(reader, rv))
+        t = Thread(target = lambda: StorageTestBase.wait_for(reader, rv))
         t.start()
         time.sleep(0.1)
         logging.info('test append')
@@ -236,25 +253,25 @@ class StorageTest(unittest.TestCase):
 
     @staticmethod
     def wait_created(s, rv, db_id):
-        logging.info('StorageTest.wait_created %s', db_id)
+        logging.info('StorageTestBase.wait_created %s', db_id)
         rv[0] = s.wait_created(db_id, 1)
 
     def test_wait_created(self):
         created_id = None
         for i in range(1,3):
-            logging.info('StorageTest.test_wait_created i=%d', i)
+            logging.info('StorageTestBase.test_wait_created i=%d', i)
             rv = [None]
-            t = Thread(target =
-                       lambda: StorageTest.wait_created(self.s, rv, created_id))
+            t = Thread(target = lambda: StorageTestBase.wait_created(
+                self.s, rv, created_id))
             t.start()
             time.sleep(0.1)
 
             writer = self.s.get_transaction_cursor()
             writer.create('xyz%d' % i, TransactionMetadata(host='host'))
 
-            logging.info('StorageTest.test_wait_created join')
+            logging.info('StorageTestBase.test_wait_created join')
             t.join(timeout=2)
-            logging.info('StorageTest.test_wait_created join done')
+            logging.info('StorageTestBase.test_wait_created join done')
             self.assertFalse(t.is_alive())
 
             self.assertTrue(rv[0])
@@ -266,7 +283,7 @@ class StorageTest(unittest.TestCase):
 
     def start_wait(self, reader, rv):
         t = Thread(target =
-                   lambda: StorageTest.wait_blob(reader, rv))
+                   lambda: StorageTestBase.wait_blob(reader, rv))
         t.start()
         time.sleep(0.1)
         return t
@@ -295,13 +312,12 @@ class StorageTest(unittest.TestCase):
         reader.load(blob_writer.id)
 
         dd = [None]
-        # xxx both ways
         t = Thread(target = lambda: self.reader(reader, wait, dd), daemon=True)
         t.start()
 
         d = None
         with open('/dev/urandom', 'rb') as f:
-            d = f.read(1024)
+            d = f.read(128)
 
         for i in range(0, len(d)):
             logging.info('test_blob_waiting2 %d', i)
@@ -318,6 +334,63 @@ class StorageTest(unittest.TestCase):
         self._test_blob_waiting(True)
     def test_blob_waiting_poll(self):
         self._test_blob_waiting(False)
+
+class StorageTestSqlite(StorageTestBase):
+    def setUp(self):
+        super().setUp()
+        self.s = Storage.get_sqlite_inmemory_for_test()
+
+    def load_recovery(self):
+        with open('storage_test_recovery.sql', 'r') as f:
+            with self.s.conn() as conn:
+                conn.connection.cursor().executescript(f.read())
+                conn.connection.commit()
+
+
+class StorageTestPostgres(StorageTestBase):
+    def postgres_url(self, unix_socket_dir, port, db):
+        url = 'postgresql://postgres@/' + db + '?'
+        url += ('host=' + unix_socket_dir)
+        url += ('&port=%d' % port)
+        return url
+
+    def setUp(self):
+        super().setUp()
+
+        global pg_factory
+        self.pg = pg_factory()
+        unix_socket_dir = self.pg.base_dir + '/tmp'
+        port = self.pg.dsn()['port']
+        url = self.postgres_url(unix_socket_dir, port, 'postgres')
+        logging.info('StorageTest setup_postgres %s', url)
+
+        with psycopg.connect(url) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cursor:
+                try:
+                    cursor.execute('drop database storage_test;')
+                except psycopg.errors.InvalidCatalogName:
+                    pass
+                cursor.execute('create database storage_test;')
+                conn.commit()
+
+        url = self.postgres_url(unix_socket_dir, port, 'storage_test')
+        with psycopg.connect(url) as conn:
+            with open('init_storage_postgres.sql', 'r') as f:
+                with conn.cursor() as cursor:
+                    cursor.execute(f.read())
+
+        self.s = Storage.connect_postgres(
+            db_user='postgres', db_name='storage_test',
+            unix_socket_dir=unix_socket_dir, port=port)
+
+    def load_recovery(self):
+        with open('storage_test_recovery.sql', 'r') as f:
+            with self.s.conn() as conn:
+                conn.connection.cursor().execute(f.read())
+                conn.connection.commit()
+
+
 
 if __name__ == '__main__':
     unittest.main()

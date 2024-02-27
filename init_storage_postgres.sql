@@ -1,25 +1,32 @@
-PRAGMA foreign_keys = ON;  -- XXX on every connection
-PRAGMA journal_mode=WAL;
-PRAGMA auto_vacuum=2;  -- incremental
-
 CREATE TABLE Sessions (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   pid INTEGER,
   pid_create INTEGER,
   UNIQUE(pid, pid_create)
 );
 
+CREATE TABLE Blob (
+  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  rest_id TEXT UNIQUE,
+  -- final length declared by client in content-length header
+  length INTEGER,
+  last_update INTEGER NOT NULL,
+  content BYTEA
+);
+
+CREATE INDEX BlobRestId on Blob (rest_id);
+
 CREATE TABLE Transactions (
-  id INTEGER PRIMARY KEY,  -- autoincrement?
+  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   rest_id TEXT UNIQUE,
 
   -- tag/queue/service/host
   json JSON,
 
   -- bool, basically payload is completely written
-  input_done int,
+  input_done boolean,
   -- bool, max TransactionAttempts was final
-  output_done int,
+  output_done boolean,
 
   -- append(last=True) has been called, guarantees that TransactionContent
   -- not growing but not that all blobs are finalized
@@ -69,27 +76,3 @@ CREATE TABLE TransactionAttempts (
     ON DELETE CASCADE
 );
 
-CREATE TABLE Blob (
-  id INTEGER PRIMARY KEY,
-  rest_id TEXT UNIQUE,
-  -- final length declared by client in content-length header
-  length INTEGER,
-  last_update INTEGER NOT NULL,
-  content BLOB
-);
-
-CREATE INDEX BlobRestId on Blob (rest_id);
-
-/*
-gc:
-step 1:  delete expired transactions
-DELETE FROM Transactions WHERE now - last_update > ttl
-step 2: delete blobs
-DELETE FROM Blob WHERE id in (
-SELECT id from Blob LEFT JOIN (SELECT DISTINCT blob_id as trans_blob_id FROM TransactionContent)
-WHERE trans_blob_id = NULL);
-
-also drop old INSERT status, etc.
-
-PRAGMA incremental_vacuum;
-*/
