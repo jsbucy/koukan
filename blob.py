@@ -1,8 +1,10 @@
 from typing import List, Optional
+from abc import ABC, abstractmethod
 
-class Blob:
+class Blob(ABC):
+    @abstractmethod
     def len(self) -> int:
-        raise NotImplementedError
+        pass
 
     # TODO this id is vestigal?
     def id(self) -> Optional[str]:
@@ -11,9 +13,12 @@ class Blob:
     def unref(self, Any) -> None:
         return None
 
+    @abstractmethod
     def read(offset, len=None) -> bytes:
-        pass
+        # pytype doesn't flag len() (above) but does flag this?!
+        raise NotImplementedError()
 
+    @abstractmethod
     def content_length(self) -> Optional[int]:
         pass
 

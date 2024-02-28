@@ -9,9 +9,8 @@ from aiosmtpd.smtp import SMTP
 from aiosmtpd.controller import Controller
 
 from blob import Blob, InlineBlob
-from response import ok_resp, to_smtp_resp
+from response import ok_resp, to_smtp_resp, Response
 from smtp_auth import Authenticator
-from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
 
 class SmtpHandler:

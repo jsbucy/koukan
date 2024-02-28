@@ -23,9 +23,9 @@ class InMemoryHandler:
 
     async def handle_RCPT(self, server, session, envelope, address, rcpt_options) -> str:
         if address.startswith('rcpttemp'):
-            return b'450 rcpt temp'
+            return '450 rcpt temp'
         elif address.startswith('rcptperm'):
-            return b'550 rcpt perm'
+            return '550 rcpt perm'
         elif address.startswith('rcpttimeout'):
             await asyncio.sleep(3600)
 
@@ -36,9 +36,9 @@ class InMemoryHandler:
         if len(envelope.rcpt_tos) == 1:
             address = envelope.rcpt_tos[0]
             if address.startswith('datatemp'):
-                return b'450 data temp'
+                return '450 data temp'
             elif address.startswith('dataperm'):
-                return b'550 data perm'
+                return '550 data perm'
             elif address.startswith('datatimeout'):
                 await asyncio.sleep(3600)
 

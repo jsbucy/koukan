@@ -59,7 +59,7 @@ class BlobStorage:
         if not last:
             return len(blob.d)
 
-        blob.b = InlineBlob(blob.d, str(id))
+        blob.b = InlineBlob(blob.d, None, str(id))
         blob.d = None
         for cb in blob.waiters:
             cb(blob.b)

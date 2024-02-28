@@ -72,6 +72,8 @@ def create_app(handler_factory : HandlerFactory):
             return err
         rest_resp : Optional[FlaskResponse] = handler.start(
             request.get_json(), timeout)
+        if rest_resp is None:
+            return FlaskResponse(status=500)
         if rest_resp.status_code > 299:
             return rest_resp
         resp_json = rest_resp.json

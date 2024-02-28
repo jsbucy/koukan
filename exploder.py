@@ -47,7 +47,7 @@ class Recipient:
 
 class Exploder(Filter):
     output_chain : str
-    factory : Callable[[str], Filter]
+    factory : Callable[[], Filter]
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -219,7 +219,7 @@ class Exploder(Filter):
         if data_resp is not None and prev_resp is None:
             recipient.status = data_resp
 
-    def _append_data(self, blob : Blob) -> Response:
+    def _append_data(self, blob : Blob) -> Optional[Response]:
         logging.info('Exploder._append_data %d %s',
                      blob.len(), blob.content_length())
 

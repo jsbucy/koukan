@@ -768,6 +768,11 @@ class Storage:
     created_lock = None
     created_cv = None
 
+    session_table : Optional[Table] = None
+    blob_table : Optional[Table] = None
+    tx_table : Optional[Table] = None
+    attempt_table : Optional[Table] = None
+
     def __init__(self, engine=None):
         self.engine = engine
         self._db_write_lock = Lock()

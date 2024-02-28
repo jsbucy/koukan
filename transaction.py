@@ -193,7 +193,7 @@ class RestServiceTransaction(Handler):
         rest_resp.content_type = 'application/json'
         return rest_resp
 
-    def get(self, req_json : Dict[str, Any], timeout : Optional[int] = None
+    def get(self, req_json : Dict[str, Any], timeout : Optional[float] = None
             ) -> FlaskResponse:
         logging.info('RestServiceTransaction.get %s', self._tx_rest_id)
 

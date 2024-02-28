@@ -16,15 +16,17 @@ from storage import Storage
 
 class Config:
     storage : Optional[Storage] = None
+    endpoint_yaml : Optional[dict] = None
+
     def __init__(self):
-       self.router_policies = {
-           'dest_domain': self.router_policy_dest_domain,
-           'local_domain': self.router_policy_local_domain}
-       self.filters = {
-           'rest_output': self.rest_output,
-           'router': self.router,
-           'dkim': self.dkim,
-           'exploder': self.exploder,
+        self.router_policies = {
+            'dest_domain': self.router_policy_dest_domain,
+            'local_domain': self.router_policy_local_domain}
+        self.filters = {
+            'rest_output': self.rest_output,
+            'router': self.router,
+            'dkim': self.dkim,
+            'exploder': self.exploder,
        }
 
     def set_storage(self, storage : Storage):
@@ -103,11 +105,11 @@ class Config:
 
     def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]
-        next : Filter = None
+        next : Optional[Filter] = None
         for filter_yaml in reversed(endpoint_yaml['chain']):
             filter_name = filter_yaml['filter']
             endpoint = self.filters[filter_name](filter_yaml, next)
             next = endpoint
-
+        assert next is not None
         return next, endpoint_yaml['msa']
 
