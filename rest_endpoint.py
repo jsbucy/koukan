@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
@@ -25,6 +25,8 @@ def get_resp_json(resp):
         return resp.json()
     except json.decoder.JSONDecodeError:
         return None
+
+Resolution = Callable[[HostPort], Generator[HostPort, None, Any]]
 
 def identity_resolution(x):
     yield x
@@ -63,7 +65,7 @@ class RestEndpoint(Filter):
                  transaction_url=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 remote_host_resolution = identity_resolution,
+                 remote_host_resolution : Resolution = identity_resolution,
                  min_poll=1,
                  max_inline=1024,
                  chunk_size=1048576):
