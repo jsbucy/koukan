@@ -6,7 +6,7 @@ from yaml import load, CLoader as Loader
 from local_domain_policy import LocalDomainPolicy
 from dest_domain_policy import DestDomainPolicy
 from recipient_router_filter import RecipientRouterFilter
-from rest_endpoint import RestEndpoint
+from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
 from filter import Filter, HostPort
@@ -66,17 +66,19 @@ class Config:
         logging.debug('Config.rest_output %s', yaml)
         assert next is None
         static_remote_host_yaml = yaml.get('static_remote_host', None)
-        static_remote_host = HostPort.from_yaml(static_remote_host_yaml) if static_remote_host_yaml else None
+        static_remote_host = (HostPort.from_yaml(static_remote_host_yaml)
+                              if static_remote_host_yaml else None)
         logging.info('Factory.rest_output %s', static_remote_host)
         remote_host_disco = None
-        if yaml.get('remote_host_discovery', '') == 'mx':
-                remote_host_disco = resolve_mx
+        if static_remote_host is not None:
+            remote_host_disco = constant_resolution(static_remote_host)
+        elif yaml.get('remote_host_discovery', '') == 'mx':
+            remote_host_disco = resolve_mx
         rcpt_timeout = 30
         data_timeout = 300
         return RestEndpoint(
             static_base_url = yaml['static_endpoint'],
             http_host = yaml['http_host'],
-            static_remote_host = static_remote_host,
             remote_host_resolution = remote_host_disco,
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout))

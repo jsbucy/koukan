@@ -26,9 +26,14 @@ def get_resp_json(resp):
     except json.decoder.JSONDecodeError:
         return None
 
+def identity_resolution(x):
+    yield x
+
+def constant_resolution(x):
+  return lambda ignored: identity_resolution(x)
+
 class RestEndpoint(Filter):
     transaction_url : Optional[str] = None
-    static_remote_host : Optional[HostPort] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
@@ -51,24 +56,20 @@ class RestEndpoint(Filter):
         if timeout and int(timeout):
             headers['request-timeout'] = str(int(timeout))
 
-    # static_remote_host overrides transaction remote_host to send all
-    # traffic to a fixed next-hop
     # pass base_url/http_host or transaction_url
     def __init__(self,
                  static_base_url=None,
                  http_host=None,
                  transaction_url=None,
-                 static_remote_host : Optional[HostPort] = None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 remote_host_resolution = None,
+                 remote_host_resolution = identity_resolution,
                  min_poll=1,
                  max_inline=1024,
                  chunk_size=1048576):
         self.base_url = self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
-        self.static_remote_host = static_remote_host
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
 
@@ -81,19 +82,8 @@ class RestEndpoint(Filter):
     def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any],
                timeout : Optional[float] = None):
         logging.debug('RestEndpoint._start %s', req_json)
-        remote_host_disco = [None]
-        next_hop = (self.static_remote_host if self.static_remote_host
-                    else tx.remote_host)
-        logging.debug('RestEndpoint._start next_hop %s', next_hop)
-        if next_hop:
-            if self.remote_host_resolution is not None:
-                remote_host_disco = self.remote_host_resolution(next_hop.host)
-            else:
-                remote_host_disco = [next_hop.host]
 
-        for host in remote_host_disco:
-            remote_host : Optional[HostPort] = (
-                HostPort(host, next_hop.port) if host else None)
+        for remote_host in self.remote_host_resolution(tx.remote_host):
             logging.debug('RestEndpoint._start remote_host %s', remote_host)
             # none if no remote_host/disco (above)
             if remote_host is not None:

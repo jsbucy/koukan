@@ -52,6 +52,7 @@ root_yaml = {
         },
     ],
     'storage': {
+        'engine': 'sqlite_memory'
     }
 }
 
