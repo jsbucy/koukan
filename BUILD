@@ -86,7 +86,8 @@ pytype_library(name='output_handler',
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
         deps=[':output_handler',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              ':transaction'])
 
 pytype_library(name='address',
                srcs=['address.py'])
