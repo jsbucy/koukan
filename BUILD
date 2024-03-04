@@ -152,6 +152,7 @@ py_test(name='exploder_test',
               ':response',
               ':storage'])
 
+# clients should get at this via ABC since this depends on ~everything?
 pytype_library(name='config',
                srcs=['config.py'],
                deps=[':storage',
@@ -189,6 +190,7 @@ pytype_library(name='router_service',
                srcs=['router_service.py'],
                deps=[':storage',
                      ':transaction',
+                     ':output_handler',
                      ':response',
                      ':tags',
                      ':executor',

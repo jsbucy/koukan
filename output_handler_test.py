@@ -9,7 +9,7 @@ from werkzeug.datastructures import ContentRange
 from storage import Storage, TransactionCursor
 from storage_schema import VersionConflictException
 from response import Response
-from output_handler import cursor_to_endpoint
+from output_handler import OutputHandler
 from transaction import RestServiceTransaction
 from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata
@@ -56,7 +56,8 @@ class TransactionTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
-        cursor_to_endpoint(tx_cursor, endpoint)
+        handler = OutputHandler()
+        handler.cursor_to_endpoint(tx_cursor, endpoint)
 
         self.assertEqual(endpoint.mail_from.mailbox, 'alice')
         self.assertEqual(endpoint.rcpt_to[0].mailbox, 'bob')
@@ -68,7 +69,8 @@ class TransactionTest(unittest.TestCase):
     def output(self, rest_id, endpoint):
         tx_cursor = self.storage.load_one()
         self.assertEqual(tx_cursor.rest_id, rest_id)
-        cursor_to_endpoint(tx_cursor, endpoint)
+        handler = OutputHandler()
+        handler.cursor_to_endpoint(tx_cursor, endpoint)
 
     def test_integrated(self):
         rest_tx = RestServiceTransaction.create_tx(

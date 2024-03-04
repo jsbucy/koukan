@@ -14,7 +14,8 @@ from blobs import BlobStorage
 from blob import InlineBlob
 
 from storage import Storage, TransactionCursor
-from transaction import RestServiceTransactionFactory, cursor_to_endpoint
+from transaction import RestServiceTransactionFactory
+from output_handler import OutputHandler
 from response import Response
 from tags import Tag
 from executor import Executor
@@ -149,7 +150,8 @@ class Service:
 
 
     def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
-        cursor_to_endpoint(storage_tx, endpoint)
+        handler = OutputHandler()
+        handler.cursor_to_endpoint(storage_tx, endpoint)
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
