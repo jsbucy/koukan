@@ -9,7 +9,7 @@ from werkzeug.datastructures import ContentRange
 from storage import Storage, TransactionCursor
 from storage_schema import VersionConflictException
 from response import Response
-from transaction import RestServiceTransaction, cursor_to_endpoint
+from output_handler import RestServiceTransaction, cursor_to_endpoint
 from fake_endpoints import SyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
@@ -200,7 +200,6 @@ class TransactionTest(unittest.TestCase):
 
         # TODO more coverage of PUTs without content-range
 
-    # TODO dedup
     def test_cursor_to_endpoint(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))

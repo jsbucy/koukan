@@ -270,7 +270,6 @@ class RestServiceTransactionFactory(HandlerFactory):
         return RestServiceTransaction.load_blob(self.storage, blob_rest_id)
 
 
-# TODO dedup
 def output(cursor, endpoint) -> Optional[Response]:
     logging.debug('cursor_to_endpoint output() %s', cursor.rest_id)
 

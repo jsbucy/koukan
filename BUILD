@@ -57,6 +57,11 @@ py_test(name='storage_test_postgres',
         data=['storage_test_recovery.sql'],
         deps=[':storage'])
 
+pytype_library(name='fake_endpoints',
+               srcs=['fake_endpoints.py'],
+               deps=['response',
+                     'filter'])
+
 pytype_library(name='transaction',
                srcs=['transaction.py'],
                deps=['rest_service_handler',
@@ -65,14 +70,22 @@ pytype_library(name='transaction',
                      'storage',
                      'storage_schema'])
 
-pytype_library(name='fake_endpoints',
-               srcs=['fake_endpoints.py'],
-               deps=['response',
-                     'filter'])
-
 py_test(name='transaction_test',
         srcs=['transaction_test.py'],
         deps=[':transaction',
+              ':fake_endpoints'])
+
+pytype_library(name='output_handler',
+               srcs=['output_handler.py'],
+               deps=['rest_service_handler',
+                     'filter',
+                     'response',
+                     'storage',
+                     'storage_schema'])
+
+py_test(name='output_handler_test',
+        srcs=['output_handler_test.py'],
+        deps=[':output_handler',
               ':fake_endpoints'])
 
 pytype_library(name='address',
