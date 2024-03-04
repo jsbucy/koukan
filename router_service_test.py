@@ -121,8 +121,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertFalse(self.endpoints)
 
         # gc the probe request so it doesn't cause confusion later
-        # TODO rest_endpoint.abort()
-        self.assertEqual(1, self.service._gc_inflight(0))
+        self.assertTrue(self.service._gc_inflight(0))
 
     def tearDown(self):
         self.service.shutdown()

@@ -150,8 +150,8 @@ class Service:
 
 
     def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
-        handler = OutputHandler()
-        handler.cursor_to_endpoint(storage_tx, endpoint)
+        handler = OutputHandler(storage_tx, endpoint)
+        handler.cursor_to_endpoint()
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None

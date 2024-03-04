@@ -56,8 +56,8 @@ class TransactionTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
-        handler = OutputHandler()
-        handler.cursor_to_endpoint(tx_cursor, endpoint)
+        handler = OutputHandler(tx_cursor, endpoint)
+        handler.cursor_to_endpoint()
 
         self.assertEqual(endpoint.mail_from.mailbox, 'alice')
         self.assertEqual(endpoint.rcpt_to[0].mailbox, 'bob')
@@ -69,8 +69,8 @@ class TransactionTest(unittest.TestCase):
     def output(self, rest_id, endpoint):
         tx_cursor = self.storage.load_one()
         self.assertEqual(tx_cursor.rest_id, rest_id)
-        handler = OutputHandler()
-        handler.cursor_to_endpoint(tx_cursor, endpoint)
+        handler = OutputHandler(tx_cursor, endpoint)
+        handler.cursor_to_endpoint()
 
     def test_integrated(self):
         rest_tx = RestServiceTransaction.create_tx(
