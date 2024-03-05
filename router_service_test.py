@@ -15,7 +15,6 @@ from config import Config
 from fake_endpoints import SyncEndpoint
 from filter import HostPort, Mailbox, TransactionMetadata
 
-# XXX exercise exploder flows
 root_yaml = {
     'global': {
         'use_gunicorn': False,
@@ -29,6 +28,10 @@ root_yaml = {
         {
             'name': 'smtp-msa',
             'msa': True,
+            'output_handler': {
+                'downstream_env_timeout': 1,
+                'downstream_data_timeout': 1
+            },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True}]
@@ -48,6 +51,10 @@ root_yaml = {
         {
             'name': 'inbound-gw',
             'msa': True,
+            'output_handler': {
+                'downstream_env_timeout': 1,
+                'downstream_data_timeout': 1
+            },
             'chain': [{'filter': 'sync'}]
         },
     ],
@@ -76,7 +83,7 @@ class RouterServiceTest(unittest.TestCase):
         self.cv = Condition(self.lock)
 
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+                            format='%(asctime)s [%(thread)d] %(message)s')
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:

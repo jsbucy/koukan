@@ -15,10 +15,14 @@ class OutputHandler:
     endpoint : Filter
     rest_id : str
 
-    def __init__(self, cursor : TransactionCursor, endpoint : Filter):
+    def __init__(self, cursor : TransactionCursor, endpoint : Filter,
+                 downstream_env_timeout=None,
+                 downstream_data_timeout=None):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
+        self.env_timeout = downstream_env_timeout
+        self.data_timeout = downstream_data_timeout
 
     def _output(self) -> Optional[Response]:
       logging.debug('OutputHandler._output() %s', self.rest_id)
@@ -46,7 +50,9 @@ class OutputHandler:
                       'OutputHandler._output() %s -> body', self.rest_id)
                   break
               else:
-                  self.cursor.wait()
+                  if not self.cursor.wait(self.env_timeout):
+                      return Response(
+                          400, 'OutputHandler downstream env timeout')
                   continue
 
           self.endpoint.on_update(delta)
@@ -107,7 +113,8 @@ class OutputHandler:
       blob_reader.load(rest_id = self.cursor.tx.body)
       while blob_reader.content_length() is None or (
               blob_reader.length < blob_reader.content_length()):
-          blob_reader.wait()
+          if not blob_reader.wait(self.data_timeout):
+              return Response(400, 'OutputHandler downstream data timeout')
       body_tx = TransactionMetadata()
       body_tx.body_blob = blob_reader
       self.endpoint.on_update(body_tx)
@@ -127,10 +134,11 @@ class OutputHandler:
     def cursor_to_endpoint(self):
         logging.debug('OutputHandler.cursor_to_endpoint() %s', self.rest_id)
         resp = self._output()
+        # TODO need another attempt column for internal errors?
         if resp is None:
             logging.warning('OutputHandler.cursor_to_endpoint() %s abort',
                             self.rest_id)
-            return
+            resp = Response(400, 'output handler abort')
         logging.info('OutputHandler.cursor_to_endpoint() %s done %s',
                      self.rest_id, resp)
         while True:

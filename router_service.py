@@ -20,6 +20,7 @@ from response import Response
 from tags import Tag
 from executor import Executor
 from config import Config
+from filter import Filter
 
 class Service:
     lock : Lock
@@ -149,9 +150,18 @@ class Service:
             self.wsgi_server.serve_forever()
 
 
-    def handle_tx(self, storage_tx : TransactionCursor, endpoint : object):
-        handler = OutputHandler(storage_tx, endpoint)
+    def handle_tx(self, storage_tx : TransactionCursor,
+                  endpoint : Filter,
+                  endpoint_yaml):
+        output_yaml = endpoint_yaml.get('output_handler', {})
+        handler = OutputHandler(
+            storage_tx, endpoint,
+            downstream_env_timeout=
+            output_yaml.get('downstream_env_timeout', 30),
+            downstream_data_timeout=
+            output_yaml.get('downstream_env_timeout', 60))
         handler.cursor_to_endpoint()
+        # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
@@ -166,11 +176,14 @@ class Service:
                 storage_tx.id > self.created_id):
             self.created_id = storage_tx.id
 
-        endpoint, msa = self.config.get_endpoint(storage_tx.tx.host)
+        endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
+        msa = endpoint_yaml['msa']
         logging.info('_dequeue %s %s', endpoint, msa)
         tag = Tag.MSA if msa else Tag.MX
         self.executor.enqueue(
-            tag, lambda: self.handle_tx(storage_tx, endpoint))
+            tag, lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
+
+        # TODO wrap all of this in try...finally cursor.finalize_attempt()?
         return True
 
     def dequeue(self):

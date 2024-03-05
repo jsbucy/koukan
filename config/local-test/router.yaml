@@ -12,6 +12,9 @@ rest_listener:
 endpoint:
 - name: outbound-gw
   msa: true
+  output_handler:
+    downstream_env_timeout: 5
+    downstream_data_timeout: 5
   chain:
   - filter: exploder
     output_chain: msa-output
@@ -42,6 +45,9 @@ endpoint:
 
 - name: inbound-gw
   msa: false
+  output_handler:
+    downstream_env_timeout: 5
+    downstream_data_timeout: 5
   chain:
   - filter: exploder
     output_chain: mx-out

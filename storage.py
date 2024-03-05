@@ -385,7 +385,6 @@ class TransactionCursor:
 
     def finalize_attempt(self, output_done):
         with self.parent.conn() as conn:
-            #cursor = conn.connection.cursor()
             self._finalize_attempt(conn, output_done)
             conn.commit()
 
@@ -940,16 +939,10 @@ class Storage:
             conn.commit()
             return tx
 
-
     def _gc_non_durable_one(self, min_age):
         max_recent = int(time.time()) - min_age
 
         with self.conn() as conn:
-            # TODO the way this is supposed to work is that
-            # cursor_to_endpoint() notices that this has been aborted and
-            # early returns but it doesn't actually do that. OTOH maybe it
-            # should implement the downstream timeout and this should be
-            # restricted to inflight_session_id IS NULL
             sel = (select(self.tx_table.c.id)
                    .where(self.tx_table.c.input_done.is_not(sa_true()),
                           self.tx_table.c.output_done.is_not(sa_true()),

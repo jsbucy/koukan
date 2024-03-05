@@ -113,5 +113,4 @@ class Config:
             endpoint = self.filters[filter_name](filter_yaml, next)
             next = endpoint
         assert next is not None
-        return next, endpoint_yaml['msa']
-
+        return next, endpoint_yaml
