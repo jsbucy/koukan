@@ -2,6 +2,9 @@ global:
   dequeue: true
   gc_interval: 5
   tx_idle_timeout: 5
+  executor:
+    max_inflight: 10
+    watchdog_timeout: 10
 
 rest_listener:
   use_gunicorn: false

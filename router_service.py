@@ -17,7 +17,6 @@ from storage import Storage, TransactionCursor
 from transaction import RestServiceTransactionFactory
 from output_handler import OutputHandler
 from response import Response
-from tags import Tag
 from executor import Executor
 from config import Config
 from filter import Filter
@@ -41,20 +40,18 @@ class Service:
     config : Optional[Config] = None
 
     started = False
+    executor : Optional[Executor] = None
+    owned_executor : Optional[Executor] = None
 
-    def __init__(self, config=None):
+    def __init__(self, config=None,
+                 executor : Optional[Executor] = None):
         self.lock = Lock()
         self.cv = Condition(self.lock)
-
-        self.executor = Executor(10, {
-            Tag.LOAD: 1,
-            Tag.MX: 3,
-            Tag.MSA : 5,
-            Tag.DATA: 10 })
 
         self.blobs = None
 
         self.config = config
+        self.executor = executor
 
     def shutdown(self):
         logging.info("router_service shutdown()")
@@ -64,7 +61,8 @@ class Service:
         if self.gc_thread is not None:
             self.gc_thread.join()
 
-        assert(self.executor.wait_empty(timeout=5))
+        if self.owned_executor is not None:
+            assert(self.owned_executor.shutdown(timeout=5))
 
         if self.wsgi_server:
             self.wsgi_server.shutdown()
@@ -78,6 +76,15 @@ class Service:
             config = Config()
             config.load_yaml(config_filename)
             self.config = config
+
+        global_yaml = self.config.root_yaml.get('global', {})
+
+        if self.executor is None:
+            executor_yaml = global_yaml.get('executor', {})
+            self.owned_executor = Executor(
+                executor_yaml.get('max_inflight', 10),
+                executor_yaml.get('watchdog_timeout', 30))
+            self.executor = self.owned_executor
 
         storage_yaml = self.config.root_yaml['storage']
         engine = storage_yaml.get('engine', None)
@@ -106,12 +113,12 @@ class Service:
 
         self.blobs = BlobStorage()
 
-        if self.config.root_yaml['global'].get('dequeue', True):
+        if global_yaml.get('dequeue', True):
             self.dequeue_thread = Thread(target = lambda: self.dequeue(),
                                          daemon=True)
             self.dequeue_thread.start()
 
-        if self.config.root_yaml['global'].get('gc_interval', None):
+        if global_yaml.get('gc_interval', None):
             self.gc_thread = Thread(target = lambda: self.gc(),
                                     daemon=True)
             self.gc_thread.start()
@@ -156,16 +163,15 @@ class Service:
         output_yaml = endpoint_yaml.get('output_handler', {})
         handler = OutputHandler(
             storage_tx, endpoint,
-            downstream_env_timeout=
-            output_yaml.get('downstream_env_timeout', 30),
-            downstream_data_timeout=
-            output_yaml.get('downstream_env_timeout', 60))
+            downstream_env_timeout =
+              output_yaml.get('downstream_env_timeout', 30),
+            downstream_data_timeout =
+              output_yaml.get('downstream_env_timeout', 60))
         handler.cursor_to_endpoint()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
-        # xxx broken needs to loop?
         self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         storage_tx = self.storage.load_one()
         logging.info("dequeued %s", storage_tx.id if storage_tx else None)
@@ -179,9 +185,8 @@ class Service:
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
         msa = endpoint_yaml['msa']
         logging.info('_dequeue %s %s', endpoint, msa)
-        tag = Tag.MSA if msa else Tag.MX
-        self.executor.enqueue(
-            tag, lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
+        self.executor.submit(
+            lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
 
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
         return True
@@ -193,14 +198,15 @@ class Service:
             prev = self._dequeue(wait=(not prev))
 
     def gc(self):
-        while not self._shutdown:
-            self._gc_inflight(
-                self.config.root_yaml['global'].get('tx_idle_timeout', 5))
-            # xxx wait for shutdown
-            time.sleep(self.config.root_yaml['global'].get('gc_interval', 5))
+        global_yaml = self.config.root_yaml['global']
+        while True:
+            self._gc_inflight(global_yaml.get('tx_idle_timeout', 5))
+            with self.lock:
+                if self.cv.wait_for(lambda: self.shutdown,
+                                    global_yaml.get('gc_interval', 5)):
+                    break
 
     def _gc_inflight(self, idle_timeout=None):
-        now = time.monotonic()
         logging.info('router_service _gc_inflight %d', idle_timeout)
 
         count = self.storage.gc_non_durable(idle_timeout)

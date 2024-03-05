@@ -1,5 +1,5 @@
 from typing import Any, List, Optional, Tuple
-from threading import Thread, Lock, Condition
+from threading import Lock, Condition
 import logging
 import unittest
 import socketserver
@@ -14,6 +14,7 @@ from blob import CompositeBlob, InlineBlob
 from config import Config
 from fake_endpoints import SyncEndpoint
 from filter import HostPort, Mailbox, TransactionMetadata
+from executor import Executor
 
 root_yaml = {
     'global': {
@@ -67,6 +68,7 @@ class RouterServiceTest(unittest.TestCase):
     lock : Lock
     cv : Condition
     endpoints : List[SyncEndpoint]
+    executor : Executor
 
     def get_endpoint(self):
         with self.lock:
@@ -82,6 +84,8 @@ class RouterServiceTest(unittest.TestCase):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
+        self.executor = Executor(inflight_limit=10, watchdog_timeout=30)
+
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(thread)d] %(message)s')
 
@@ -93,14 +97,11 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoints = []
         self.config = Config()
         self.config.inject_yaml(root_yaml)
-        self.config.inject_filter('sync',
-                                  lambda yaml, next: self.get_endpoint())
-        self.service = Service(config=self.config)
-        self.service_thread = Thread(
-            daemon=True,
-            target=lambda: self.service.main())
-        self.service_thread.start()
-
+        self.config.inject_filter(
+            'sync', lambda yaml, next: self.get_endpoint())
+        self.service = Service(config=self.config,
+                               executor = self.executor)
+        self.executor.submit(lambda: self.service.main())
 
         self.assertTrue(self.service.wait_started(1))
 
@@ -131,8 +132,10 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service._gc_inflight(0))
 
     def tearDown(self):
+        # TODO this should verify that there are no open tx attempts in storage
+        # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
-        self.service_thread.join()
+        self.executor.shutdown(timeout=5)
 
     def dump_db(self):
         for l in self.service.storage.db.iterdump():
@@ -251,13 +254,11 @@ class RouterServiceTest(unittest.TestCase):
         endpoint.on_update(tx)
 
     def start_tx_update(self, rest_endpoint, tx):
-        t = Thread(target = lambda: self._update_tx(rest_endpoint, tx))
-        t.start()
-        return t
+        return self.executor.submit(lambda: self._update_tx(rest_endpoint, tx))
+
 
     def join_tx_update(self, t):
-        t.join(timeout=1)
-        self.assertFalse(t.is_alive())
+        t.result()
 
     # xxx need non-exploder test w/filter api, problems in
     # post-exploder/upstream tx won't be reported out synchronously,
