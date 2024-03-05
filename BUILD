@@ -165,11 +165,9 @@ pytype_library(name='config',
                      ':mx_resolution',
                      ':storage_writer_filter',
                      ':exploder'])
-pytype_library(name='tags',
-               srcs=['tags.py'])
+
 pytype_library(name='executor',
-               srcs=['executor.py'],
-               deps=['tags'])
+               srcs=['executor.py'])
 
 
 pytype_library(name='blobs',
@@ -181,7 +179,6 @@ pytype_library(name='gunicorn_main',
 pytype_library(name='rest_service',
                srcs=['rest_service.py',
                      'rest_service_handler',
-                     'tags',
                      'blobs',
                      'blob',
                      'response'])
@@ -192,7 +189,6 @@ pytype_library(name='router_service',
                      ':transaction',
                      ':output_handler',
                      ':response',
-                     ':tags',
                      ':executor',
                      ':config',
                      ':blob',

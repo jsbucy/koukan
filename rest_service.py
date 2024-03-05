@@ -15,7 +15,6 @@ import werkzeug.http
 
 from blobs import Blob, BlobStorage
 from blob import InlineBlob
-from tags import Tag
 
 from response import Response as MailResponse
 
