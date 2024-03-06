@@ -85,7 +85,7 @@ class RestServiceTransaction(Handler):
         create_body_rest_id = None
         if tx.body:
             tx.body = tx.body.removeprefix('/blob/')
-        elif 'body' in req_json and req_json['body'] is None:
+        elif 'body' in req_json and req_json['body'] == '':
             create_body_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         self.tx_cursor.create(self._tx_rest_id, tx,
                               create_body_rest_id = create_body_rest_id)
