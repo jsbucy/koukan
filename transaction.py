@@ -80,23 +80,18 @@ class RestServiceTransaction(Handler):
     def _blob_uri_to_id(uri):
         return uri.removeprefix('/blob/')
 
-    # -> create ids, reuse ids
-    def _body_blob_id(self, tx, req_json) -> Tuple[List[str], List[str]]:
-        create = []
+
+    # -> reuse ids
+    def _body_blob_id(self, tx, req_json) -> List[str]:
         reuse = []
         if tx.message_builder:
-            reuse, create = MessageBuilder.get_blobs(
+            reuse = MessageBuilder.get_blobs(
                 tx.message_builder,
-                lambda: secrets.token_urlsafe(REST_ID_BYTES),
                 RestServiceTransaction._blob_uri_to_id)
         elif tx.body:
             tx.body = RestServiceTransaction._blob_uri_to_id(tx.body)
             reuse = [ tx.body ]
-        elif 'body' in req_json and req_json['body'] == '':
-            raise NotImplementedError()
-            tx.body = secrets.token_urlsafe(REST_ID_BYTES)
-            create = [ tx.body ]
-        return create, reuse
+        return reuse
 
     def start(self, req_json, timeout : Optional[float] = None
               ) -> Optional[FlaskResponse]:
@@ -109,11 +104,9 @@ class RestServiceTransaction(Handler):
         if tx is None:
             return FlaskResponse(status=400,
                                  response=['invalid transaction json'])
-        create_blob_rest_id, reuse_blob_rest_id = self._body_blob_id(
-            tx, req_json)
+        reuse_blob_rest_id = self._body_blob_id(tx, req_json)
         self.tx_cursor.create(self._tx_rest_id, tx,
-                              reuse_blob_rest_id = reuse_blob_rest_id,
-                              create_blob_rest_id = create_blob_rest_id)
+                              reuse_blob_rest_id = reuse_blob_rest_id)
         self.tx_cursor.load()
         return self._get_tx_json(timeout)
 
@@ -127,16 +120,14 @@ class RestServiceTransaction(Handler):
             return FlaskResponse(status=400,
                                  response=['invalid transaction delta'])
 
-        create_blob_rest_id, reuse_blob_rest_id = self._body_blob_id(
-            tx, req_json)
+        reuse_blob_rest_id = self._body_blob_id(tx, req_json)
 
-        logging.debug('RestServiceTransaction.patch create %s reuse %s',
-                      create_blob_rest_id, reuse_blob_rest_id)
+        logging.debug('RestServiceTransaction.patch reuse %s',
+                      reuse_blob_rest_id)
 
         try:
             self.tx_cursor.write_envelope(
-                tx, reuse_blob_rest_id = reuse_blob_rest_id,
-                create_blob_rest_id = create_blob_rest_id)
+                tx, reuse_blob_rest_id = reuse_blob_rest_id)
         except VersionConflictException:
             return FlaskResponse(status=412,
                                  response=['version conflict'])
@@ -205,10 +196,7 @@ class RestServiceTransaction(Handler):
             resp_json['body'] = '/blob/' + self.tx_cursor.tx.body
 
         if self.tx_cursor.message_builder:
-            resp_json['message_builder'] = self.tx_cursor.message_builder
-            MessageBuilder.urlify_blobs(
-                resp_json['message_builder'],
-                lambda blob_rest_id: '/blob/' + blob_rest_id)
+            resp_json['message_builder'] = {}
 
         # xxx this needs the inflight -> {} logic
         #resp_json = self.tx_cursor.tx.to_json(WhichJson.REST_READ)

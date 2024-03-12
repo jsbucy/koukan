@@ -13,7 +13,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, or_, select, true as sa_true, update, union_all, values
 
-
 import psutil
 
 from blob import Blob, InlineBlob
@@ -51,7 +50,6 @@ class TransactionCursor:
     def create(self,
                rest_id,
                tx : TransactionMetadata,
-               create_blob_rest_id : List[str] = [],
                reuse_blob_rest_id : List[str] = []):
         parent = self.parent
         self.creation = int(time.time())
@@ -79,7 +77,7 @@ class TransactionCursor:
             self.id = row[0]
             self.tx = TransactionMetadata()  # tx
 
-            self._write(conn, tx, create_blob_rest_id, reuse_blob_rest_id)
+            self._write(conn, tx, reuse_blob_rest_id)
 
             conn.commit()
 
@@ -143,21 +141,11 @@ class TransactionCursor:
 
         return out
 
-    def _create_blob(self, conn, rest_id : List[str]) -> List[int]:
-        blob_id = []
-        for rid in rest_id:
-            raise NotImplementedError()
-            blob_writer = self.parent.get_blob_writer()
-            blob_id.append(blob_writer._create(rid, conn))
-        return blob_id
-
     def write_envelope(self,
                        tx_delta : TransactionMetadata,
-                       create_blob_rest_id : List[str] = [],
                        reuse_blob_rest_id : List[str] = []):
         with self.parent.conn() as conn:
-            self._write(
-                conn, tx_delta, create_blob_rest_id, reuse_blob_rest_id)
+            self._write(conn, tx_delta, reuse_blob_rest_id)
             conn.commit()
             self.parent.tx_versions.update(self.id, self.version)
 
@@ -165,20 +153,16 @@ class TransactionCursor:
                     conn,
                     tx,
                     upd,  # sa update
-                    create_blob_rest_id : List[str] = [],
                     reuse_blob_rest_id : List[str] = []):
         reuse_blob_id = self._reuse_blob(conn, reuse_blob_rest_id)
-        create_blob_id = self._create_blob(conn, create_blob_rest_id)
-        if not reuse_blob_id and not create_blob_id:
+        if not reuse_blob_id:
             return upd
 
         input_done = True
-        if create_blob_id:
-            input_done = False
-        elif reuse_blob_id:
+        if reuse_blob_id:
             for blob_id, rest_id, done in reuse_blob_id:
                 if not done:
-                    # this can be precondition now: don't PATCH the
+                    # TODO this can be precondition now: don't PATCH the
                     # blob id in until it's finalized
                     input_done = False
                     break
@@ -189,13 +173,7 @@ class TransactionCursor:
         logging.debug('TransactionCursor._write_blob %d body %s',
                       self.id, tx.body)
         if tx.body:
-            if create_blob_rest_id:
-                logging.debug('TransactionCursor._write_blob %d create',
-                              self.id)
-                upd = upd.values(
-                    body_blob_id = create_blob_id[0],
-                    body_rest_id = create_blob_rest_id[0])
-            elif reuse_blob_rest_id:
+            if reuse_blob_rest_id:
                 logging.debug('TransactionCursor._write_blob %d reuse', self.id)
                 upd = upd.values(
                     body_blob_id = reuse_blob_id[0][0],
@@ -207,7 +185,7 @@ class TransactionCursor:
 
         reused_blob_ids = [y[0] for y in reuse_blob_id]
         blobrefs = [{"transaction_id": self.id, "blob_id": blob_id}
-                    for blob_id in (create_blob_id + reused_blob_ids)]
+                    for blob_id in reused_blob_ids]
         logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
 
         ins = insert(self.parent.tx_blob_table).values(blobrefs)
@@ -219,7 +197,6 @@ class TransactionCursor:
     def _write(self,
                conn,
                tx_delta : TransactionMetadata,
-               create_blob_rest_id : List[str] = [],
                reuse_blob_rest_id : List[str] = []):
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
@@ -247,8 +224,7 @@ class TransactionCursor:
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)
 
-        upd = self._write_blob(conn, tx_delta, upd,
-                               create_blob_rest_id, reuse_blob_rest_id)
+        upd = self._write_blob(conn, tx_delta, upd, reuse_blob_rest_id)
 
         res = conn.execute(upd)
         row = res.fetchone()
@@ -518,39 +494,6 @@ class TransactionCursor:
                     self.id, old, self.version)
             return self.version > old  # xxx assert?
 
-    def _set_input_done(self, conn):
-        subq = (select(self.parent.tx_blob_table.c.blob_id.label('blob_id'))
-                .where(self.parent.tx_blob_table.c.transaction_id == self.id)
-                ).subquery()
-        # EXISTS?
-        sel = (select(or_(
-            self.parent.blob_table.c.length.is_(None),
-            func.length(self.parent.blob_table.c.content) !=
-            self.parent.blob_table.c.length))
-               ).join_from(self.parent.blob_table, subq,
-                           self.parent.blob_table.c.id == subq.c.blob_id)
-        res = conn.execute(sel)
-        for row in res:
-            if row[0]:
-                return
-
-        new_version = (select(self.parent.tx_table.c.version + 1)
-                .where(self.parent.tx_table.c.id == self.id).scalar_subquery())
-        upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id)
-               .values(input_done = True,
-                       version = new_version)
-               .returning(self.parent.tx_table.c.version))
-        res = conn.execute(upd)
-        self.version = res.fetchone()[0]
-        logging.debug('_set_input_done id=%d version=%d', self.id, self.version)
-        # xxx defer until after commit
-        self.parent.add_post_commit(
-            conn, lambda:
-            self.parent.tx_versions.update(self.id, self.version))
-        self.input_done = True
-        return True
-
     def _abort(self, conn):
         logging.info('TransactionCursor.abort %d %s', self.id, self.rest_id)
         new_version = self.version + 1
@@ -626,12 +569,6 @@ class BlobWriter:
     # TODO this should probably just take Blob and share the data
     # under the hood if isinstance(blob, BlobReader), etc
     def append_data(self, d : bytes, content_length=None):
-        # TODO allowing a 0-length write that sets content_length has some
-        # implications for the waiting protocol that I don't want to
-        # deal with right now. We're currently using the length as the
-        # version but may need to bump that, etc.
-        assert len(d) > 0
-
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.id, self.rest_id, self.length, len(d),
@@ -674,38 +611,7 @@ class BlobWriter:
             self.last = (self.length == self.content_length)
             logging.debug('append_data %d %s last=%s',
                           self.length, self.content_length, self.last)
-            self.parent.blob_versions.update(self.id, self.length)
 
-        # TODO we might decide not to allow reusing incomplete blobs
-        # i.e. can't start tx reusing a blob until the blob is
-        # finalized. If we wanted to support that, this query could be
-        # folded into the one in TransactionCursor._set_input_done()
-        # to roll this all up in one shot i.e. give me all the
-        # transactions that have no incomplete blobs, etc.
-
-        # blob completeness
-        # select blob.id, (blob.length is n not null and length(blob.content) == blob.length) as done
-        # tx containing this blob
-        # (select distinct tx_id from blobrefs
-        # where body_blob_id = self.id) join blobrefs on blob_id
-
-        # join blob completeness w/tx containing this blob
-        # select tx,count(blob_id) from join where done = false group by tx
-        # -> NOT EXISTS (SELECT ... WHERE done = FALSE)
-
-
-        if self.last:
-            with self.parent.conn() as conn:
-                sel = (select(self.parent.tx_blob_table.c.transaction_id)
-                       .where(self.parent.tx_blob_table.c.blob_id == self.id))
-                res = conn.execute(sel)
-                for row in res:
-                    logging.debug('BlobWriter.append_data last %d tx %s',
-                                  self.id, row)
-                    tx = self.parent.get_transaction_cursor()
-                    tx._load_db(conn, row[0])
-                    tx._set_input_done(conn)
-                self.parent.commit(conn)
         return True
 
 
@@ -871,9 +777,9 @@ class IdVersionMap:
             waiter.waiters.add(obj)
             return waiter
 
-# sqlalchemy StaticPool used in-memory/tests just returns the same
-# connection to everyone but doesn't limit to one at a time as one
-# might expect
+# sqlalchemy StaticPool used for sqlite in-memory/tests just returns
+# the same connection to everyone but doesn't limit concurrent access
+# as one might expect
 class ConnLock:
     def __init__(self, parent):
         self.parent = parent
@@ -890,7 +796,6 @@ class ConnLock:
 class Storage:
     session_id = None
     tx_versions : IdVersionMap
-    blob_versions : IdVersionMap
     engine : Optional[Engine] = None
     inmemory = False
     _db_write_lock : Lock
@@ -911,7 +816,6 @@ class Storage:
         self.engine = engine
         self._db_write_lock = Lock()
         self.tx_versions = IdVersionMap()
-        self.blob_versions = IdVersionMap()
 
         self.created_lock = Lock()
         self.created_cv = Condition(self.created_lock)

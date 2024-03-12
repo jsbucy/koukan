@@ -13,40 +13,23 @@ class MessageBuilder:
         self.json = json
         self.blob_factory = blob_factory
 
+    # replace part 'content_uri' with 'blob_rest_id' per uri_to_id
+    # and return a list of these
     @staticmethod
-    def get_blobs(json, factory, uri_to_id : Callable[[str], str]
-                  ) -> Tuple[List[str], List[str]]:
+    def get_blobs(json, uri_to_id : Callable[[str], str]) -> List[str]:
         reuse = []
-        create = []
 
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
             parts = json.get(multipart, [])
             for part in parts:
-                if part.get('content_uri', None):
-                    blob_rest_id = uri_to_id(part['content_uri'])
-                    part['blob_rest_id'] = blob_rest_id
-                    del part['content_uri']
-                    reuse.append(blob_rest_id)
-                elif 'content' not in part:
-                    rest_id = factory()
-                    part['blob_rest_id'] = rest_id
-                    create.append(rest_id)
-        return reuse, create
-
-    @staticmethod
-    def urlify_blobs(json, blob_to_url):
-        reuse = []
-        create = []
-
-        for multipart in [
-                'text_body', 'related_attachments', 'file_attachments']:
-            parts = json.get(multipart, [])
-            for part in parts:
-                if 'blob_rest_id' not in part:
+                if not part.get('content_uri', None):
                     continue
-                part['content_uri'] = blob_to_url(part['blob_rest_id'])
-                del part['blob_rest_id']
+                blob_rest_id = uri_to_id(part['content_uri'])
+                part['blob_rest_id'] = blob_rest_id
+                del part['content_uri']
+                reuse.append(blob_rest_id)
+        return reuse
 
     def _add_part(self, part_json, multipart,
                   existing_part=None,

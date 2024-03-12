@@ -23,8 +23,8 @@ class MessageBuilderTest(unittest.TestCase):
 
     def test_get_blobs(self):
         json = { 'text_body': [ { 'content_uri': '/blob/xyz' } ] }
-        reuse, create = MessageBuilder.get_blobs(
-            json, None, lambda x: x.removeprefix('/blob/'))
+        reuse = MessageBuilder.get_blobs(
+            json, lambda x: x.removeprefix('/blob/'))
         self.assertEqual(reuse, ['xyz'])
         self.assertEqual(json, { 'text_body': [ { 'blob_rest_id': 'xyz' } ] } )
 

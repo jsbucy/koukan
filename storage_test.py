@@ -60,10 +60,6 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_writer.tx.mail_response.code, 450)
         self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
-        #tx_writer = self.s.get_transaction_cursor()
-        #tx_writer.load(rest_id='tx_rest_id')
-        #tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id'),
-        #                         create_blob_rest_id=['blob_rest_id'])
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('blob_rest_id')
 
@@ -136,12 +132,10 @@ class StorageTestBase(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
         tx_writer.write_envelope(TransactionMetadata())
-                                 #create_blob_rest_id=['body_rest_id'])
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('body_rest_id')
         d = b'hello, world!'
         blob_writer.append_data(d, len(d))
-
 
         # write a tx attempting to reuse a non-existent blob rest id,
         # this should fail
@@ -301,19 +295,16 @@ class StorageTestBase(unittest.TestCase):
         t.join(timeout=5)
         self.assertFalse(t.is_alive())
 
-    def reader(self, reader, wait, dd):
+    def reader(self, reader, dd):
         d = bytes()
         while (reader.content_length() is None or
                reader.len() < reader.content_length()):
             logging.info('reader %d', len(d))
-            if wait:
-                reader.wait()
-            else:
-                reader.load()
+            reader.load()
             d += reader.read(len(d))
         dd[0] = d
 
-    def _test_blob_waiting(self, wait):
+    def test_blob_waiting_poll(self):
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('blob_rest_id')
 
@@ -321,7 +312,7 @@ class StorageTestBase(unittest.TestCase):
         reader.load(blob_writer.id)
 
         dd = [None]
-        t = Thread(target = lambda: self.reader(reader, wait, dd), daemon=True)
+        t = Thread(target = lambda: self.reader(reader, dd), daemon=True)
         t.start()
 
         d = None
@@ -339,10 +330,6 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(reader.content_length(), len(d))
         self.assertEqual(reader.len(), len(d))
 
-    def test_blob_waiting_wait(self):
-        self._test_blob_waiting(True)
-    def test_blob_waiting_poll(self):
-        self._test_blob_waiting(False)
 
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
