@@ -75,14 +75,11 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(status=500)
         if rest_resp.status_code > 299:
             return rest_resp
-        resp_json = rest_resp.json
-        resp_json['url'] = '/transactions/' + handler.tx_rest_id()
-
-        #rest_resp = FlaskResponse()
-        rest_resp.set_data(json.dumps(resp_json))
-        #rest_resp.content_type = 'application/json'
+        tx_url = '/transactions/' + handler.tx_rest_id()
+        rest_resp.status_code = 201
+        rest_resp.headers.set('location', tx_url)
         set_etag(rest_resp, handler)
-        # XXX 201 created and return uri in Location: header
+
         return rest_resp
 
     @app.route('/transactions/<tx_rest_id>',

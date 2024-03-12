@@ -3,6 +3,7 @@ from threading import Lock, Condition
 import logging
 import time
 import json.decoder
+from urllib.parse import urljoin
 
 import requests
 from werkzeug.datastructures import ContentRange
@@ -100,17 +101,11 @@ class RestEndpoint(Filter):
                                           timeout=self.timeout_start)
             except requests.RequestException:
                 return None
-            # XXX rest_resp.status_code?
-            logging.info('RestEndpoint.start resp %s', rest_resp)
-            self.etag = rest_resp.headers.get('etag', None)
-            resp_json = get_resp_json(rest_resp)
-            logging.info('RestEndpoint.start resp_json %s', resp_json)
-            if not resp_json:
+            if rest_resp.status_code != 201:
                 return rest_resp
-            self.transaction_url = self.base_url + resp_json['url']
-            # if body := resp_json.get('body', None):
-            #     self.body_url = self.base_url + body
-
+            logging.info('RestEndpoint.start resp %s', rest_resp)
+            self.transaction_url = urljoin(self.base_url, rest_resp.headers['location'])
+            self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
     def _update(self, req_json, timeout : Optional[float] = None):
@@ -133,8 +128,6 @@ class RestEndpoint(Filter):
 
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)
-            # if body := resp_json.get('body', None):
-            #     self.body_url = self.base_url + body
         else:
             self.etag = None
             # xxx err?
