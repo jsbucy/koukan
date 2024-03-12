@@ -1,0 +1,42 @@
+{
+  "headers": {
+    "from": [{"display_name": "alice", "address": "alice@example.com"}],
+    "to": [{}],
+    "cc": [{}],
+    "bcc": [{}],
+    "subject": "hello",
+    "date": {"unix_secs": 1709750551, "tz_offset": -28800},
+    "message-id": "abc@xyz",
+    "in-reply-to": "abd@xyz",
+    "references": ["abd@xyz", "abe@xyz"]
+  },
+
+  "text_body": [
+    {
+      "content_type": "text/html",
+      "content": "<b>hello</b>"
+    },
+    {
+      "content_type": "text/plain",
+      "content": "hello"
+    }
+  ],
+
+  "related_attachments": [
+    {
+      "content_type": "image/png",
+      "content_id": "xyz123",
+      "content": "related image contents"
+    }
+  ],
+
+  "file_attachments": [
+      {
+          "content_type": "image/png",
+          "filename": "hipstercat.png",
+          "content": "attachment contents"
+      }
+  ]
+}
+
+

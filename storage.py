@@ -1,4 +1,4 @@
-from typing import Optional, Dict, List, Tuple
+from typing import Callable, Optional, Dict, List, Tuple
 import sqlite3
 import json
 import time
@@ -6,11 +6,12 @@ import logging
 from threading import Lock, Condition
 from hashlib import sha256
 from base64 import b64encode
+from functools import reduce
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlalchemy import LargeBinary, MetaData, Table, cast, case as sa_case, delete, func, insert, or_, select, true as sa_true, update
+from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, or_, select, true as sa_true, update, union_all, values
 
 
 import psutil
@@ -34,6 +35,7 @@ class TransactionCursor:
 
     tx : Optional[TransactionMetadata] = None
 
+    message_builder : Optional[dict] = None  # json
 
     def __init__(self, storage):
         self.parent = storage
@@ -46,19 +48,17 @@ class TransactionCursor:
         #return b64encode(
         #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
-    # create_body_rest_id
-    # XXX maybe this should be refactored into
-    # insert; update in the same db tx
-    def create(self, rest_id, tx : TransactionMetadata,
-               create_body_rest_id : Optional[str] = None):
+    def create(self,
+               rest_id,
+               tx : TransactionMetadata,
+               create_blob_rest_id : List[str] = [],
+               reuse_blob_rest_id : List[str] = []):
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.conn() as conn:
+            # xxx dead?
             self.last = False
             self.version = 0
-
-            body_blob_id, body_rest_id, input_done = self._set_body(
-                conn, tx.body, create_body_rest_id)
 
             max_attempts = tx.max_attempts if tx.max_attempts else 1
             db_json = tx.to_json(WhichJson.DB)
@@ -71,16 +71,16 @@ class TransactionCursor:
                 last = self.last,
                 json = db_json,
                 attempt_count = 0,
-                max_attempts =  max_attempts,
-                body_blob_id = body_blob_id,
-                body_rest_id = body_rest_id,
-                input_done = input_done
+                max_attempts = max_attempts,
             ).returning(self.parent.tx_table.c.id)
+
             res = conn.execute(ins)
             row = res.fetchone()
             self.id = row[0]
-            self.tx = tx
-            self.input_done = input_done
+            self.tx = TransactionMetadata()  # tx
+
+            self._write(conn, tx, create_blob_rest_id, reuse_blob_rest_id)
+
             conn.commit()
 
         with parent.created_lock:
@@ -89,92 +89,182 @@ class TransactionCursor:
                 parent.created_id = self.id
                 parent.created_cv.notify_all()
 
-    def _set_body(self, conn,
-                  reuse_body_rest_id=None, create_body_rest_id=None
-                  ) -> Tuple[Optional[int], Optional[str], Optional[bool]]:
-                  # -> id, rest_id, input_done
-        if reuse_body_rest_id:
-            # TODO refactor with BlobReader?
-            sel = (select(self.parent.blob_table.c.id,
-                          func.length(self.parent.blob_table.c.content),
-                          self.parent.blob_table.c.length)
-                   .where(self.parent.blob_table.c.rest_id == reuse_body_rest_id))
+    def _reuse_blob(self, conn, rest_id : List[str]
+                    ) -> List[Tuple[int, str, bool]]:
+                    # -> id, rest_id, input_done
+        if not rest_id:
+            return []
+        assert isinstance(rest_id, list)
 
-            res = conn.execute(sel)
-            row = res.fetchone()
-            # xxx need proper reporting of this
-            assert row
-            body_blob_id,length,content_length = row
-            done = (length == content_length)
-            # XXX allow sharing incomplete for exploder but not rest?
-            return body_blob_id, reuse_body_rest_id, done
-        elif create_body_rest_id:
+        # sqlite handles some forms of VALUES e.g
+        # WITH tt(i) AS (VALUES(2),(3)) SELECT t.i FROM t JOIN tt ON t.i = tt.i;
+        # but SA renders the following as
+        # WITH anon_1 AS
+        # (SELECT v.rest_id AS rest_id
+        # FROM (VALUES (?)) AS v (rest_id))
+        # SELECT blob.id, blob.rest_id, length(blob.content)
+        #   AS length_1, blob.length
+        # FROM blob JOIN anon_1 ON blob.rest_id = anon_1.rest_id]
+        # which sqlite throws a syntax error on
+
+        if str(self.parent.engine.url).find('sqlite') == -1:
+            val = select(values(column('rest_id', String), name='v').data(
+                [(x,) for x in rest_id])).cte()
+        else:
+            # OTOH chaining up UNION ALL works fine and we don't expect it
+            # to be so much worse as to make a difference anywhere you
+            # would actually use sqlite!
+            literals = [select(literal(x).label('rest_id')) for x in rest_id]
+            val = reduce(lambda x,y: x.union_all(y),
+                         literals[1:], literals[0].cte())
+
+        sel = select(self.parent.blob_table.c.id,
+                     self.parent.blob_table.c.rest_id,
+                     func.length(self.parent.blob_table.c.content),
+                     self.parent.blob_table.c.length
+                     ).join_from(self.parent.blob_table, val,
+                                 self.parent.blob_table.c.rest_id ==
+                                 val.c.rest_id)
+
+        res = conn.execute(sel)
+        ids = {}
+        for row in res:
+               blob_id, rid, length, content_length = row
+
+               done = (length == content_length)
+               ids[rid] = (blob_id, done)
+
+        out = []
+        for rid in rest_id:
+            if rid not in ids:
+                raise ValueError()  # invalid rest id
+            blob_id, done = ids[rid]
+            out.append((blob_id, rid, done))
+
+        return out
+
+    def _create_blob(self, conn, rest_id : List[str]) -> List[int]:
+        blob_id = []
+        for rid in rest_id:
+            raise NotImplementedError()
             blob_writer = self.parent.get_blob_writer()
-            body_rest_id = create_body_rest_id
-            body_blob_id = blob_writer._create(
-                body_rest_id, conn)
-            return body_blob_id, create_body_rest_id, False
-        return None, None, None
+            blob_id.append(blob_writer._create(rid, conn))
+        return blob_id
 
-    def write_envelope(self, tx_delta : TransactionMetadata,
-                       create_body_rest_id : Optional[str] = None):
+    def write_envelope(self,
+                       tx_delta : TransactionMetadata,
+                       create_blob_rest_id : List[str] = [],
+                       reuse_blob_rest_id : List[str] = []):
         with self.parent.conn() as conn:
-            #cursor = conn.connection.cursor()
-            # TODO this should just load(), trying to save a single
-            # point read from the db isn't worth worrying about the
-            # state in the cursor getting out of sync with the db.
-            assert self.tx is not None
-            tx_to_db = self.tx.merge(tx_delta)
-            # e.g. overwriting an existing field
-            # xxx return/throw
-            assert tx_to_db is not None
-            logging.debug('write_envelope %s', tx_to_db.to_json(WhichJson.DB))
-            new_version = self.version + 1
-            # TODO all updates '... WHERE inflight_session_id =
-            #   self.parent.session' ?
-            now = int(time.time())
-
-            # xxx err if this was already set?
-            body_blob_id, body_rest_id, input_done = self._set_body(
-                conn, tx_delta.body, create_body_rest_id)
-
-            upd = (update(self.parent.tx_table)
-                   .where(self.parent.tx_table.c.id == self.id)
-                   .where(self.parent.tx_table.c.version == self.version)
-                   .values(json = tx_to_db.to_json(WhichJson.DB),
-                           version = new_version,
-                           max_attempts = 1,
-                           attempt_count = 0,
-                           last_update = now)
-                   .returning(self.parent.tx_table.c.version))
-            if tx_delta.max_attempts:
-                upd = upd.values(max_attempts = tx_delta.max_attempts)
-
-            if body_blob_id:
-                upd = upd.values(body_blob_id = body_blob_id,
-                                 body_rest_id = body_rest_id,
-                                 input_done = input_done)
-
-            res = conn.execute(upd)
-            row = res.fetchone()
-
-            if row is None or row[0] != new_version:
-                raise VersionConflictException()
-            self.version = row[0]
-            self.input_done = input_done
-
-            # XXX need to catch exceptions and db.rollback()? (throughout)
+            self._write(
+                conn, tx_delta, create_blob_rest_id, reuse_blob_rest_id)
             conn.commit()
-
-            # TODO or RETURNING json
-            # XXX doesn't include response fields? tx.merge() should
-            # handle that?
-            self.tx = self.tx.merge(tx_delta)
-
-            logging.info('write_envelope id=%d version=%d',
-                         self.id, self.version)
-
             self.parent.tx_versions.update(self.id, self.version)
+
+    def _write_blob(self,
+                    conn,
+                    tx,
+                    upd,  # sa update
+                    create_blob_rest_id : List[str] = [],
+                    reuse_blob_rest_id : List[str] = []):
+        reuse_blob_id = self._reuse_blob(conn, reuse_blob_rest_id)
+        create_blob_id = self._create_blob(conn, create_blob_rest_id)
+        if not reuse_blob_id and not create_blob_id:
+            return upd
+
+        input_done = True
+        if create_blob_id:
+            input_done = False
+        elif reuse_blob_id:
+            for blob_id, rest_id, done in reuse_blob_id:
+                if not done:
+                    # this can be precondition now: don't PATCH the
+                    # blob id in until it's finalized
+                    input_done = False
+                    break
+
+        logging.debug('TransactionCursor._write_blob %d %s',
+                      self.id, input_done)
+
+        logging.debug('TransactionCursor._write_blob %d body %s',
+                      self.id, tx.body)
+        if tx.body:
+            if create_blob_rest_id:
+                logging.debug('TransactionCursor._write_blob %d create',
+                              self.id)
+                upd = upd.values(
+                    body_blob_id = create_blob_id[0],
+                    body_rest_id = create_blob_rest_id[0])
+            elif reuse_blob_rest_id:
+                logging.debug('TransactionCursor._write_blob %d reuse', self.id)
+                upd = upd.values(
+                    body_blob_id = reuse_blob_id[0][0],
+                    body_rest_id = reuse_blob_rest_id[0])
+            else:
+                raise ValueError()
+
+        upd = upd.values(input_done = input_done)
+
+        reused_blob_ids = [y[0] for y in reuse_blob_id]
+        blobrefs = [{"transaction_id": self.id, "blob_id": blob_id}
+                    for blob_id in (create_blob_id + reused_blob_ids)]
+        logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
+
+        ins = insert(self.parent.tx_blob_table).values(blobrefs)
+        res = conn.execute(ins)
+
+        self.input_done = input_done
+        return upd
+
+    def _write(self,
+               conn,
+               tx_delta : TransactionMetadata,
+               create_blob_rest_id : List[str] = [],
+               reuse_blob_rest_id : List[str] = []):
+        assert self.tx is not None
+        tx_to_db = self.tx.merge(tx_delta)
+        # e.g. overwriting an existing field
+        # xxx return/throw
+        assert tx_to_db is not None
+        logging.debug('write_envelope %s', tx_to_db.to_json(WhichJson.DB))
+        new_version = self.version + 1
+        # TODO all updates '... WHERE inflight_session_id =
+        #   self.parent.session' ?
+        now = int(time.time())
+
+        upd = (update(self.parent.tx_table)
+               .where(self.parent.tx_table.c.id == self.id)
+               .where(self.parent.tx_table.c.version == self.version)
+               .values(json = tx_to_db.to_json(WhichJson.DB),
+                       version = new_version,
+                       max_attempts = 1,  # wat
+                       attempt_count = 0,
+                       last_update = now)
+               .returning(self.parent.tx_table.c.version))
+        if tx_delta.max_attempts:
+            upd = upd.values(max_attempts = tx_delta.max_attempts)
+
+        if tx_delta.message_builder:
+            upd = upd.values(message_builder = tx_delta.message_builder)
+
+        upd = self._write_blob(conn, tx_delta, upd,
+                               create_blob_rest_id, reuse_blob_rest_id)
+
+        res = conn.execute(upd)
+        row = res.fetchone()
+
+        if row is None or row[0] != new_version:
+            raise VersionConflictException()
+        self.version = row[0]
+
+        # TODO or RETURNING json
+        # XXX doesn't include response fields? tx.merge() should
+        # handle that?
+        self.tx = self.tx.merge(tx_delta)
+
+        logging.info('write_envelope id=%d version=%d',
+                     self.id, self.version)
+
         return True
 
     def _set_response(self, col : str, response : Response):
@@ -284,7 +374,9 @@ class TransactionCursor:
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.output_done,
                      self.parent.tx_table.c.body_rest_id,
-                     self.parent.tx_table.c.max_attempts)
+                     self.parent.tx_table.c.max_attempts,
+                     self.parent.tx_table.c.message_builder)
+
 
         if db_id is not None:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
@@ -298,13 +390,14 @@ class TransactionCursor:
         (self.id, self.rest_id,
          self.creation, trans_json, self.version, self.last,
          self.input_done, self.output_done, self.body_rest_id,
-         self.max_attempts) = row[0:10]
+         self.max_attempts, self.message_builder) = row
 
         logging.debug('TransactionCursor._load_db %s %s %s',
                       self.rest_id, row, trans_json)
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         self.tx.body = self.body_rest_id
+        self.tx.message_builder = self.message_builder
 
         sel = (select(self.parent.attempt_table.c.attempt_id,
                      self.parent.attempt_table.c.mail_response,
@@ -419,9 +512,28 @@ class TransactionCursor:
                 logging.debug('TransactionCursor.wait timed out')
                 return False
             self.load()
+            if self.version <= old:
+                logging.critical(
+                    'TransactionCursor.wait() BUG id=%d old=%d new=%d',
+                    self.id, old, self.version)
             return self.version > old  # xxx assert?
 
     def _set_input_done(self, conn):
+        subq = (select(self.parent.tx_blob_table.c.blob_id.label('blob_id'))
+                .where(self.parent.tx_blob_table.c.transaction_id == self.id)
+                ).subquery()
+        # EXISTS?
+        sel = (select(or_(
+            self.parent.blob_table.c.length.is_(None),
+            func.length(self.parent.blob_table.c.content) !=
+            self.parent.blob_table.c.length))
+               ).join_from(self.parent.blob_table, subq,
+                           self.parent.blob_table.c.id == subq.c.blob_id)
+        res = conn.execute(sel)
+        for row in res:
+            if row[0]:
+                return
+
         new_version = (select(self.parent.tx_table.c.version + 1)
                 .where(self.parent.tx_table.c.id == self.id).scalar_subquery())
         upd = (update(self.parent.tx_table)
@@ -433,7 +545,9 @@ class TransactionCursor:
         self.version = res.fetchone()[0]
         logging.debug('_set_input_done id=%d version=%d', self.id, self.version)
         # xxx defer until after commit
-        self.parent.tx_versions.update(self.id, self.version)
+        self.parent.add_post_commit(
+            conn, lambda:
+            self.parent.tx_versions.update(self.id, self.version))
         self.input_done = True
         return True
 
@@ -484,7 +598,7 @@ class BlobWriter:
         return self.id
 
     def create(self, rest_id):
-        with self.parent.engine.connect() as conn:
+        with self.parent.conn() as conn:
             self._create(rest_id, conn)
             conn.commit()
             return self.id
@@ -497,7 +611,7 @@ class BlobWriter:
             func.length(self.parent.blob_table.c.content)).where(
                 self.parent.blob_table.c.rest_id == rest_id)
 
-        with self.parent.engine.connect() as conn:
+        with self.parent.conn() as conn:
             res = conn.execute(stmt)
             row = res.fetchone()
 
@@ -562,10 +676,28 @@ class BlobWriter:
                           self.length, self.content_length, self.last)
             self.parent.blob_versions.update(self.id, self.length)
 
+        # TODO we might decide not to allow reusing incomplete blobs
+        # i.e. can't start tx reusing a blob until the blob is
+        # finalized. If we wanted to support that, this query could be
+        # folded into the one in TransactionCursor._set_input_done()
+        # to roll this all up in one shot i.e. give me all the
+        # transactions that have no incomplete blobs, etc.
+
+        # blob completeness
+        # select blob.id, (blob.length is n not null and length(blob.content) == blob.length) as done
+        # tx containing this blob
+        # (select distinct tx_id from blobrefs
+        # where body_blob_id = self.id) join blobrefs on blob_id
+
+        # join blob completeness w/tx containing this blob
+        # select tx,count(blob_id) from join where done = false group by tx
+        # -> NOT EXISTS (SELECT ... WHERE done = FALSE)
+
+
         if self.last:
             with self.parent.conn() as conn:
-                sel = (select(self.parent.tx_table.c.id)
-                       .where(self.parent.tx_table.c.body_blob_id == self.id))
+                sel = (select(self.parent.tx_blob_table.c.transaction_id)
+                       .where(self.parent.tx_blob_table.c.blob_id == self.id))
                 res = conn.execute(sel)
                 for row in res:
                     logging.debug('BlobWriter.append_data last %d tx %s',
@@ -573,7 +705,7 @@ class BlobWriter:
                     tx = self.parent.get_transaction_cursor()
                     tx._load_db(conn, row[0])
                     tx._set_input_done(conn)
-                conn.commit()
+                self.parent.commit(conn)
         return True
 
 
@@ -750,6 +882,7 @@ class ConnLock:
         self.conn = self.parent.engine.connect()
         return self.conn
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.conn.rollback()  # yikes!
         self.parent._db_write_lock.release()
     def commit(self):
         self.conn.commit()
@@ -772,6 +905,8 @@ class Storage:
     tx_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
+    post_commit : Dict[object, List[Callable[[], None]]]
+
     def __init__(self, engine=None):
         self.engine = engine
         self._db_write_lock = Lock()
@@ -780,6 +915,23 @@ class Storage:
 
         self.created_lock = Lock()
         self.created_cv = Condition(self.created_lock)
+        self.post_commit = {}
+
+    # TODO context manager thing for this?
+    def commit(self, conn):
+        logging.debug('Storage.on_commit %s %s',
+                      conn, self.post_commit.get(conn, []))
+        conn.commit()
+        if conn not in self.post_commit:
+            return
+        for fn in self.post_commit[conn]:
+            fn()
+        del self.post_commit[conn]
+
+    def add_post_commit(self, conn, fn):
+        if conn not in self.post_commit:
+            self.post_commit[conn] = []
+        self.post_commit[conn].append(fn)
 
     @staticmethod
     def get_sqlite_inmemory_for_test():
@@ -853,6 +1005,9 @@ class Storage:
             'blob', self.metadata, autoload_with=self.engine)
         self.tx_table = Table(
             'transactions', self.metadata, autoload_with=self.engine)
+        self.tx_blob_table = Table(
+            'transactionblobrefs', self.metadata, autoload_with=self.engine)
+
         self.attempt_table = Table(
             'transactionattempts', self.metadata, autoload_with=self.engine)
 

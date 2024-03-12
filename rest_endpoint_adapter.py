@@ -32,18 +32,27 @@ class RestEndpointAdapter(Handler):
 
     def tx_rest_id(self): return self._tx_rest_id
 
+    def _body(self, req_json, resp_json):
+        if 'body' not in req_json:
+            return
+        if req_json['body'] != '':
+            raise NotImplementedError()
+
+        #blob_done_cb = lambda blob: self.append_blob_upstream(True, blob)
+        #blob_id = self.blob_storage.create(blob_done_cb)
+        #resp_json['body'] = '/blob/' + str(blob_id)
+
     def start(self, req_json,
               timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
         self.endpoint.start(tx)
         # xxx inflight response fields per tx req fields
-        rest_resp = FlaskResponse(200)
-        rest_resp.set_data('{}')
-        rest_resp.content_type = 'application/json'
-        return rest_resp
+        resp_json = {}
+        self._body(req_json, resp_json)
+        return jsonify(resp_json)
 
     def get(self, req_json : Dict[str, Any],
-              timeout : Optional[float] = None) -> FlaskResponse:
+            timeout : Optional[float] = None) -> FlaskResponse:
         json_out = {}
 
         if self.endpoint.mail_resp:
@@ -60,35 +69,26 @@ class RestEndpointAdapter(Handler):
               timeout : Optional[float] = None) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.patch %s %s',
                       self._tx_rest_id, req_json)
-        if req_json != {'body': ''}:
+        if req_json.keys() != {'body'}:
             raise NotImplementedError()
-        blob_done_cb = lambda blob: self.append_blob_upstream(True, blob)
-        blob_id = self.blob_storage.create(blob_done_cb)
-        resp_json = { 'body': '/blob/' + str(blob_id) }
-        return jsonify(resp_json)
+        blob_id = req_json['body'].removeprefix('/blob/')
+        if not (blob := self.blob_storage.get(blob_id)):
+            return FlaskResponse(status=404, response=['blob not found'])
+
+        resp = self.endpoint.append_data(last=True, blob=blob)
+
+        # TODO this needs to yield something in the tx json, length, etc.
+
+        return self.get(req_json={})
 
     def etag(self):
         return None
 
-    def append_blob_upstream(self, last : bool, blob : Blob):
-        logging.info('%s rest service RestRequestHandler.append_data %s %d',
-                     self._tx_rest_id, last, blob.len())
-        # XXX put back a precondition check here similar to that at
-        # the beginning of append_data() that the upstream transaction
-        # hasn't already failed
-
-        resp = None
-        try:
-            resp = self.endpoint.append_data(last, blob)
-        except:
-            resp = MailResponse.Internal(
-                'rest transaction append_data exception')
-        logging.info('%s rest service RestRequestHandler.append_data %s',
-                     self._tx_rest_id, resp)
-
-        if last:
-            self.last = True
-
+    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
+        blob_id = self.blob_storage.create()
+        blob_uri = '/blob/' + str(blob_id)
+        resp = FlaskResponse(status=201, response=['created'])
+        resp.headers.set('location', blob_uri)
         return resp
 
     def put_blob(self, request : FlaskRequest, content_range : ContentRange,
@@ -130,7 +130,8 @@ class RestEndpointAdapterFactory(HandlerFactory):
         endpoint = self.endpoint_factory.create(http_host)
         if endpoint is None: return None
         return RestEndpointAdapter(endpoint=endpoint,
-                                   tx_rest_id=endpoint.rest_id)
+                                   tx_rest_id=endpoint.rest_id,
+                                   blob_storage=self.blob_storage)
 
     def get_tx(self, tx_rest_id) -> Optional[RestEndpointAdapter]:
         endpoint = self.endpoint_factory.get(tx_rest_id)
@@ -138,6 +139,9 @@ class RestEndpointAdapterFactory(HandlerFactory):
         return RestEndpointAdapter(endpoint=endpoint,
                                    tx_rest_id=tx_rest_id,
                                    blob_storage=self.blob_storage)
+
+    def create_blob(self) -> Optional[Handler]:
+        return RestEndpointAdapter(blob_storage=self.blob_storage)
 
     def get_blob(self, blob_rest_id) -> Optional[RestEndpointAdapter]:
         return RestEndpointAdapter(blob_storage=self.blob_storage,

@@ -21,6 +21,7 @@ CREATE TABLE Transactions (
   -- bool, max TransactionAttempts was final
   output_done int,
 
+  -- XXX dead?
   -- append(last=True) has been called, guarantees that TransactionContent
   -- not growing but not that all blobs are finalized
   last bool,
@@ -37,6 +38,8 @@ CREATE TABLE Transactions (
   body_blob_id INTEGER,
   body_rest_id TEXT,
 
+  message_builder JSON,
+
   FOREIGN KEY(body_blob_id) REFERENCES Blob(id)
     ON UPDATE CASCADE
     ON DELETE SET NULL,
@@ -52,6 +55,21 @@ CREATE TABLE Transactions (
 
 CREATE INDEX TxRestId on Transactions (rest_id);
 CREATE INDEX TxBodyBlobId on Transactions (body_blob_id);
+
+CREATE TABLE TransactionBlobRefs (
+  transaction_id INTEGER,
+  blob_id INTEGER,
+
+  FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
+
+  FOREIGN KEY(blob_id) REFERENCES Blob(id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
+
+  PRIMARY KEY(transaction_id, blob_id)
+);
 
 -- TODO add timestamps
 CREATE TABLE TransactionAttempts (

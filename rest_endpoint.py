@@ -42,7 +42,6 @@ class RestEndpoint(Filter):
     etag : Optional[str] = None
     max_inline : int
     chunk_size : int
-    body_url : Optional[str] = None
     body_len : int = 0
 
     # PATCH sends rcpts to append but it sends back the responses for
@@ -109,8 +108,8 @@ class RestEndpoint(Filter):
             if not resp_json:
                 return rest_resp
             self.transaction_url = self.base_url + resp_json['url']
-            if body := resp_json.get('body', None):
-                self.body_url = self.base_url + body
+            # if body := resp_json.get('body', None):
+            #     self.body_url = self.base_url + body
 
             return rest_resp
 
@@ -134,8 +133,8 @@ class RestEndpoint(Filter):
 
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)
-            if body := resp_json.get('body', None):
-                self.body_url = self.base_url + body
+            # if body := resp_json.get('body', None):
+            #     self.body_url = self.base_url + body
         else:
             self.etag = None
             # xxx err?
@@ -148,11 +147,8 @@ class RestEndpoint(Filter):
             self.base_url = tx.rest_endpoint
 
         req_json = tx.to_json()
-        body_last = tx.body_blob and (
-            tx.body_blob.len() == tx.body_blob.content_length())
-        if body_last and not self.body_url:
-            req_json['body'] = ''
 
+        logging.debug('RestEndpoint.on_update req_json %s', req_json)
         if req_json:
             if not self.transaction_url:
                 rest_resp = self._start(tx, req_json)
@@ -170,34 +166,42 @@ class RestEndpoint(Filter):
             # or else stuff the http error in the response for the first
             # inflight req field in tx?
             resp_json = get_resp_json(rest_resp) if rest_resp else None
-            http_err = rest_resp is None or rest_resp.status_code >= 300 or resp_json is None
+            http_err = (rest_resp is None or rest_resp.status_code >= 300 or
+                        resp_json is None)
             resp_json = resp_json if resp_json else {}
             self.get_tx_response(timeout, tx, resp_json, http_err)
 
-        # TODO this can trickle out the blob as it grows
+        body_last = tx.body_blob and (
+            tx.body_blob.len() == tx.body_blob.content_length())
+
         if body_last:
             logging.debug('RestEndpoint.on_update body_blob')
-            assert self.body_url
-            data_resp = self._put_blob(tx.body_blob, last=True)
+            data_resp = self._put_blob(tx.body_blob)
             logging.debug('on_update %s', data_resp)
             http_err = (data_resp is None)
             self.data_last = True
             self.get_tx_response(self.timeout_data, tx, {}, http_err)
 
-    def _put_blob(self, blob, last) -> Optional[Response]:
-        logging.info('RestEndpoint._put_blob via uri %s blob.len=%d last %s',
-                     self.body_url, blob.len(), last)
+    def _put_blob(self, blob) -> Optional[Response]:
+        blob_post_resp = requests.post(self.base_url + '/blob')
+        logging.info('RestEndpoint._put_blob POST /blob %s %s',
+                     blob_post_resp, blob_post_resp.headers)
+
+        if blob_post_resp.status_code != 201:
+            return None
+        if not (blob_url := blob_post_resp.headers.get('location', None)):
+            return None
 
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
-            chunk_last = last and (offset + len(chunk) >= blob.len())
+            chunk_last = (offset + len(chunk) >= blob.len())
             logging.debug('_put_blob chunk_offset %d chunk len %d '
                           'body_len %d chunk_last %s',
                           offset, len(chunk), self.body_len, chunk_last)
 
             resp,body_offset = self._put_blob_chunk(
-                self.body_url,
+                self.base_url + blob_url,
                 offset=self.body_len,
                 d=chunk,
                 last=chunk_last)
@@ -210,7 +214,15 @@ class RestEndpoint(Filter):
             offset += chunk_out
             self.body_len += chunk_out
         logging.debug('_put_blob %s', resp)
-        return resp
+
+        patch_tx_resp = requests.patch(self.transaction_url,
+                                       json={'body': blob_url})
+        # TODO should this return endpoint Response or http/requests Response?
+        if patch_tx_resp.status_code > 299:
+            return Response(
+                400, 'RestEndpoint._put_blob_chunk PATCH err')
+
+        return Response()
 
     # -> (resp, len)
     def _put_blob_chunk(self, chunk_uri, offset,

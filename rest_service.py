@@ -117,6 +117,16 @@ def create_app(handler_factory : HandlerFactory):
         set_etag(rest_resp, handler)
         return rest_resp
 
+    @app.route('/blob', methods=['POST'])
+    def create_blob() -> FlaskResponse:
+        logging.info("rest service create_blob %s %s",
+                     request, request.headers)
+        handler = handler_factory.create_blob()
+        if handler is None:
+            return FlaskResponse(status=500,
+                                 response=['could not create blob handler'])
+        return handler.create_blob(request)
+
     @app.route('/blob/<blob_rest_id>', methods=['PUT'])
     def append_data_chunk(blob_rest_id) -> FlaskResponse:
         logging.info("rest service append_data_chunk %s %s",

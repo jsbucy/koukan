@@ -60,12 +60,12 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_writer.tx.mail_response.code, 450)
         self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.load(rest_id='tx_rest_id')
-        tx_writer.write_envelope(TransactionMetadata(),
-                                 create_body_rest_id='blob_rest_id')
+        #tx_writer = self.s.get_transaction_cursor()
+        #tx_writer.load(rest_id='tx_rest_id')
+        #tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id'),
+        #                         create_blob_rest_id=['blob_rest_id'])
         blob_writer = self.s.get_blob_writer()
-        blob_writer.load('blob_rest_id')
+        blob_writer.create('blob_rest_id')
 
         blob_writer.append_data(d=b'abc')
         self.assertFalse(blob_writer.last)
@@ -74,8 +74,10 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
+        tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id'),
+                                 reuse_blob_rest_id=['blob_rest_id'])
+
         logging.info('test_basic check tx input done')
-        tx_writer.load()
         self.assertTrue(tx_writer.input_done)
 
         tx_writer.set_max_attempts(100)
@@ -133,24 +135,31 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        tx_writer.write_envelope(TransactionMetadata(),
-                                 create_body_rest_id='body_rest_id')
+        tx_writer.write_envelope(TransactionMetadata())
+                                 #create_blob_rest_id=['body_rest_id'])
         blob_writer = self.s.get_blob_writer()
-        blob_writer.load('body_rest_id')
+        blob_writer.create('body_rest_id')
         d = b'hello, world!'
         blob_writer.append_data(d, len(d))
 
+
+        # write a tx attempting to reuse a non-existent blob rest id,
+        # this should fail
         tx_writer = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host',
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         tx.body = 'q'
 
-        with self.assertRaises(AssertionError):
-            tx_writer.create('tx_rest_id2', tx)
+        with self.assertRaises(ValueError):
+            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
+
+        reader = self.s.get_transaction_cursor()
+        self.assertIsNone(reader.load(rest_id='tx_rest_id2'))
 
         tx.body = 'body_rest_id'
-        tx_writer.create('tx_rest_id2', tx)
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
         self.assertTrue(tx_writer.input_done)
 
     def test_recovery(self):

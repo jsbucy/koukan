@@ -1,6 +1,5 @@
 import unittest
 import logging
-from threading import Thread
 import time
 
 from flask import Request as FlaskRequest
@@ -38,7 +37,7 @@ class TransactionTest(unittest.TestCase):
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.get({})
+        rest_resp = rest_tx.get({}, timeout=1)
         self.assertEqual(rest_resp.status_code, 200)
         resp_json = rest_resp.get_json()
         self.assertIsNotNone(resp_json)
@@ -67,15 +66,23 @@ class TransactionTest(unittest.TestCase):
         self.assertEqual(resp_json.get('rcpt_response'), [{}])
         self.assertIsNone(resp_json.get('data_response', None))
 
+
+        create_blob_handler = RestServiceTransaction.create_blob_handler(
+            self.storage)
+        create_blob_resp = create_blob_handler.create_blob(
+            FlaskRequest({}))
+        self.assertEqual(create_blob_resp.status_code, 201)
+        self.assertIsNotNone(blob_uri := create_blob_resp.headers['location'])
+
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.patch({
-            'body': '' })
+            'body': blob_uri})
         self.assertEqual(rest_resp.status_code, 200)
-        resp_json = rest_resp.get_json()
-        self.assertIsNotNone(resp_json)
-        self.assertIn('body', resp_json)
-        blob_uri = resp_json['body']
+#        resp_json = rest_resp.get_json()
+#        self.assertIsNotNone(resp_json)
+#        self.assertIn('body', resp_json)
+#        blob_uri = resp_json['body']
 
         d = b'world!'
         put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
@@ -135,13 +142,20 @@ class TransactionTest(unittest.TestCase):
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
 
+        create_blob_handler = RestServiceTransaction.create_blob_handler(
+            self.storage)
+        create_blob_resp = create_blob_handler.create_blob(
+            FlaskRequest({}))
+        self.assertEqual(create_blob_resp.status_code, 201)
+        self.assertIsNotNone(blob_uri := create_blob_resp.headers['location'])
+
         rest_resp = rest_tx.patch({
-            'body': '' })
+            'body': blob_uri})
         self.assertEqual(rest_resp.status_code, 200)
-        resp_json = rest_resp.get_json()
-        self.assertIsNotNone(resp_json)
-        self.assertIn('body', resp_json)
-        blob_uri = resp_json['body']
+#        resp_json = rest_resp.get_json()
+#        self.assertIsNotNone(resp_json)
+#        self.assertIn('body', resp_json)
+#        blob_uri = resp_json['body']
 
         # bad uri
         self.assertIsNone(RestServiceTransaction.load_blob(self.storage, 'xyz'))

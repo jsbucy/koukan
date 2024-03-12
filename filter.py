@@ -148,6 +148,10 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
             emit=[WhichJson.REST_READ]),
+    TxField('message_builder',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE],
+            emit=[WhichJson.REST_READ]),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -178,12 +182,15 @@ class TransactionMetadata:
     # Filter.on_update() but may grow
     body_blob : Optional[Blob] = None
 
+    message_builder : Optional[dict] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
                  host : Optional[str] = None,
                  max_attempts : Optional[int] = None,
+                 body : Optional[str] = None,
                  body_blob : Optional[Blob] = None):
         self.local_host = local_host
         self.remote_host = remote_host
@@ -193,6 +200,7 @@ class TransactionMetadata:
         self.host = host
         if max_attempts is not None:
             self.max_attempts = max_attempts
+        self.body = body
         self.body_blob = body_blob
 
 #    def __bool__(self):

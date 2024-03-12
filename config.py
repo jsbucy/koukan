@@ -9,6 +9,7 @@ from recipient_router_filter import RecipientRouterFilter
 from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
+from message_builder_filter import MessageBuilderFilter
 from filter import Filter, HostPort
 from storage_writer_filter import StorageWriterFilter
 from exploder import Exploder
@@ -27,6 +28,7 @@ class Config:
             'router': self.router,
             'dkim': self.dkim,
             'exploder': self.exploder,
+            'message_builder': self.message_builder
        }
 
     def set_storage(self, storage : Storage):
@@ -104,6 +106,9 @@ class Config:
             return None
         return DkimEndpoint(
             yaml['domain'], yaml['selector'], yaml['key'], next)
+
+    def message_builder(self, yaml, next):
+        return MessageBuilderFilter(self.storage, next)
 
     def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]

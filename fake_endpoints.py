@@ -7,36 +7,6 @@ from blob import Blob
 from response import Response, Esmtp
 from filter import Filter, Mailbox, TransactionMetadata
 
-class FakeEndpoint(Filter):
-    mail_response : Optional[Response] = None
-    rcpt_response : Optional[Response] = None
-    data_response : Optional[Response] = None
-    aborted = False
-    tx : Optional[TransactionMetadata] = None
-
-    def __init__(self):
-        self.blobs = []
-        self.last = False
-
-    def on_update(self, tx : TransactionMetadata,
-                  timeout : Optional[float] = None):
-        logging.info('FakeEndpoint.start %s %s', tx.mail_from, tx.rcpt_to)
-        self.tx = tx
-        for x in ['mail_response', 'rcpt_response', 'data_response']:
-            if getattr(self, x):
-                setattr(self.tx, x, getattr(self, x))
-
-    def append_data(self, last, blob):
-        logging.info('FakeEndpoint.append_data %d %s', blob.len(), last)
-        self.blobs.append(blob)
-        if last:
-            self.last = True
-            return self.data_response
-        return Response()
-
-    def abort(self):
-        self.aborted = True
-
 class SyncEndpoint(Filter):
     mail_from : Optional[Mailbox] = None
     mail_response : Optional[Response] = None
@@ -44,6 +14,7 @@ class SyncEndpoint(Filter):
     rcpt_response : List[Response]
     data_resp : List[Response]
     aborted = False
+    ok_rcpt = False
 
     lock : Lock
     cv : Condition
@@ -68,6 +39,8 @@ class SyncEndpoint(Filter):
 
     def add_rcpt_response(self, resp : Response):
         with self.lock:
+            if resp.ok():
+                self.ok_rcpt = True
             self.rcpt_response.append(resp)
             self.cv.notify_all()
 
@@ -105,7 +78,7 @@ class SyncEndpoint(Filter):
                     deadline_left)
                 self.tx.rcpt_response = self.rcpt_response
                 self.rcpt_response = []
-        if tx.body_blob:
+        if tx.body_blob and self.ok_rcpt:
             assert self.body_blob is None or self.body_blob == tx.body_blob
             self.body_blob = tx.body_blob
             with self.lock:

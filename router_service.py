@@ -166,7 +166,7 @@ class Service:
             downstream_env_timeout =
               output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
-              output_yaml.get('downstream_env_timeout', 60))
+              output_yaml.get('downstream_data_timeout', 60))
         handler.cursor_to_endpoint()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 

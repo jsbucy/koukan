@@ -37,15 +37,18 @@ class Response:
     content_type = None
     body = None
     content_range = None
+    location = None
     def __init__(self,
                  http_resp = None,
                  content_type = None,
                  body = None,
-                 content_range = None):
+                 content_range = None,
+                 location = None):
         self.http_resp = http_resp
         self.content_type = content_type
         self.body = body
         self.content_range = content_range
+        self.location = location
 
 def eq_range(lhs, rhs):
     return (lhs.units == rhs.units and
@@ -117,6 +120,9 @@ class RestEndpointTest(unittest.TestCase):
             resp_headers.append(('content-type', resp.content_type))
         if resp.content_range:
             resp_headers.append(('content-range', str(resp.content_range)))
+        if resp.location:
+            resp_headers.append(('location', resp.location))
+
         start_response(resp.http_resp, resp_headers)
         resp_body = []
         if resp.body:
@@ -332,12 +338,24 @@ class RestEndpointTest(unittest.TestCase):
     def testPutBlobBadResponse(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      timeout_data=1)
-        tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(b'hello'))
+
+        # POST /transactions
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = json.dumps({'url': '/transactions/124',
-                               'body': '/blob/123'})))
+            body = json.dumps({'url': '/transactions/124'})))
+
+        # POST /blob
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            location = '/blob/123'))
+
+        # PUT /blob/123 -> invalid content-range
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -381,7 +399,8 @@ class RestEndpointTest(unittest.TestCase):
 
         req = self.requests.pop(0)  # POST
         self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code if r else None for r in tx.rcpt_response], [202])
+        self.assertEqual([r.code if r else None for r in tx.rcpt_response],
+                         [202])
 
         logging.debug('testFilterApi !last append')
         # incomplete -> noop
@@ -399,7 +418,21 @@ class RestEndpointTest(unittest.TestCase):
         body_blob.append(b, 0, b.len(), True)
         tx=TransactionMetadata(body_blob=body_blob)
 
-        # PATCH 'body'
+        # POST /blob
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            location = '/blob/xyz'))
+
+        # PUT /blob/xyz
+        # PUT 0-11/12
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            content_range=ContentRange(
+                'bytes', 0, body_blob.len(), body_blob.len())))
+
+        # PATCH /transactions/123 {'body': '/blob/xyz'}
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -409,12 +442,7 @@ class RestEndpointTest(unittest.TestCase):
                  'rcpt_response': [{'code': 202, 'message': 'ok'}],
                  'data_response': {},
                  'body': '/blob/xyz'})))
-        # PUT 0-11/12
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_type = 'application/json',
-            content_range=ContentRange(
-                'bytes', 0, body_blob.len(), body_blob.len())))
+
 
         # GET
         self.responses.append(Response(

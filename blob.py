@@ -1,5 +1,6 @@
 from typing import List, Optional
 from abc import ABC, abstractmethod
+import os
 
 class Blob(ABC):
     @abstractmethod
@@ -14,7 +15,7 @@ class Blob(ABC):
         return None
 
     @abstractmethod
-    def read(offset, len=None) -> bytes:
+    def read(self, offset, len=None) -> bytes:
         # pytype doesn't flag len() (above) but does flag this?!
         raise NotImplementedError()
 
@@ -49,6 +50,24 @@ class InlineBlob(Blob):
     def append(self, dd : bytes):
         self.d += dd
         assert self.len() <= self.content_length()
+
+# already finalized
+class FileLikeBlob(Blob):
+    def __init__(self, f):
+        self.f = f
+        stat = os.stat(f.fileno())
+        self._len = stat.st_size
+        self._content_length = self._len
+
+    def read(self, offset, len=None) -> bytes:
+        self.f.seek(offset)
+        return self.f.read(len)
+
+    def content_length(self) -> Optional[int]:
+        return self._content_length
+
+    def len(self) -> int:
+        return self._len
 
 class Chunk:
     # byte offset in CompositeBlob

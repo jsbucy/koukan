@@ -48,7 +48,8 @@ class StorageWriterFilter(Filter):
             assert isinstance(tx.body_blob, BlobReader)
             body_tx = TransactionMetadata()
             body_tx.body = tx.body_blob.rest_id
-            self.tx_cursor.write_envelope(body_tx)
+            self.tx_cursor.write_envelope(
+                body_tx, reuse_blob_rest_id=[body_tx.body])
             wait_data_resp = True
 
         start = time.monotonic()

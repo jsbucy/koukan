@@ -25,111 +25,121 @@ class OutputHandler:
         self.data_timeout = downstream_data_timeout
 
     def _output(self) -> Optional[Response]:
-      logging.debug('OutputHandler._output() %s', self.rest_id)
+        logging.debug('OutputHandler._output() %s', self.rest_id)
 
-      last_tx = TransactionMetadata()
-      err = None
-      ok_rcpt = False
-      # TODO this needs to notice that the tx has aborted e.g. due to
-      # timing out on input cf Storage._gc_non_durable_one()
-      while True:
-          delta = last_tx.delta(self.cursor.tx)
-          # XXX delta() outputs response fields
-          # but we don't really say if it's a precondition of Filter.on_update()
-          # that those fields are unset
-          delta.mail_response = None
-          delta.rcpt_response = []
-          assert delta is not None
-          logging.info('OutputHandler._output() %s '
-                       'mail_from = %s '
-                       'rcpt_to = %s ',
-                       self.rest_id, delta.mail_from, delta.rcpt_to)
-          if delta.mail_from is None and not delta.rcpt_to:
-              if self.cursor.tx.body:
-                  logging.debug(
-                      'OutputHandler._output() %s -> body', self.rest_id)
-                  break
-              else:
-                  if not self.cursor.wait(self.env_timeout):
-                      return Response(
-                          400, 'OutputHandler downstream env timeout')
-                  continue
+        last_tx = TransactionMetadata()
+        err = None
+        ok_rcpt = False
 
-          self.endpoint.on_update(delta)
-          if delta.mail_from:
-              logging.debug('OutputHandler._output() %s mail_from: %s',
-                            self.rest_id, delta.mail_from.mailbox)
-              resp = delta.mail_response
-              if not resp:
-                  # XXX fix upstream and assert
-                  logging.warning(
-                      'OutputHandler._output(): output chain didn\'t set '
-                      'mail response')
-                  resp = Response()
-              else:
-                  logging.debug('OutputHandler._output() %s mail_resp %s',
-                                self.rest_id, resp)
-              if resp.err():
-                  err = resp
-              while True:
-                  try:
-                      self.cursor.set_mail_response(resp)
-                  except VersionConflictException:
-                      self.cursor.load()
-                      continue
-                  break
-              last_tx.mail_from = delta.mail_from
+        while True:
+            delta = last_tx.delta(self.cursor.tx)
+            # XXX delta() outputs response fields but we don't really
+            # say if it's a precondition of Filter.on_update() that
+            # those fields are unset
+            delta.mail_response = None
+            delta.rcpt_response = []
+            assert delta is not None
+            logging.info('OutputHandler._output() %s '
+                         'mail_from = %s '
+                         'rcpt_to = %s body = %s message_builder = %s '
+                         'input_done = %s',
+                         self.rest_id, delta.mail_from, delta.rcpt_to,
+                         delta.body, delta.message_builder,
+                         self.cursor.input_done)
+            have_body = ((self.cursor.input_done) and
+                         ((delta.body is not None) or
+                          (delta.message_builder is not None)))
+            if (not delta.rcpt_to) and (not ok_rcpt) and have_body:
+                return
+            if ((delta.mail_from is None) and (not delta.rcpt_to) and
+                (not have_body)):
+                # xxx env vs data timeout
+                if not self.cursor.wait(self.env_timeout):
+                    logging.debug(
+                        'OutputHandler._output() %s timeout %d',
+                        self.rest_id, self.env_timeout)
 
-          if delta.rcpt_to:
-              resp = delta.rcpt_response
-              logging.debug('OutputHandler._output() %s rcpt_to: %s resp %s',
-                            self.rest_id, delta.rcpt_to, resp)
-              assert len(resp) == len(delta.rcpt_to)
-              logging.debug('OutputHandler._output() %s rcpt_resp %s',
-                            self.rest_id, resp)
-              while True:
-                  try:
-                      self.cursor.add_rcpt_response(resp)
-                  except VersionConflictException:
-                      self.cursor.load()
-                      continue
-                  break
-              for r in resp:
-                  if r.ok():
-                      ok_rcpt = True
-                  elif err is None:
-                      # XXX revisit in the context of the exploder,
-                      # this is used downstream for append_action,
-                      # what does that mean in the context of
-                      # multi-rcpt?
-                      err = r
-              last_tx.rcpt_to += delta.rcpt_to
+                    return Response(
+                        400, 'OutputHandler downstream env timeout')
+                continue
 
-      if not ok_rcpt:
-          logging.debug('OutputHandler._output() %s no rcpt', self.rest_id)
-          return err
+            body_blob = None
+            if self.cursor.input_done and delta.body:
+                blob_reader = self.cursor.parent.get_blob_reader()
+                blob_reader.load(rest_id = self.cursor.tx.body)
+                assert blob_reader.length == blob_reader.content_length()
+                delta.body_blob = blob_reader
 
-      blob_reader = self.cursor.parent.get_blob_reader()
-      blob_reader.load(rest_id = self.cursor.tx.body)
-      while blob_reader.content_length() is None or (
-              blob_reader.length < blob_reader.content_length()):
-          if not blob_reader.wait(self.data_timeout):
-              return Response(400, 'OutputHandler downstream data timeout')
-      body_tx = TransactionMetadata()
-      body_tx.body_blob = blob_reader
-      self.endpoint.on_update(body_tx)
-      data_resp = body_tx.data_response
-      assert data_resp is not None
-      logging.info('OutputHandler._output() %s body %s',
-                   self.rest_id, data_resp)
-      while True:
-          try:
-              self.cursor.set_data_response(data_resp)
-          except VersionConflictException:
-              self.cursor.load()
-              continue
-          break
-      return data_resp
+            # TODO possibly dead code, presence of message builder
+            # entails input_done?
+            if not self.cursor.input_done and delta.message_builder:
+                del delta.message_builder
+
+            assert delta.mail_from or delta.rcpt_to or (
+                self.cursor.input_done and (
+                    delta.body_blob or delta.message_builder))
+
+            self.endpoint.on_update(delta)
+            if delta.mail_from:
+                logging.debug('OutputHandler._output() %s mail_from: %s',
+                              self.rest_id, delta.mail_from.mailbox)
+                resp = delta.mail_response
+                if not resp:
+                    # XXX fix upstream and assert
+                    logging.warning(
+                        'OutputHandler._output(): output chain didn\'t set '
+                        'mail response')
+                    resp = Response()
+                else:
+                    logging.debug('OutputHandler._output() %s mail_resp %s',
+                                  self.rest_id, resp)
+                if resp.err():
+                    err = resp
+                while True:
+                    try:
+                        self.cursor.set_mail_response(resp)
+                    except VersionConflictException:
+                        self.cursor.load()
+                        continue
+                    break
+                last_tx.mail_from = delta.mail_from
+
+            if delta.rcpt_to:
+                resp = delta.rcpt_response
+                logging.debug('OutputHandler._output() %s rcpt_to: %s resp %s',
+                              self.rest_id, delta.rcpt_to, resp)
+                assert len(resp) == len(delta.rcpt_to)
+                logging.debug('OutputHandler._output() %s rcpt_resp %s',
+                              self.rest_id, resp)
+                while True:
+                    try:
+                        self.cursor.add_rcpt_response(resp)
+                    except VersionConflictException:
+                        self.cursor.load()
+                        continue
+                    break
+                for r in resp:
+                    if r.ok():
+                        ok_rcpt = True
+                    elif err is None:
+                        # XXX revisit in the context of the exploder,
+                        # this is used downstream for append_action,
+                        # what does that mean in the context of
+                        # multi-rcpt?
+                        err = r
+                last_tx.rcpt_to += delta.rcpt_to
+
+            # data response is ~undefined on update where all rcpts failed
+            if self.cursor.input_done and (
+                    delta.body_blob or delta.message_builder) and ok_rcpt:
+                last_tx.body_blob = delta.body_blob
+                last_tx.message_builder = delta.message_builder
+                try:
+                    self.cursor.set_data_response(delta.data_response)
+                    return delta.data_response
+                except VersionConflictException:
+                    self.cursor.load()
+                    continue
 
     def cursor_to_endpoint(self):
         logging.debug('OutputHandler.cursor_to_endpoint() %s', self.rest_id)

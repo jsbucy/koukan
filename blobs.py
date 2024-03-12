@@ -35,13 +35,15 @@ class BlobStorage:
     def __init__(self):
         pass
 
-    def create(self, on_done : Callable[[Blob],None]) -> str:
+    def create(self, on_done : Optional[Callable[[Blob],None]] = None) -> str:
         id = str(self.next)
         self.next += 1
 
         b = InflightBlob(id, self)
         b.d = bytes()
-        b.waiters = [on_done]
+        b.waiters = []
+        if on_done is not None:
+            b.waiters.append(on_done)
         self.blobs[id] = b
         return id
 

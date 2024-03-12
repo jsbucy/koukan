@@ -29,6 +29,7 @@ endpoint:
 - name: msa-output
   msa: true
   chain:
+  - filter: message_builder
   - filter: router
     policy:
       name: dest_domain

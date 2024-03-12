@@ -22,6 +22,10 @@ class Handler(ABC):
         pass
 
     @abstractmethod
+    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
+        pass
+
+    @abstractmethod
     def put_blob(self, request : FlaskRequest,
                  content_range : ContentRange,
                  range_in_headers : bool) -> FlaskResponse:
@@ -44,6 +48,10 @@ class HandlerFactory(ABC):
 
     @abstractmethod
     def get_tx(self, tx_rest_id : str) -> Optional[Handler]:
+        pass
+
+    @abstractmethod
+    def create_blob(self) -> Optional[Handler]:
         pass
 
     @abstractmethod

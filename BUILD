@@ -66,6 +66,7 @@ pytype_library(name='transaction',
                srcs=['transaction.py'],
                deps=['rest_service_handler',
                      'filter',
+                     ':message_builder',
                      'response',
                      'storage',
                      'storage_schema'])
@@ -81,13 +82,42 @@ pytype_library(name='output_handler',
                      'filter',
                      'response',
                      'storage',
-                     'storage_schema'])
+                     'storage_schema',
+                     'message_builder'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
         deps=[':output_handler',
+              ':executor',
               ':fake_endpoints',
               ':transaction'])
+
+
+pytype_library(name='message_builder',
+               srcs=['message_builder.py'],
+               deps=[':blob'])
+
+py_test(name='message_builder_test',
+        srcs=['message_builder_test.py'],
+        deps=[':message_builder'],
+        data=['message_builder.json'])
+
+pytype_library(name='message_builder_filter',
+               srcs=['message_builder_filter.py'],
+               deps=[':blob',
+                     ':filter',
+                     ':message_builder',
+                     ':storage'])
+
+py_test(name='message_builder_filter_test',
+        srcs=['message_builder_filter_test.py'],
+        deps=[':blob',
+              ':fake_endpoints',
+              ':filter',
+              ':message_builder_filter',
+              ':response',
+              ':storage'])
+
 
 pytype_library(name='address',
                srcs=['address.py'])
@@ -160,6 +190,7 @@ pytype_library(name='config',
                      ':rest_endpoint',
                      ':local_domain_policy',
                      ':dest_domain_policy',
+                     ':message_builder_filter',
                      ':recipient_router_filter',
                      ':dkim_endpoint',
                      ':mx_resolution',
