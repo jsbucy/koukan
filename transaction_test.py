@@ -79,10 +79,6 @@ class TransactionTest(unittest.TestCase):
         rest_resp = rest_tx.patch({
             'body': blob_uri})
         self.assertEqual(rest_resp.status_code, 200)
-#        resp_json = rest_resp.get_json()
-#        self.assertIsNotNone(resp_json)
-#        self.assertIn('body', resp_json)
-#        blob_uri = resp_json['body']
 
         d = b'world!'
         put_req = FlaskRequest({})  # wsgiref.types.WSGIEnvironment
@@ -152,10 +148,6 @@ class TransactionTest(unittest.TestCase):
         rest_resp = rest_tx.patch({
             'body': blob_uri})
         self.assertEqual(rest_resp.status_code, 200)
-#        resp_json = rest_resp.get_json()
-#        self.assertIsNotNone(resp_json)
-#        self.assertIn('body', resp_json)
-#        blob_uri = resp_json['body']
 
         # bad uri
         self.assertIsNone(RestServiceTransaction.load_blob(self.storage, 'xyz'))
@@ -165,24 +157,10 @@ class TransactionTest(unittest.TestCase):
         length = self.put(blob_tx, 0, d, None, 200, None,
                           len(d), False)
 
-        # same one again: noop
-        self.put(blob_tx, 0, d, None, 200, b'noop (range)',
-                 length, False)
-
-        # underrun: noop
-        self.put(blob_tx, 1, b'eadbee', None, 200, b'noop (range)',
-                 length, False)
-
         # past the end: 400
-        self.put(blob_tx, 10, b'deadbeef', None, 400,
-                 b'range start past the end',
+        self.put(blob_tx, 10, b'deadbeef', None, 416,
+                 b'invalid range',
                  length, False)
-
-        # overlap the end: ok
-        d = b'f01234567'
-        length = self.put(blob_tx, length, d, None,
-                          200, None,
-                          length + len(d), False)
 
         # append exactly at the end: ok
         d = b'feed'
@@ -195,22 +173,6 @@ class TransactionTest(unittest.TestCase):
         self.put(blob_tx, length, d, length + len(d),
                  200, None,
                  length + len(d), True)
-
-        # last noop
-        self.put(blob_tx, length, d, length + len(d),
-                 200, b'noop (range)',
-                 length + len(d), True)
-
-        # !last after last
-        self.put(blob_tx, length, d, None,
-                 400, b'append or !last after last',
-                 length + len(d), True)
-        length += len(d)
-
-        # append after last
-        self.put(blob_tx, length, d, length+len(d),
-                 400, b'append or !last after last',
-                 length, True)
 
         # TODO more coverage of PUTs without content-range
 

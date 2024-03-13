@@ -40,11 +40,19 @@ root_yaml = {
         {
             'name': 'submission',
             'msa': True,
+            'output_handler': {
+                'downstream_env_timeout': 1,
+                'downstream_data_timeout': 1
+            },
             'chain': [{'filter': 'sync'}]
         },
         {
             'name': 'smtp-in',
             'msa': True,
+            'output_handler': {
+                'downstream_env_timeout': 1,
+                'downstream_data_timeout': 1
+            },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
                        'msa': False}]
@@ -227,7 +235,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(mail_resp.code, 201)
         self.assertRcptJsonCodesEqual(tx_json, [456])
         self.assertEqual(tx_json.get('data_response', None), {})
-        #self.assertEqual(tx_json.get('last', None), True)
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
@@ -237,7 +244,6 @@ class RouterServiceTest(unittest.TestCase):
         # upstream success, retry succeeds, propagates down to rest
         upstream_endpoint.set_mail_response(Response(201))
         upstream_endpoint.add_rcpt_response(Response(202))
-        #upstream_endpoint.add_data_response(None)
         upstream_endpoint.add_data_response(Response(203))
 
         tx_json = rest_endpoint.get_json(1.2)
@@ -248,7 +254,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertRcptJsonCodesEqual(tx_json, [202])
         data_resp = Response.from_json(tx_json.get('data_response', None))
         self.assertEqual(data_resp.code, 203)
-        #self.assertEqual(tx_json.get('last', None), True)
 
     def _update_tx(self, endpoint, tx):
         endpoint.on_update(tx)

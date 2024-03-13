@@ -35,6 +35,10 @@ class Handler(ABC):
     def tx_rest_id(self) -> str:
         pass
 
+    @abstractmethod
+    def blob_rest_id(self) -> str:
+        pass
+
     # This should be valid before and after handling a request. The
     # first-tier request handler validates if-match: and returns etag:
     # headers.

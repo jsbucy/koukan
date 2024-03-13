@@ -313,24 +313,98 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 400)
 
 
+    def testPutBlob(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     chunk_size=8)
+
+        # POST /blob
+        self.responses.append(Response(
+            http_resp = '201 created',
+            location = '/blob/123'))
+
+        # PUT /blob 0-7/* -> ok
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_range=ContentRange('bytes', 0, 8, None)))
+
+        # suppose something like a previous request was applied but
+        # the response timed out to get into this state
+        # PUT /blob 8-12/13 -> 416 0-10/*
+        self.responses.append(Response(
+            http_resp = '416 bad range',
+            content_range=ContentRange('bytes', 0, 10, None)))
+
+        # PUT /blob 11-12/13
+        self.responses.append(Response(
+            http_resp = '416 bad range',
+            content_range=ContentRange('bytes', 11, 12, 13)))
+
+        blob = InlineBlob(b'hello, world!')
+        rest_endpoint._put_blob(blob)
+
+        # POST
+        req = self.requests.pop(0)
+        # PUT
+        req = self.requests.pop(0)
+        self.assertEqual(req.content_range.start, 0)
+        self.assertEqual(req.content_range.stop, 8)
+        self.assertEqual(req.content_range.length, None)
+
+        self.assertEqual(req.body, b'hello, w')
+
+        # PUT
+        req = self.requests.pop(0)
+        self.assertEqual(req.body, b'orld!')
+        self.assertEqual(req.content_range.start, 8)
+        self.assertEqual(req.content_range.stop, 13)
+        self.assertEqual(req.content_range.length, 13)
+
+        # PUT
+        req = self.requests.pop(0)
+        self.assertEqual(req.body, b'ld!')
+        self.assertEqual(req.content_range.start, 10)
+        self.assertEqual(req.content_range.stop, 13)
+        self.assertEqual(req.content_range.length, 13)
+
+
     def testPutBlobChunk(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
 
         self.responses.append(Response(
-            http_resp = '200 ok'))
+            http_resp = '200 ok',
+            content_range=ContentRange('bytes', 0, 133, None)))
 
-        rest_endpoint._put_blob_chunk(self.static_base_url + '/blob/127',
-                                      128, b'hello', False)
+        resp, len = rest_endpoint._put_blob_chunk(
+            self.static_base_url + '/blob/127', 128, b'hello', False)
+        self.assertTrue(resp.ok())
+        self.assertEqual(len, 133)
         req = self.requests.pop(0)
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
         self.assertEqual(req.content_range.length, None)
 
         self.responses.append(Response(
-            http_resp = '200 ok'))
-        rest_endpoint._put_blob_chunk(self.static_base_url + '/blob/127',
-                                      128, b'hello', True)
+            http_resp = '200 ok',
+            content_range=ContentRange('bytes', 0, 133, None)))
+        resp, len = rest_endpoint._put_blob_chunk(
+            self.static_base_url + '/blob/127', 128, b'hello', True)
         req = self.requests.pop(0)
+        self.assertTrue(resp.ok())
+        self.assertEqual(len, 133)
+
+        self.assertEqual(req.content_range.start, 128)
+        self.assertEqual(req.content_range.stop, 133)
+        self.assertEqual(req.content_range.length, 133)
+
+        self.responses.append(Response(
+            http_resp = '416 invalid range',
+            content_range=ContentRange('bytes', 0, 120, None)))
+        resp, len = rest_endpoint._put_blob_chunk(
+            self.static_base_url + '/blob/127', 128, b'hello', True)
+        req = self.requests.pop(0)
+        self.assertTrue(resp.ok())
+        self.assertEqual(len, 120)
+
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
         self.assertEqual(req.content_range.length, 133)

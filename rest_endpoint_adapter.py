@@ -20,7 +20,7 @@ class RestEndpointAdapter(Handler):
     _tx_rest_id : str
 
     blob_storage : BlobStorage
-    blob_rest_id : str
+    _blob_rest_id : str
 
     def __init__(self, endpoint=None,
                  tx_rest_id=None,
@@ -28,19 +28,19 @@ class RestEndpointAdapter(Handler):
         self.endpoint = endpoint
         self._tx_rest_id = tx_rest_id
         self.blob_storage = blob_storage
-        self.blob_rest_id = blob_rest_id
+        self._blob_rest_id = blob_rest_id
 
-    def tx_rest_id(self): return self._tx_rest_id
+    def tx_rest_id(self):
+        return self._tx_rest_id
+
+    def blob_rest_id(self):
+        return self._blob_rest_id
 
     def _body(self, req_json, resp_json):
         if 'body' not in req_json:
             return
         if req_json['body'] != '':
             raise NotImplementedError()
-
-        #blob_done_cb = lambda blob: self.append_blob_upstream(True, blob)
-        #blob_id = self.blob_storage.create(blob_done_cb)
-        #resp_json['body'] = '/blob/' + str(blob_id)
 
     def start(self, req_json,
               timeout : Optional[float] = None) -> Optional[FlaskResponse]:
@@ -85,27 +85,29 @@ class RestEndpointAdapter(Handler):
         return None
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
-        blob_id = self.blob_storage.create()
-        blob_uri = '/blob/' + str(blob_id)
-        resp = FlaskResponse(status=201, response=['created'])
-        resp.headers.set('location', blob_uri)
-        return resp
+        self._blob_rest_id = self.blob_storage.create()
+        return FlaskResponse()
 
     def put_blob(self, request : FlaskRequest, content_range : ContentRange,
                  range_in_headers : bool) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.put_blob %s content-range: %s',
-                      self.blob_rest_id, content_range)
+                      self._blob_rest_id, content_range)
         offset = 0
         last = True
         offset = content_range.start
         last = (content_range.length is not None and
                 content_range.stop == content_range.length)
         result_len = self.blob_storage.append(
-            self.blob_rest_id, offset, request.data, last)
+            self._blob_rest_id, offset, request.data, last)
         if result_len is None:
             return FlaskResponse(status=404, response=['unknown blob'])
+        resp = FlaskResponse()
+        if result_len != offset + len(request.data):
+            resp.status = 416
+            resp.response = ['invalid range']
 
         resp = jsonify({})
+        # cf RestTransactionHandler.build_resp() regarding content-range
         resp.headers.set('content-range',
                          ContentRange('bytes', 0, result_len,
                                       result_len if last else None))

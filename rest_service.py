@@ -122,7 +122,11 @@ def create_app(handler_factory : HandlerFactory):
         if handler is None:
             return FlaskResponse(status=500,
                                  response=['could not create blob handler'])
-        return handler.create_blob(request)
+        rest_resp = handler.create_blob(request)
+        blob_url = '/blob/' + handler.blob_rest_id()
+        rest_resp.status_code = 201
+        rest_resp.headers.set('location', blob_url)
+        return rest_resp
 
     @app.route('/blob/<blob_rest_id>', methods=['PUT'])
     def append_data_chunk(blob_rest_id) -> FlaskResponse:

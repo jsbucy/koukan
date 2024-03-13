@@ -23,7 +23,7 @@ class RestServiceTransaction(Handler):
     _tx_rest_id : str
     http_host : Optional[str]
     tx_cursor : TransactionCursor
-    blob_rest_id : Optional[str]
+    _blob_rest_id : Optional[str]
     blob_writer : Optional[BlobWriter]
 
     def __init__(self, storage,
@@ -36,8 +36,14 @@ class RestServiceTransaction(Handler):
         self.http_host = http_host
         self._tx_rest_id = tx_rest_id
         self.tx_cursor = tx_cursor
-        self.blob_rest_id = blob_rest_id
+        self._blob_rest_id = blob_rest_id
         self.blob_writer = blob_writer
+
+    def tx_rest_id(self):
+        return self._tx_rest_id
+
+    def blob_rest_id(self):
+        return self._blob_rest_id
 
     def etag(self):
         return self.tx_cursor.etag()
@@ -65,7 +71,7 @@ class RestServiceTransaction(Handler):
 
     @staticmethod
     def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
-        blob_rest_id = blob_uri.removeprefix('/blob/')  # XXX uri prefix
+        blob_rest_id = RestServiceTransaction._blob_uri_to_id(blob_uri)
 
         blob_writer = storage.get_blob_writer()
         if blob_writer.load(rest_id=blob_rest_id) is None:
@@ -73,13 +79,14 @@ class RestServiceTransaction(Handler):
         return RestServiceTransaction(
             storage, blob_rest_id=blob_rest_id, blob_writer=blob_writer)
 
-    def tx_rest_id(self):
-        return self._tx_rest_id
-
+    # TODO pull out a schema thing to share with RestService
     @staticmethod
     def _blob_uri_to_id(uri):
         return uri.removeprefix('/blob/')
 
+    @staticmethod
+    def _blob_id_to_uri(blob_id):
+        return '/blob/' + blob_id
 
     # -> reuse ids
     def _body_blob_id(self, tx, req_json) -> List[str]:
@@ -193,7 +200,7 @@ class RestServiceTransaction(Handler):
                 self.tx_cursor.tx.data_response)
 
         if self.tx_cursor.tx.body:
-            resp_json['body'] = '/blob/' + self.tx_cursor.tx.body
+            resp_json['body'] = RestServiceTransaction._blob_id_to_uri(self.tx_cursor.tx.body)
 
         if self.tx_cursor.message_builder:
             resp_json['message_builder'] = {}
@@ -225,52 +232,41 @@ class RestServiceTransaction(Handler):
         resp = FlaskResponse(status=code, response=[msg] if msg else None)
         logging.info('build_resp code=%d msg=%s offset=%s content_length=%s',
                      code, msg, writer.length, writer.content_length)
+        # NOTE chunked PUT with content-range is a ~custom protocol,
+        # ours is inspired by gcp cloud storage resumable uploads.
         if writer.length > 0:
             resp.headers.set(
                 'content-range',
-                ContentRange('bytes', 0, writer.length, writer.content_length))
+                ContentRange('bytes', 0,
+                             writer.length, writer.content_length))
         return resp
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
-        self.blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        self._blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
         blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(self.blob_rest_id)
+        blob_writer.create(self._blob_rest_id)
         resp = FlaskResponse(status=201, response=['created'])
-        resp.headers.set('location', '/blob/' + self.blob_rest_id)
+        resp.headers.set(
+            'location',
+            RestServiceTransaction._blob_id_to_uri(self._blob_rest_id))
         return resp
 
     def put_blob(self, request : FlaskRequest,
                  content_range : ContentRange, range_in_headers : bool):
         logging.info('put_blob loaded %s len=%d content_length=%s range %s',
-                     self.blob_rest_id, self.blob_writer.length,
+                     self._blob_rest_id, self.blob_writer.length,
                      self.blob_writer.content_length,
                      content_range)
 
-        # being extremely persnickety: we would reject
-        # !range_in_headers after a request with it populated even if
-        # it's equivalent/noop but may not be worth storing that to
-        # enforce?
-
+        # this is a little on the persnickety side in that it will
+        # fail requests that we could treat as a noop but those should
+        # be uncommon, only in case of timeout/retry, etc.
         offset = content_range.start
-        if offset > self.blob_writer.length:
+        if offset != self.blob_writer.length:
             return RestServiceTransaction.build_resp(
-                400, 'range start past the end', self.blob_writer)
+                416, 'invalid range', self.blob_writer)
 
-        if (self.blob_writer.content_length is not None and
-            content_range.length != self.blob_writer.content_length):
-            return RestServiceTransaction.build_resp(
-                400, 'append or !last after last', self.blob_writer)
-
-        if self.blob_writer.length >= content_range.stop:
-            return RestServiceTransaction.build_resp(
-                200, 'noop (range)', self.blob_writer)
-
-        # xxx on second thought I'm not sure why we would accept an
-        # append that isn't exactly at the current end, just return a
-        # 4xx with the current content-range
-        d = request.data[self.blob_writer.length - offset:]
-        assert len(d) > 0
-        self.blob_writer.append_data(d, content_range.length)
+        self.blob_writer.append_data(request.data, content_range.length)
 
         return RestServiceTransaction.build_resp(
             200, None, self.blob_writer)

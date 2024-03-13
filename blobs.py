@@ -6,7 +6,6 @@ from blob import Blob, InlineBlob
 class InflightBlob:
     d : bytes
     b : InlineBlob
-    waiters : List[Callable[[Blob], None]]
     parent = None
 
     refs : set[Any]
@@ -41,9 +40,6 @@ class BlobStorage:
 
         b = InflightBlob(id, self)
         b.d = bytes()
-        b.waiters = []
-        if on_done is not None:
-            b.waiters.append(on_done)
         self.blobs[id] = b
         return id
 
@@ -52,35 +48,21 @@ class BlobStorage:
             return None
         blob = self.blobs[id]
         blob_len = len(blob.d)
-        # xxx on second thought I'm not sure why we would accept an
-        # append that isn't exactly at the current end, just return a
-        # 4xx with the current content-range
-        if offset > blob_len:
+
+        if offset != blob_len:
             return blob_len
-        blob.d += d[offset - blob_len:]
+        blob.d += d
         if not last:
             return len(blob.d)
 
         blob.b = InlineBlob(blob.d, None, str(id))
         blob.d = None
-        for cb in blob.waiters:
-            cb(blob.b)
         return blob.b.len()
 
     def get(self, id) -> Optional[Blob]:
         if not id in self.blobs or not self.blobs[id].b:
             return None
         return self.blobs[id].b
-
-    def add_waiter(self, id, ref, cb : Callable[[Blob],None]):
-        if id not in self.blobs: return False
-        b = self.blobs[id]
-        b.ref(ref)
-        if not b.b:
-            b.waiters.append(cb)
-        else:
-            cb(b.b)
-        return True
 
     def unref(self, id, b : InflightBlob):
         assert(id in self.blobs)

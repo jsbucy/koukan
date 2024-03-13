@@ -3,7 +3,7 @@ from threading import Lock, Condition
 import logging
 import time
 import json.decoder
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from werkzeug.datastructures import ContentRange
@@ -81,6 +81,12 @@ class RestEndpoint(Filter):
         self.max_inline = max_inline
         self.chunk_size = chunk_size
 
+    def _maybe_qualify_url(self, url):
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return url
+        return urljoin(self.base_url, url)
+
     def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any],
                timeout : Optional[float] = None):
         logging.debug('RestEndpoint._start %s', req_json)
@@ -104,7 +110,8 @@ class RestEndpoint(Filter):
             if rest_resp.status_code != 201:
                 return rest_resp
             logging.info('RestEndpoint.start resp %s', rest_resp)
-            self.transaction_url = urljoin(self.base_url, rest_resp.headers['location'])
+            self.transaction_url = self._maybe_qualify_url(
+                rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
@@ -184,6 +191,7 @@ class RestEndpoint(Filter):
             return None
         if not (blob_url := blob_post_resp.headers.get('location', None)):
             return None
+        full_blob_url = self._maybe_qualify_url(blob_url)
 
         offset = 0
         while offset < blob.len():
@@ -193,17 +201,17 @@ class RestEndpoint(Filter):
                           'body_len %d chunk_last %s',
                           offset, len(chunk), self.body_len, chunk_last)
 
-            resp,body_offset = self._put_blob_chunk(
-                self.base_url + blob_url,
+            resp, result_length = self._put_blob_chunk(
+                full_blob_url,
                 offset=self.body_len,
                 d=chunk,
                 last=chunk_last)
             if resp is None or resp.err():
                 return resp
             # how many bytes from chunk were actually accepted?
-            chunk_out = body_offset - self.body_len
-            logging.debug('_put_blob body_offset %d chunk_out %d',
-                          body_offset, chunk_out)
+            chunk_out = result_length - self.body_len
+            logging.debug('_put_blob result_length %d chunk_out %d',
+                          result_length, chunk_out)
             offset += chunk_out
             self.body_len += chunk_out
         logging.debug('_put_blob %s', resp)
@@ -234,19 +242,24 @@ class RestEndpoint(Filter):
         except requests.RequestException:
             return None, None
         logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
+
         # Most(all?) errors on blob put here means temp
         # transaction final status
         # IOW blob upload is not the place to reject the content, etc.
-        if rest_resp.status_code > 299:
+
+        if rest_resp.status_code > 299 and rest_resp.status_code != 416:
             return Response(
                 400, 'RestEndpoint._put_blob_chunk PUT err'), None
 
+        # cf RestTransactionHandler.build_resp() re content-range
         dlen = len(d)
         if 'content-range' in rest_resp.headers:
             range = werkzeug.http.parse_content_range_header(
                 rest_resp.headers.get('content-range'))
             logging.debug('_put_blob_chunk resp range %s', range)
-            if range is None or range.start != offset:
+            # range.stop != offset + dlen is expected in some cases
+            # e.g. after a 416 to report the current length to resync
+            if range is None or range.start != 0:
                 return Response(
                     400, 'RestEndpoint._put_blob_chunk bad range'), None
             dlen = range.stop
