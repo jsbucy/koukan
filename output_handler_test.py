@@ -169,7 +169,7 @@ class OutputHandlerTest(unittest.TestCase):
             self.storage)
         create_blob_resp = create_blob_handler.create_blob(FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)
-        blob_uri = create_blob_resp.headers['location']
+        blob_uri = create_blob_handler.blob_rest_id()
 
         d = b'world!'
         for i in range(0, len(d)):
@@ -185,7 +185,7 @@ class OutputHandlerTest(unittest.TestCase):
             put_req.content_length = 1
 
             put_resp = blob_tx.put_blob(
-                put_req, ContentRange('bytes', i, i+1, len(d)), True)
+                put_req, ContentRange('bytes', i, i+1, len(d)))
             self.assertEqual(200, put_resp.status_code)
 
         rest_resp = rest_tx.patch({'body': blob_uri})

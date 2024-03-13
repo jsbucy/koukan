@@ -86,10 +86,10 @@ class RestEndpointAdapter(Handler):
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = self.blob_storage.create()
-        return FlaskResponse()
+        return FlaskResponse(status=201)
 
-    def put_blob(self, request : FlaskRequest, content_range : ContentRange,
-                 range_in_headers : bool) -> FlaskResponse:
+    def put_blob(self, request : FlaskRequest, content_range : ContentRange
+                 ) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.put_blob %s content-range: %s',
                       self._blob_rest_id, content_range)
         offset = 0

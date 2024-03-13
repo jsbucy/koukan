@@ -45,6 +45,9 @@ class RestEndpoint(Filter):
     chunk_size : int
     body_len : int = 0
 
+    blob_url : Optional[str] = None
+    full_blob_url : Optional[str] = None
+
     # PATCH sends rcpts to append but it sends back the responses for
     # all rcpts so far, need to remember how many we've sent to know
     # if we have all the responses.
@@ -101,10 +104,11 @@ class RestEndpoint(Filter):
             req_headers = {'host': self.http_host}
             self._set_request_timeout(req_headers, timeout)
             try:
-                rest_resp = requests.post(self.base_url + '/transactions',
-                                          json=req_json,
-                                          headers=req_headers,
-                                          timeout=self.timeout_start)
+                rest_resp = requests.post(
+                    urljoin(self.base_url, '/transactions'),
+                    json=req_json,
+                    headers=req_headers,
+                    timeout=self.timeout_start)
             except requests.RequestException:
                 return None
             if rest_resp.status_code != 201:
@@ -183,16 +187,6 @@ class RestEndpoint(Filter):
             self.get_tx_response(self.timeout_data, tx, {}, http_err)
 
     def _put_blob(self, blob) -> Optional[Response]:
-        blob_post_resp = requests.post(self.base_url + '/blob')
-        logging.info('RestEndpoint._put_blob POST /blob %s %s',
-                     blob_post_resp, blob_post_resp.headers)
-
-        if blob_post_resp.status_code != 201:
-            return None
-        if not (blob_url := blob_post_resp.headers.get('location', None)):
-            return None
-        full_blob_url = self._maybe_qualify_url(blob_url)
-
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
@@ -202,11 +196,10 @@ class RestEndpoint(Filter):
                           offset, len(chunk), self.body_len, chunk_last)
 
             resp, result_length = self._put_blob_chunk(
-                full_blob_url,
                 offset=self.body_len,
                 d=chunk,
                 last=chunk_last)
-            if resp is None or resp.err():
+            if resp is None or not resp.ok():
                 return resp
             # how many bytes from chunk were actually accepted?
             chunk_out = result_length - self.body_len
@@ -217,7 +210,7 @@ class RestEndpoint(Filter):
         logging.debug('_put_blob %s', resp)
 
         patch_tx_resp = requests.patch(self.transaction_url,
-                                       json={'body': blob_url})
+                                       json={'body': self.blob_url})
         # TODO should this return endpoint Response or http/requests Response?
         if patch_tx_resp.status_code > 299:
             return Response(
@@ -226,19 +219,39 @@ class RestEndpoint(Filter):
         return Response()
 
     # -> (resp, len)
-    def _put_blob_chunk(self, chunk_uri, offset,
-                         d : bytes, last : bool):
-        logging.info('RestEndpoint._put_blob_chunk %s %d %d %s',
-                     chunk_uri, offset, len(d), last)
+    def _put_blob_chunk(self, offset, d : bytes, last : bool
+                        ) -> Tuple[Optional[Response], Optional[int]]:
+        logging.info('RestEndpoint._put_blob_chunk %d %d %s',
+                     offset, len(d), last)
         headers = {}
-        if d is not None:  # XXX when can this be None?
-            range = ContentRange('bytes', offset, offset + len(d),
-                                 offset + len(d) if last else None)
-            headers['content-range'] = range.to_header()
         headers['host'] = self.http_host
         try:
-            rest_resp = requests.put(
-                chunk_uri, headers=headers, data=d, timeout=self.timeout_data)
+            if self.blob_url is None:
+                endpoint = '/blob'
+                entity = d
+                if not last:
+                    endpoint += '?upload=chunked'
+                    entity = None
+                rest_resp = requests.post(
+                    urljoin(self.base_url, endpoint), headers=headers,
+                    data=entity, timeout=self.timeout_data)
+                logging.info('RestEndpoint._put_blob POST /blob %s %s',
+                             rest_resp, rest_resp.headers)
+                if rest_resp.status_code != 201:
+                    return None, None
+                self.blob_url = rest_resp.headers.get('location', None)
+                if not self.blob_url:
+                    return None, None
+                self.full_blob_url = self._maybe_qualify_url(self.blob_url)
+                if not last:
+                    return Response(), 0
+            else:
+                range = ContentRange('bytes', offset, offset + len(d),
+                                     offset + len(d) if last else None)
+                headers['content-range'] = range.to_header()
+                rest_resp = requests.put(
+                    self.full_blob_url, headers=headers, data=d,
+                    timeout=self.timeout_data)
         except requests.RequestException:
             return None, None
         logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)

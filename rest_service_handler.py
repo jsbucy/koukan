@@ -27,8 +27,7 @@ class Handler(ABC):
 
     @abstractmethod
     def put_blob(self, request : FlaskRequest,
-                 content_range : ContentRange,
-                 range_in_headers : bool) -> FlaskResponse:
+                 content_range : ContentRange) -> FlaskResponse:
         pass
 
     @abstractmethod

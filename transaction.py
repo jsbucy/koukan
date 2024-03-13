@@ -67,7 +67,8 @@ class RestServiceTransaction(Handler):
 
     @staticmethod
     def create_blob_handler(storage):
-        return RestServiceTransaction(storage)
+        blob_writer = storage.get_blob_writer()
+        return RestServiceTransaction(storage, blob_writer=blob_writer)
 
     @staticmethod
     def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
@@ -80,6 +81,8 @@ class RestServiceTransaction(Handler):
             storage, blob_rest_id=blob_rest_id, blob_writer=blob_writer)
 
     # TODO pull out a schema thing to share with RestService
+    # NOTE removeprefix(x) doesn't require startswith(x) so this will
+    # accept a bare blob rest id
     @staticmethod
     def _blob_uri_to_id(uri):
         return uri.removeprefix('/blob/')
@@ -237,22 +240,16 @@ class RestServiceTransaction(Handler):
         if writer.length > 0:
             resp.headers.set(
                 'content-range',
-                ContentRange('bytes', 0,
-                             writer.length, writer.content_length))
+                ContentRange('bytes', 0, writer.length, writer.content_length))
         return resp
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(self._blob_rest_id)
-        resp = FlaskResponse(status=201, response=['created'])
-        resp.headers.set(
-            'location',
-            RestServiceTransaction._blob_id_to_uri(self._blob_rest_id))
-        return resp
+        if self.blob_writer.create(self._blob_rest_id) is None:
+            return FlaskResponse(status=500, response=['failed to create blob'])
+        return FlaskResponse(status=201)
 
-    def put_blob(self, request : FlaskRequest,
-                 content_range : ContentRange, range_in_headers : bool):
+    def put_blob(self, request : FlaskRequest, content_range : ContentRange):
         logging.info('put_blob loaded %s len=%d content_length=%s range %s',
                      self._blob_rest_id, self.blob_writer.length,
                      self.blob_writer.content_length,

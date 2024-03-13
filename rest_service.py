@@ -1,9 +1,9 @@
+from typing import Any, Dict, Optional, List
+from typing import Callable, Tuple
+
 from threading import Lock, Condition
 import logging
 import json
-
-from typing import Any, Dict, Optional, List
-from typing import Callable, Tuple
 
 from flask import Flask
 from flask import Response as FlaskResponse
@@ -114,6 +114,21 @@ def create_app(handler_factory : HandlerFactory):
         set_etag(rest_resp, handler)
         return rest_resp
 
+    def _get_range(request) -> Tuple[Optional[FlaskResponse],
+                                     Optional[ContentRange]]:
+        if range_header := request.headers.get('content-range', None):
+            range = werkzeug.http.parse_content_range_header(
+                request.headers.get('content-range'))
+            logging.info('put_blob content-range: %s', range)
+            if not range or range.units != 'bytes':
+                return FlaskResponse(400, 'bad range'), None
+            # no idea if underlying stack enforces this
+            assert(range.stop - range.start == request.content_length)
+            return None, range
+        else:
+            return None, ContentRange(
+                'bytes', 0, request.content_length, request.content_length)
+
     @app.route('/blob', methods=['POST'])
     def create_blob() -> FlaskResponse:
         logging.info("rest service create_blob %s %s",
@@ -123,9 +138,25 @@ def create_app(handler_factory : HandlerFactory):
             return FlaskResponse(status=500,
                                  response=['could not create blob handler'])
         rest_resp = handler.create_blob(request)
+        if rest_resp.status_code != 201:
+            return rest_resp
+
+        if not request.args:
+            range_err, range = _get_range(request)
+            if range_err:
+                return range_err
+            rest_resp = handler.put_blob(request, range)
+        elif request.args.keys() != {'upload'} or (
+                request.args['upload'] != 'chunked'):
+            return FlaskResponse(status=400, response=['bad query'])
+        elif request.data:
+            return FlaskResponse(
+                status=400, response=['unimplemented metadata upload'])
+
         blob_url = '/blob/' + handler.blob_rest_id()
         rest_resp.status_code = 201
         rest_resp.headers.set('location', blob_url)
+
         return rest_resp
 
     @app.route('/blob/<blob_rest_id>', methods=['PUT'])
@@ -133,26 +164,17 @@ def create_app(handler_factory : HandlerFactory):
         logging.info("rest service append_data_chunk %s %s",
                      request, request.headers)
 
-        # no idea if underlying stack enforces this
-        assert(len(request.data) == request.content_length)
-        range = None
-        range_in_headers = 'content-range' in request.headers
-        if range_in_headers:
-            range = werkzeug.http.parse_content_range_header(
-                request.headers.get('content-range'))
-            logging.info('put_blob content-range: %s', range)
-            if not range or range.units != 'bytes':
-                return FlaskResponse(400, 'bad range')
-            # no idea if underlying stack enforces this
-            assert(range.stop - range.start == request.content_length)
-        else:
-           range = ContentRange('bytes', 0, request.content_length,
-                                request.content_length)
-
         handler = handler_factory.get_blob(blob_rest_id)
         if handler is None:
             return FlaskResponse(status=404, response=['blob not found'])
-        return handler.put_blob(request, range, range_in_headers)
+
+        # no idea if underlying stack enforces this
+        assert(len(request.data) == request.content_length)
+        range_err, range = _get_range(request)
+        if range_err:
+            return range_err
+
+        return handler.put_blob(request, range)
 
     return app
 

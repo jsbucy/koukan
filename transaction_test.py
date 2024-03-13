@@ -72,12 +72,15 @@ class TransactionTest(unittest.TestCase):
         create_blob_resp = create_blob_handler.create_blob(
             FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)
-        self.assertIsNotNone(blob_uri := create_blob_resp.headers['location'])
+        self.assertIsNotNone(blob_uri := create_blob_handler.blob_rest_id())
 
         rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
         self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.patch({
-            'body': blob_uri})
+
+        # cf RestServiceTransaction._blob_uri_to_id() this illustrates
+        # how it will accept a bare blob id without the /blob/ path
+        # prefix which is a bug but seems harmless
+        rest_resp = rest_tx.patch({'body': blob_uri})
         self.assertEqual(rest_resp.status_code, 200)
 
         d = b'world!'
@@ -89,7 +92,7 @@ class TransactionTest(unittest.TestCase):
         blob_tx = RestServiceTransaction.load_blob(self.storage, blob_uri)
         self.assertIsNotNone(blob_tx)
         range = ContentRange('bytes', 0, len(d), len(d))
-        rest_resp = blob_tx.put_blob(put_req, range, True)
+        rest_resp = blob_tx.put_blob(put_req, range)
         logging.info('%d %s', rest_resp.status_code, str(rest_resp.data))
         self.assertEqual(rest_resp.status_code, 200)
 
@@ -109,7 +112,7 @@ class TransactionTest(unittest.TestCase):
         put_req.method = 'PUT'
         put_req.data = d
         put_req.content_length = len(put_req.data)
-        rest_resp = blob_tx.put_blob(put_req, range, True)
+        rest_resp = blob_tx.put_blob(put_req, range)
         logging.info('put off=%d code=%d resp=%s range: %s', offset,
                      rest_resp.status_code, rest_resp.data,
                      rest_resp.content_range)
@@ -143,7 +146,7 @@ class TransactionTest(unittest.TestCase):
         create_blob_resp = create_blob_handler.create_blob(
             FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)
-        self.assertIsNotNone(blob_uri := create_blob_resp.headers['location'])
+        self.assertIsNotNone(blob_uri := create_blob_handler.blob_rest_id())
 
         rest_resp = rest_tx.patch({
             'body': blob_uri})

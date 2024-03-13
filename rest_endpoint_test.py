@@ -18,12 +18,15 @@ from blob import CompositeBlob, InlineBlob
 from response import Response as MailResponse
 
 class Request:
+    method = None
     path = None
+    query = None
     content_type = None
     content_range = None
     request_timeout : Optional[int] = None
     body = None
     def __init__(self,
+                 method = None,
                  path = None,
                  content_type = None,
                  content_range = None,
@@ -97,7 +100,9 @@ class RestEndpointTest(unittest.TestCase):
     def wsgi_app(self, environ, start_response):
         #logging.debug(environ)
         req = Request()
+        req.method = environ['REQUEST_METHOD']
         req.path = environ['PATH_INFO']
+        req.query = environ['QUERY_STRING']
         req.content_type = environ['CONTENT_TYPE']
         if range_header := environ.get('HTTP_CONTENT_RANGE', None):
             req.content_range = (
@@ -322,10 +327,10 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '201 created',
             location = '/blob/123'))
 
-        # PUT /blob 0-7/* -> ok
         self.responses.append(Response(
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 0, 8, None)))
+
 
         # suppose something like a previous request was applied but
         # the response timed out to get into this state
@@ -342,24 +347,28 @@ class RestEndpointTest(unittest.TestCase):
         blob = InlineBlob(b'hello, world!')
         rest_endpoint._put_blob(blob)
 
-        # POST
+        # POST /blob?upload=chunked
         req = self.requests.pop(0)
-        # PUT
+        self.assertEqual(req.path, '/blob')
+        self.assertEqual(req.query, 'upload=chunked')
+        self.assertIsNone(req.content_range)
+        self.assertEqual(req.body, b'')
+
+        # PUT /blob/xyz
         req = self.requests.pop(0)
         self.assertEqual(req.content_range.start, 0)
         self.assertEqual(req.content_range.stop, 8)
         self.assertEqual(req.content_range.length, None)
-
         self.assertEqual(req.body, b'hello, w')
 
-        # PUT
+        # PUT /blob/xyz
         req = self.requests.pop(0)
         self.assertEqual(req.body, b'orld!')
         self.assertEqual(req.content_range.start, 8)
         self.assertEqual(req.content_range.stop, 13)
         self.assertEqual(req.content_range.length, 13)
 
-        # PUT
+        # PUT /blob/xyz
         req = self.requests.pop(0)
         self.assertEqual(req.body, b'ld!')
         self.assertEqual(req.content_range.start, 10)
@@ -371,27 +380,32 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
 
         self.responses.append(Response(
-            http_resp = '200 ok',
-            content_range=ContentRange('bytes', 0, 133, None)))
+            http_resp = '201 created',
+            location='/blob/123'))
 
         resp, len = rest_endpoint._put_blob_chunk(
-            self.static_base_url + '/blob/127', 128, b'hello', False)
+            128, b'hello', False)
         self.assertTrue(resp.ok())
-        self.assertEqual(len, 133)
+        self.assertEqual(len, 0)
+        self.assertEqual(rest_endpoint.blob_url, '/blob/123')
+        self.assertEqual(rest_endpoint.full_blob_url,
+                         urljoin(self.static_base_url, '/blob/123'))
         req = self.requests.pop(0)
-        self.assertEqual(req.content_range.start, 128)
-        self.assertEqual(req.content_range.stop, 133)
-        self.assertEqual(req.content_range.length, None)
+        self.assertEqual(req.method, 'POST')
+        self.assertEqual(req.path, '/blob')
+        self.assertEqual(req.query, 'upload=chunked')
+
+        self.assertIsNone(req.content_range)
 
         self.responses.append(Response(
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 0, 133, None)))
-        resp, len = rest_endpoint._put_blob_chunk(
-            self.static_base_url + '/blob/127', 128, b'hello', True)
+        resp, len = rest_endpoint._put_blob_chunk(128, b'hello', True)
         req = self.requests.pop(0)
         self.assertTrue(resp.ok())
         self.assertEqual(len, 133)
-
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/blob/123')
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
         self.assertEqual(req.content_range.length, 133)
@@ -399,12 +413,12 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '416 invalid range',
             content_range=ContentRange('bytes', 0, 120, None)))
-        resp, len = rest_endpoint._put_blob_chunk(
-            self.static_base_url + '/blob/127', 128, b'hello', True)
+        resp, len = rest_endpoint._put_blob_chunk(128, b'hello', True)
         req = self.requests.pop(0)
         self.assertTrue(resp.ok())
         self.assertEqual(len, 120)
-
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/blob/123')
         self.assertEqual(req.content_range.start, 128)
         self.assertEqual(req.content_range.stop, 133)
         self.assertEqual(req.content_range.length, 133)
@@ -442,7 +456,7 @@ class RestEndpointTest(unittest.TestCase):
 
     def testPutBlobTimeout(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_data=1)
+                                     timeout_data=1, chunk_size=4)
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         self.responses.append(Response(
             http_resp = '201 created',
@@ -456,7 +470,8 @@ class RestEndpointTest(unittest.TestCase):
 
     def testFilterApi(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1)
+                                     min_poll=0.1,
+                                     chunk_size=8)
 
         # POST
         self.responses.append(Response(
@@ -473,7 +488,7 @@ class RestEndpointTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')])
         rest_endpoint.on_update(tx)
 
-        req = self.requests.pop(0)  # POST
+        req = self.requests.pop(0)  # POST /transactions
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code if r else None for r in tx.rcpt_response],
                          [202])
@@ -530,6 +545,19 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         logging.debug('%s', tx.data_response)
         self.assertEqual(tx.data_response.code, 203)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'POST')
+        self.assertEqual(req.path, '/blob')
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/blob/xyz')
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PATCH')
+        self.assertEqual(req.path, '/transactions/123')
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'GET')
+        self.assertEqual(req.path, '/transactions/123')
 
 
 
