@@ -1,15 +1,13 @@
 {
-  "headers": {
-    "from": [{"display_name": "alice", "address": "alice@example.com"}],
-    "to": [{}],
-    "cc": [{}],
-    "bcc": [{}],
-    "subject": "hello",
-    "date": {"unix_secs": 1709750551, "tz_offset": -28800},
-    "message-id": "abc@xyz",
-    "in-reply-to": "abd@xyz",
-    "references": ["abd@xyz", "abe@xyz"]
-  },
+  "headers": [
+    ["from", [{"display_name": "alice a", "address": "alice@example.com"}]],
+    ["to", [{"address": "bob@example.com"}]],
+    ["subject", "hello"],
+    ["date", {"unix_secs": 1709750551, "tz_offset": -28800}],
+    ["message-id", ["abc@xyz"]],
+    ["in-reply-to", ["abd@xyz"]],
+    ["references", ["abd@xyz", "abe@xyz"]]
+  ],
 
   "text_body": [
     {

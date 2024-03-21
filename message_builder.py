@@ -1,7 +1,11 @@
 from typing import Callable, List, Optional, Tuple
 
+import logging
+import datetime
+
 from email.message import EmailMessage, MIMEPart
 from email.generator import BytesGenerator
+from email.headerregistry import Address
 
 from blob import Blob
 
@@ -9,9 +13,25 @@ BlobFactory = Callable[[str],Blob]
 
 class MessageBuilder:
     blob_factory : Optional[BlobFactory]
+
     def __init__(self, json, blob_factory : Optional[BlobFactory]):
         self.json = json
+        self.header_json = self.json.get('headers', {})
+
         self.blob_factory = blob_factory
+
+        self._header_adders = {
+            'from': MessageBuilder._add_address_header,
+            'to': MessageBuilder._add_address_header,
+            'cc': MessageBuilder._add_address_header,
+            'bcc': MessageBuilder._add_address_header,
+            'date': MessageBuilder._add_date_header,
+            'message-id': MessageBuilder._add_messageid_header,
+            'in-reply-to': MessageBuilder._add_messageid_header,
+            'references': MessageBuilder._add_messageid_header,
+            # any other header (e.g. subject) will be added verbatim
+        }
+
 
     # replace part 'content_uri' with 'blob_rest_id' per uri_to_id
     # and return a list of these
@@ -64,8 +84,43 @@ class MessageBuilder:
         if existing_part is None:
             multipart.attach(part)
 
+    def _add_address_header(self, field, field_json, builder):
+        addrs = []
+        for addr_json in field_json:
+            if not (addr := addr_json.get('address', None)):
+                raise ValueError('no address')
+            addrs.append(Address(display_name=addr_json.get('display_name', ''),
+                                 addr_spec=addr))
+        if not addrs:
+            return
+        builder[field] = addrs
+
+    def _add_messageid_header(self, field, field_json, builder):
+        msgids = []
+        for msgid in field_json:
+            msgids.append('<' + msgid + '>')
+
+        builder[field] = ' '.join(msgids)
+
+    def _add_date_header(self, field, field_json, builder):
+        tz = None
+        if tz_json := field_json.get('tz_offset', None):
+            tz = datetime.timezone(
+                datetime.timedelta(seconds=tz_json))
+        builder[field] = datetime.datetime.fromtimestamp(
+            field_json['unix_secs'], tz=tz)
+
+    def _add_headers(self, builder):
+        for k,v in self.header_json:
+            if adder := self._header_adders.get(k, None):
+                adder(self, k, v, builder)
+            else:
+                builder[k] = v
+
     def build(self, out):
         builder = EmailMessage()
+
+        self._add_headers(builder)
 
         text_body = self.json.get('text_body', [])
         if text_body:
