@@ -66,9 +66,13 @@ class GatewayTest(unittest.TestCase):
                     remote_host=HostPort('localhost', self.fake_smtpd_port))
                 tx.mail_from = Mailbox('probe-from%d' % i)
                 tx.rcpt_to = [Mailbox('probe-to%d' % i)]
-                start_resp = rest_endpoint.on_update(tx)
+                rest_endpoint.on_update(tx)
+                logging.debug('probe %s', tx.mail_response)
+                if tx.mail_response.code >= 300:
+                    time.sleep(1)
+                    continue
             except ConnectionError:
-                time.sleep(0.1)
+                time.sleep(1)
             else:
                 break
 
@@ -93,6 +97,7 @@ class GatewayTest(unittest.TestCase):
         tx.mail_from = Mailbox('alice')
         tx.rcpt_to = [Mailbox('bob')]
         rest_endpoint.on_update(tx)
+        logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
         tx = TransactionMetadata(body_blob=InlineBlob('hello'))
