@@ -25,7 +25,7 @@ def create_app():
         return send_from_directory('.', 'app.js')
 
     # https://stackoverflow.com/questions/6656363/proxying-to-another-web-service-with-flask
-    @app.route('/<path:path>', methods=['GET', 'POST', 'PUT'])
+    @app.route('/<path:path>', methods=['GET', 'PATCH', 'POST', 'PUT'])
     def proxy(path):
         app.logger.info('proxy %s', request)
 
