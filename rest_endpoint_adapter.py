@@ -36,25 +36,28 @@ class RestEndpointAdapter(Handler):
     def blob_rest_id(self):
         return self._blob_rest_id
 
-    def _body(self, req_json, resp_json):
+    # reject oneshot body, must PATCH
+    def _body(self, req_json):
         if 'body' not in req_json:
             return
         if req_json['body'] != '':
             raise NotImplementedError()
 
+    # TODO this running self.endpoint (i.e. SmtpEndpoint)
+    # synchronously in the wsgi handler. Probably should dispatch to
+    # Executor, wait on upstream result with timeout for rest resp.
     def start(self, req_json,
               timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
         self.endpoint.start(tx)
-        # xxx inflight response fields per tx req fields
-        resp_json = {}
-        self._body(req_json, resp_json)
-        return jsonify(resp_json)
+        self._body(req_json)
+        return self.get({})
 
     def get(self, req_json : Dict[str, Any],
             timeout : Optional[float] = None) -> FlaskResponse:
         json_out = {}
 
+        # xxx inflight response fields per tx req fields
         if self.endpoint.mail_resp:
             json_out['mail_response'] = self.endpoint.mail_resp.to_json()
         if self.endpoint.rcpt_resp:
@@ -62,6 +65,8 @@ class RestEndpointAdapter(Handler):
                 r.to_json() for r in self.endpoint.rcpt_resp]
         if self.endpoint.data_response:
             json_out['data_response'] = self.endpoint.data_response.to_json()
+
+        logging.debug('RestEndpointAdapter.get %s', json_out)
 
         return jsonify(json_out)
 
