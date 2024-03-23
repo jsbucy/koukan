@@ -9,6 +9,7 @@ from wsgiref.simple_server import make_server
 
 import rest_service
 import gunicorn_main
+import hypercorn_main
 
 from blobs import BlobStorage
 from blob import InlineBlob
@@ -137,13 +138,17 @@ class Service:
 
         flask_app = rest_service.create_app(handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
-        if listener_yaml.get('use_gunicorn', False):
+        if listener_yaml.get('use_hypercorn', False):
+            hypercorn_main.run(
+                [listener_yaml['addr']],
+                listener_yaml.get('cert', None),
+                listener_yaml.get('key', None),
+                flask_app)
+        elif listener_yaml.get('use_gunicorn', False):
             # XXX gunicorn always forks, need to get all our startup
             # code into the worker e.g. post_worker_init() hook. May
             # be possible to run gunicorn.workers.ThreadWorker
             # directly?
-            # Alternatively, hypercorn appears to support configuring
-            # num_workers=0 and running in the same process.
             gunicorn_main.run(
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),

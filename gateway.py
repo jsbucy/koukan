@@ -11,6 +11,7 @@ from smtp_service import service as smtp_service
 import rest_service
 from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
 import gunicorn_main
+import hypercorn_main
 from config import Config
 
 from wsgiref.simple_server import make_server
@@ -46,7 +47,8 @@ class SmtpGateway(EndpointFactory):
             yaml['endpoint'],
             http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
-            timeout_data=yaml.get('data_timeout', 60))
+            timeout_data=yaml.get('data_timeout', 60),
+            verify=yaml.get('verify', True))
 
     def rest_endpoint_yaml(self, name):
         for endpoint_yaml in self.config.root_yaml['rest_output']:
@@ -119,10 +121,19 @@ class SmtpGateway(EndpointFactory):
         self.adapter_factory = RestEndpointAdapterFactory(self, self.blobs)
 
         flask_app=rest_service.create_app(self.adapter_factory)
-        if self.config.root_yaml['rest_listener']['use_gunicorn']:
+        rest_listener_yaml = self.config.root_yaml['rest_listener']
+        cert = rest_listener_yaml.get('cert', None)
+        key = rest_listener_yaml.get('key', None)
+
+        if rest_listener_yaml.get('use_hypercorn', False):
+            hypercorn_main.run(
+                [rest_listener_yaml['addr']],
+                cert=cert, key=key,
+                app=flask_app)
+        elif rest_listener_yaml.get('use_gunicorn', False):
             gunicorn_main.run(
                 [self.config.root_yaml['rest_listener']['addr']],
-                cert=None, key=None,
+                cert=cert, key=key,
                 app=flask_app)
         else:
             listener_yaml = self.config.root_yaml['rest_listener']

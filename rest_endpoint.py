@@ -5,7 +5,7 @@ import time
 import json.decoder
 from urllib.parse import urljoin, urlparse
 
-import requests
+from httpx import Client, RequestError
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
@@ -57,6 +57,8 @@ class RestEndpoint(Filter):
     # the data_response
     data_last = False
 
+    client : Client
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout):
             headers['request-timeout'] = str(int(timeout))
@@ -71,7 +73,8 @@ class RestEndpoint(Filter):
                  remote_host_resolution : Resolution = identity_resolution,
                  min_poll=1,
                  max_inline=1024,
-                 chunk_size=1048576):
+                 chunk_size=1048576,
+                 verify=True):
         self.base_url = self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
@@ -84,6 +87,8 @@ class RestEndpoint(Filter):
         self.max_inline = max_inline
         self.chunk_size = chunk_size
 
+        self.client = Client(http2=True, verify=verify)
+
     def _maybe_qualify_url(self, url):
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc:
@@ -95,43 +100,50 @@ class RestEndpoint(Filter):
         logging.debug('RestEndpoint._start %s', req_json)
 
         for remote_host in self.remote_host_resolution(tx.remote_host):
-            logging.debug('RestEndpoint._start remote_host %s', remote_host)
+            logging.debug('RestEndpoint._start remote_host %s %s',
+                          self.base_url, remote_host)
             # none if no remote_host/disco (above)
             if remote_host is not None:
                 req_json['remote_host'] = remote_host.to_tuple()
                 self.remote_host = remote_host
 
-            req_headers = {'host': self.http_host}
+            req_headers = {}
+            if self.http_host:
+                req_headers['host'] = self.http_host
             self._set_request_timeout(req_headers, timeout)
             try:
-                rest_resp = requests.post(
+                rest_resp = self.client.post(
                     urljoin(self.base_url, '/transactions'),
                     json=req_json,
                     headers=req_headers,
                     timeout=self.timeout_start)
-            except requests.RequestException:
+            except RequestError:
                 return None
             if rest_resp.status_code != 201:
                 return rest_resp
-            logging.info('RestEndpoint.start resp %s', rest_resp)
+            logging.info('RestEndpoint.start resp %s %s',
+                         rest_resp, rest_resp.http_version)
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
     def _update(self, req_json, timeout : Optional[float] = None):
-        req_headers = { 'host': self.http_host }
+        req_headers = {}
+        if self.http_host:
+            req_headers['host'] = self.http_host
         self._set_request_timeout(req_headers, timeout)
         if self.etag:
             req_headers['if-match'] = self.etag
         try:
-            rest_resp = requests.patch(self.transaction_url,
+            rest_resp = self.client.patch(self.transaction_url,
                                        json=req_json,
                                        headers=req_headers,
                                        timeout=self.timeout_start)
-        except requests.RequestException:
+        except RequestError:
             return None
-        logging.info('RestEndpoint.on_update resp %s', rest_resp)
+        logging.info('RestEndpoint.on_update resp %s %s',
+                     rest_resp, rest_resp.http_version)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint.on_update resp_json %s', resp_json)
         if not resp_json:
@@ -209,8 +221,8 @@ class RestEndpoint(Filter):
             self.body_len += chunk_out
         logging.debug('_put_blob %s', resp)
 
-        patch_tx_resp = requests.patch(self.transaction_url,
-                                       json={'body': self.blob_url})
+        patch_tx_resp = self.client.patch(self.transaction_url,
+                                          json={'body': self.blob_url})
         # TODO should this return endpoint Response or http/requests Response?
         if patch_tx_resp.status_code > 299:
             return Response(
@@ -224,7 +236,8 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
         headers = {}
-        headers['host'] = self.http_host
+        if self.http_host:
+            headers['host'] = self.http_host
         try:
             if self.blob_url is None:
                 endpoint = '/blob'
@@ -232,11 +245,12 @@ class RestEndpoint(Filter):
                 if not last:
                     endpoint += '?upload=chunked'
                     entity = None
-                rest_resp = requests.post(
+                rest_resp = self.client.post(
                     urljoin(self.base_url, endpoint), headers=headers,
                     data=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob POST /blob %s %s',
-                             rest_resp, rest_resp.headers)
+                logging.info('RestEndpoint._put_blob POST /blob %s %s %s',
+                             rest_resp, rest_resp.headers,
+                             rest_resp.http_version)
                 if rest_resp.status_code != 201:
                     return None, None
                 self.blob_url = rest_resp.headers.get('location', None)
@@ -249,10 +263,10 @@ class RestEndpoint(Filter):
                 range = ContentRange('bytes', offset, offset + len(d),
                                      offset + len(d) if last else None)
                 headers['content-range'] = range.to_header()
-                rest_resp = requests.put(
+                rest_resp = self.client.put(
                     self.full_blob_url, headers=headers, data=d,
                     timeout=self.timeout_data)
-        except requests.RequestException:
+        except RequestError:
             return None, None
         logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
 
@@ -284,13 +298,15 @@ class RestEndpoint(Filter):
 
     def get_json(self, timeout : Optional[float] = None):
         try:
-            req_headers = {'host': self.http_host}
+            req_headers = {}
+            if self.http_host:
+                req_headers['host'] = self.http_host
             self._set_request_timeout(req_headers, timeout)
-            rest_resp = requests.get(self.transaction_url,
+            rest_resp = self.client.get(self.transaction_url,
                                      headers=req_headers,
                                      timeout=timeout)
             logging.debug('RestEndpoint.get_json %s', rest_resp)
-        except requests.RequestException:
+        except RequestError:
             return None
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)

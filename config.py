@@ -83,7 +83,8 @@ class Config:
             http_host = yaml['http_host'],
             remote_host_resolution = remote_host_disco,
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
-            timeout_data=yaml.get('data_timeout', data_timeout))
+            timeout_data=yaml.get('data_timeout', data_timeout),
+            verify=yaml.get('verify', True))
 
     def router_policy_dest_domain(self, policy_yaml):
         return DestDomainPolicy()

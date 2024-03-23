@@ -19,6 +19,11 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
         return self.application
 
 def run(bind : List[Tuple[str,int]], cert, key, app):
+    # TODO this doesn't currently work: gunicorn always forks the
+    # worker but we start dequeue threads from the parent which breaks
+    # the in-process synchronization/change notifications in the
+    # storage stack.
+    raise NotImplementedError()
     bnd = [('%s:%d' % (h,p)) for h,p in bind]
     options = {
         'bind': bnd,

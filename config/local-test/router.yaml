@@ -7,10 +7,11 @@ global:
     watchdog_timeout: 10
 
 rest_listener:
-  use_gunicorn: false
+  # use_gunicorn: false
+  use_hypercorn: true
   addr: ["127.0.0.1", 8000]
-  # cert:
-  # key:
+  cert: localhost.crt
+  key: localhost.key
     
 endpoint:
 - name: outbound-gw
@@ -38,7 +39,8 @@ endpoint:
 #   domain:
 #   selector:
   - filter: rest_output
-    static_endpoint: http://localhost:8001
+    static_endpoint: https://localhost:8001
+    verify: localhost.crt
     http_host: outbound
 #    remote_host_discovery: mx
     static_remote_host:
@@ -68,7 +70,8 @@ endpoint:
       domains:
       - name: d
   - filter: rest_output
-    static_endpoint: http://localhost:8001
+    static_endpoint: https://localhost:8001
+    verify: localhost.crt
     http_host: outbound
     static_remote_host:
       host: 127.0.0.1

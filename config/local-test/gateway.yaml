@@ -1,7 +1,10 @@
 # rest -> smtp
 rest_listener:
-  use_gunicorn: true
+  #use_gunicorn: true
+  use_hypercorn: true
   addr: ["[::0]", 8001]
+  cert: localhost.crt
+  key: localhost.key
 
 smtp_output:
   ehlo_host: frylock
@@ -17,9 +20,11 @@ smtp_listener:
 rest_output:
   - name: mx
     host: inbound-gw
-    endpoint: http://localhost:8000/
+    endpoint: https://localhost:8000/
+    verify: localhost.crt
   - name: msa
     host: outbound-gw
-    endpoint: http://localhost:8000/
+    endpoint: https://localhost:8000/
+    verify: localhost.crt
 
 
