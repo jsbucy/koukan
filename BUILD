@@ -206,6 +206,8 @@ pytype_library(name='blobs',
 
 pytype_library(name='gunicorn_main',
                srcs=['gunicorn_main.py'])
+pytype_library(name='hypercorn_main',
+               srcs=['hypercorn_main.py'])
 
 pytype_library(name='rest_service',
                srcs=['rest_service.py',
@@ -226,7 +228,8 @@ pytype_library(name='router_service',
                      ':rest_endpoint',
                      ':blobs',
                      ':rest_service',
-                     ':gunicorn_main'])
+                     ':gunicorn_main',
+                     ':hypercorn_main'])
 
 py_test(name='router_service_test',
         srcs=['router_service_test.py'],
@@ -271,6 +274,7 @@ pytype_library(name='gateway',
                      ':smtp_service',
                      ':rest_service',
                      ':gunicorn_main',
+                     ':hypercorn_main',
                      ':config'])
 
 pytype_library(name='fake_smtpd',
