@@ -25,6 +25,7 @@ class TransactionCursor:
     id : Optional[int] = None
     rest_id : Optional[str] = None
     attempt_id : Optional[int] = None
+    max_attempts : Optional[int] = None
 
     version : Optional[int] = None
 
@@ -208,17 +209,16 @@ class TransactionCursor:
         # TODO all updates '... WHERE inflight_session_id =
         #   self.parent.session' ?
         now = int(time.time())
-
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == self.id)
                .where(self.parent.tx_table.c.version == self.version)
                .values(json = tx_to_db.to_json(WhichJson.DB),
                        version = new_version,
-                       max_attempts = 1,  # wat
                        attempt_count = 0,
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
-        if tx_delta.max_attempts:
+
+        if tx_delta.max_attempts is not None:
             upd = upd.values(max_attempts = tx_delta.max_attempts)
 
         if tx_delta.message_builder:
@@ -399,14 +399,10 @@ class TransactionCursor:
     def _start_attempt_db(self, conn, db_id, version):
         assert self.parent.session_id is not None
         new_version = version + 1
-        subq = (select(func.count(self.parent.attempt_table.c.attempt_id))
-               .where(self.parent.attempt_table.c.transaction_id == db_id)
-                .scalar_subquery())
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
                       self.parent.tx_table.c.version == version)
                .values(version = new_version,
-                       attempt_count = subq + 1,
                        inflight_session_id = self.parent.session_id)
                .returning(self.parent.tx_table.c.version))
         res = conn.execute(upd)
@@ -432,6 +428,10 @@ class TransactionCursor:
         self.attempt_id = row[0]
         self._load_db(conn, db_id=db_id)
 
+    # xxx if we're increasing max_attempts ("set durable") the tx may
+    # have already failed which sets output_done since it started with
+    # max_attempts==1 so this needs to clear output_done if the last
+    # attempt was a tempfail?
     def _set_max_attempts(self, max_attempts, conn):
         new_version = self.version + 1
         upd = (update(self.parent.tx_table)
@@ -466,7 +466,8 @@ class TransactionCursor:
                .values(inflight_session_id = None,
                        output_done = output_done,
                        last_update = now,
-                       version = new_version)
+                       version = new_version,
+                       attempt_count = self.attempt_id)
                .returning(self.parent.tx_table.c.version))
         res = conn.execute(upd)
 
@@ -970,8 +971,11 @@ class Storage:
             # next attempt time logic into the previous request completion so
             # you can index on it
 
-            # TODO maybe don't load !input_done until some request
-            # from the client
+            # TODO maybe input_done or last_update_session == our session
+
+            # iow don't recover incomplete after a crash until the
+            # client writes to it again so we don't start it upstream
+            # if the client went away
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
