@@ -263,12 +263,16 @@ class Exploder(Filter):
         r0 = self.recipients[0].status
         codes = [ int(r.status.code/100) if r.status is not None else None
                   for r in self.recipients]
+        msa_async_temp = False
         if len([c for c in codes if c == codes[0]]) == len(codes):
             # same status for all recipients
+            # but msa store-and-forward temp since the client expects that
             if self.msa:
                 if r0 is None or r0.ok() or r0.perm():
                     logging.debug('Exploder msa same resp')
                     return r0
+                elif r0.temp():
+                    msa_async_temp = True
             else:
                 logging.debug('Exploder mx same resp')
                 return r0
@@ -284,8 +288,13 @@ class Exploder(Filter):
                 recipient.upstream.on_update(
                     TransactionMetadata(max_attempts=self.max_attempts))
 
+        message = None
+        if msa_async_temp:
+            message = 'exploder async msa upstream temp'
+        else:
+            message = 'exploder async mixed upstream responses'
         return Response(
-            250, 'accepted (exploder async mixed upstream responses)')
+            250, 'accepted (' + message + ')')
 
 
     def abort(self):
