@@ -428,30 +428,6 @@ class TransactionCursor:
         self.attempt_id = row[0]
         self._load_db(conn, db_id=db_id)
 
-    # xxx if we're increasing max_attempts ("set durable") the tx may
-    # have already failed which sets output_done since it started with
-    # max_attempts==1 so this needs to clear output_done if the last
-    # attempt was a tempfail?
-    def _set_max_attempts(self, max_attempts, conn):
-        new_version = self.version + 1
-        upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id,
-                      self.parent.tx_table.c.version == self.version)
-               .values(max_attempts = max_attempts,
-                       last_update = int(time.time()),
-                       version = new_version)
-               .returning(self.parent.tx_table.c.version))
-        res = conn.execute(upd)
-        if (row := res.fetchone()) is None or row[0] != new_version:
-            raise VersionConflictException()
-        self.version = new_version
-        self.parent.tx_versions.update(self.id, self.version)
-
-    def set_max_attempts(self, max_attempts : Optional[int] = None):
-        with self.parent.conn() as conn:
-            self._set_max_attempts(max_attempts, conn)
-            conn.commit()
-
     def finalize_attempt(self, output_done):
         with self.parent.conn() as conn:
             self._finalize_attempt(conn, output_done)

@@ -70,13 +70,12 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
-        tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id'),
+        tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id',
+                                                     max_attempts =100),
                                  reuse_blob_rest_id=['blob_rest_id'])
 
         logging.info('test_basic check tx input done')
         self.assertTrue(tx_writer.input_done)
-
-        tx_writer.set_max_attempts(100)
 
         tx_reader.load()
         self.assertEqual(tx_reader.max_attempts, 100)

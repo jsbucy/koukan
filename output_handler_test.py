@@ -45,11 +45,9 @@ class OutputHandlerTest(unittest.TestCase):
             blob_writer.append_data(d[i:i+1], len(d))
 
         tx_cursor.write_envelope(
-            TransactionMetadata(body='blob_rest_id'),
+            TransactionMetadata(body='blob_rest_id',
+                                max_attempts = 100),
             reuse_blob_rest_id=['blob_rest_id'])
-
-        tx_cursor.load()
-        tx_cursor.set_max_attempts(100)
         del tx_cursor
 
         endpoint = SyncEndpoint()
