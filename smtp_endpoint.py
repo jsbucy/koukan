@@ -34,6 +34,7 @@ class SmtpEndpoint:
     blobs_received : int = -1
     rest_id : Optional[str] = None
     idle_start : Optional[float] = None
+    good_rcpt : bool = False
 
     def __init__(self, rest_id, ehlo_hostname):
         self.rest_id = rest_id
@@ -112,13 +113,13 @@ class SmtpEndpoint:
 
         self.data = bytes()
 
-        good_rcpt = False
+        self.good_rcpt = False
         for rcpt in tx.rcpt_to:
             resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox))
             if resp.ok():
-                good_rcpt = True
+                self.good_rcpt = True
             self.rcpt_resp.append(resp)
-        if not good_rcpt:
+        if not self.good_rcpt:
             self._shutdown()
         return self.rcpt_resp
 
@@ -127,6 +128,8 @@ class SmtpEndpoint:
         self.idle_start = time.monotonic()
         logging.info('SmtpEndpoint.append_data last=%s len=%d',
                      last, blob.len())
+        if not self.good_rcpt:
+            return Response(450, 'no valid RCPT')
         self.data += blob.read(0)
         self.blobs_received += 1
         if not last:
