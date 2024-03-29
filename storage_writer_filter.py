@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Any
+from typing import Callable, Dict, Optional, Any
 import logging
 import json
 import secrets
@@ -15,9 +15,12 @@ REST_ID_BYTES = 4  # XXX configurable, use more in prod
 class StorageWriterFilter(Filter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
+    blob_id_factory : Callable[[], str]
 
-    def __init__(self, storage):
+    def __init__(self, storage,
+                 blob_id_factory : Callable[[], str]):
         self.storage = storage
+        self.blob_id_factory = blob_id_factory
 
     def _create(self, tx : TransactionMetadata):
         assert tx.host is not None
@@ -45,11 +48,25 @@ class StorageWriterFilter(Filter):
                 tx.body_blob.len() == tx.body_blob.content_length()):
             # TODO this assumes cursor_to_endpoint buffers the entire
             # payload and nothing between there and here re-chunks it
-            assert isinstance(tx.body_blob, BlobReader)
             body_tx = TransactionMetadata()
-            body_tx.body = tx.body_blob.rest_id
-            self.tx_cursor.write_envelope(
-                body_tx, reuse_blob_rest_id=[body_tx.body])
+            # xxx move this into Storage
+            if isinstance(tx.body_blob, BlobReader):
+                body_tx.body = tx.body_blob.rest_id
+            else:
+                blob_writer = self.storage.get_blob_writer()
+                # xxx this should be able to use storage id instead of rest id
+                rest_id = self.blob_id_factory()
+                blob_writer.create(rest_id)
+                d = tx.body_blob.read(0)
+                blob_writer.append_data(d, len(d))
+                body_tx.body=rest_id
+            while True:
+                try:
+                    self.tx_cursor.write_envelope(
+                        body_tx, reuse_blob_rest_id=[body_tx.body])
+                    break
+                except VersionConflictException:
+                    self.tx_cursor.load()
             wait_data_resp = True
 
         start = time.monotonic()

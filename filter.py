@@ -152,6 +152,9 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
             emit=[WhichJson.REST_READ]),
+    TxField('notifications',
+            accept=[WhichJson.DB],
+            emit=[WhichJson.DB])
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -184,6 +187,9 @@ class TransactionMetadata:
 
     message_builder : Optional[dict] = None
 
+    # arbitrary json for now
+    notifications : Optional[dict] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
@@ -191,7 +197,8 @@ class TransactionMetadata:
                  host : Optional[str] = None,
                  max_attempts : Optional[int] = None,
                  body : Optional[str] = None,
-                 body_blob : Optional[Blob] = None):
+                 body_blob : Optional[Blob] = None,
+                 notifications : Optional[dict] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -202,6 +209,7 @@ class TransactionMetadata:
             self.max_attempts = max_attempts
         self.body = body
         self.body_blob = body_blob
+        self.notifications = notifications
 
 #    def __bool__(self):
 #        for f in TransactionMetadata.all_fields:
@@ -256,7 +264,7 @@ class TransactionMetadata:
                 if v is None:
                     continue
                 v_js = None
-                if isinstance(v, str) or isinstance(v, int):
+                if isinstance(v, str) or isinstance(v, int) or isinstance(v, dict):
                     v_js = v
                 elif isinstance(v, list):
                     if v:

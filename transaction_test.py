@@ -28,7 +28,7 @@ class TransactionTest(unittest.TestCase):
     # call since that's how it's invoked, clear out state in tx_cursor
     def test_rest_transaction(self):
         rest_tx = RestServiceTransaction.create_tx(
-            self.storage, 'host')
+            self.storage, 'host', rest_id_factory=lambda: str(time.time()))
         self.assertIsNotNone(rest_tx)
         rest_resp = rest_tx.start(
             TransactionMetadata(mail_from=Mailbox('alice')).to_json())
@@ -68,7 +68,7 @@ class TransactionTest(unittest.TestCase):
 
 
         create_blob_handler = RestServiceTransaction.create_blob_handler(
-            self.storage)
+            self.storage, rest_id_factory=lambda: str(time.time()))
         create_blob_resp = create_blob_handler.create_blob(
             FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)
@@ -130,7 +130,9 @@ class TransactionTest(unittest.TestCase):
 
 
     def test_rest_blob_ranges(self):
-        rest_tx = RestServiceTransaction.create_tx(self.storage, 'host')
+        rest_tx = RestServiceTransaction.create_tx(
+            self.storage, 'host',
+            rest_id_factory=lambda: str(time.time()))
         self.assertIsNotNone(rest_tx)
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
                                           rcpt_to=[Mailbox('bob')]).to_json())
@@ -142,7 +144,7 @@ class TransactionTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
 
         create_blob_handler = RestServiceTransaction.create_blob_handler(
-            self.storage)
+            self.storage, rest_id_factory=lambda: str(time.time()))
         create_blob_resp = create_blob_handler.create_blob(
             FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)

@@ -1,7 +1,6 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import json
-import secrets
 import time
 
 from flask import Request as FlaskRequest, Response as FlaskResponse
@@ -16,8 +15,7 @@ from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
 from message_builder import MessageBuilder
 
-REST_ID_BYTES = 4  # XXX configurable, use more in prod
-
+# TODO could this be refactored to call upon StorageWriterFilter?
 class RestServiceTransaction(Handler):
     storage : Storage
     _tx_rest_id : str
@@ -25,19 +23,22 @@ class RestServiceTransaction(Handler):
     tx_cursor : TransactionCursor
     _blob_rest_id : Optional[str]
     blob_writer : Optional[BlobWriter]
+    rest_id_factory : Optional[Callable[[], str]]
 
     def __init__(self, storage,
                  tx_rest_id=None,
                  http_host=None,
                  tx_cursor=None,
                  blob_rest_id=None,
-                 blob_writer=None):
+                 blob_writer=None,
+                 rest_id_factory : Optional[Callable[[], str]] = None):
         self.storage = storage
         self.http_host = http_host
         self._tx_rest_id = tx_rest_id
         self.tx_cursor = tx_cursor
         self._blob_rest_id = blob_rest_id
         self.blob_writer = blob_writer
+        self.rest_id_factory = rest_id_factory
 
     def tx_rest_id(self):
         return self._tx_rest_id
@@ -49,13 +50,15 @@ class RestServiceTransaction(Handler):
         return self.tx_cursor.etag()
 
     @staticmethod
-    def create_tx(storage, http_host) -> Optional["RestServiceTransaction"]:
+    def create_tx(storage, http_host, rest_id_factory
+                  ) -> Optional["RestServiceTransaction"]:
         logging.debug('RestServiceTransaction.create_tx %s', http_host)
 
         cursor = storage.get_transaction_cursor()
         return RestServiceTransaction(storage,
                                       http_host=http_host,
-                                      tx_cursor=cursor)
+                                      tx_cursor=cursor,
+                                      rest_id_factory=rest_id_factory)
 
     @staticmethod
     def load_tx(storage, rest_id) -> Optional["RestServiceTransaction"]:
@@ -66,9 +69,10 @@ class RestServiceTransaction(Handler):
             storage, tx_rest_id=rest_id, tx_cursor=cursor)
 
     @staticmethod
-    def create_blob_handler(storage):
+    def create_blob_handler(storage, rest_id_factory):
         blob_writer = storage.get_blob_writer()
-        return RestServiceTransaction(storage, blob_writer=blob_writer)
+        return RestServiceTransaction(storage, blob_writer=blob_writer,
+                                      rest_id_factory=rest_id_factory)
 
     @staticmethod
     def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
@@ -108,7 +112,8 @@ class RestServiceTransaction(Handler):
         logging.debug('RestServiceTransaction.start %s %s',
                       self.http_host, req_json)
         assert self._tx_rest_id is None
-        self._tx_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        assert self.rest_id_factory is not None
+        self._tx_rest_id = self.rest_id_factory()
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         tx.host = self.http_host
         if tx is None:
@@ -244,7 +249,8 @@ class RestServiceTransaction(Handler):
         return resp
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
-        self._blob_rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        assert self.rest_id_factory is not None
+        self._blob_rest_id = self.rest_id_factory()
         if self.blob_writer.create(self._blob_rest_id) is None:
             return FlaskResponse(status=500, response=['failed to create blob'])
         return FlaskResponse(status=201)
@@ -275,18 +281,24 @@ class RestServiceTransaction(Handler):
 
 # interface to top-level flask app
 class RestServiceTransactionFactory(HandlerFactory):
-    def __init__(self, storage : Storage):
+    storage : Storage
+    rest_id_factory : Callable[[], str]
+
+    def __init__(self, storage : Storage, rest_id_factory : Callable[[], str]):
         self.storage = storage
+        self.rest_id_factory = rest_id_factory
 
     def create_tx(self, http_host) -> Optional[RestServiceTransaction]:
-        return RestServiceTransaction.create_tx(self.storage, http_host)
+        return RestServiceTransaction.create_tx(
+            self.storage, http_host, rest_id_factory=self.rest_id_factory)
 
     def get_tx(self, tx_rest_id) -> Optional[RestServiceTransaction]:
         return RestServiceTransaction.load_tx(
             self.storage, tx_rest_id)
 
     def create_blob(self):
-        return RestServiceTransaction.create_blob_handler(self.storage)
+        return RestServiceTransaction.create_blob_handler(
+            self.storage, rest_id_factory=self.rest_id_factory)
 
     def get_blob(self, blob_rest_id) -> Optional[RestServiceTransaction]:
         return RestServiceTransaction.load_blob(self.storage, blob_rest_id)

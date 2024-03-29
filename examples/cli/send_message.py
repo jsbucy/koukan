@@ -5,15 +5,19 @@ from urllib.parse import urljoin
 import time
 import requests
 import copy
+from sys import argv
 
-base_url = 'http://localhost:8000'
+base_url = 'https://localhost:8000'
+
+session = requests.Session()
+session.verify = 'localhost.crt'
 
 # -> uri
 def send_part(inline : Optional[str] = None,
               filename : Optional[str] = None) -> Optional[str]:
     assert inline or filename
 
-    resp = requests.post(base_url + '/blob?upload=chunked')
+    resp = session.post(base_url + '/blob?upload=chunked')
     logging.info('POST /blob %s', resp)
 
     if resp.status_code != 201:
@@ -26,7 +30,7 @@ def send_part(inline : Optional[str] = None,
     elif filename:
         with open(filename, 'rb') as f:
             content = f.read()
-    resp = requests.put(base_url + uri, content)
+    resp = session.put(base_url + uri, content)
     logging.info('PUT %s %s', uri, resp)
     if resp.status_code >= 300:
         return None
@@ -68,13 +72,13 @@ message_builder = {
     ]
 }
 
-def main():
-    resp = requests.post(
+def main(mail_from, rcpt_to):
+    resp = session.post(
         base_url + '/transactions',
         headers={'host': 'msa-output'},
         json={
-            'mail_from': {'m': 'alice@example.com'},
-            'rcpt_to': [{'m': 'bob@d'}],
+            'mail_from': {'m': mail_from},
+            'rcpt_to': [{'m': rcpt_to}],
         })
 
     if resp.status_code != 201:
@@ -83,7 +87,7 @@ def main():
     tx_json = resp.json()
     tx_url = urljoin(base_url, resp.headers['location'])
 
-    rest_resp = requests.get(tx_url, headers={'request-timeout': '5'})
+    rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
     for resp_field in ['mail_response', 'rcpt_response']:
         if not (resp := rest_resp.json().get(resp_field, None)):
             continue
@@ -92,14 +96,15 @@ def main():
         if (code := resp.get('code', None)) is None:
             continue
         if code >= 500:
-            logging.info('err %s %s', resp_field, rest_resp)
+            logging.info('err %s %s %s',
+                         resp_field, rest_resp, rest_resp.json())
             return
 
     if not send_body(message_builder):
         return
     logging.info('main message_builder spec %s', message_builder)
 
-    resp = requests.patch(tx_url, json={'message_builder': message_builder})
+    resp = session.patch(tx_url, json={'message_builder': message_builder})
     if resp.status_code >= 300:
         return
 
@@ -107,7 +112,7 @@ def main():
     while not done:
         logging.info('GET %s', tx_url)
         start = time.monotonic()
-        resp = requests.get(tx_url, headers={'request-timeout': '5'})
+        resp = session.get(tx_url, headers={'request-timeout': '5'})
         logging.info('GET /%s %d %s', tx_url, resp.status_code, resp.text)
         tx_json = resp.json()
 
@@ -125,13 +130,13 @@ def main():
                 done = True
         if done:
             break
-        # delta = time.monotonic() - start
-        # if delta < 1:
-        #     time.sleep(1 - delta)
+        delta = time.monotonic() - start
+        if delta < 1:
+            time.sleep(1 - delta)
         tx_json = None
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(message)s')
-    main()
+    main(argv[1], argv[2])

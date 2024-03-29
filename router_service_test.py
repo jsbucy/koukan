@@ -22,6 +22,7 @@ root_yaml = {
         'tx_idle_timeout': 5,
         'gc_interval': None,
         'dequeue': False,
+        'mailer_daemon_mailbox': 'mailer-daemon@d'
     },
     'rest_listener': {
     },
@@ -31,11 +32,16 @@ root_yaml = {
             'msa': True,
             'output_handler': {
                 'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1
+                'downstream_data_timeout': 1,
+                'notifications_enabled': False,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
-                       'msa': True}]
+                       'msa': True,
+                       'max_attempts': 3,
+                       'default_notifications': {
+                           'host': 'submission'
+                       }}]
         },
         {
             'name': 'submission',
@@ -51,11 +57,16 @@ root_yaml = {
             'msa': True,
             'output_handler': {
                 'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1
+                'downstream_data_timeout': 1,
+                'notifications_enabled': False,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
-                       'msa': False}]
+                       'msa': False,
+                       'max_attempts': 3,
+                       'default_notifications': {
+                           'host': 'inbound-gw'
+                       }}]
         },
         {
             'name': 'inbound-gw',
@@ -270,7 +281,6 @@ class RouterServiceTest(unittest.TestCase):
     # would potentially bounce
     # and/or get ahold of those tx IDs and verify the status directly
 
-    # exploder multi rcpt
     def test_exploder_multi_rcpt(self):
         logging.info('testExploderMultiRcpt')
         rest_endpoint = RestEndpoint(
@@ -334,6 +344,56 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertEqual(tx.data_response.code, 204)
 
+    def test_notifications(self):
+        logging.info('test_notifications')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='smtp-msa')
+
+
+        logging.info('testExploderMultiRcpt start tx')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(b'Hello, World!'),
+            remote_host=HostPort('1.2.3.4', 12345))
+        t = self.start_tx_update(rest_endpoint, tx)
+        # exploder tx
+        self.assertTrue(self.service._dequeue())
+        self.join_tx_update(t)
+
+        for i in range(0,3):
+            logging.debug('test_notifications upstream tx %d', i)
+            upstream_endpoint = SyncEndpoint()
+            upstream_endpoint.set_mail_response(Response(250))
+            upstream_endpoint.add_rcpt_response(Response(450))
+
+            self.add_endpoint(upstream_endpoint)
+            for j in range(0,3):
+                if self.service._dequeue():
+                    break
+                time.sleep(1)
+            else:
+                self.fail('failed to dequeue')
+
+        dsn_endpoint = SyncEndpoint()
+        dsn_endpoint.set_mail_response(Response(250))
+        dsn_endpoint.add_rcpt_response(Response(250))
+        dsn_endpoint.add_data_response(Response(250))
+        self.add_endpoint(dsn_endpoint)
+        self.assertTrue(self.service._dequeue())
+
+        # xxx kludge, fix SyncEndpoint to wait on this
+        for i in range(0,5):
+            if dsn_endpoint.body_blob is not None:
+                break
+            time.sleep(1)
+        else:
+            self.fail('didn\'t get dsn')
+        self.assertEqual(dsn_endpoint.mail_from.mailbox, '')
+        self.assertEqual([m.mailbox for m in dsn_endpoint.rcpt_to],
+                         ['alice'])
+        self.assertIn(b'subject: Delivery Status Notification',
+                      dsn_endpoint.body_blob.read(0))
 
 if __name__ == '__main__':
     unittest.main()

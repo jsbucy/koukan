@@ -6,6 +6,7 @@ import datetime
 from email.message import EmailMessage, MIMEPart
 from email.generator import BytesGenerator
 from email.headerregistry import Address
+from email import policy
 
 from blob import Blob
 
@@ -57,6 +58,7 @@ class MessageBuilder:
         maintype, subtype = part_json['content_type'].split('/')
         part = existing_part if existing_part is not None else MIMEPart()
 
+        # TODO use str if maintype == 'text'
         content : Optional[bytes]
         if 'content' in part_json:
             content = part_json['content'].encode('utf-8')
@@ -144,5 +146,5 @@ class MessageBuilder:
             for part in mixed:
                 self._add_part(part, builder)
 
-        gen = BytesGenerator(out, policy=builder.policy.clone(linesep='\r\n'))
+        gen = BytesGenerator(out, policy=policy.SMTP)
         gen.flatten(builder)

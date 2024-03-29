@@ -123,7 +123,7 @@ class OutputHandlerTest(unittest.TestCase):
 
     def test_integrated(self):
         rest_tx = RestServiceTransaction.create_tx(
-            self.storage, 'host')
+            self.storage, 'host', rest_id_factory=lambda: str(time.time()))
         self.assertIsNotNone(rest_tx)
         rest_tx.start(TransactionMetadata(mail_from=Mailbox('alice'),
                                           rcpt_to=[Mailbox('bob')]).to_json())
@@ -164,7 +164,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(rest_tx)
 
         create_blob_handler = RestServiceTransaction.create_blob_handler(
-            self.storage)
+            self.storage, rest_id_factory=lambda: str(time.time()))
         create_blob_resp = create_blob_handler.create_blob(FlaskRequest({}))
         self.assertEqual(create_blob_resp.status_code, 201)
         blob_uri = create_blob_handler.blob_rest_id()
@@ -213,6 +213,63 @@ class OutputHandlerTest(unittest.TestCase):
         fut.result(timeout=1)
 
         self.assertEqual(endpoint.body_blob.read(0), b'world!')
+
+
+    def test_notifications(self):
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+
+        tx_meta = TransactionMetadata(
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
+        tx_cursor.write_envelope(tx_meta)
+        blob_writer = self.storage.get_blob_writer()
+        blob_writer.create(rest_id='blob_rest_id')
+        d = (b'from: alice\r\n'
+             b'to: bob\r\n'
+             b'message-id: <abc@xyz>\r\n'
+             b'\r\n'
+             b'hello\r\n')
+        blob_writer.append_data(d, len(d))
+
+        tx_cursor.write_envelope(
+            TransactionMetadata(body='blob_rest_id',
+                                max_attempts = 1,
+                                notifications = {'host': 'smtp-out'}),
+            reuse_blob_rest_id=['blob_rest_id'])
+        del tx_cursor
+
+        endpoint = SyncEndpoint()
+        endpoint.set_mail_response(Response())
+        endpoint.add_rcpt_response(Response(450))
+
+        notification_endpoint = SyncEndpoint()
+        notification_endpoint.set_mail_response(Response())
+        notification_endpoint.add_rcpt_response(Response())
+        notification_endpoint.add_data_response(Response())
+
+        tx_cursor = self.storage.load_one()
+        self.assertIsNotNone(tx_cursor)
+        self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
+        handler = OutputHandler(
+            tx_cursor, endpoint,
+            downstream_env_timeout=1,
+            downstream_data_timeout=1,
+            notification_factory=lambda: notification_endpoint,
+            mailer_daemon_mailbox='mailer-daemon@example.com')
+        handler.cursor_to_endpoint()
+
+        self.assertEqual(endpoint.mail_from.mailbox, 'alice')
+        self.assertEqual(endpoint.rcpt_to[0].mailbox, 'bob')
+
+        reader = self.storage.get_transaction_cursor()
+        reader.load(rest_id='rest_tx_id')
+
+        self.assertEqual(notification_endpoint.mail_from.mailbox, '')
+        self.assertEqual(notification_endpoint.rcpt_to[0].mailbox, 'alice')
+
+        dsn = notification_endpoint.body_blob.read(0).decode('utf-8')
+        logging.debug(dsn)
+        self.assertIn('subject: Delivery Status Notification', dsn)
 
 if __name__ == '__main__':
     unittest.main()

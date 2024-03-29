@@ -168,11 +168,9 @@ class TransactionCursor:
                     input_done = False
                     break
 
-        logging.debug('TransactionCursor._write_blob %d %s',
-                      self.id, input_done)
+        logging.debug('TransactionCursor._write_blob %d %s body %s',
+                      self.id, input_done, tx.body)
 
-        logging.debug('TransactionCursor._write_blob %d body %s',
-                      self.id, tx.body)
         if tx.body:
             if reuse_blob_rest_id:
                 logging.debug('TransactionCursor._write_blob %d reuse', self.id)
@@ -220,6 +218,11 @@ class TransactionCursor:
 
         if tx_delta.max_attempts is not None:
             upd = upd.values(max_attempts = tx_delta.max_attempts)
+
+        # TODO this is a kludge for the exploder to ensure we send a
+        # bounce in certain edge cases cf Exploder._append_data()
+        if tx_delta.max_attempts and tx_delta.notifications:
+            upd = upd.values(output_done = None)
 
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)

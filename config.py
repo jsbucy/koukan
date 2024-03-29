@@ -1,6 +1,7 @@
 from typing import Any, Callable, Optional, Tuple
 import logging
 import sys
+import secrets
 
 from yaml import load, CLoader as Loader
 from local_domain_policy import LocalDomainPolicy
@@ -56,13 +57,23 @@ class Config:
         if msa:
             rcpt_timeout = 5
             data_timeout = 30
-        return Exploder(yaml['output_chain'],
-                        lambda: StorageWriterFilter(self.storage),
-                        msa=msa,
-                        rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
-                        data_timeout=yaml.get('data_timeout', data_timeout),
-                        max_attempts=yaml.get('max_attempts', max_attempts))
+        return Exploder(
+            yaml['output_chain'],
+            lambda: StorageWriterFilter(
+                self.storage, blob_id_factory=self.rest_id_factory()),
+            msa=msa,
+            rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
+            data_timeout=yaml.get('data_timeout', data_timeout),
+            max_attempts=yaml.get('max_attempts', max_attempts),
+            default_notifications=yaml.get('default_notifications', None))
 
+    def rest_id_factory(self):
+        entropy = self.root_yaml.get('global', {}).get('rest_id_entropy', 16)
+        return lambda: secrets.token_urlsafe(entropy)
+
+    def notification_endpoint(self):
+        return StorageWriterFilter(self.storage,
+                                   blob_id_factory=self.rest_id_factory())
 
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)

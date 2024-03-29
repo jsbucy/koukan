@@ -5,6 +5,9 @@ global:
   executor:
     max_inflight: 10
     watchdog_timeout: 10
+  # needs to authenticate!
+  mailer_daemon_mailbox: mailer-daemon@d
+  rest_id_entropy: 4
 
 rest_listener:
   # use_gunicorn: false
@@ -19,6 +22,7 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
+    notifications_enabled: false
   chain:
   - filter: exploder
     output_chain: msa-output
@@ -26,6 +30,8 @@ endpoint:
     max_attempts: 3
     rcpt_timeout: 4
     data_timeout: 4
+    default_notifications:
+      host: msa-output
 
 - name: msa-output
   msa: true
@@ -54,12 +60,15 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
+    notifications_enabled: false
   chain:
   - filter: exploder
     output_chain: mx-out
     max_attempts: 3
     rcpt_timeout: 4
     data_timeout: 4
+    default_notifications:
+      host: msa-output
 
 - name: mx-out
   msa: false

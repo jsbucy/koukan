@@ -129,7 +129,8 @@ class Service:
         # top-level: http host -> endpoint
 
         handler_factory = None
-        self.rest_tx_factory = RestServiceTransactionFactory(self.storage)
+        self.rest_tx_factory = RestServiceTransactionFactory(
+            self.storage, self.config.rest_id_factory())
         handler_factory = self.rest_tx_factory
 
         with self.lock:
@@ -171,7 +172,12 @@ class Service:
             downstream_env_timeout =
               output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
-              output_yaml.get('downstream_data_timeout', 60))
+              output_yaml.get('downstream_data_timeout', 60),
+            notifications_enabled =
+              output_yaml.get('notifications_enabled', True),
+            notification_factory=lambda: self.config.notification_endpoint(),
+            mailer_daemon_mailbox=self.config.root_yaml['global'].get(
+                'mailer_daemon_mailbox', None))
         handler.cursor_to_endpoint()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 
@@ -189,7 +195,7 @@ class Service:
 
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
         msa = endpoint_yaml['msa']
-        logging.info('_dequeue %s %s', endpoint, msa)
+        logging.info('_dequeue %s %s', endpoint, endpoint_yaml)
         self.executor.submit(
             lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
 

@@ -76,6 +76,14 @@ py_test(name='transaction_test',
         deps=[':transaction',
               ':fake_endpoints'])
 
+pytype_library(name='dsn',
+               srcs=['dsn.py'],
+               deps=[':response'])
+py_test(name='dsn_test',
+        srcs=['dsn_test.py'],
+        deps=[':dsn',
+              ':response'])
+
 pytype_library(name='output_handler',
                srcs=['output_handler.py'],
                deps=['rest_service_handler',
@@ -83,7 +91,8 @@ pytype_library(name='output_handler',
                      'response',
                      'storage',
                      'storage_schema',
-                     'message_builder'])
+                     'message_builder',
+                     ':dsn'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
