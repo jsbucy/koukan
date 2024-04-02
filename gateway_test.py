@@ -18,8 +18,9 @@ root_yaml = {
     },
     'rest_listener': {
         'use_gunicorn': False,
-        'tx_idle_timeout': 1,
-        'tx_idle_gc': 1,
+        'gc_interval': 1,
+        'gc_tx_ttl': 1,
+        'gc_blob_ttl': 1,
     },
     'smtp_output': {
         'ehlo_host': 'gateway_test',

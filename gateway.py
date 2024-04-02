@@ -26,7 +26,7 @@ class SmtpGateway(EndpointFactory):
 
         rest_output  = config.root_yaml.get('rest_output', None)
 
-        self.blobs = BlobStorage()
+        self.blob_storage = BlobStorage()
         self.smtp_factory = SmtpFactory()
 
         self.inflight = {}
@@ -77,16 +77,14 @@ class SmtpGateway(EndpointFactory):
             now = time.monotonic()
             logging.debug('SmtpGateway.gc_inflight %f', now)
             delta = now - last_gc
-            # XXX this may need to get wired into blobs to know that
-            # the data upload is making forward progress?
-            tx_idle_gc = rest_yaml.get('tx_idle_gc', 5)
-            if delta < tx_idle_gc:
-                time.sleep(tx_idle_gc - delta)
+            gc_interval = rest_yaml.get('gc_interval', 5)
+            if delta < gc_interval:
+                time.sleep(gc_interval - delta)
             last_gc = now
             dele = []
             for (rest_id, tx) in self.inflight.items():
                 tx_idle = now - tx.idle_start if tx.idle_start else 0
-                if tx_idle > rest_yaml.get('tx_idle_timeout', 5):
+                if tx_idle > rest_yaml.get('gc_tx_ttl', 600):
                     logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                                  tx.rest_id)
                     tx._shutdown()
@@ -94,6 +92,7 @@ class SmtpGateway(EndpointFactory):
             for d in dele:
                 logging.info(d)
                 del self.inflight[d]
+            self.blob_storage.gc(rest_yaml.get('gc_blob_ttl', 60))
 
     def main(self):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:
@@ -118,7 +117,8 @@ class SmtpGateway(EndpointFactory):
                 rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
-        self.adapter_factory = RestEndpointAdapterFactory(self, self.blobs)
+        self.adapter_factory = RestEndpointAdapterFactory(
+            self, self.blob_storage)
 
         flask_app=rest_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']

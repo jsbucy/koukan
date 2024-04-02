@@ -1,5 +1,6 @@
 
 from typing import Any, Callable, Dict, List, Optional
+import time
 
 from blob import Blob, InlineBlob
 
@@ -7,25 +8,17 @@ class InflightBlob:
     d : bytes
     b : InlineBlob
     parent = None
-
-    refs : set[Any]
+    last_update = None
 
     def __init__(self, id, parent):
         self.refs = set()
         self.id = id
         self.parent = parent
+        self.ping()
 
-    def ref(self, x):
-        assert(x not in self.refs)
-        self.refs.add(x)
+    def ping(self):
+        self.last_update = time.monotonic()
 
-    def unref(self, x):
-        assert(x in self.refs)
-        self.refs.remove(x)
-        if not self.refs:
-            self.parent.unref(id, self)
-
-# TODO needs idle ttl/gc
 # TODO this should just use a temp file for now
 class BlobStorage:
     next = 0
@@ -44,9 +37,9 @@ class BlobStorage:
         return id
 
     def append(self, id : str, offset : int, d : bytes, last) -> Optional[int]:
-        if id not in self.blobs:
+        if not (blob := self.blobs.get(id, None)):
             return None
-        blob = self.blobs[id]
+        blob.ping()
         blob_len = len(blob.d)
 
         if offset != blob_len:
@@ -60,11 +53,13 @@ class BlobStorage:
         return blob.b.len()
 
     def get(self, id) -> Optional[Blob]:
-        if not id in self.blobs or not self.blobs[id].b:
+        if not (inflight_blob := self.blobs.get(id, None)):
             return None
-        return self.blobs[id].b
+        inflight_blob.ping()
+        return inflight_blob.b
 
-    def unref(self, id, b : InflightBlob):
-        assert(id in self.blobs)
-        assert(self.blobs[id] == b)
-        del self.blobs[id]
+    def gc(self, ttl):
+        for (k,v) in [(k,v) for (k,v) in self.blobs.items()]:
+            if (time.monotonic() - v.last_update) < ttl:
+                continue
+            del self.blobs[k]
