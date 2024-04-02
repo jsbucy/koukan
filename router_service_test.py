@@ -148,7 +148,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertFalse(self.endpoints)
 
         # gc the probe request so it doesn't cause confusion later
-        self.assertTrue(self.service._gc_inflight(0))
+        self.assertTrue(self.service._gc(0))
 
     def tearDown(self):
         # TODO this should verify that there are no open tx attempts in storage

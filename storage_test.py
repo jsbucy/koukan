@@ -185,21 +185,44 @@ class StorageTestBase(unittest.TestCase):
         reader = self.s.load_one()
         self.assertIsNone(reader)
 
-    def test_gc_non_durable(self):
+    def test_gc(self):
+        blob_writer = self.s.get_blob_writer()
+        blob_writer.create(rest_id=str(time.time()))
+        d = b'hello, world!'
+        blob_writer.append_data(d, len(d))
+
         writer = self.s.get_transaction_cursor()
         writer.create('xyz', TransactionMetadata(
             host='host',
             local_host=HostPort('local_host', 25),
-            remote_host=HostPort('remote_host', 2525)))
+            remote_host=HostPort('remote_host', 2525)),
+            reuse_blob_rest_id=[blob_writer.rest_id])
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],))
-        self.assertFalse(writer.input_done)
-        self.assertEqual(self.s.gc_non_durable(min_age = 1), 0)
-        time.sleep(2)
-#        self.dump_db()
-        self.assertEqual(self.s.gc_non_durable(min_age = 1), 1)
 
+        reader = self.s.load_one()
+        blob_reader = self.s.get_blob_reader()
+        self.assertEqual(reader.id, writer.id)
+
+        # not expired, leased
+        count = self.s.gc(ttl=10)
+        self.assertEqual(count, (0, 0))
+        self.assertTrue(reader.load())
+        self.assertIsNotNone(blob_reader.load(db_id=blob_writer.id))
+
+        # expired, leased
+        count = self.s.gc(ttl=0)
+        self.assertEqual(count, (0, 0))
+        self.assertTrue(reader.load())
+        self.assertIsNotNone(blob_reader.load(db_id=blob_writer.id))
+
+        reader.finalize_attempt(output_done=True)
+
+        # expired, unleased
+        self.assertEqual(self.s.gc(ttl=0), (1,1))
+        self.assertFalse(reader.load())
+        self.assertIsNone(blob_reader.load(db_id=blob_writer.id))
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()

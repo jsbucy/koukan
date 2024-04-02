@@ -62,7 +62,7 @@ CREATE TABLE TransactionBlobRefs (
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
     ON UPDATE CASCADE
-    ON DELETE SET NULL,
+    ON DELETE CASCADE,
 
   FOREIGN KEY(blob_id) REFERENCES Blob(id)
     ON UPDATE CASCADE
@@ -98,16 +98,3 @@ CREATE TABLE Blob (
 
 CREATE INDEX BlobRestId on Blob (rest_id);
 
-/*
-gc:
-step 1:  delete expired transactions
-DELETE FROM Transactions WHERE now - last_update > ttl
-step 2: delete blobs
-DELETE FROM Blob WHERE id in (
-SELECT id from Blob LEFT JOIN (SELECT DISTINCT blob_id as trans_blob_id FROM TransactionContent)
-WHERE trans_blob_id = NULL);
-
-also drop old INSERT status, etc.
-
-PRAGMA incremental_vacuum;
-*/

@@ -119,12 +119,12 @@ class Service:
                                          daemon=True)
             self.dequeue_thread.start()
 
-        if global_yaml.get('gc_interval', None):
+        if storage_yaml.get('gc_interval', None):
             self.gc_thread = Thread(target = lambda: self.gc(),
                                     daemon=True)
             self.gc_thread.start()
         else:
-            logging.warning('idle gc disabled')
+            logging.warning('gc disabled')
 
         # top-level: http host -> endpoint
 
@@ -209,18 +209,17 @@ class Service:
             prev = self._dequeue(wait=(not prev))
 
     def gc(self):
-        global_yaml = self.config.root_yaml['global']
+        storage_yaml = self.config.root_yaml['storage']
         while True:
-            self._gc_inflight(global_yaml.get('tx_idle_timeout', 5))
+            self._gc(storage_yaml.get('gc_ttl', 86400))
             with self.lock:
                 if self.cv.wait_for(lambda: self.shutdown,
-                                    global_yaml.get('gc_interval', 5)):
+                                    storage_yaml.get('gc_interval', 300)):
                     break
 
-    def _gc_inflight(self, idle_timeout=None):
-        logging.info('router_service _gc_inflight %d', idle_timeout)
-
-        count = self.storage.gc_non_durable(idle_timeout)
-        logging.info('router_service _gc_inflight aborted %d', count)
+    def _gc(self, gc_ttl=None):
+        logging.info('router_service _gc %d', gc_ttl)
+        count = self.storage.gc(gc_ttl)
+        logging.info('router_service _gc deleted %d tx %d blobs',
+                     count[0], count[1])
         return count
-

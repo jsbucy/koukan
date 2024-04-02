@@ -69,12 +69,11 @@ CREATE TABLE TransactionBlobRefs (
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
     ON UPDATE CASCADE
-    ON DELETE SET NULL,
+    ON DELETE CASCADE,
 
   FOREIGN KEY(blob_id) REFERENCES Blob(id)
     ON UPDATE CASCADE
     ON DELETE SET NULL,
-
 
   PRIMARY KEY(transaction_id, blob_id)
 );

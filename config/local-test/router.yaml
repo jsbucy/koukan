@@ -1,7 +1,5 @@
 global:
   dequeue: true
-  gc_interval: 5
-  tx_idle_timeout: 5
   executor:
     max_inflight: 10
     watchdog_timeout: 10
@@ -98,3 +96,5 @@ storage:
   unix_socket_dir: /var/run/postgresql
   #port: 5432
 
+  gc_interval: 30
+  gc_ttl: 3600

@@ -11,7 +11,8 @@ from functools import reduce
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, or_, select, true as sa_true, update, union_all, values
+from sqlalchemy.sql.functions import count, current_time
+from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, not_, or_, select, true as sa_true, update, union_all, values
 
 import psutil
 
@@ -187,7 +188,7 @@ class TransactionCursor:
                     for blob_id in reused_blob_ids]
         logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
 
-        ins = insert(self.parent.tx_blob_table).values(blobrefs)
+        ins = insert(self.parent.tx_blobref_table).values(blobrefs)
         res = conn.execute(ins)
 
         self.input_done = input_done
@@ -473,27 +474,6 @@ class TransactionCursor:
                     'TransactionCursor.wait() BUG id=%d old=%d new=%d',
                     self.id, old, self.version)
             return self.version > old  # xxx assert?
-
-    def _abort(self, conn):
-        logging.info('TransactionCursor.abort %d %s', self.id, self.rest_id)
-        new_version = self.version + 1
-        now = int(time.time())
-        upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id,
-                      self.parent.tx_table.c.version == self.version)
-               .values(max_attempts = 0,
-                       last_update = now,
-                       version = new_version)
-               .returning(self.parent.tx_table.c.version))
-        res = conn.execute(upd)
-        if (row := res.fetchone()) is None or row[0] != new_version:
-            raise VersionConflictException()
-        self.version = new_version
-        self.parent.tx_versions.update(self.id, self.version)
-
-    def abort(self):
-        with self.parent.conn() as conn:
-            return self._abort(conn)
 
 
 class BlobWriter:
@@ -788,6 +768,7 @@ class Storage:
     session_table : Optional[Table] = None
     blob_table : Optional[Table] = None
     tx_table : Optional[Table] = None
+    tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
     post_commit : Dict[object, List[Callable[[], None]]]
@@ -889,7 +870,7 @@ class Storage:
             'blob', self.metadata, autoload_with=self.engine)
         self.tx_table = Table(
             'transactions', self.metadata, autoload_with=self.engine)
-        self.tx_blob_table = Table(
+        self.tx_blobref_table = Table(
             'transactionblobrefs', self.metadata, autoload_with=self.engine)
 
         self.attempt_table = Table(
@@ -981,36 +962,42 @@ class Storage:
             conn.commit()
             return tx
 
-    def _gc_non_durable_one(self, min_age):
-        max_recent = int(time.time()) - min_age
+    def _gc(self, conn, ttl : int) -> Tuple[int, int]:
+        # It would be fairly easy to support a staged policy like ttl
+        # blobs after 1d but tx after 7d. Then there would be a
+        # separate delete from TransactionBlobRefs with the shorter
+        # ttl, etc.
+        # This could also be finer-grained in terms of shorter ttl for
+        # !input_done, blobs, etc.
+        del_tx = delete(self.tx_table).where(
+            self.tx_table.c.inflight_session_id == None,
+            or_(self.tx_table.c.input_done.is_not(sa_true()),
+                self.tx_table.c.output_done),
+            (time.time() - self.tx_table.c.last_update) > ttl)
+        res = conn.execute(del_tx)
+        deleted_tx = res.rowcount
 
+        # If you wanted to reuse a blob for longer than the ttl
+        # (unlikely?), you might need tx creation reusing the
+        # blob to bump the blob last_update so it stays live?
+        j = join(self.blob_table, self.tx_blobref_table,
+             self.blob_table.c.id == self.tx_blobref_table.c.blob_id,
+             isouter=True)
+        sel = (select(self.blob_table.c.id).select_from(j)
+               .where(self.tx_blobref_table.c.transaction_id == None))
+        del_blob = delete(self.blob_table).where(
+            (time.time() - self.blob_table.c.last_update) > ttl,
+            self.blob_table.c.id.in_(sel)
+        )
+        res = conn.execute(del_blob)
+        deleted_blob = res.rowcount
+        return deleted_tx, deleted_blob
+
+    def gc(self, ttl) -> Tuple[int, int]:
         with self.conn() as conn:
-            sel = (select(self.tx_table.c.id)
-                   .where(self.tx_table.c.input_done.is_not(sa_true()),
-                          self.tx_table.c.output_done.is_not(sa_true()),
-                          self.tx_table.c.max_attempts == 1,
-                          self.tx_table.c.last_update <= max_recent)
-                   .limit(1))
-            res = conn.execute(sel)
-            row = res.fetchone()
-            if row is None:
-                return False
-
-            tx_cursor = self.get_transaction_cursor()
-            tx_cursor._load_db(conn, db_id = row[0])
-            tx_cursor._abort(conn)
-
+            deleted = self._gc(conn, ttl)
             conn.commit()
-
-        return True
-
-    def gc_non_durable(self, min_age):
-        count = 0
-        while True:
-            if not self._gc_non_durable_one(min_age):
-                break
-            count += 1
-        return count
+            return deleted
 
     def wait_created(self, db_id, timeout=None):
         with self.created_lock:
