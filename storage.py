@@ -26,13 +26,13 @@ class TransactionCursor:
     id : Optional[int] = None
     rest_id : Optional[str] = None
     attempt_id : Optional[int] = None
-    max_attempts : Optional[int] = None
 
     version : Optional[int] = None
 
     creation : Optional[int] = None
+
     input_done : Optional[bool] = None
-    output_done : Optional[bool] = None
+    final_attempt_reason : Optional[str] = None
 
     tx : Optional[TransactionMetadata] = None
 
@@ -60,7 +60,6 @@ class TransactionCursor:
             self.last = False
             self.version = 0
 
-            max_attempts = tx.max_attempts if tx.max_attempts else 1
             db_json = tx.to_json(WhichJson.DB)
             logging.debug('TxCursor.create %s %s', rest_id, db_json)
             ins = insert(self.parent.tx_table).values(
@@ -70,8 +69,6 @@ class TransactionCursor:
                 version = self.version,
                 last = self.last,
                 json = db_json,
-                attempt_count = 0,
-                max_attempts = max_attempts,
             ).returning(self.parent.tx_table.c.id)
 
             res = conn.execute(ins)
@@ -145,9 +142,13 @@ class TransactionCursor:
 
     def write_envelope(self,
                        tx_delta : TransactionMetadata,
-                       reuse_blob_rest_id : List[str] = []):
+                       reuse_blob_rest_id : List[str] = [],
+                       final_attempt_reason : Optional[str] = None,
+                       finalize_attempt : Optional[bool] = None,
+                       next_attempt_time : Optional[int] = None):
         with self.parent.conn() as conn:
-            self._write(conn, tx_delta, reuse_blob_rest_id)
+            self._write(conn, tx_delta, reuse_blob_rest_id,
+                        final_attempt_reason, finalize_attempt)
             conn.commit()
             self.parent.tx_versions.update(self.id, self.version)
 
@@ -197,36 +198,44 @@ class TransactionCursor:
     def _write(self,
                conn,
                tx_delta : TransactionMetadata,
-               reuse_blob_rest_id : List[str] = []):
+               reuse_blob_rest_id : List[str] = [],
+               final_attempt_reason : Optional[str] = None,
+               finalize_attempt : Optional[bool] = None,
+               next_attempt_time : Optional[int] = None):
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
         # e.g. overwriting an existing field
         # xxx return/throw
         assert tx_to_db is not None
-        logging.debug('write_envelope %s', tx_to_db.to_json(WhichJson.DB))
+        logging.debug('TransactionCursor._write %s',
+                      tx_to_db.to_json(WhichJson.DB))
         new_version = self.version + 1
         # TODO all updates '... WHERE inflight_session_id =
         #   self.parent.session' ?
         now = int(time.time())
         upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id)
-               .where(self.parent.tx_table.c.version == self.version)
+               .where(self.parent.tx_table.c.id == self.id,
+                      self.parent.tx_table.c.version == self.version)
                .values(json = tx_to_db.to_json(WhichJson.DB),
                        version = new_version,
-                       attempt_count = 0,
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
-
-        if tx_delta.max_attempts is not None:
-            upd = upd.values(max_attempts = tx_delta.max_attempts)
 
         # TODO this is a kludge for the exploder to ensure we send a
         # bounce in certain edge cases cf Exploder._append_data()
         if tx_delta.max_attempts and tx_delta.notifications:
-            upd = upd.values(output_done = None)
+            assert final_attempt_reason is None
+            upd = upd.values(final_attempt_reason = None)
 
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)
+
+        if final_attempt_reason:
+            upd = upd.values(final_attempt_reason = final_attempt_reason)
+
+        if finalize_attempt:
+            upd = upd.values(inflight_session_id = None,
+                             next_attempt_time = next_attempt_time)
 
         upd = self._write_blob(conn, tx_delta, upd, reuse_blob_rest_id)
 
@@ -246,6 +255,9 @@ class TransactionCursor:
                      self.id, self.version)
 
         return True
+
+    # TODO fold all of this set-response stuff into write_envelope()
+    # since we read it via TransactionMetadata anyway?
 
     def _set_response(self, col : str, response : Response):
         assert(self.attempt_id is not None)
@@ -352,9 +364,8 @@ class TransactionCursor:
                      self.parent.tx_table.c.version,
                      self.parent.tx_table.c.last,
                      self.parent.tx_table.c.input_done,
-                     self.parent.tx_table.c.output_done,
+                     self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.body_rest_id,
-                     self.parent.tx_table.c.max_attempts,
                      self.parent.tx_table.c.message_builder)
 
 
@@ -369,8 +380,8 @@ class TransactionCursor:
 
         (self.id, self.rest_id,
          self.creation, trans_json, self.version, self.last,
-         self.input_done, self.output_done, self.body_rest_id,
-         self.max_attempts, self.message_builder) = row
+         self.input_done, self.final_attempt_reason, self.body_rest_id,
+         self.message_builder) = row
 
         logging.debug('TransactionCursor._load_db %s %s %s',
                       self.rest_id, row, trans_json)
@@ -431,30 +442,6 @@ class TransactionCursor:
         assert (row := res.fetchone())
         self.attempt_id = row[0]
         self._load_db(conn, db_id=db_id)
-
-    def finalize_attempt(self, output_done):
-        with self.parent.conn() as conn:
-            self._finalize_attempt(conn, output_done)
-            conn.commit()
-
-    def _finalize_attempt(self, conn, output_done):
-        new_version = self.version + 1
-        now = int(time.time())
-        upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id,
-                      self.parent.tx_table.c.version == self.version)
-               .values(inflight_session_id = None,
-                       output_done = output_done,
-                       last_update = now,
-                       version = new_version,
-                       attempt_count = self.attempt_id)
-               .returning(self.parent.tx_table.c.version))
-        res = conn.execute(upd)
-
-        if (row := res.fetchone()) is None or row[0] != new_version:
-            raise VersionConflictException()
-        self.version = new_version
-        self.parent.tx_versions.update(self.id, self.version)
 
     def wait(self, timeout=None) -> bool:
         with Waiter(self.parent.tx_versions, self.id, self.version, self
@@ -939,9 +926,12 @@ class Storage:
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
-                          self.tx_table.c.attempt_count <
-                          self.tx_table.c.max_attempts,
-                          self.tx_table.c.output_done.is_not(sa_true()),
+
+                          #or_(self.tx_table.c.next_attempt_time.is_(None),
+                          #    self.tx_table.c.next_attempt_time < time.time()),
+
+                          self.tx_table.c.final_attempt_reason.is_(None),
+
                           self.tx_table.c.json.is_not(None))
                    .limit(1))
             res = conn.execute(sel)
@@ -972,7 +962,7 @@ class Storage:
         del_tx = delete(self.tx_table).where(
             self.tx_table.c.inflight_session_id == None,
             or_(self.tx_table.c.input_done.is_not(sa_true()),
-                self.tx_table.c.output_done),
+                self.tx_table.c.final_attempt_reason.is_not(None)),
             (time.time() - self.tx_table.c.last_update) > ttl)
         res = conn.execute(del_tx)
         deleted_tx = res.rowcount

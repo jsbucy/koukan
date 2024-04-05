@@ -25,8 +25,7 @@ CREATE TABLE Transactions (
 
   -- bool, basically payload is completely written
   input_done boolean,
-  -- bool, max TransactionAttempts was final
-  output_done boolean,
+  final_attempt_reason TEXT,
 
   -- XXX dead?
   -- append(last=True) has been called, guarantees that TransactionContent
@@ -39,8 +38,7 @@ CREATE TABLE Transactions (
   last_update INTEGER,
   version INTEGER NOT NULL,
 
-  attempt_count INTEGER,
-  max_attempts INTEGER,
+  next_attempt_time INTEGER,  -- unix secs
 
   body_blob_id INTEGER,
   body_rest_id TEXT,

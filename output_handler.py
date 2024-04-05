@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional, Any
+from typing import Any, Callable, Dict, Optional, Tuple
 import logging
 import json
 import secrets
@@ -173,22 +173,49 @@ class OutputHandler:
         logging.info('OutputHandler.cursor_to_endpoint() %s done %s',
                      self.rest_id, resp)
 
-        logging.debug('OutputHandler.cursor_to_endpoint() %s attempt %d max %d',
+        logging.debug('OutputHandler.cursor_to_endpoint() %s attempt %d max %s',
                       self.rest_id, self.cursor.attempt_id,
-                      self.cursor.max_attempts)
+                      self.cursor.tx.max_attempts)
 
         self._maybe_send_notification(resp)
 
+        next_attempt_time = None
+        final_attempt_reason = None
+        if resp.ok():
+            final_attempt_reason = 'upstream response success'
+        elif resp.perm():
+            final_attempt_reason = 'upstream response permfail'
+        else:
+            final_attempt_reason, next_attempt_time = self._next_attempt_time()
         while True:
             try:
-                self.cursor.finalize_attempt(resp.ok() or resp.perm())
+                delta = TransactionMetadata()
+                delta.attempt_count = self.cursor.attempt_id
+                self.cursor.write_envelope(
+                    delta,
+                    final_attempt_reason = final_attempt_reason,
+                    # XXX special policy for test?
+                    # next_attempt_time = next_attempt_time,
+                    finalize_attempt = True)
                 break
             except VersionConflictException:
                 self.cursor.load()
 
+    def _next_attempt_time(self) -> Tuple[Optional[str], Optional[int]]:
+        if self.cursor.tx.max_attempts is not None and (
+                self.cursor.attempt_id >= self.cursor.tx.max_attempts):
+            return 'retry policy max attempts', None
+        now = time.time()
+        dt = now - self.cursor.creation
+        dt = max(dt * 1.5, 10000)
+        next = now + dt
+        if self.cursor.tx.deadline is not None and (
+                next > self.cursor.tx.deadline):
+            return 'retry policy deadline', None
+        return None, next
 
     def _maybe_send_notification(self, resp):
-        last_attempt = (self.cursor.attempt_id == self.cursor.max_attempts)
+        last_attempt = (self.cursor.attempt_id == self.cursor.tx.max_attempts)
 
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s enabled %s last %s',

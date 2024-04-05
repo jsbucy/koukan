@@ -318,9 +318,12 @@ class Exploder(Filter):
                 # OR into the query?
 
                 # TODO restore any saved downstream notification request
+
+                # xxx need to update next attempt time here?
                 recipient.upstream.on_update(
                     TransactionMetadata(
                         max_attempts=self.max_attempts,
+                        # xxx deadline=
                         notifications=self.default_notifications))
 
         message = None

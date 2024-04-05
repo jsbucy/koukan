@@ -140,10 +140,22 @@ _tx_fields = [
             accept=[],
             emit=[WhichJson.REST_READ],
             from_json=Response.from_json),
+    TxField('attempt_count',
+            accept=[WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB]),
     TxField('max_attempts',
             accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE],
-            emit=[WhichJson.REST_READ]),
+                    WhichJson.REST_UPDATE,
+                    WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB]),
+    TxField('deadline',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.REST_UPDATE,
+                    WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB]),
     TxField('body',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
@@ -174,7 +186,9 @@ class TransactionMetadata:
     rcpt_response : List[Response]
     data_response : Optional[Response] = None
 
+    attempt_count : Optional[int] = None
     max_attempts : Optional[int] = None
+    deadline : Optional[int] = None
 
     # in rest, this is the url to the body blob, in-memory, it is the id
     # suffix of the blob url

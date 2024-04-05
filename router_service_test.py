@@ -134,7 +134,8 @@ class RouterServiceTest(unittest.TestCase):
                 static_base_url=self.router_url,
                 http_host='inbound-gw')
             tx = TransactionMetadata(
-                mail_from = Mailbox('probe-from%d' % i))
+                mail_from = Mailbox('probe-from%d' % i),
+                max_attempts = 1)
             t = self.start_tx_update(rest_endpoint, tx)
             logging.info('setUp %s', tx.mail_response)
             self.service._dequeue()
@@ -157,8 +158,9 @@ class RouterServiceTest(unittest.TestCase):
         self.executor.shutdown(timeout=5)
 
     def dump_db(self):
-        for l in self.service.storage.db.iterdump():
-            print(l)
+        with self.service.storage.conn() as conn:
+            for l in conn.connection.iterdump():
+                logging.debug(l)
 
     def assertRcptCodesEqual(self, responses : List[Optional[Response]],
                              expected_codes):
@@ -238,8 +240,8 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.set_mail_response(Response(201))
         upstream_endpoint.add_rcpt_response(Response(456))
 
-
         tx_json = rest_endpoint.get_json(1.2)
+
         logging.debug('RouterServiceTest.test_retry get after first attempt '
                       '%s %s', rest_resp, tx_json)
         mail_resp = Response.from_json(tx_json.get('mail_response', None))

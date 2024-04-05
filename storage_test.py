@@ -78,9 +78,11 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(tx_writer.input_done)
 
         tx_reader.load()
-        self.assertEqual(tx_reader.max_attempts, 100)
+        self.assertEqual(tx_reader.tx.max_attempts, 100)
         tx_reader.add_rcpt_response([Response(456, 'busy')])
-        tx_reader.finalize_attempt(False)
+        tx_reader.write_envelope(TransactionMetadata(),
+                                 #output_done = False,
+                                 finalize_attempt = True)
 
         expected_content = [
             b'abc',
@@ -103,7 +105,9 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(r2.tx.rcpt_response, [])
         self.assertIsNone(r2.tx.data_response)
 
-        r2.finalize_attempt(True)
+        r2.write_envelope(TransactionMetadata(),
+                          final_attempt_reason = 'retry max attempts',
+                          finalize_attempt = True)
 
         self.assertIsNone(self.s.load_one())
 
@@ -176,7 +180,10 @@ class StorageTestBase(unittest.TestCase):
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
 
-        reader.finalize_attempt(False)
+        reader.write_envelope(
+            TransactionMetadata(),
+            final_attempt_reason = 'retry policy max attempts',
+            finalize_attempt = True)
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))
@@ -217,7 +224,9 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(reader.load())
         self.assertIsNotNone(blob_reader.load(db_id=blob_writer.id))
 
-        reader.finalize_attempt(output_done=True)
+        reader.write_envelope(TransactionMetadata(),
+                              final_attempt_reason = 'upstream success',
+                              finalize_attempt = True)
 
         # expired, unleased
         self.assertEqual(self.s.gc(ttl=0), (1,1))
