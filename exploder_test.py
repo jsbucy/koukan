@@ -429,7 +429,7 @@ class ExploderTest(unittest.TestCase):
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', lambda: self.factory(),
                             rcpt_timeout=1, msa=False,
-                            max_attempts = 3)
+                            default_notifications={'host': 'smtp-out'})
 
         # xxx need to add rcpts in multiple updates to catch index bug
         tx = TransactionMetadata(
@@ -459,10 +459,10 @@ class ExploderTest(unittest.TestCase):
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)
         self.assertEqual(tx.data_response.code, 250)
-        # validate that we set max_retries on the one that tempfailed
+        # validate that we set notifications on the one that tempfailed
         # and didn't on the one that succeeded
-        self.assertIsNone(up0.tx.max_attempts)
-        self.assertEqual(up1.tx.max_attempts, 3)
+        self.assertIsNone(up0.tx.notifications)
+        self.assertEqual(up1.tx.notifications['host'], 'smtp-out')
 
 
 if __name__ == '__main__':

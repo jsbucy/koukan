@@ -64,14 +64,12 @@ class Exploder(Filter):
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  msa : Optional[bool] = None,
-                 max_attempts : Optional[int] = None,
                  default_notifications : Optional[dict] = None):
         self.output_chain = output_chain
         self.factory = factory
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.msa = msa
-        self.max_attempts = max_attempts
         self.recipients = []
         self.default_notifications = default_notifications
 
@@ -296,19 +294,17 @@ class Exploder(Filter):
 
         # temp or needs notification
         for recipient in [r for r in self.recipients if r.status.temp()]:
-            if self.max_attempts:
-
+            if self.default_notifications is not None:
                 # The upstream tx could have permfailed right after we
                 # timed out the first/sync attempt w/notifications
                 # disabled. The final upstream response will set
-                # output_done in the tx so it isn't recoverable.  But
+                # final_attempt_reason in the tx so it isn't recoverable.  But
                 # we still need to send a notification.
 
                 # For the time being, Storage._write() clears
-                # output_done if setting max_attempts and
-                # notifications. This opens a small window within
-                # which we will dupe/resend to the upstream after it
-                # previously permfailed.
+                # final_attempt_reason if setting notifications. This opens a
+                # small window within which we will dupe/resend to the
+                # upstream after it previously permfailed.
 
                 # TODO It may actually not be that hard for
                 # OutputHandler to skip directly to the notification
@@ -318,12 +314,8 @@ class Exploder(Filter):
                 # OR into the query?
 
                 # TODO restore any saved downstream notification request
-
-                # xxx need to update next attempt time here?
                 recipient.upstream.on_update(
                     TransactionMetadata(
-                        max_attempts=self.max_attempts,
-                        # xxx deadline=
                         notifications=self.default_notifications))
 
         message = None

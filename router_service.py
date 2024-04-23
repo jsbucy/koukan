@@ -177,7 +177,8 @@ class Service:
               output_yaml.get('notifications_enabled', True),
             notification_factory=lambda: self.config.notification_endpoint(),
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
-                'mailer_daemon_mailbox', None))
+                'mailer_daemon_mailbox', None),
+            retry_params = output_yaml.get('retry_params', {}))
         handler.cursor_to_endpoint()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 

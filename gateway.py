@@ -58,7 +58,7 @@ class SmtpGateway(EndpointFactory):
 
     # EndpointFactory
     def create(self, host):
-        if host == 'outbound':
+        if host == 'outbound':  # xxx config??
             endpoint = self.smtp_factory.new(
                 ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
             self.inflight[endpoint.rest_id] = endpoint

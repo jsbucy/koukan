@@ -34,11 +34,17 @@ root_yaml = {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1,
                 'notifications_enabled': False,
+                'retry_params': {
+                    'max_attempts': 3,
+                    'min_attempt_time': 1,
+                    'max_attempt_time': 1,
+                    'backoff_factor': 0,
+                    'deadline': 10,
+                }
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
-                       'max_attempts': 3,
                        'default_notifications': {
                            'host': 'submission'
                        }}]
@@ -48,7 +54,14 @@ root_yaml = {
             'msa': True,
             'output_handler': {
                 'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1
+                'downstream_data_timeout': 1,
+                'retry_params': {
+                    'max_attempts': 3,
+                    'min_attempt_time': 1,
+                    'max_attempt_time': 1,
+                    'backoff_factor': 0,
+                    'deadline': 10,
+                }
             },
             'chain': [{'filter': 'sync'}]
         },
@@ -63,7 +76,6 @@ root_yaml = {
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
                        'msa': False,
-                       'max_attempts': 3,
                        'default_notifications': {
                            'host': 'inbound-gw'
                        }}]
@@ -103,7 +115,7 @@ class RouterServiceTest(unittest.TestCase):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        self.executor = Executor(inflight_limit=10, watchdog_timeout=30)
+        self.executor = Executor(inflight_limit=10, watchdog_timeout=300)
 
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(thread)d] %(message)s')
@@ -251,6 +263,7 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
+        time.sleep(2)  # max_attempt_time
         self.assertTrue(self.service._dequeue())
 
         # set upstream responses so output (retry) succeeds

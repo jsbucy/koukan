@@ -148,7 +148,9 @@ class TransactionCursor:
                        next_attempt_time : Optional[int] = None):
         with self.parent.conn() as conn:
             self._write(conn, tx_delta, reuse_blob_rest_id,
-                        final_attempt_reason, finalize_attempt)
+                        final_attempt_reason,
+                        finalize_attempt,
+                        next_attempt_time = next_attempt_time)
             conn.commit()
             self.parent.tx_versions.update(self.id, self.version)
 
@@ -223,7 +225,7 @@ class TransactionCursor:
 
         # TODO this is a kludge for the exploder to ensure we send a
         # bounce in certain edge cases cf Exploder._append_data()
-        if tx_delta.max_attempts and tx_delta.notifications:
+        if tx_delta.notifications is not None:
             assert final_attempt_reason is None
             upd = upd.values(final_attempt_reason = None)
 
@@ -911,24 +913,22 @@ class Storage:
     def get_transaction_cursor(self) -> TransactionCursor:
         return TransactionCursor(self)
 
-    def load_one(self, min_age=0):
+    def load_one(self):
         with self.conn() as conn:
-            max_recent = int(time.time()) - min_age
-            # TODO this is currently a scan, probably want to bake the
-            # next attempt time logic into the previous request completion so
-            # you can index on it
+            # TODO this is currently a scan, index on/ORDER BY
+            # next_attempt_time?
 
             # TODO maybe input_done or last_update_session == our session
-
             # iow don't recover incomplete after a crash until the
             # client writes to it again so we don't start it upstream
             # if the client went away
+            now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
 
-                          #or_(self.tx_table.c.next_attempt_time.is_(None),
-                          #    self.tx_table.c.next_attempt_time < time.time()),
+                          or_(self.tx_table.c.next_attempt_time.is_(None),
+                              self.tx_table.c.next_attempt_time < now),
 
                           self.tx_table.c.final_attempt_reason.is_(None),
 

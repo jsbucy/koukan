@@ -25,7 +25,6 @@ endpoint:
   - filter: exploder
     output_chain: msa-output
     msa: true
-    max_attempts: 3
     rcpt_timeout: 4
     data_timeout: 4
     default_notifications:
@@ -33,6 +32,13 @@ endpoint:
 
 - name: msa-output
   msa: true
+  output_handler:
+    retry_params:
+      max_attempts: 3
+      min_attempt_time: 2
+      max_attempt_time: 5
+      backoff_factor: 1.5
+      deadline: 30
   chain:
   - filter: message_builder
   - filter: router
@@ -62,7 +68,6 @@ endpoint:
   chain:
   - filter: exploder
     output_chain: mx-out
-    max_attempts: 3
     rcpt_timeout: 4
     data_timeout: 4
     default_notifications:

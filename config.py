@@ -53,7 +53,6 @@ class Config:
         msa = msa=yaml.get('msa', False)
         rcpt_timeout = 30
         data_timeout = 300
-        max_attempts = 100
         if msa:
             rcpt_timeout = 5
             data_timeout = 30
@@ -64,7 +63,6 @@ class Config:
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
-            max_attempts=yaml.get('max_attempts', max_attempts),
             default_notifications=yaml.get('default_notifications', None))
 
     def rest_id_factory(self):

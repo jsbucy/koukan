@@ -214,6 +214,56 @@ class OutputHandlerTest(unittest.TestCase):
 
         self.assertEqual(endpoint.body_blob.read(0), b'world!')
 
+    def test_next_attempt_time(self):
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', TransactionMetadata(
+            host='outbound',
+            notifications = {'host': 'smtp-out'}))
+
+        tx_cursor = self.storage.load_one()
+        retry_params = {}
+        handler = OutputHandler(
+            tx_cursor, endpoint=None,
+            notification_factory=None,
+            retry_params=retry_params)
+
+
+        retry_params['min_attempt_time'] = 0
+        retry_params['backoff_factor'] = 2
+        now = tx_cursor.creation + 1
+        final_attempt_reason, next_attempt_time = handler._next_attempt_time(
+            now)
+        self.assertIsNone(final_attempt_reason)
+        self.assertEqual(next_attempt_time - now, 2)
+
+        retry_params['min_attempt_time'] = 7
+        now = tx_cursor.creation
+        final_attempt_reason, next_attempt_time = handler._next_attempt_time(
+            now)
+        self.assertIsNone(final_attempt_reason)
+        self.assertEqual(next_attempt_time - now, 7)
+
+        retry_params['max_attempt_time'] = 17
+        retry_params['backoff_factor'] = 100
+        now = tx_cursor.creation + 1
+        final_attempt_reason, next_attempt_time = handler._next_attempt_time(
+            now)
+        self.assertIsNone(final_attempt_reason)
+        self.assertEqual(next_attempt_time - now, 17)
+
+        retry_params['max_attempts'] = 1
+        final_attempt_reason, next_attempt_time = handler._next_attempt_time(
+            now)
+        self.assertEqual(final_attempt_reason, 'retry policy max attempts')
+        self.assertIsNone(next_attempt_time)
+
+        retry_params['deadline'] = 0
+        retry_params['max_attempts'] = 2
+        final_attempt_reason, next_attempt_time = handler._next_attempt_time(
+            now)
+        self.assertEqual(final_attempt_reason, 'retry policy deadline')
+        self.assertIsNone(next_attempt_time)
+
 
     def test_notifications(self):
         tx_cursor = self.storage.get_transaction_cursor()

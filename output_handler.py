@@ -27,7 +27,8 @@ class OutputHandler:
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 notifications_enabled = True):
+                 notifications_enabled = True,
+                 retry_params : Optional[dict] = {}):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
@@ -36,6 +37,7 @@ class OutputHandler:
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.notifications_enabled = notifications_enabled
+        self.retry_params = retry_params
 
     def _output(self) -> Optional[Response]:
         logging.debug('OutputHandler._output() %s', self.rest_id)
@@ -177,8 +179,6 @@ class OutputHandler:
                       self.rest_id, self.cursor.attempt_id,
                       self.cursor.tx.max_attempts)
 
-        self._maybe_send_notification(resp)
-
         next_attempt_time = None
         final_attempt_reason = None
         if resp.ok():
@@ -186,7 +186,11 @@ class OutputHandler:
         elif resp.perm():
             final_attempt_reason = 'upstream response permfail'
         else:
-            final_attempt_reason, next_attempt_time = self._next_attempt_time()
+            final_attempt_reason, next_attempt_time = self._next_attempt_time(
+                time.time())
+
+        self._maybe_send_notification(resp, final_attempt_reason is not None)
+
         while True:
             try:
                 delta = TransactionMetadata()
@@ -194,28 +198,42 @@ class OutputHandler:
                 self.cursor.write_envelope(
                     delta,
                     final_attempt_reason = final_attempt_reason,
-                    # XXX special policy for test?
-                    # next_attempt_time = next_attempt_time,
+                    next_attempt_time = next_attempt_time,
                     finalize_attempt = True)
                 break
             except VersionConflictException:
                 self.cursor.load()
 
-    def _next_attempt_time(self) -> Tuple[Optional[str], Optional[int]]:
-        if self.cursor.tx.max_attempts is not None and (
-                self.cursor.attempt_id >= self.cursor.tx.max_attempts):
+    def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
+        max_attempts = self.cursor.tx.max_attempts
+        if max_attempts is None:
+            max_attempts = self.retry_params.get('max_attempts', None)
+        if max_attempts is not None and (
+                self.cursor.attempt_id >= max_attempts):
             return 'retry policy max attempts', None
-        now = time.time()
         dt = now - self.cursor.creation
-        dt = max(dt * 1.5, 10000)
-        next = now + dt
-        if self.cursor.tx.deadline is not None and (
-                next > self.cursor.tx.deadline):
+        logging.debug('OutputHandler._next_attempt_time %s %d',
+                      self.rest_id, int(dt))
+        dt = dt * self.retry_params.get('backoff_factor', 1.5)
+        dt = min(dt, self.retry_params.get('max_attempt_time', 3600))
+        dt = max(dt, self.retry_params.get('min_attempt_time', 60))
+        next = int(now + dt)
+        # TODO jitter?
+        logging.debug('OutputHandler._next_attempt_time %s %d %d',
+                      self.rest_id, int(dt), next)
+        deadline = self.cursor.tx.deadline
+        if deadline is None:
+            deadline = self.retry_params.get('deadline', None)
+        if deadline is not None and (dt > deadline):
             return 'retry policy deadline', None
         return None, next
 
-    def _maybe_send_notification(self, resp):
-        last_attempt = (self.cursor.attempt_id == self.cursor.tx.max_attempts)
+    def _maybe_send_notification(self, resp, last_attempt : bool):
+        if not last_attempt:
+            max_attempts = self.cursor.tx.max_attempts
+            if max_attempts is None:
+                max_attempts = self.retry_params.get('max_attempts', 3)
+            last_attempt = (self.cursor.attempt_id == max_attempts)
 
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s enabled %s last %s',
