@@ -150,6 +150,7 @@ _tx_fields = [
                     WhichJson.DB],
             emit=[WhichJson.REST_READ,
                   WhichJson.DB]),
+    # delta from tx creation
     TxField('deadline',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE,

@@ -207,7 +207,7 @@ class OutputHandler:
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
         max_attempts = self.cursor.tx.max_attempts
         if max_attempts is None:
-            max_attempts = self.retry_params.get('max_attempts', None)
+            max_attempts = self.retry_params.get('max_attempts', 30)
         if max_attempts is not None and (
                 self.cursor.attempt_id >= max_attempts):
             return 'retry policy max attempts', None
@@ -223,18 +223,12 @@ class OutputHandler:
                       self.rest_id, int(dt), next)
         deadline = self.cursor.tx.deadline
         if deadline is None:
-            deadline = self.retry_params.get('deadline', None)
+            deadline = self.retry_params.get('deadline', 86400)
         if deadline is not None and (dt > deadline):
             return 'retry policy deadline', None
         return None, next
 
     def _maybe_send_notification(self, resp, last_attempt : bool):
-        if not last_attempt:
-            max_attempts = self.cursor.tx.max_attempts
-            if max_attempts is None:
-                max_attempts = self.retry_params.get('max_attempts', 3)
-            last_attempt = (self.cursor.attempt_id == max_attempts)
-
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s enabled %s last %s',
                       self.rest_id, self.notifications_enabled, last_attempt)
