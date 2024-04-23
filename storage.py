@@ -945,9 +945,9 @@ class Storage:
 
             self.tx_versions.update(tx.id, tx.version)
 
-            # TODO: if the last n consecutive actions are all
-            # load/recover, this transaction may be crashing the system ->
-            # quarantine
+            # TODO: if the last n consecutive attempts weren't
+            # finalized, this transaction may be crashing the system
+            # -> quarantine
 
             conn.commit()
             return tx

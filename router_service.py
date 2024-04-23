@@ -87,6 +87,7 @@ class Service:
                 executor_yaml.get('watchdog_timeout', 30))
             self.executor = self.owned_executor
 
+        # TODO move most/all of this to storage i.e. just pass the yaml
         storage_yaml = self.config.root_yaml['storage']
         engine = storage_yaml.get('engine', None)
         if engine == 'sqlite_memory':
@@ -114,6 +115,7 @@ class Service:
 
         self.blobs = BlobStorage()
 
+        # TODO storage should manage this internally?
         if global_yaml.get('dequeue', True):
             self.dequeue_thread = Thread(target = lambda: self.dequeue(),
                                          daemon=True)
