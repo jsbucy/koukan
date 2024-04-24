@@ -15,6 +15,7 @@ from filter import Filter, HostPort
 from storage_writer_filter import StorageWriterFilter
 from exploder import Exploder
 from storage import Storage
+from remote_host_filter import RemoteHostFilter
 
 class Config:
     storage : Optional[Storage] = None
@@ -120,6 +121,9 @@ class Config:
 
     def message_builder(self, yaml, next):
         return MessageBuilderFilter(self.storage, next)
+
+    def remote_host(self, yaml, next):
+        return RemoteHostFilter(next)
 
     def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]

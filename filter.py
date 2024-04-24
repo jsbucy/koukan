@@ -213,6 +213,9 @@ class TransactionMetadata:
 
     smtp_meta: Optional[dict] = None
 
+    remote_hostname : Optional[str] = None
+    fcrdns : Optional[bool] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,

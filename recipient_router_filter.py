@@ -2,7 +2,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
 import logging
 from datetime import datetime
-import dns.resolver
 
 import email.utils
 
@@ -64,18 +63,10 @@ class RecipientRouterFilter(Filter):
 
     def _format_received(self, tx : TransactionMetadata) -> str:
         received_host = ''
-        logging.debug('_route %s', tx.remote_host)
         if tx.remote_host and tx.remote_host.host:
             received_host = '[' + tx.remote_host.host + ']'
-            try:
-                ans = dns.resolver.resolve_address(tx.remote_host.host)
-                if ans and ans[0].target:
-                    received_host = str(ans[0].target) + ' ' + received_host
-            except dns.resolver.NoAnswer:
-                pass
-            except dns.resolver.NXDOMAIN:
-                pass
-
+            if tx.remote_hostname and tx.fcrdns:
+                received_host = tx.remote_hostname + ' ' + received_host
 
         datetime = (self.inject_time if self.inject_time
                     else email.utils.localtime())

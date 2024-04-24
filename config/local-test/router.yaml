@@ -40,6 +40,7 @@ endpoint:
       backoff_factor: 1.5
       deadline: 30
   chain:
+  - filter: remote_host
   - filter: message_builder
   - filter: router
     received_hostname: gargantua1
@@ -77,6 +78,7 @@ endpoint:
 - name: mx-out
   msa: false
   chain:
+  - filter: remote_host
   - filter: router
     policy:
       name: local_domain

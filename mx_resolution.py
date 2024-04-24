@@ -13,13 +13,18 @@ def resolve(hostport : HostPort, lifetime=30):
         answers = dns.resolver.resolve(hostport.host, 'MX', lifetime=lifetime)
         answers = sorted(answers, key=lambda x: x.preference)
         mxen = [ mx.exchange for mx in answers]
+    # XXX other exceptions: NXDOMAIN, NoNameservers
     except dns.resolver.NoAnswer:
         mxen = [host]
+
+    # TODO null mx rfc7505
 
     seen = []
     # It seems like the ordering gets randomized somewhere upstream so
     # we don't need to?
     for mx in mxen:
+        # TODO newer library has dns.resolver.resolve_name() does both
+        # A and AAAA
         for rrtype in ['a', 'aaaa']:
             try:
                 a = dns.resolver.resolve(mx, rrtype, lifetime=lifetime)

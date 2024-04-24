@@ -191,6 +191,13 @@ py_test(name='exploder_test',
               ':response',
               ':storage'])
 
+pytype_library(name='remote_host_filter',
+               srcs=['remote_host_filter.py'],
+               deps=[':filter'])
+py_test(name='remote_host_filter_test',
+        srcs=['remote_host_filter_test.py'],
+        deps=[':remote_host_filter'])
+
 # clients should get at this via ABC since this depends on ~everything?
 pytype_library(name='config',
                srcs=['config.py'],
@@ -204,7 +211,8 @@ pytype_library(name='config',
                      ':dkim_endpoint',
                      ':mx_resolution',
                      ':storage_writer_filter',
-                     ':exploder'])
+                     ':exploder',
+                     ':remote_host_filter'])
 
 pytype_library(name='executor',
                srcs=['executor.py'])

@@ -29,6 +29,8 @@ class RecipientRouterFilterTest(unittest.TestCase):
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
+        tx.remote_hostname = 'gargantua1'
+        tx.fcrdns = True
         tx.body_blob = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
@@ -46,7 +48,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 203)
         self.assertEqual(
             next.body_blob.read(0),
-            b'Received: from gargantua1 ([1.2.3.4])\r\n'
+            b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
             b'\tby gargantua1\r\n'
             b'\twith ESMTPS\r\n'
             b'\tfor bob@domain;\r\n'
