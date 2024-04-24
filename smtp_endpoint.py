@@ -104,7 +104,7 @@ class SmtpEndpoint:
                 self._shutdown()
                 return ehlo_resp
 
-        # TODO buffer partial here
+        # XXX esmtp
         self.mail_resp = Response.from_smtp(
             self.smtp.mail(tx.mail_from.mailbox))
         if self.mail_resp.err():
@@ -115,6 +115,7 @@ class SmtpEndpoint:
 
         self.good_rcpt = False
         for rcpt in tx.rcpt_to:
+            # XXX esmtp
             resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox))
             if resp.ok():
                 self.good_rcpt = True

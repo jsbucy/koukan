@@ -42,6 +42,7 @@ endpoint:
   chain:
   - filter: message_builder
   - filter: router
+    received_hostname: gargantua1
     policy:
       name: dest_domain
 # - filter: dkim

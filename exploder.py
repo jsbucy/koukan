@@ -85,7 +85,8 @@ class Exploder(Filter):
             # otherwise we'll take care of it in _on_rcpt()
             delta.mail_response = Response(250)
 
-    def _on_rcpt(self, delta, rcpt : Mailbox, recipient : Recipient):
+    def _on_rcpt(self, delta : TransactionMetadata,
+                 rcpt : Mailbox, recipient : Recipient):
         logging.info('Exploder._on_rcpt %s', rcpt)
 
         # just send the envelope, we'll deal with any data below
@@ -100,7 +101,8 @@ class Exploder(Filter):
             mail_from = self.mail_from,
             rcpt_to = [rcpt],
             remote_host = delta.remote_host,
-            notifications = None)
+            notifications = None,
+            smtp_meta = delta.smtp_meta)
         recipient.upstream = self.factory()
         recipient.upstream.on_update(upstream_tx, self.rcpt_timeout)
 

@@ -38,7 +38,7 @@ class Esmtp:
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
     esmtp : Optional[Esmtp] = None
-    def __init__(self, mailbox, esmtp=None):
+    def __init__(self, mailbox : str, esmtp : Optional[Esmtp] = None):
         self.mailbox = mailbox
         self.esmtp = esmtp
 
@@ -65,6 +65,8 @@ class Mailbox:
 
     @staticmethod
     def from_json(json):
+        # XXX this should fail pytype since esmtp is arbitrary json
+        # (in practice List[str]), Esmtp (above) isn't actually used?
         return Mailbox(json['m'], json['e'] if 'e' in json else None)
 
 def list_from_js(js, builder):
@@ -167,6 +169,10 @@ _tx_fields = [
             emit=[WhichJson.REST_READ]),
     TxField('notifications',
             accept=[WhichJson.DB],
+            emit=[WhichJson.DB]),
+    TxField('smtp_meta',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.DB],
             emit=[WhichJson.DB])
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
@@ -205,6 +211,8 @@ class TransactionMetadata:
     # arbitrary json for now
     notifications : Optional[dict] = None
 
+    smtp_meta: Optional[dict] = None
+
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
@@ -213,7 +221,8 @@ class TransactionMetadata:
                  max_attempts : Optional[int] = None,
                  body : Optional[str] = None,
                  body_blob : Optional[Blob] = None,
-                 notifications : Optional[dict] = None):
+                 notifications : Optional[dict] = None,
+                 smtp_meta : Optional[dict] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -225,6 +234,7 @@ class TransactionMetadata:
         self.body = body
         self.body_blob = body_blob
         self.notifications = notifications
+        self.smtp_meta = smtp_meta
 
 #    def __bool__(self):
 #        for f in TransactionMetadata.all_fields:

@@ -41,8 +41,8 @@ class Executor:
             if runtime > self.watchdog_timeout:
                 logging.critical(
                     'Executor thread watchdog timeout '
-                    'tid %d 0x%x runtime %d',
-                    thread.native_id, thread.ident, runtime)
+                    'tid %d %d 0x%x runtime %d',
+                    thread.native_id, thread.ident, thread.ident, runtime)
                 faulthandler.dump_traceback()
                 assert False
 

@@ -19,6 +19,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
         policy = DestDomainPolicy()
         r = RecipientRouterFilter(
             policy, next,
+            received_hostname = 'gargantua1',
             inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
 
         next.set_mail_response(Response(201))
@@ -33,6 +34,11 @@ class RecipientRouterFilterTest(unittest.TestCase):
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
+        tx.smtp_meta = {
+            'ehlo_host': 'gargantua1',
+            'esmtp': True,
+            'tls': True
+        }
 
         r.on_update(tx)
         self.assertEqual(tx.mail_response.code, 201)
@@ -40,7 +46,10 @@ class RecipientRouterFilterTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 203)
         self.assertEqual(
             next.body_blob.read(0),
-            b'Received: from fixme.ehlo ([1.2.3.4]);\r\n'
+            b'Received: from gargantua1 ([1.2.3.4])\r\n'
+            b'\tby gargantua1\r\n'
+            b'\twith ESMTPS\r\n'
+            b'\tfor bob@domain;\r\n'
             b'\tFri, 13 Feb 2009 23:31:30 +0000\r\n'
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'

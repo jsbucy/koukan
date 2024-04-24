@@ -44,7 +44,13 @@ class SmtpHandler:
         envelope.endpoint = self.endpoint_factory()
         envelope.tx = TransactionMetadata()
 
-        # TODO propagate session.host_name into tx ehlo host
+        envelope.tx.smtp_meta = {
+            'ehlo_host': session.host_name,
+            'esmtp': session.extended_smtp,
+            'tls': session.ssl is not None,
+            'auth': session.authenticated
+        }
+
         logging.debug('handle_MAIL %s %s', session.host_name, session.peer)
         if session.peer:
             # TODO this is always an ascii IP? try to reverse resolve
@@ -129,6 +135,7 @@ class ControllerTls(Controller):
 
     def factory(self):
         return SMTP(self.handler, #require_starttls=True,
+                    enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth)
 
