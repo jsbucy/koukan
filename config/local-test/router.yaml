@@ -41,9 +41,12 @@ endpoint:
       deadline: 30
   chain:
   - filter: remote_host
+  # message_builder must be chained before anything that wants to
+  # access/modify the message: received_header, dkim
   - filter: message_builder
+  - filter: received_header
+    received_hostname: gargantua1    
   - filter: router
-    received_hostname: gargantua1
     policy:
       name: dest_domain
 # - filter: dkim
@@ -79,6 +82,8 @@ endpoint:
   msa: false
   chain:
   - filter: remote_host
+  - filter: received_header
+    received_hostname: gargantua1    
   - filter: router
     policy:
       name: local_domain

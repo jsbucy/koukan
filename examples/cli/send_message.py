@@ -1,6 +1,9 @@
 from typing import Optional
 import logging
 from urllib.parse import urljoin
+import time
+import secrets
+import socket
 
 import time
 import requests
@@ -59,6 +62,12 @@ def send_body(json):
     return True
 
 message_builder = {
+    "headers": [
+        ["subject", "hello"],
+        ["date", {"unix_secs": time.time() }],
+        ["message-id", [secrets.token_hex(16) + "@" + socket.gethostname()]],
+    ],
+
     "text_body": [
         {
             "content_type": "text/html",
@@ -68,11 +77,14 @@ message_builder = {
             "content_type": "text/plain",
             "file_content": "/etc/lsb-release"
         }
-
     ]
 }
 
 def main(mail_from, rcpt_to):
+    message_builder["headers"] += [
+        ["from", [{"display_name": "alice a", "address": mail_from}]],
+        ["to", [{"display_name": "bob b", "address": rcpt_to}]]]
+
     resp = session.post(
         base_url + '/transactions',
         headers={'host': 'msa-output'},

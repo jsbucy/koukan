@@ -9,14 +9,15 @@ py_test(name='blob_test',
 
 pytype_library(name='response',
                srcs=['response.py'])
+
 pytype_library(name='filter',
                srcs=['filter.py'],
                deps=[':blob',
                      ':response'])
+
 py_test(name='filter_test',
         srcs=['filter_test.py'],
         deps=[':filter'])
-
 
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],
@@ -79,6 +80,7 @@ py_test(name='transaction_test',
 pytype_library(name='dsn',
                srcs=['dsn.py'],
                deps=[':response'])
+
 py_test(name='dsn_test',
         srcs=['dsn_test.py'],
         deps=[':dsn',
@@ -100,7 +102,6 @@ py_test(name='output_handler_test',
               ':executor',
               ':fake_endpoints',
               ':transaction'])
-
 
 pytype_library(name='message_builder',
                srcs=['message_builder.py'],
@@ -137,11 +138,17 @@ pytype_library(name='recipient_router_filter',
                      ':response',
                      ':blob'])
 
+py_test(name='recipient_router_filter_test',
+        srcs=['recipient_router_filter_test.py'],
+        deps=[':recipient_router_filter',
+              ':fake_endpoints'])
+
 pytype_library(name='local_domain_policy',
                srcs=['local_domain_policy.py'],
                deps=[':recipient_router_filter',
                      ':address',
                      ':response'])
+
 pytype_library(name='dest_domain_policy',
                srcs=['dest_domain_policy.py'],
                deps=[':recipient_router_filter',
@@ -149,23 +156,18 @@ pytype_library(name='dest_domain_policy',
                      ':response',
                      ':filter'])
 
-py_test(name='recipient_router_filter_test',
-        srcs=['recipient_router_filter_test.py'],
-        deps=[':recipient_router_filter',
-              ':dest_domain_policy',
-              ':fake_endpoints'])
-
 pytype_library(name='dkim_endpoint',
                srcs=['dkim_endpoint.py'])
+
 py_test(name='dkim_endpoint_test',
         srcs=['dkim_endpoint_test.py'],
         deps=[':dkim_endpoint',
               ':dest_domain_policy',
               ':fake_endpoints'])
 
-
 pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'])
+
 pytype_library(name='storage_writer_filter',
                srcs=['storage_writer_filter.py'])
 
@@ -181,7 +183,6 @@ py_test(name='storage_writer_filter_test',
 pytype_library(name='exploder',
                srcs=['exploder.py'])
 
-
 py_test(name='exploder_test',
         srcs=['exploder_test.py'],
         deps=[':exploder',
@@ -194,11 +195,21 @@ py_test(name='exploder_test',
 pytype_library(name='remote_host_filter',
                srcs=['remote_host_filter.py'],
                deps=[':filter'])
+
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter'])
 
-# clients should get at this via ABC since this depends on ~everything?
+pytype_library(name='received_header_filter',
+               srcs=['received_header_filter.py'],
+               deps=[':filter'])
+
+py_test(name='received_header_filter_test',
+        srcs=['received_header_filter_test.py'],
+        deps=[':received_header_filter',
+              ':fake_endpoints'])
+
+# clients should get at this via ABC since it depends on ~everything?
 pytype_library(name='config',
                srcs=['config.py'],
                deps=[':storage',
@@ -212,17 +223,18 @@ pytype_library(name='config',
                      ':mx_resolution',
                      ':storage_writer_filter',
                      ':exploder',
-                     ':remote_host_filter'])
+                     ':remote_host_filter',
+                     ':received_header_filter'])
 
 pytype_library(name='executor',
                srcs=['executor.py'])
-
 
 pytype_library(name='blobs',
                srcs=['blobs.py'])
 
 pytype_library(name='gunicorn_main',
                srcs=['gunicorn_main.py'])
+
 pytype_library(name='hypercorn_main',
                srcs=['hypercorn_main.py'])
 

@@ -28,7 +28,8 @@ class HostPort:
         return '%s:%d' % (self.host, self.port)
     def __repr__(self):
         return '%s:%d' % (self.host, self.port)
-
+    def __eq__(self, h : 'HostPort'):
+        return self.host == h.host and self.port == h.port
 
 class Esmtp:
     # from aiosmtpd
@@ -367,6 +368,15 @@ class TransactionMetadata:
 
 class Filter(ABC):
     # XXX needs to return some errors e.g. http 412 directly instead of via tx
+
+    # XXX we need to say a lot more about the protocol here
+    # - resp for all req
+    # - tx is a delta
+    #   -- but tx.body_blob isn't a delta: grows across successive calls
+    #   -- same object?
+    # - is the tx object the same across multiple calls?
+    # - mutation?
+
     @abstractmethod
     def on_update(self, transaction_metadata : TransactionMetadata,
                   timeout : Optional[float] = None):

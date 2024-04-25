@@ -1,62 +1,82 @@
+from typing import Optional, Tuple
 import unittest
 import logging
-from datetime import datetime, timezone
 
 from blob import InlineBlob
 from recipient_router_filter import RecipientRouterFilter, RoutingPolicy
-from dest_domain_policy import DestDomainPolicy
 from filter import HostPort, Mailbox, TransactionMetadata
+from response import Response
 from fake_endpoints import SyncEndpoint
 from response import Response
+
+class SuccessPolicy(RoutingPolicy):
+    def endpoint_for_rcpt(self, rcpt) -> Tuple[
+            Optional[str], Optional[HostPort], Optional[Response]]:
+        return 'http://gateway', HostPort('example.com', 1234), None
+
+class FailurePolicy(RoutingPolicy):
+    def endpoint_for_rcpt(self, rcpt) -> Tuple[
+            Optional[str], Optional[HostPort], Optional[Response]]:
+        return None, None, Response(500, 'not found')
+
 
 class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-    def test_basic(self):
+    def test_success(self):
         next = SyncEndpoint()
-        policy = DestDomainPolicy()
-        r = RecipientRouterFilter(
-            policy, next,
-            received_hostname = 'gargantua1',
-            inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
+        r = RecipientRouterFilter(SuccessPolicy(), next)
 
         next.set_mail_response(Response(201))
         next.add_rcpt_response(Response(202))
         next.add_data_response(Response(203))
         tx = TransactionMetadata(
-            remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
-        tx.remote_hostname = 'gargantua1'
-        tx.fcrdns = True
+
         tx.body_blob = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
-        tx.smtp_meta = {
-            'ehlo_host': 'gargantua1',
-            'esmtp': True,
-            'tls': True
-        }
 
         r.on_update(tx)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
-        self.assertEqual(
-            next.body_blob.read(0),
-            b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
-            b'\tby gargantua1\r\n'
-            b'\twith ESMTPS\r\n'
-            b'\tfor bob@domain;\r\n'
-            b'\tFri, 13 Feb 2009 23:31:30 +0000\r\n'
+
+        self.assertEqual(next.tx.rest_endpoint, 'http://gateway')
+        self.assertEqual(next.tx.remote_host, HostPort('example.com', 1234))
+
+    # TODO: exercise "buffer mail"
+
+    def test_failure(self):
+        next = SyncEndpoint()
+        r = RecipientRouterFilter(FailurePolicy(), next)
+
+        next.set_mail_response(Response(201))
+        next.add_rcpt_response(Response(202))
+        next.add_data_response(Response(203))
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob@domain')])
+
+        tx.body_blob = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
+
+        r.on_update(tx)
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertEqual([r.code for r in tx.rcpt_response], [500])
+        self.assertIsNone(tx.data_response)
+
+        # upstream never invoked
+        self.assertIsNone(next.tx)
+
 
 if __name__ == '__main__':
     unittest.main()

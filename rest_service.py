@@ -61,6 +61,9 @@ def create_app(handler_factory : HandlerFactory):
                      request, request.headers)
         if not request.is_json:
             return FlaskResponse(status=400, response=['not json'])
+        # TODO if request doesn't have remote_addr or is not from a
+        # well-known/trusted peer (i.e. smtp gateway), set remote_addr to wsgi
+        # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
         handler = handler_factory.create_tx(request.headers['host'])
         if handler is None:
             return FlaskResponse(

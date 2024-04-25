@@ -105,10 +105,11 @@ class MessageBuilder:
         builder[field] = ' '.join(msgids)
 
     def _add_date_header(self, field, field_json, builder):
-        tz = None
         if tz_json := field_json.get('tz_offset', None):
-            tz = datetime.timezone(
-                datetime.timedelta(seconds=tz_json))
+            tz = datetime.timezone(datetime.timedelta(seconds=tz_json))
+        else:
+            tz = datetime.timezone.utc  # tz=None -> system timezone?
+
         builder[field] = datetime.datetime.fromtimestamp(
             field_json['unix_secs'], tz=tz)
 
