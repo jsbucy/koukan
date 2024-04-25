@@ -45,6 +45,8 @@ class RemoteHostFilter(Filter):
             pass  # name doesn't exist at all
 
         # dns.resolver.NoNameservers
+        #   docs: All nameservers failed to answer the query.
+        #   # this includes upstream timeout?
         #   return Response(4xx)
         # fallthrough dns.exception.DNSException ?
         #   unexpected/internal error

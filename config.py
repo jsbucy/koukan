@@ -30,7 +30,8 @@ class Config:
             'router': self.router,
             'dkim': self.dkim,
             'exploder': self.exploder,
-            'message_builder': self.message_builder
+            'message_builder': self.message_builder,
+            'remote_host': self.remote_host,
        }
 
     def set_storage(self, storage : Storage):
