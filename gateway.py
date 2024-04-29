@@ -145,7 +145,7 @@ class SmtpGateway(EndpointFactory):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] %(message)s')
     config = Config()
     config.load_yaml(sys.argv[1])
     gw = SmtpGateway(config)

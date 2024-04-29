@@ -23,7 +23,6 @@ class Factory:
         factory_rest_id_next += 1
         return SmtpEndpoint(rest_id, ehlo_hostname)
 
-# rest or smtp services call upon a single instance of this
 class SmtpEndpoint:
     smtp : Optional[smtplib.SMTP] = None
     data : Optional[bytes] = None
@@ -76,7 +75,11 @@ class SmtpEndpoint:
             logging.info('SmtpEndpoint.connect %s %s %d', e, host, port)
             return [400, b'connect error']
 
-
+    # NOTE this assumes that mail_from and (exactly 1) rcpt_to will be
+    # in the initial POST.
+    # When wired upstream of RecipientRouterFilter, that will be the
+    # case since it always buffers MAIL (early-returns 250) since it
+    # needs the RCPT to determine the next hop.
     def start(self, tx : TransactionMetadata):
         self.version += 1
         self.idle_start = time.monotonic()
@@ -104,9 +107,15 @@ class SmtpEndpoint:
                 self._shutdown()
                 return ehlo_resp
 
-        # XXX esmtp
+        for e in tx.mail_from.esmtp:
+            if not self.smtp.has_extn(e.keyword):
+                return Response(
+                    504, 'smtp_endpoint: MAIL esmtp param not advertised '
+                    'by peer: %s', e.keyword)
+
         self.mail_resp = Response.from_smtp(
-            self.smtp.mail(tx.mail_from.mailbox))
+            self.smtp.mail(tx.mail_from.mailbox,
+                           [e.to_str() for e in tx.mail_from.esmtp]))
         if self.mail_resp.err():
             self._shutdown()
             return self.mail_resp
@@ -115,8 +124,20 @@ class SmtpEndpoint:
 
         self.good_rcpt = False
         for rcpt in tx.rcpt_to:
-            # XXX esmtp
-            resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox))
+            bad_ext = None
+            for e in rcpt.esmtp:
+                if not self.smtp.has_extn(e.keyword):
+                    bad_ext = e
+                    break
+            if bad_ext is not None:
+                self.rcpt_resp.append(Response(
+                    504, 'smtp_endpoint: RCPT esmtp param not advertised '
+                    'by peer: %s', bad_ext.keyword))
+                continue
+
+            resp = Response.from_smtp(
+                self.smtp.rcpt(rcpt.mailbox,
+                               [e.to_str() for e in rcpt.esmtp]))
             if resp.ok():
                 self.good_rcpt = True
             self.rcpt_resp.append(resp)

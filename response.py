@@ -28,6 +28,9 @@ class Response:
     def __str__(self):
         return '%d %s' % (self.code, self.message)
 
+    def __repr__(self):
+        return str(self)
+
     @staticmethod
     def from_smtp(t : Tuple[int, bytes]) -> "Response":
         return Response(t[0], t[1].decode('utf-8'))

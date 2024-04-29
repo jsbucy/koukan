@@ -31,15 +31,48 @@ class HostPort:
     def __eq__(self, h : 'HostPort'):
         return self.host == h.host and self.port == h.port
 
-class Esmtp:
-    # from aiosmtpd
-    # TODO parse out into keyword and key/value
-    capabilities : List[str]
+# NOTE the SMTP syntax for the capability list returned from EHLO
+# isn't the same as that requested in MAIL/RCPT. This is for the latter.
+class EsmtpParam:
+    keyword : str
+    value : Optional[str]
+    def __init__(self, keyword, value = None):
+        self.keyword = keyword
+        self.value = value
+
+    @staticmethod
+    def from_str(s):
+        eq = s.find('=')
+        if eq == 0:
+            return None
+        if eq == -1:
+            return EsmtpParam(s)
+        return EsmtpParam(s[0:eq], s[eq+1:])
+
+    @staticmethod
+    def from_json(json : dict):
+        if not (k := json.get('k', None)):
+            return None
+        p = json.get('p', None)
+        return EsmtpParam(k, p)
+
+    def to_str(self):
+        out = self.keyword
+        if self.value:
+            out += '=' + self.value
+        return out
+
+    def to_json(self):
+        json = { 'k': self.keyword }
+        if self.value:
+            json['p'] = self.value
+        return json
+
 
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
-    esmtp : Optional[Esmtp] = None
-    def __init__(self, mailbox : str, esmtp : Optional[Esmtp] = None):
+    esmtp : List[EsmtpParam]
+    def __init__(self, mailbox : str, esmtp : List[EsmtpParam] = []):
         self.mailbox = mailbox
         self.esmtp = esmtp
 
@@ -61,14 +94,18 @@ class Mailbox:
     def to_json(self):
         out = {'m': self.mailbox}
         if self.esmtp:
-            out['e'] = self.esmtp
+            out['e'] = [e.to_json() for e in self.esmtp]
         return out
 
     @staticmethod
     def from_json(json):
         # XXX this should fail pytype since esmtp is arbitrary json
         # (in practice List[str]), Esmtp (above) isn't actually used?
-        return Mailbox(json['m'], json['e'] if 'e' in json else None)
+        esmtp = json.get('e', [])
+        params = []
+        if isinstance(esmtp, list):  # xxx else fail?
+            params = [EsmtpParam.from_json(j) for j in esmtp]
+        return Mailbox(json['m'], params)
 
 def list_from_js(js, builder):
     return [builder(j) for j in js]
@@ -116,7 +153,7 @@ _tx_fields = [
     TxField('local_host',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.DB],
-            emit=[],
+            emit=[WhichJson.DB],
             from_json=HostPort.from_seq),
     TxField('mail_from',
             accept=[WhichJson.REST_CREATE,

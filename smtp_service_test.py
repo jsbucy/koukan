@@ -19,8 +19,7 @@ class SmtpServiceTest(unittest.TestCase):
         self.endpoint = SyncEndpoint()
 
         logging.basicConfig(level=logging.DEBUG)
-        self.handler = SmtpHandler(
-            lambda: self.endpoint, max_rcpt=100)
+        self.handler = SmtpHandler(lambda: self.endpoint)
         self.controller = Controller(self.handler)
         self.controller.start()
 

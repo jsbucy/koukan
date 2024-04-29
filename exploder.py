@@ -34,6 +34,11 @@ from response import Response
 # return a 250, durably retry any temp failures, and emit bounces for
 # all the ones that don't eventually succeed.
 
+# TODO options try to avoid accept&bounce smtp extensions i.e. if the
+# envelope contains an extension and we time out upstream and would
+# have to emit a 2xx response here for store&forward, fail if we
+# don't otherwise know that the destination accepts it.
+
 class Recipient:
     # error or final data response
     status : Optional[Response] = None

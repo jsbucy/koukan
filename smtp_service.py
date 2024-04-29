@@ -1,3 +1,5 @@
+from typing import Callable
+
 import asyncio
 import time
 import logging
@@ -11,103 +13,122 @@ from aiosmtpd.controller import Controller
 from blob import Blob, InlineBlob
 from response import ok_resp, to_smtp_resp, Response
 from smtp_auth import Authenticator
-from filter import HostPort, Mailbox, TransactionMetadata
+from filter import EsmtpParam, Filter, HostPort, Mailbox, TransactionMetadata
+
+connection_id = 0
 
 class SmtpHandler:
-    def __init__(self, endpoint_factory, max_rcpt=None,
+    endpoint_factory : Callable[[], Filter]
+    smtp : Optional[SMTP] = None
+    cx_id : str  # connection id, log token
+
+    endpoint : Optional[Filter] = None
+    tx : Optional[TransactionMetadata] = None
+
+    def __init__(self, endpoint_factory : Callable[[], Filter],
                  timeout_mail=10,
                  timeout_rcpt=60,
                  timeout_data=330):
         self.endpoint_factory = endpoint_factory
-        self.max_rcpt = max_rcpt
         self.next_blob_id = 0
         self.timeout_mail = timeout_mail
         self.timeout_rcpt = timeout_rcpt
         self.timeout_data = timeout_data
+
+        global connection_id
+        self.cx_id = 'cx%d' % ++connection_id
 
     # TODO would be nice to abort the upstream transaction if the
     # client goes away, handle_QUIT(), subclass aiosmtpd.smtp.SMTP and
     # override connection_lost()?
 
     async def handle_RSET(self, server, session, envelope):
-        envelope.endpoint = None
-        envelope.tx = None
+        self.endpoint = None
+        self.tx = None
         return b'250 ok'
 
     def _update_tx(self, endpoint, tx):
-        logging.info('SmtpHandler._update_tx')
+        logging.info('SmtpHandler._update_tx %s', self.cx_id)
         endpoint.on_update(tx)
-        logging.info('SmtpHandler._update_tx done')
+        logging.info('SmtpHandler._update_tx %s done', self.cx_id)
 
     async def handle_MAIL(
-            self, server, session, envelope, mail_from, mail_esmtp):
-        envelope.endpoint = self.endpoint_factory()
-        envelope.tx = TransactionMetadata()
+            self, server, session, envelope, mail_from : str,
+            mail_esmtp : List[str]):
+        self.endpoint = self.endpoint_factory()
+        self.tx = TransactionMetadata()
 
-        envelope.tx.smtp_meta = {
+        self.tx.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
             'tls': session.ssl is not None,
             'auth': session.authenticated
         }
 
-        logging.debug('handle_MAIL %s %s', session.host_name, session.peer)
-        if session.peer:
-            # TODO this is always an ascii IP? try to reverse resolve
-            # and pass along for Received: headers if nothing else
-            envelope.tx.remote_host = HostPort.from_seq(session.peer)
+        local_socket = None
+        if self.smtp is not None:
+            local_socket = self.smtp.transport.get_extra_info('sockname')
 
-        # can't quite dig
-        # session.transport.get_extra_info('sockname') out of aiosmtpd
-        # envelope.tx.local_host = HostPort.from_seq(...)
-        envelope.tx.mail_from = Mailbox(mail_from, mail_esmtp)
+        logging.info('SmtpHandler.handle_MAIL %s %s %s %s',
+                     self.cx_id, session.host_name, session.peer, local_socket)
+        if session.peer:
+            self.tx.remote_host = HostPort.from_seq(session.peer)
+
+        if local_socket:
+            self.tx.local_host = HostPort.from_seq(local_socket)
+
+        params = [EsmtpParam.from_str(s) for s in mail_esmtp]
+        self.tx.mail_from = Mailbox(mail_from, params)
         fut = server.loop.run_in_executor(
-            None, lambda: self._update_tx(envelope.endpoint, envelope.tx))
+            None, lambda: self._update_tx(self.endpoint, self.tx))
         await asyncio.wait([fut], timeout=self.timeout_mail)
-        logging.info('mail resp %s', envelope.tx.mail_response)
-        if envelope.tx.mail_response is None:
+        logging.info('SmtpHandler.handle_MAIL %s mail resp %s',
+                     self.cx_id, self.tx.mail_response)
+        if self.tx.mail_response is None:
             return b'450 MAIL upstream timeout/internal err'
-        if envelope.tx.mail_response.ok():
+        if self.tx.mail_response.ok():
+            # aiosmtpd expects this
             envelope.mail_from = mail_from
             envelope.mail_options.extend(mail_esmtp)
-            envelope.rcpt_i = 0
-        return envelope.tx.mail_response.to_smtp_resp()
+        return self.tx.mail_response.to_smtp_resp()
 
     async def handle_RCPT(
             self, server, session, envelope, rcpt_to, rcpt_esmtp):
 
-        if self.max_rcpt and (len(envelope.rcpt_tos) > self.max_rcpt):
-            return b'452-4.5.3 too many recipients (max %d)' % self.max_rcpt
+        params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
 
-        envelope.tx = TransactionMetadata(
-            rcpt_to=[Mailbox(rcpt_to, rcpt_esmtp)])
+        self.tx = TransactionMetadata(
+            rcpt_to=[Mailbox(rcpt_to, params)])
         fut = server.loop.run_in_executor(
-            None, lambda: self._update_tx(envelope.endpoint, envelope.tx))
+            None, lambda: self._update_tx(self.endpoint, self.tx))
 
         await asyncio.wait([fut], timeout=self.timeout_rcpt)
 
-        logging.info('handle_RCPT rcpt_response %s', envelope.tx.rcpt_response)
+        logging.info('SmtpHandler.handle_RCPT %s rcpt_response %s',
+                     self.cx_id, self.tx.rcpt_response)
 
         # for now without pipelining we send one rcpt upstream at a time
-        if len(envelope.tx.rcpt_response) != 1:
+        if len(self.tx.rcpt_response) != 1:
             return b'450 RCPT upstream timeout/internal err'
-        rcpt_resp = envelope.tx.rcpt_response[0]
+        rcpt_resp = self.tx.rcpt_response[0]
 
-        envelope.rcpt_i += 1
         if rcpt_resp is None:
             return b'450 RCPT upstream timeout/internal err'
         if rcpt_resp.ok():
+            # aiosmtpd expects this
             envelope.rcpt_tos.append(rcpt_to)
-            #XXX envelope.rcpt_options.append(rcpt_esmtp)
+            envelope.rcpt_options.append(rcpt_esmtp)
         return rcpt_resp.to_smtp_resp()
 
     def append_data(self, envelope, blob : Blob):
-        logging.info('SmtpHandler.append_data len=%d', blob.len())
+        logging.info('SmtpHandler.append_data %s len=%d',
+                     self.cx_id, blob.len())
         tx = TransactionMetadata()
         tx.body_blob = blob
-        envelope.endpoint.on_update(tx)
-        envelope.tx.data_response = tx.data_response
-        logging.info('SmtpHandler.append_data %s', envelope.tx.data_response)
+        self.endpoint.on_update(tx)
+        self.tx.data_response = tx.data_response
+        logging.info('SmtpHandler.append_data %s %s',
+                     self.cx_id, self.tx.data_response)
 
     def get_blob_id(self):
         id = 'gw_blob_%d' % self.next_blob_id
@@ -115,48 +136,54 @@ class SmtpHandler:
         return id
 
     async def handle_DATA(self, server, session, envelope):
-        # framework enforces this
-        assert(envelope.rcpt_tos)
-
         blob = InlineBlob(envelope.content, id=self.get_blob_id())
 
         fut = server.loop.run_in_executor(
                 None, lambda: self.append_data(envelope, blob=blob))
         await asyncio.wait([fut], timeout=self.timeout_data)
-        return envelope.tx.data_response.to_smtp_resp()
+        return self.tx.data_response.to_smtp_resp()
 
 
 class ControllerTls(Controller):
-    def __init__(self, handler, host, port, ssl_context, auth):
+    def __init__(self, host, port, ssl_context, auth,
+                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout):
         self.tls_controller_context = ssl_context
         self.auth = auth
+        self.endpoint_factory = endpoint_factory
+        self.max_rcpt = max_rcpt
+        self.rcpt_timeout = rcpt_timeout
+        self.data_timeout = data_timeout
+        # The aiosmtpd docs don't discuss this directly but it seems
+        # like this handler= is only used by the default implementation of
+        # factory() which is moot if you override it like this.
         super(Controller, self).__init__(
-            handler, hostname=host, port=port)
+            handler=None, hostname=host, port=port)
 
     def factory(self):
-        return SMTP(self.handler, #require_starttls=True,
+        handler = SmtpHandler(
+            self.endpoint_factory, self.max_rcpt, self.rcpt_timeout,
+            self.data_timeout)
+        handler.loop = self.loop
+        smtp = SMTP(handler,
+                    #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth)
+        handler.smtp = smtp
+        return smtp
 
-
-def service(endpoint,
+def service(endpoint_factory,
             hostname="localhost", port=9025, cert=None, key=None,
             auth_secrets_path=None, max_rcpt=None,
             rcpt_timeout=None, data_timeout=None):
-    # DEBUG logs message contents!
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
-
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
     else:
         ssl_context = None
     auth = Authenticator(auth_secrets_path) if auth_secrets_path else None
-    handler = SmtpHandler(endpoint, max_rcpt, rcpt_timeout, data_timeout)
-    controller = ControllerTls(handler,
-                               hostname, port, ssl_context,
-                               auth)
-    handler.loop = controller.loop
+    controller = ControllerTls(
+        hostname, port, ssl_context,
+        auth,
+        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout)
     controller.start()

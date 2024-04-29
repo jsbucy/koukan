@@ -64,6 +64,8 @@ def create_app(handler_factory : HandlerFactory):
         # TODO if request doesn't have remote_addr or is not from a
         # well-known/trusted peer (i.e. smtp gateway), set remote_addr to wsgi
         # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
+        # TODO only accept smtp_meta from trusted peer i.e. the
+        # well-known address of the gateway
         handler = handler_factory.create_tx(request.headers['host'])
         if handler is None:
             return FlaskResponse(
