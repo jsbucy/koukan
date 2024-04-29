@@ -3,6 +3,7 @@ import dns.resolver
 import logging
 
 from filter import Filter, TransactionMetadata
+from response import Response
 
 _NotFoundExceptions = (
     dns.resolver.NoAnswer,  # name exists but not that rrtype
@@ -49,6 +50,7 @@ class RemoteHostFilter(Filter):
 
         all_failed = True
         for rrtype in ['a', 'aaaa']:
+            ans = None
             try:
                 ans = dns.resolver.resolve(tx.remote_hostname, rrtype)
                 all_failed = False
@@ -60,7 +62,8 @@ class RemoteHostFilter(Filter):
             if ans is None:
                 continue
             for a in ans:
-                logging.debug('%s %s', str(a), tx.remote_host.host)
+                logging.debug('RemoteHostFilter._resolve %s %s %s',
+                              rrtype, str(a), tx.remote_host.host)
                 if str(a) == tx.remote_host.host:
                     tx.fcrdns = True
                     break

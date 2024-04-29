@@ -224,7 +224,7 @@ class OutputHandler:
         deadline = self.cursor.tx.deadline
         if deadline is None:
             deadline = self.retry_params.get('deadline', 86400)
-        if deadline is not None and (dt > deadline):
+        if deadline is not None and ((next - self.cursor.creation) > deadline):
             return 'retry policy deadline', None
         return None, next
 
