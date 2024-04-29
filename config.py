@@ -17,6 +17,7 @@ from exploder import Exploder
 from storage import Storage
 from remote_host_filter import RemoteHostFilter
 from received_header_filter import ReceivedHeaderFilter
+from relay_auth_filter import RelayAuthFilter
 
 class Config:
     storage : Optional[Storage] = None
@@ -33,7 +34,8 @@ class Config:
             'exploder': self.exploder,
             'message_builder': self.message_builder,
             'remote_host': self.remote_host,
-            'received_header': self.received_header
+            'received_header': self.received_header,
+            'relay_auth': self.relay_auth
        }
 
     def set_storage(self, storage : Storage):
@@ -130,6 +132,9 @@ class Config:
 
     def received_header(self, yaml, next):
         return ReceivedHeaderFilter(next, yaml.get('received_hostname', None))
+
+    def relay_auth(self, yaml, next):
+        return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
 
     def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]

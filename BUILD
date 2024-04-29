@@ -209,6 +209,15 @@ py_test(name='received_header_filter_test',
         deps=[':received_header_filter',
               ':fake_endpoints'])
 
+pytype_library(name='relay_auth_filter',
+               srcs=['relay_auth_filter.py'],
+               deps=[':filter'])
+
+py_test(name='relay_auth_filter_test',
+        srcs=['relay_auth_filter_test.py'],
+        deps=[':relay_auth_filter',
+              ':fake_endpoints'])
+
 # clients should get at this via ABC since it depends on ~everything?
 pytype_library(name='config',
                srcs=['config.py'],
