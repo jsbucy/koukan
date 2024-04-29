@@ -35,10 +35,11 @@ class ReceivedHeaderFilter(Filter):
         if tx.remote_host and tx.remote_host.host:
             received_host_literal = '[' + tx.remote_host.host + ']'
 
-            if tx.remote_host and tx.remote_host.host:
-                if tx.remote_hostname and tx.fcrdns:
-                    received_host = (tx.remote_hostname + ' ' +
-                                     received_host_literal)
+            if tx.remote_hostname and tx.fcrdns:
+                received_host = (tx.remote_hostname + ' ' +
+                                 received_host_literal)
+            else:
+                received_host = received_host_literal
 
         clauses = []
         ehlo = None
