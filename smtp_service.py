@@ -6,6 +6,7 @@ import logging
 from typing import Optional, List, Tuple
 from functools import partial
 import ssl
+from threading import Lock
 
 from aiosmtpd.smtp import SMTP
 from aiosmtpd.controller import Controller
@@ -15,7 +16,15 @@ from response import ok_resp, to_smtp_resp, Response
 from smtp_auth import Authenticator
 from filter import EsmtpParam, Filter, HostPort, Mailbox, TransactionMetadata
 
-connection_id = 0
+
+_next_cx = 0
+_next_cx_mu = Lock()
+def next_cx():
+    global _next_cx, _next_cx_mu
+    with _next_cx_mu:
+        rv = _next_cx
+        _next_cx += 1
+    return rv
 
 class SmtpHandler:
     endpoint_factory : Callable[[], Filter]
@@ -35,12 +44,18 @@ class SmtpHandler:
         self.timeout_rcpt = timeout_rcpt
         self.timeout_data = timeout_data
 
-        global connection_id
-        self.cx_id = 'cx%d' % ++connection_id
+        self.cx_id = 'cx%d' % next_cx()
+
+    def set_smtp(self, smtp):
+        logging.info('SmtpHandler %s', self.cx_id)
+        self.smtp = smtp
 
     # TODO would be nice to abort the upstream transaction if the
-    # client goes away, handle_QUIT(), subclass aiosmtpd.smtp.SMTP and
-    # override connection_lost()?
+    # client goes away, handle RSET/QUIT(), subclass aiosmtpd.smtp.SMTP and
+    # override connection_lost()? In the meantime this gives us a
+    # little visibility.
+    def __del__(self):
+        logging.info('SmtpHandler.__del__ %s', self.cx_id)
 
     async def handle_RSET(self, server, session, envelope):
         self.endpoint = None
@@ -169,7 +184,7 @@ class ControllerTls(Controller):
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth)
-        handler.smtp = smtp
+        handler.set_smtp(smtp)
         return smtp
 
 def service(endpoint_factory,
