@@ -25,11 +25,6 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx.remote_hostname = 'gargantua1'
         tx.fcrdns = True
 
-        tx.body_blob = InlineBlob(
-            b'From: <alice>\r\n'
-            b'To: <bob>\r\n'
-            b'\r\n'
-            b'hello\r\n')
         tx.smtp_meta = {
             'ehlo_host': 'gargantua1',
             'esmtp': True,
@@ -40,6 +35,14 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             next = next,
             received_hostname = 'gargantua1',
             inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
+        filter.on_update(tx)
+
+        tx = TransactionMetadata()
+        tx.body_blob = InlineBlob(
+            b'From: <alice>\r\n'
+            b'To: <bob>\r\n'
+            b'\r\n'
+            b'hello\r\n')
         filter.on_update(tx)
         self.assertEqual(
             next.body_blob.read(0),

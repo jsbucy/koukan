@@ -75,6 +75,10 @@ class RemoteHostFilter(Filter):
         if all_failed:
             tx.mail_response = Response(450, 'RemoteHostFilter fwd err')
 
+        logging.debug('RemoteHostFilter._resolve() '
+                      'mail_response=%s remote_hostname=%s fcrdns=%s',
+                      tx.mail_response, tx.remote_hostname, tx.fcrdns)
+
 
     def abort(self):
         pass

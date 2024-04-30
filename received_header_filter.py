@@ -2,9 +2,10 @@ from typing import List, Optional
 from datetime import datetime
 import email.utils
 import copy
+import logging
 
 from blob import Blob, InlineBlob, CompositeBlob
-from filter import Filter, Mailbox, TransactionMetadata
+from filter import Filter, HostPort, Mailbox, TransactionMetadata
 
 class ReceivedHeaderFilter(Filter):
     next : Optional[Filter]
@@ -13,6 +14,9 @@ class ReceivedHeaderFilter(Filter):
     mail_from : Optional[Mailbox] = None
     rcpt_to : List[Mailbox]
     received_hostname : Optional[str] = None
+    remote_host : Optional[HostPort] = None
+    remote_hostname : Optional[str] = None
+    fcrdns : Optional[bool] = None
 
     def __init__(self, next : Optional[Filter] = None,
                  received_hostname : Optional[str] = None,
@@ -30,13 +34,15 @@ class ReceivedHeaderFilter(Filter):
 #  Wed, 07 Feb 2024 14:47:24 -0800 (PST)
 
     def _format_received(self, tx : TransactionMetadata) -> str:
+        logging.debug('_format_received %s %s %s',
+                      self.remote_host, self.remote_hostname, self.fcrdns)
         received_host = None
         received_host_literal = None
-        if tx.remote_host and tx.remote_host.host:
-            received_host_literal = '[' + tx.remote_host.host + ']'
+        if self.remote_host and self.remote_host.host:
+            received_host_literal = '[' + self.remote_host.host + ']'
 
-            if tx.remote_hostname and tx.fcrdns:
-                received_host = (tx.remote_hostname + ' ' +
+            if self.remote_hostname and self.fcrdns:
+                received_host = (self.remote_hostname + ' ' +
                                  received_host_literal)
             else:
                 received_host = received_host_literal
@@ -59,8 +65,8 @@ class ReceivedHeaderFilter(Filter):
                 with_protocol += 'A'
             with_protocol = 'with ' + with_protocol
         else:
-            if tx.remote_hostname and tx.fcrdns:
-                ehlo = tx.remote_hostname
+            if self.remote_hostname and self.fcrdns:
+                ehlo = self.remote_hostname
             elif received_host_literal:
                 ehlo = received_host_literal
             with_protocol = 'with X-RESTMTP'
@@ -97,6 +103,12 @@ class ReceivedHeaderFilter(Filter):
             self.mail_from = tx.mail_from
         if tx.rcpt_to:
             self.rcpt_to.extend(tx.rcpt_to)
+        if tx.remote_host:
+            self.remote_host = tx.remote_host
+        if tx.remote_hostname:
+            self.remote_hostname = tx.remote_hostname
+        if tx.fcrdns:
+            self.fcrdns = tx.fcrdns
 
         # TODO in this case, since the received header that's being
         # prepended onto the body doesn't depend on the body contents,
