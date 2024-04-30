@@ -29,6 +29,9 @@ CREATE TABLE Transactions (
   -- not growing but not that all blobs are finalized
   last bool,
 
+  -- session that created this
+  creation_session_id INTEGER,
+  -- session that output attempt is currently active in
   inflight_session_id INTEGER,
 
   creation INTEGER,

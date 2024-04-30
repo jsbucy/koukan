@@ -160,7 +160,12 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(tx_writer.input_done)
 
     def test_recovery(self):
+        # note storage_test_recovery.sql has
+        # creation_session_id = (select min(id) from sessions)
+        # since self.s session will be created before the one in the
+        # .sql and we create a fresh db for each test
         self.load_recovery()
+        #self.dump_db()
         self.s.recover()
         reader = self.s.load_one()
         self.assertIsNotNone(reader)

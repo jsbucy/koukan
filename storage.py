@@ -69,6 +69,7 @@ class TransactionCursor:
                 version = self.version,
                 last = self.last,
                 json = db_json,
+                creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id)
 
             res = conn.execute(ins)
@@ -918,14 +919,22 @@ class Storage:
             # TODO this is currently a scan, index on/ORDER BY
             # next_attempt_time?
 
-            # TODO maybe input_done or last_update_session == our session
-            # iow don't recover incomplete after a crash until the
-            # client writes to it again so we don't start it upstream
-            # if the client went away
+            # NOTE we currently don't recover !input_done from
+            # different sessions. We need to surface some more
+            # information in the rest tx (at least attempt#) for the
+            # client to have a chance of handling it
+            # correctly. Longer-term, we'd like to make this
+            # work. Possibly we need a more explicit "handoff" from
+            # the input side to the output side, otherwise another
+            # process/instance might steal it?
             now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
+
+                          or_(self.tx_table.c.input_done.is_(True),
+                              self.tx_table.c.creation_session_id ==
+                              self.session_id),
 
                           or_(self.tx_table.c.next_attempt_time.is_(None),
                               self.tx_table.c.next_attempt_time < now),
