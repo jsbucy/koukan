@@ -111,7 +111,7 @@ class SmtpEndpoint:
             if not self.smtp.has_extn(e.keyword):
                 return Response(
                     504, 'smtp_endpoint: MAIL esmtp param not advertised '
-                    'by peer: %s', e.keyword)
+                    'by peer: %s' % e.keyword)
 
         self.mail_resp = Response.from_smtp(
             self.smtp.mail(tx.mail_from.mailbox,
@@ -132,7 +132,7 @@ class SmtpEndpoint:
             if bad_ext is not None:
                 self.rcpt_resp.append(Response(
                     504, 'smtp_endpoint: RCPT esmtp param not advertised '
-                    'by peer: %s', bad_ext.keyword))
+                    'by peer: %s' % bad_ext.keyword))
                 continue
 
             resp = Response.from_smtp(
