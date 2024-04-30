@@ -41,6 +41,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx.body_blob = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
+            b'Received: from somewhere-else.example.com with ESMTP;\r\n'
+            b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
             b'\r\n'
             b'hello\r\n')
         filter.on_update(tx)
@@ -53,9 +55,41 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             b'\tFri, 13 Feb 2009 23:31:30 +0000\r\n'
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
+            b'Received: from somewhere-else.example.com with ESMTP;\r\n'
+            b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
             b'\r\n'
             b'hello\r\n')
 
+    def test_max_received_headers(self):
+        next = SyncEndpoint()
+        next.set_mail_response(Response(201))
+        next.add_rcpt_response(Response(202))
+        next.add_data_response(Response(203))
+
+        tx = TransactionMetadata(
+            remote_host=HostPort('1.2.3.4', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob@domain')])
+        tx.remote_hostname = 'gargantua1'
+        tx.fcrdns = True
+
+        filter = ReceivedHeaderFilter(
+            next = next,
+            received_hostname = 'gargantua1',
+            inject_time = datetime.fromtimestamp(1234567890, timezone.utc),
+            max_received_headers = 1)
+
+        tx = TransactionMetadata()
+        tx.body_blob = InlineBlob(
+            b'Received: from time-becomes-a-loop.example.com with ESMTP;\r\n'
+            b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
+            b'Received: from somewhere-else.example.com with ESMTP;\r\n'
+            b'\tFri, 13 Feb 2009 23:31:28 +0000\r\n'
+            b'\r\n'
+            b'hello\r\n')
+        filter.on_update(tx)
+        self.assertEqual(tx.data_response.code, 550)
+        self.assertTrue(tx.data_response.message.startswith('5.4.6'))
 
 if __name__ == '__main__':
     unittest.main()

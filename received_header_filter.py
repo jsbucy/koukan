@@ -3,9 +3,12 @@ from datetime import datetime
 import email.utils
 import copy
 import logging
+from email.parser import BytesHeaderParser
+from email import policy
 
 from blob import Blob, InlineBlob, CompositeBlob
 from filter import Filter, HostPort, Mailbox, TransactionMetadata
+from response import Response
 
 class ReceivedHeaderFilter(Filter):
     next : Optional[Filter]
@@ -17,14 +20,17 @@ class ReceivedHeaderFilter(Filter):
     remote_host : Optional[HostPort] = None
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
+    max_received_headers : int
 
     def __init__(self, next : Optional[Filter] = None,
                  received_hostname : Optional[str] = None,
-                 inject_time = None):
+                 inject_time = None,
+                 max_received_headers = 30):
         self.next = next
         self.inject_time = inject_time
         self.rcpt_to = []
         self.received_hostname = received_hostname
+        self.max_received_headers = max_received_headers
 
 # Received: from a48-180.smtp-out.amazonses.com
 #  (a48-180.smtp-out.amazonses.com. [54.240.48.180])
@@ -34,8 +40,6 @@ class ReceivedHeaderFilter(Filter):
 #  Wed, 07 Feb 2024 14:47:24 -0800 (PST)
 
     def _format_received(self, tx : TransactionMetadata) -> str:
-        logging.debug('_format_received %s %s %s',
-                      self.remote_host, self.remote_hostname, self.fcrdns)
         received_host = None
         received_host_literal = None
         if self.remote_host and self.remote_host.host:
@@ -95,6 +99,19 @@ class ReceivedHeaderFilter(Filter):
             email.utils.format_datetime(datetime))
         return received
 
+    def _check_max_received_headers(self, body_blob : Blob):
+        body = body_blob.read(0, int(pow(2, 16)))
+        parser = BytesHeaderParser(policy=policy.SMTP)
+        parsed = parser.parsebytes(body)
+        received_count = 0
+        for (k,v) in parsed.items():
+            if k.lower() == 'received':
+                received_count += 1
+                if received_count > self.max_received_headers:
+                    return Response(550, '5.4.6 message has too many received: '
+                                    'headers and is likely looping')
+        return None
+
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
         if tx.smtp_meta:
@@ -118,6 +135,11 @@ class ReceivedHeaderFilter(Filter):
         # probably moot.
         upstream_tx = tx
         if tx.body_blob and tx.body_blob.len() == tx.body_blob.content_length():
+            resp = self._check_max_received_headers(tx.body_blob)
+            if resp:
+                tx.data_response = resp
+                return
+
             upstream_body = CompositeBlob()
             received = InlineBlob(self._format_received(tx).encode('ascii'))
             upstream_body.append(received, 0, received.len())
