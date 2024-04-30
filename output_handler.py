@@ -185,6 +185,8 @@ class OutputHandler:
             final_attempt_reason = 'upstream response success'
         elif resp.perm():
             final_attempt_reason = 'upstream response permfail'
+        elif not self.cursor.input_done:
+            final_attempt_reason = 'downstream timeout'
         else:
             final_attempt_reason, next_attempt_time = self._next_attempt_time(
                 time.time())

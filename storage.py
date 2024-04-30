@@ -932,12 +932,13 @@ class Storage:
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
 
+                          # TODO also #attempts is 0?
                           or_(self.tx_table.c.input_done.is_(True),
                               self.tx_table.c.creation_session_id ==
                               self.session_id),
 
                           or_(self.tx_table.c.next_attempt_time.is_(None),
-                              self.tx_table.c.next_attempt_time < now),
+                              self.tx_table.c.next_attempt_time <= now),
 
                           self.tx_table.c.final_attempt_reason.is_(None),
 
