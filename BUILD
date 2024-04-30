@@ -233,7 +233,8 @@ pytype_library(name='config',
                      ':storage_writer_filter',
                      ':exploder',
                      ':remote_host_filter',
-                     ':received_header_filter'])
+                     ':received_header_filter',
+                     ':relay_auth_filter'])
 
 pytype_library(name='executor',
                srcs=['executor.py'])
