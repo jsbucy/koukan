@@ -10,7 +10,7 @@ from functools import reduce
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
 from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, not_, or_, select, true as sa_true, update, union_all, values
 
@@ -55,7 +55,7 @@ class TransactionCursor:
                reuse_blob_rest_id : List[str] = []):
         parent = self.parent
         self.creation = int(time.time())
-        with self.parent.conn() as conn:
+        with self.parent.begin_transaction() as db_tx:
             # xxx dead?
             self.last = False
             self.version = 0
@@ -72,14 +72,13 @@ class TransactionCursor:
                 creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id)
 
-            res = conn.execute(ins)
+            res = db_tx.execute(ins)
             row = res.fetchone()
             self.id = row[0]
             self.tx = TransactionMetadata()  # tx
 
-            self._write(conn, tx, reuse_blob_rest_id)
+            self._write(db_tx, tx, reuse_blob_rest_id)
 
-            conn.commit()
 
         with parent.created_lock:
             logging.debug('TransactionCursor.create id %d', self.id)
@@ -87,7 +86,7 @@ class TransactionCursor:
                 parent.created_id = self.id
                 parent.created_cv.notify_all()
 
-    def _reuse_blob(self, conn, rest_id : List[str]
+    def _reuse_blob(self, db_tx, rest_id : List[str]
                     ) -> List[Tuple[int, str, bool]]:
                     # -> id, rest_id, input_done
         if not rest_id:
@@ -124,7 +123,7 @@ class TransactionCursor:
                                  self.parent.blob_table.c.rest_id ==
                                  val.c.rest_id)
 
-        res = conn.execute(sel)
+        res = db_tx.execute(sel)
         ids = {}
         for row in res:
                blob_id, rid, length, content_length = row
@@ -147,20 +146,19 @@ class TransactionCursor:
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None):
-        with self.parent.conn() as conn:
-            self._write(conn, tx_delta, reuse_blob_rest_id,
+        with self.parent.begin_transaction() as db_tx:
+            self._write(db_tx, tx_delta, reuse_blob_rest_id,
                         final_attempt_reason,
                         finalize_attempt,
                         next_attempt_time = next_attempt_time)
-            conn.commit()
-            self.parent.tx_versions.update(self.id, self.version)
+        self.parent.tx_versions.update(self.id, self.version)
 
     def _write_blob(self,
-                    conn,
+                    db_tx,
                     tx,
                     upd,  # sa update
                     reuse_blob_rest_id : List[str] = []):
-        reuse_blob_id = self._reuse_blob(conn, reuse_blob_rest_id)
+        reuse_blob_id = self._reuse_blob(db_tx, reuse_blob_rest_id)
         if not reuse_blob_id:
             return upd
 
@@ -193,13 +191,13 @@ class TransactionCursor:
         logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
 
         ins = insert(self.parent.tx_blobref_table).values(blobrefs)
-        res = conn.execute(ins)
+        res = db_tx.execute(ins)
 
         self.input_done = input_done
         return upd
 
     def _write(self,
-               conn,
+               db_tx,
                tx_delta : TransactionMetadata,
                reuse_blob_rest_id : List[str] = [],
                final_attempt_reason : Optional[str] = None,
@@ -240,9 +238,9 @@ class TransactionCursor:
             upd = upd.values(inflight_session_id = None,
                              next_attempt_time = next_attempt_time)
 
-        upd = self._write_blob(conn, tx_delta, upd, reuse_blob_rest_id)
+        upd = self._write_blob(db_tx, tx_delta, upd, reuse_blob_rest_id)
 
-        res = conn.execute(upd)
+        res = db_tx.execute(upd)
         row = res.fetchone()
 
         if row is None or row[0] != new_version:
@@ -264,13 +262,13 @@ class TransactionCursor:
 
     def _set_response(self, col : str, response : Response):
         assert(self.attempt_id is not None)
-        with self.parent.conn() as conn:
+        with self.parent.begin_transaction() as db_tx:
             upd_att = (update(self.parent.attempt_table)
                    .where(self.parent.attempt_table.c.transaction_id == self.id,
                           self.parent.attempt_table.c.attempt_id ==
                           self.attempt_id)
                    .values({col: response.to_json()}))
-            res = conn.execute(upd_att)
+            res = db_tx.execute(upd_att)
 
             new_version = self.version + 1
             upd_tx = (update(self.parent.tx_table)
@@ -278,12 +276,11 @@ class TransactionCursor:
                              self.parent.tx_table.c.version == self.version)
                       .values(version = new_version)
                       .returning(self.parent.tx_table.c.version))
-            res = conn.execute(upd_tx)
+            res = db_tx.execute(upd_tx)
             if (row := res.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
-            conn.commit()
             self.version = row[0]
-            self.parent.tx_versions.update(self.id, new_version)
+        self.parent.tx_versions.update(self.id, new_version)
 
 
     def set_mail_response(self, response : Response):
@@ -292,12 +289,12 @@ class TransactionCursor:
 
     def add_rcpt_response(self, response : List[Response]):
         assert(self.attempt_id is not None)
-        with self.parent.conn() as conn:
+        with self.parent.begin_transaction() as db_tx:
             # TODO load-that's-not-a-load, cf write_envelope()
             sel = (select(self.parent.tx_table.c.version,
                           self.parent.tx_table.c.json)
                    .where(self.parent.tx_table.c.id == self.id))
-            res = conn.execute(sel)
+            res = db_tx.execute(sel)
             db_version,tx_json = res.fetchone()
             if db_version != self.version:
                 raise VersionConflictException()
@@ -306,7 +303,7 @@ class TransactionCursor:
                    .where(self.parent.attempt_table.c.transaction_id == self.id,
                           self.parent.attempt_table.c.attempt_id ==
                           self.attempt_id))
-            res = conn.execute(sel)
+            res = db_tx.execute(sel)
 
             old_resp = []
             row = res.fetchone()
@@ -325,7 +322,7 @@ class TransactionCursor:
                           self.parent.attempt_table.c.attempt_id ==
                           self.attempt_id)
                    .values(rcpt_response = old_resp))
-            res = conn.execute(upd)
+            res = db_tx.execute(upd)
 
             new_version = self.version + 1
             upd = (update(self.parent.tx_table)
@@ -333,12 +330,12 @@ class TransactionCursor:
                           self.parent.tx_table.c.version == self.version)
                    .values(version = new_version)
                    .returning(self.parent.tx_table.c.version))
-            res = conn.execute(upd)
+            res = db_tx.execute(upd)
             if (row := res.fetchone()) is None or row[0] != new_version:
                 raise VersionConflictException()
             self.version = row[0]
-            conn.commit()
-            self.parent.tx_versions.update(self.id, new_version)
+
+        self.parent.tx_versions.update(self.id, new_version)
 
     def set_data_response(self, response : Response):
         self._set_response('data_response', response)
@@ -349,11 +346,11 @@ class TransactionCursor:
             assert(db_id is None and rest_id is None)
             db_id = self.id
         assert(db_id is not None or rest_id is not None)
-        with self.parent.conn() as conn:
-            #cursor = conn.connection.cursor()
-            return self._load_db(conn, db_id, rest_id)
+        with self.parent.begin_transaction() as db_tx:
+            res = self._load_db(db_tx, db_id, rest_id)
+            return res
 
-    def _load_db(self, conn,
+    def _load_db(self, db_tx,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None
                  ) -> Optional[TransactionMetadata]:
@@ -376,7 +373,7 @@ class TransactionCursor:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
         elif rest_id is not None:
             sel = sel.where(self.parent.tx_table.c.rest_id == rest_id)
-        res = conn.execute(sel)
+        res = db_tx.execute(sel)
         row = res.fetchone()
         if not row:
             return None
@@ -400,7 +397,7 @@ class TransactionCursor:
                .where(self.parent.attempt_table.c.transaction_id == self.id)
                .order_by(self.parent.attempt_table.c.attempt_id.desc())
                .limit(1))
-        res = conn.execute(sel)
+        res = db_tx.execute(sel)
         row = res.fetchone()
         if row is not None:
             self.attempt_id,mail_json,rcpt_json,data_json = row
@@ -414,7 +411,7 @@ class TransactionCursor:
 
         return self.tx
 
-    def _start_attempt_db(self, conn, db_id, version):
+    def _start_attempt_db(self, db_tx, db_id, version):
         assert self.parent.session_id is not None
         new_version = version + 1
         upd = (update(self.parent.tx_table)
@@ -423,7 +420,7 @@ class TransactionCursor:
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id)
                .returning(self.parent.tx_table.c.version))
-        res = conn.execute(upd)
+        res = db_tx.execute(upd)
         assert res.fetchone()[0] == new_version
 
         max_attempt_id = (
@@ -440,11 +437,11 @@ class TransactionCursor:
                .values(transaction_id = db_id,
                        attempt_id = new_attempt_id)
                .returning(self.parent.attempt_table.c.attempt_id))
-        res = conn.execute(ins)
+        res = db_tx.execute(ins)
 
         assert (row := res.fetchone())
         self.attempt_id = row[0]
-        self._load_db(conn, db_id=db_id)
+        self._load_db(db_tx, db_id=db_id)
 
     def wait(self, timeout=None) -> bool:
         with Waiter(self.parent.tx_versions, self.id, self.version, self
@@ -476,14 +473,14 @@ class BlobWriter:
     def __init__(self, storage):
         self.parent = storage
 
-    def _create(self, rest_id, conn):
+    def _create(self, rest_id, db_tx):
         ins = insert(self.parent.blob_table).values(
             last_update=int(time.time()),
             rest_id=rest_id,
             content=bytes()
         ).returning(self.parent.blob_table.c.id)
 
-        res = conn.execute(ins)
+        res = db_tx.execute(ins)
         row = res.fetchone()
 
         self.id = row[0]
@@ -491,9 +488,8 @@ class BlobWriter:
         return self.id
 
     def create(self, rest_id):
-        with self.parent.conn() as conn:
-            self._create(rest_id, conn)
-            conn.commit()
+        with self.parent.begin_transaction() as db_tx:
+            self._create(rest_id, db_tx)
             return self.id
 
     def load(self, rest_id):
@@ -504,8 +500,8 @@ class BlobWriter:
             func.length(self.parent.blob_table.c.content)).where(
                 self.parent.blob_table.c.rest_id == rest_id)
 
-        with self.parent.conn() as conn:
-            res = conn.execute(stmt)
+        with self.parent.begin_transaction() as db_tx:
+            res = db_tx.execute(stmt)
             row = res.fetchone()
 
         if not row:
@@ -527,11 +523,11 @@ class BlobWriter:
             self.content_length == content_length)
         assert not self.last
 
-        with self.parent.conn() as conn:
+        with self.parent.begin_transaction() as db_tx:
             stmt = select(
                 func.length(self.parent.blob_table.c.content)).where(
                     self.parent.blob_table.c.id == self.id)
-            res = conn.execute(stmt)
+            res = db_tx.execute(stmt)
             row = res.fetchone()
             assert row[0] == self.length
 
@@ -550,12 +546,11 @@ class BlobWriter:
                            last_update = int(time.time()))
                    .returning(func.length(self.parent.blob_table.c.content)))
 
-            res = conn.execute(upd)
+            res = db_tx.execute(upd)
             row = res.fetchone()
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
 
-            conn.commit()
             self.length = row[0]
             self.content_length = content_length
             self.last = (self.length == self.content_length)
@@ -599,8 +594,8 @@ class BlobReader(Blob):
         elif rest_id is not None:
             sel = sel.where(self.parent.blob_table.c.rest_id == rest_id)
 
-        with self.parent.conn() as conn:
-            res = conn.execute(sel)
+        with self.parent.begin_transaction() as db_tx:
+            res = db_tx.execute(sel)
             row = res.fetchone()
             if not row:
                 return None
@@ -619,8 +614,8 @@ class BlobReader(Blob):
         stmt = (
             select(func.substr(self.parent.blob_table.c.content, offset+1, l))
             .where(self.parent.blob_table.c.id == self.blob_id))
-        with self.parent.conn() as conn:
-            res = conn.execute(stmt)
+        with self.parent.begin_transaction() as db_tx:
+            res = db_tx.execute(stmt)
             row = res.fetchone()
             logging.debug('read blob row %s', row)  # xxx debug
             if row is None:
@@ -727,28 +722,11 @@ class IdVersionMap:
             waiter.waiters.add(obj)
             return waiter
 
-# sqlalchemy StaticPool used for sqlite in-memory/tests just returns
-# the same connection to everyone but doesn't limit concurrent access
-# as one might expect
-class ConnLock:
-    def __init__(self, parent):
-        self.parent = parent
-    def __enter__(self):
-        self.parent._db_write_lock.acquire()
-        self.conn = self.parent.engine.connect()
-        return self.conn
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.conn.rollback()  # yikes!
-        self.parent._db_write_lock.release()
-    def commit(self):
-        self.conn.commit()
 
 class Storage:
     session_id = None
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
-    inmemory = False
-    _db_write_lock : Lock
 
     # TODO IdVersionMap w/single object id 0?
     created_id = None
@@ -761,38 +739,19 @@ class Storage:
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    post_commit : Dict[object, List[Callable[[], None]]]
-
     def __init__(self, engine=None):
         self.engine = engine
-        self._db_write_lock = Lock()
         self.tx_versions = IdVersionMap()
 
         self.created_lock = Lock()
         self.created_cv = Condition(self.created_lock)
-        self.post_commit = {}
-
-    # TODO context manager thing for this?
-    def commit(self, conn):
-        logging.debug('Storage.on_commit %s %s',
-                      conn, self.post_commit.get(conn, []))
-        conn.commit()
-        if conn not in self.post_commit:
-            return
-        for fn in self.post_commit[conn]:
-            fn()
-        del self.post_commit[conn]
-
-    def add_post_commit(self, conn, fn):
-        if conn not in self.post_commit:
-            self.post_commit[conn] = []
-        self.post_commit[conn].append(fn)
 
     @staticmethod
     def get_sqlite_inmemory_for_test():
         engine = create_engine("sqlite+pysqlite://",
                                connect_args={'check_same_thread':False},
-                               poolclass=StaticPool)
+                               poolclass=QueuePool,
+                               pool_size=1, max_overflow=0)
         with engine.connect() as conn:
             dbapi_conn = conn.connection
             with open("init_storage.sql", "r") as f:
@@ -805,14 +764,14 @@ class Storage:
                 # pytype: enable=attribute-error
         s = Storage(engine)
         s._init_session()
-        s.inmemory = True
         return s
 
     @staticmethod
     def connect_sqlite(filename):
-        engine = create_engine("sqlite+pysqlite:///" + filename)
-        with engine.connect() as conn:
-            cursor = conn.connection.cursor()
+        engine = create_engine("sqlite+pysqlite:///" + filename,
+                               pool_size=1, max_overflow=0)
+        with engine.begin() as db_tx:
+            cursor = db_tx.connection.cursor()
             # should be sticky from schema but set it here anyway
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -844,10 +803,8 @@ class Storage:
         return s
 
 
-    def conn(self):
-        if self.inmemory:
-            return ConnLock(self)
-        return self.engine.connect()
+    def begin_transaction(self):
+        return self.engine.begin()
 
     def _init_session(self):
         self.metadata = MetaData()
@@ -866,7 +823,7 @@ class Storage:
         self.attempt_table = Table(
             'transactionattempts', self.metadata, autoload_with=self.engine)
 
-        with self.conn() as conn:
+        with self.begin_transaction() as db_tx:
             # for the moment, we only evict sessions that the pid no
             # longer exists but as this evolves, we might also
             # periodically check that our own session hasn't been evicted
@@ -875,16 +832,15 @@ class Storage:
                 pid = proc_self.pid,
                 pid_create = int(proc_self.create_time()))
                    .returning(self.session_table.c.id))
-            res = conn.execute(ins)
+            res = db_tx.execute(ins)
             self.session_id = res.fetchone()[0]
-            conn.commit()
 
     def recover(self):
-        with self.conn() as conn:
+        with self.begin_transaction() as db_tx:
             sel = select(self.session_table.c.id,
                          self.session_table.c.pid,
                          self.session_table.c.pid_create)
-            res = conn.execute(sel)
+            res = db_tx.execute(sel)
             for row in res:
                 (db_id, pid, pid_create) = row
                 if not Storage.check_pid(pid, pid_create):
@@ -892,9 +848,7 @@ class Storage:
                                  db_id, pid, pid_create)
                     dele = (delete(self.session_table)
                             .where(self.session_table.c.id == db_id))
-                    conn.execute(dele)
-
-            conn.commit()
+                    db_tx.execute(dele)
 
     @staticmethod
     def check_pid(pid, pid_create):
@@ -915,7 +869,7 @@ class Storage:
         return TransactionCursor(self)
 
     def load_one(self):
-        with self.conn() as conn:
+        with self.begin_transaction() as db_tx:
             # TODO this is currently a scan, index on/ORDER BY
             # next_attempt_time?
 
@@ -944,14 +898,14 @@ class Storage:
 
                           self.tx_table.c.json.is_not(None))
                    .limit(1))
-            res = conn.execute(sel)
+            res = db_tx.execute(sel)
             row = res.fetchone()
             if not row:
                 return None
             db_id,version = row
 
             tx = self.get_transaction_cursor()
-            tx._start_attempt_db(conn, db_id, version)
+            tx._start_attempt_db(db_tx, db_id, version)
 
             self.tx_versions.update(tx.id, tx.version)
 
@@ -959,10 +913,9 @@ class Storage:
             # finalized, this transaction may be crashing the system
             # -> quarantine
 
-            conn.commit()
             return tx
 
-    def _gc(self, conn, ttl : int) -> Tuple[int, int]:
+    def _gc(self, db_tx, ttl : int) -> Tuple[int, int]:
         # It would be fairly easy to support a staged policy like ttl
         # blobs after 1d but tx after 7d. Then there would be a
         # separate delete from TransactionBlobRefs with the shorter
@@ -974,7 +927,7 @@ class Storage:
             or_(self.tx_table.c.input_done.is_not(sa_true()),
                 self.tx_table.c.final_attempt_reason.is_not(None)),
             (time.time() - self.tx_table.c.last_update) > ttl)
-        res = conn.execute(del_tx)
+        res = db_tx.execute(del_tx)
         deleted_tx = res.rowcount
 
         # If you wanted to reuse a blob for longer than the ttl
@@ -989,14 +942,13 @@ class Storage:
             (time.time() - self.blob_table.c.last_update) > ttl,
             self.blob_table.c.id.in_(sel)
         )
-        res = conn.execute(del_blob)
+        res = db_tx.execute(del_blob)
         deleted_blob = res.rowcount
         return deleted_tx, deleted_blob
 
     def gc(self, ttl) -> Tuple[int, int]:
-        with self.conn() as conn:
-            deleted = self._gc(conn, ttl)
-            conn.commit()
+        with self.begin_transaction() as db_tx:
+            deleted = self._gc(db_tx, ttl)
             return deleted
 
     def wait_created(self, db_id, timeout=None):

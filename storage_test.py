@@ -8,6 +8,7 @@ import os
 
 import testing.postgresql
 
+import sqlite3
 import psycopg
 import psycopg.errors
 from storage import Storage, TransactionCursor
@@ -370,14 +371,30 @@ class StorageTestBase(unittest.TestCase):
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()
+        tempdir = tempfile.TemporaryDirectory()
+        filename = tempdir.name + '/db'
+        conn = sqlite3.connect(filename)
+        cursor = conn.cursor()
+        with open("init_storage.sql", "r") as f:
+            cursor.executescript(f.read())
+
+        self.s = Storage.connect_sqlite(filename)
+
+    def load_recovery(self):
+        with open('storage_test_recovery.sql', 'r') as f:
+            with self.s.begin_transaction() as db_tx:
+                db_tx.connection.cursor().executescript(f.read())
+
+
+class StorageTestSqliteInMemory(StorageTestBase):
+    def setUp(self):
+        super().setUp()
         self.s = Storage.get_sqlite_inmemory_for_test()
 
     def load_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.conn() as conn:
-                conn.connection.cursor().executescript(f.read())
-                conn.connection.commit()
-
+            with self.s.begin_transaction() as db_tx:
+                db_tx.connection.cursor().executescript(f.read())
 
 class StorageTestPostgres(StorageTestBase):
     def postgres_url(self, unix_socket_dir, port, db):
@@ -418,9 +435,8 @@ class StorageTestPostgres(StorageTestBase):
 
     def load_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.conn() as conn:
-                conn.connection.cursor().execute(f.read())
-                conn.connection.commit()
+            with self.s.begin_transaction() as db_tx:
+                db_tx.connection.cursor().execute(f.read())
 
 
 

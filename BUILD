@@ -51,6 +51,13 @@ py_test(name='storage_test_sqlite',
         data=['storage_test_recovery.sql'],
         deps=[':storage'])
 
+py_test(name='storage_test_sqlite_inmemory',
+        args=['StorageTestSqliteInMemory'],
+        main='storage_test.py',
+        srcs=['storage_test.py'],
+        data=['storage_test_recovery.sql'],
+        deps=[':storage'])
+
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
         main='storage_test.py',
