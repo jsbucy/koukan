@@ -88,7 +88,7 @@ class Exploder(Filter):
         self.mail_from = delta.mail_from
         if not delta.rcpt_to:
             # otherwise we'll take care of it in _on_rcpt()
-            delta.mail_response = Response(250)
+            delta.mail_response = Response(250, 'MAIL ok; exploder noop')
 
     def _on_rcpt(self, delta : TransactionMetadata,
                  rcpt : Mailbox, recipient : Recipient):

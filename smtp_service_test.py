@@ -6,28 +6,34 @@ import logging
 import unittest
 
 import time
+import socketserver
 
 from aiosmtpd.controller import Controller
 
 from filter import TransactionMetadata
-from smtp_service import SmtpHandler
+from smtp_service import SmtpHandler, service
 from response import Response
 from fake_endpoints import SyncEndpoint
+
+def find_unused_port() -> int:
+    with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
+        return s.server_address[1]
 
 class SmtpServiceTest(unittest.TestCase):
     def setUp(self):
         self.endpoint = SyncEndpoint()
 
         logging.basicConfig(level=logging.DEBUG)
-        self.handler = SmtpHandler(lambda: self.endpoint)
-        self.controller = Controller(self.handler)
-        self.controller.start()
+        endpoint_factory = lambda: self.endpoint
+        self.controller = service(endpoint_factory, port=find_unused_port())
+
+        logging.debug('controller port %d', self.controller.port)
 
         self.smtp_client = smtplib.SMTP(
             self.controller.hostname, self.controller.port)
 
-
     def tearDown(self):
+        self.smtp_client.quit()
         self.controller.stop()
         self.controller = None
 

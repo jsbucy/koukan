@@ -295,7 +295,8 @@ pytype_library(name='smtp_service',
                deps=[':blob',
                      ':smtp_auth',
                      ':response',
-                     ':filter'])
+                     ':filter',
+                     ':executor'])
 
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
