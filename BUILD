@@ -245,6 +245,9 @@ pytype_library(name='config',
 
 pytype_library(name='executor',
                srcs=['executor.py'])
+py_test(name='executor_test',
+        srcs=['executor_test.py'],
+        deps=[':executor'])
 
 pytype_library(name='blobs',
                srcs=['blobs.py'])

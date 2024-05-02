@@ -4,7 +4,7 @@ import time
 import faulthandler
 import sys
 
-from threading import Lock, Condition, Thread, current_thread
+from threading import Lock, Condition, Thread, current_thread, BoundedSemaphore
 from concurrent.futures import Future, ThreadPoolExecutor
 
 # wrapper for ThreadPoolExecutor
@@ -13,9 +13,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 # - test mode to save futures and check them all at shutdown to
 # propagate uncaught excptions
 class Executor:
-    inflight_count : int = 0
+    inflight_sem : BoundedSemaphore
     inflight : Dict[Thread, int]  # start time
-    inflight_limit : Optional[int] = None
     lock : Lock
     cv : Condition
     executor : ThreadPoolExecutor
@@ -25,7 +24,7 @@ class Executor:
     def __init__(self, inflight_limit, watchdog_timeout,
                  debug_futures=False):
         self.inflight = {}
-        self.inflight_limit = inflight_limit
+        self.inflight_sem = BoundedSemaphore(inflight_limit)
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
@@ -53,17 +52,14 @@ class Executor:
     def submit(self, fn, timeout=None) -> Optional[Future]:
         with self.lock:
             start = time.monotonic()
-            while timeout is None or ((time.monotonic() - start) < timeout):
-                self._check_watchdog_locked()
-                if self.cv.wait_for(
-                        lambda: self.inflight_count < self.inflight_limit, 1):
-                    break
-                else:
-                    return None
+            self._check_watchdog_locked()
+            if not self.inflight_sem.acquire(
+                    blocking=(timeout is None or timeout > 0),
+                    timeout=(None if timeout == 0 else timeout)):
+                return None
 
             fut = self.executor.submit(lambda: self._run(fn))
-            self.inflight_count += 1
-            if self.debug_futures:
+            if fut and (self.debug_futures is not None):
                 self.debug_futures.append(fut)
             return fut
 
@@ -72,12 +68,12 @@ class Executor:
         self.inflight[this_thread] = int(time.monotonic())
         try:
             fn()
-        except BaseException as e:
+        except Exception:
             logging.exception('Executor._run() exception')
-            raise e
+            raise
         finally:
             with self.lock:
-                self.inflight_count -= 1
+                self.inflight_sem.release(1)
                 del self.inflight[this_thread]
                 self.cv.notify_all()
 
@@ -86,6 +82,7 @@ class Executor:
             if not self.cv.wait_for(lambda: len(self.inflight) == 0,
                                     self.watchdog_timeout):
                 faulthandler.dump_traceback()
+                assert False
 
         self.executor.shutdown(wait=True, cancel_futures=True)
         if self.debug_futures:
