@@ -34,6 +34,7 @@ class RemoteHostFilter(Filter):
         if tx.remote_host is None or not tx.remote_host.host:
             return
 
+        ans = None
         try:
             ans = dns.resolver.resolve_address(tx.remote_host.host)
         except _ServFailExceptions:
