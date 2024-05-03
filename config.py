@@ -65,7 +65,7 @@ class Config:
         return Exploder(
             yaml['output_chain'],
             lambda: StorageWriterFilter(
-                self.storage, blob_id_factory=self.rest_id_factory()),
+                self.storage, rest_id_factory=self.rest_id_factory()),
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
@@ -77,7 +77,7 @@ class Config:
 
     def notification_endpoint(self):
         return StorageWriterFilter(self.storage,
-                                   blob_id_factory=self.rest_id_factory())
+                                   rest_id_factory=self.rest_id_factory())
 
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)
