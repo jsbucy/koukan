@@ -10,22 +10,20 @@ from response import Response
 from filter import Filter, HostPort, Mailbox, TransactionMetadata
 from blob import Blob
 
-REST_ID_BYTES = 4  # XXX configurable, use more in prod
-
 class StorageWriterFilter(Filter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
-    blob_id_factory : Callable[[], str]
+    rest_id_factory : Callable[[], str]
 
     def __init__(self, storage,
-                 blob_id_factory : Callable[[], str]):
+                 rest_id_factory : Callable[[], str]):
         self.storage = storage
-        self.blob_id_factory = blob_id_factory
+        self.rest_id_factory = rest_id_factory
 
     def _create(self, tx : TransactionMetadata):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
-        rest_id = secrets.token_urlsafe(REST_ID_BYTES)
+        rest_id = self.rest_id_factory()
         self.tx_cursor.create(rest_id, tx)
 
     def on_update(self, tx : TransactionMetadata,
@@ -55,7 +53,7 @@ class StorageWriterFilter(Filter):
             else:
                 blob_writer = self.storage.get_blob_writer()
                 # xxx this should be able to use storage id instead of rest id
-                rest_id = self.blob_id_factory()
+                rest_id = self.rest_id_factory()
                 blob_writer.create(rest_id)
                 d = tx.body_blob.read(0)
                 blob_writer.append_data(d, len(d))

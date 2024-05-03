@@ -41,7 +41,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testBlob(self):
         filter = StorageWriterFilter(
             self.storage,
-            blob_id_factory = lambda: str(time.time()))
+            rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
@@ -100,7 +100,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutMail(self):
         filter = StorageWriterFilter(
             self.storage,
-            blob_id_factory = lambda: str(time.time()))
+            rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
@@ -111,7 +111,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutRcpt(self):
         filter = StorageWriterFilter(
             self.storage,
-            blob_id_factory = lambda: str(time.time()))
+            rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
@@ -132,7 +132,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutData(self):
         filter = StorageWriterFilter(
             self.storage,
-            blob_id_factory = lambda: str(time.time()))
+            rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         blob_writer = self.storage.get_blob_writer()
