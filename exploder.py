@@ -57,7 +57,7 @@ class Exploder(Filter):
     data_timeout : Optional[float] = None
     msa : Optional[bool] = None
     max_attempts : Optional[int] = None
-    default_notifications : Optional[dict] = None
+    default_notification : Optional[dict] = None
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -69,14 +69,14 @@ class Exploder(Filter):
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  msa : Optional[bool] = None,
-                 default_notifications : Optional[dict] = None):
+                 default_notification : Optional[dict] = None):
         self.output_chain = output_chain
         self.factory = factory
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.msa = msa
         self.recipients = []
-        self.default_notifications = default_notifications
+        self.default_notification = default_notification
 
     def _on_mail(self, delta):
         # because of the way SMTP works, you have to return a response
@@ -97,16 +97,16 @@ class Exploder(Filter):
         # just send the envelope, we'll deal with any data below
         # TODO copy.copy() here?
 
-        # disable notifications for this first attempt even if it's
+        # disable notification for this first attempt even if it's
         # requested from downstream since we're going to report it downstream
         # synchronously
-        # TODO save any downstream notification request
+        # TODO save any downstream notification/retry params
         upstream_tx = TransactionMetadata(
             host = self.output_chain,
             mail_from = self.mail_from,
             rcpt_to = [rcpt],
             remote_host = delta.remote_host,
-            notifications = None,
+            notification = None,
             smtp_meta = delta.smtp_meta)
         recipient.upstream = self.factory()
         recipient.upstream.on_update(upstream_tx, self.rcpt_timeout)
@@ -301,15 +301,15 @@ class Exploder(Filter):
 
         # temp or needs notification
         for recipient in [r for r in self.recipients if r.status.temp()]:
-            if self.default_notifications is not None:
+            if self.default_notification is not None:
                 # The upstream tx could have permfailed right after we
-                # timed out the first/sync attempt w/notifications
+                # timed out the first/sync attempt w/notification
                 # disabled. The final upstream response will set
                 # final_attempt_reason in the tx so it isn't recoverable.  But
                 # we still need to send a notification.
 
                 # For the time being, Storage._write() clears
-                # final_attempt_reason if setting notifications. This opens a
+                # final_attempt_reason if setting notification. This opens a
                 # small window within which we will dupe/resend to the
                 # upstream after it previously permfailed.
 
@@ -323,7 +323,8 @@ class Exploder(Filter):
                 # TODO restore any saved downstream notification request
                 recipient.upstream.on_update(
                     TransactionMetadata(
-                        notifications=self.default_notifications))
+                        notification=self.default_notification,
+                        retry={}))
 
         message = None
         if msa_async_temp:

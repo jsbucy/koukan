@@ -45,8 +45,9 @@ class OutputHandlerTest(unittest.TestCase):
             blob_writer.append_data(d[i:i+1], len(d))
 
         tx_cursor.write_envelope(
-            TransactionMetadata(body='blob_rest_id',
-                                max_attempts = 100),
+            TransactionMetadata(
+                body='blob_rest_id',
+                retry = {'max_attempts': 100}),
             reuse_blob_rest_id=['blob_rest_id'])
         del tx_cursor
 
@@ -244,7 +245,8 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(
             host='outbound',
-            notifications = {'host': 'smtp-out'}))
+            notification = {'host': 'smtp-out'},
+            retry={}))
 
         tx_cursor = self.storage.load_one()
         retry_params = {}
@@ -291,7 +293,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNone(next_attempt_time)
 
 
-    def test_notifications(self):
+    def test_notification(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
@@ -308,9 +310,10 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer.append_data(d, len(d))
 
         tx_cursor.write_envelope(
-            TransactionMetadata(body='blob_rest_id',
-                                max_attempts = 1,
-                                notifications = {'host': 'smtp-out'}),
+            TransactionMetadata(
+                body='blob_rest_id',
+                retry={'max_attempts': 1},
+                notification = {'host': 'smtp-out'}),
             reuse_blob_rest_id=['blob_rest_id'])
         del tx_cursor
 

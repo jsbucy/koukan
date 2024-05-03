@@ -208,8 +208,10 @@ class TransactionCursor:
         # e.g. overwriting an existing field
         # xxx return/throw
         assert tx_to_db is not None
-        logging.debug('TransactionCursor._write %s',
-                      tx_to_db.to_json(WhichJson.DB))
+        logging.debug(
+            'TransactionCursor._write %d %s final_attempt_reason=%s %s',
+            self.id, self.rest_id, final_attempt_reason,
+            tx_to_db.to_json(WhichJson.DB))
         new_version = self.version + 1
         # TODO all updates '... WHERE inflight_session_id =
         #   self.parent.session' ?
@@ -222,10 +224,8 @@ class TransactionCursor:
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
 
-        # TODO this is a kludge for the exploder to ensure we send a
-        # bounce in certain edge cases cf Exploder._append_data()
-        if tx_delta.notifications is not None:
-            assert final_attempt_reason is None
+        if ((tx_delta.retry is not None) and
+            self.final_attempt_reason == 'oneshot'):
             upd = upd.values(final_attempt_reason = None)
 
         if tx_delta.message_builder:
@@ -413,6 +413,8 @@ class TransactionCursor:
 
     def _start_attempt_db(self, db_tx, db_id, version):
         assert self.parent.session_id is not None
+        self._load_db(db_tx, db_id=db_id)
+        assert self.tx is not None
         new_version = version + 1
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
@@ -420,6 +422,12 @@ class TransactionCursor:
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id)
                .returning(self.parent.tx_table.c.version))
+
+        # tx without retries enabled can only be loaded once
+        if self.tx.retry is None:
+            self.final_attempt_reason = "oneshot"
+            upd = upd.values(final_attempt_reason = self.final_attempt_reason)
+
         res = db_tx.execute(upd)
         assert res.fetchone()[0] == new_version
 
@@ -874,19 +882,21 @@ class Storage:
             # next_attempt_time?
 
             # NOTE we currently don't recover !input_done from
-            # different sessions. We need to surface some more
-            # information in the rest tx (at least attempt#) for the
-            # client to have a chance of handling it
-            # correctly. Longer-term, we'd like to make this
-            # work. Possibly we need a more explicit "handoff" from
-            # the input side to the output side, otherwise another
-            # process/instance might steal it?
+            # different sessions. We set final_attempt_reason in
+            # _start_attempt_db() if retries aren't enabled so non-durable
+            # transactions effectively can only be loaded once.
+
+            # TODO We need to surface some more information in the
+            # rest tx (at least attempt#) for the client to have a
+            # chance of handling it correctly. Longer-term, we'd like
+            # to make this work. Possibly we need a more explicit
+            # "handoff" from the input side to the output side,
+            # otherwise another process/instance might steal it?
             now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
 
-                          # TODO also #attempts is 0?
                           or_(self.tx_table.c.input_done.is_(True),
                               self.tx_table.c.creation_session_id ==
                               self.session_id),

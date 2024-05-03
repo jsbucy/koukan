@@ -33,7 +33,7 @@ root_yaml = {
             'output_handler': {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1,
-                'notifications_enabled': False,
+                'notification_enabled': False,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -45,7 +45,7 @@ root_yaml = {
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
-                       'default_notifications': {
+                       'default_notification': {
                            'host': 'submission'
                        }}]
         },
@@ -71,12 +71,12 @@ root_yaml = {
             'output_handler': {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1,
-                'notifications_enabled': False,
+                'notification_enabled': False,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
                        'msa': False,
-                       'default_notifications': {
+                       'default_notification': {
                            'host': 'inbound-gw'
                        }}]
         },
@@ -359,8 +359,8 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertEqual(tx.data_response.code, 204)
 
-    def test_notifications(self):
-        logging.info('test_notifications')
+    def test_notification(self):
+        logging.info('test_notification')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
@@ -377,7 +377,7 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t)
 
         for i in range(0,3):
-            logging.debug('test_notifications upstream tx %d', i)
+            logging.debug('test_notification upstream tx %d', i)
             upstream_endpoint = SyncEndpoint()
             upstream_endpoint.set_mail_response(Response(250))
             upstream_endpoint.add_rcpt_response(Response(450))

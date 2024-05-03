@@ -184,19 +184,6 @@ _tx_fields = [
             accept=[WhichJson.DB],
             emit=[WhichJson.REST_READ,
                   WhichJson.DB]),
-    TxField('max_attempts',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_READ,
-                  WhichJson.DB]),
-    # delta from tx creation
-    TxField('deadline',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_READ,
-                  WhichJson.DB]),
     TxField('body',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
@@ -205,9 +192,16 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
             emit=[WhichJson.REST_READ]),
-    TxField('notifications',
-            accept=[WhichJson.DB],
-            emit=[WhichJson.DB]),
+    TxField('notification',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB]),
+    TxField('retry',
+            accept=[WhichJson.REST_CREATE,
+                    WhichJson.DB],
+            emit=[WhichJson.REST_READ,
+                  WhichJson.DB]),
     TxField('smtp_meta',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.DB],
@@ -232,8 +226,6 @@ class TransactionMetadata:
     data_response : Optional[Response] = None
 
     attempt_count : Optional[int] = None
-    max_attempts : Optional[int] = None
-    deadline : Optional[int] = None
 
     # in rest, this is the url to the body blob, in-memory, it is the id
     # suffix of the blob url
@@ -247,7 +239,8 @@ class TransactionMetadata:
     message_builder : Optional[dict] = None
 
     # arbitrary json for now
-    notifications : Optional[dict] = None
+    notification : Optional[dict] = None
+    retry : Optional[dict] = None
 
     smtp_meta: Optional[dict] = None
 
@@ -259,10 +252,10 @@ class TransactionMetadata:
                  mail_from : Optional[Mailbox] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
                  host : Optional[str] = None,
-                 max_attempts : Optional[int] = None,
                  body : Optional[str] = None,
                  body_blob : Optional[Blob] = None,
-                 notifications : Optional[dict] = None,
+                 notification : Optional[dict] = None,
+                 retry : Optional[dict] = None,
                  smtp_meta : Optional[dict] = None):
         self.local_host = local_host
         self.remote_host = remote_host
@@ -270,11 +263,10 @@ class TransactionMetadata:
         self.rcpt_to = rcpt_to if rcpt_to else []
         self.rcpt_response = []
         self.host = host
-        if max_attempts is not None:
-            self.max_attempts = max_attempts
         self.body = body
         self.body_blob = body_blob
-        self.notifications = notifications
+        self.notification = notification
+        self.retry = retry
         self.smtp_meta = smtp_meta
 
 #    def __bool__(self):

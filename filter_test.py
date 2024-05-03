@@ -72,5 +72,10 @@ class FilterTest(unittest.TestCase):
         tx = TransactionMetadata.from_json({'body': ''}, WhichJson.REST_UPDATE)
         self.assertEqual(tx.body, '')
 
+    def testEmptyDict(self):
+        tx = TransactionMetadata(retry = {})
+        tx = TransactionMetadata.from_json(tx.to_json())
+        self.assertEqual(tx.retry, {})
+
 if __name__ == '__main__':
     unittest.main()

@@ -175,8 +175,8 @@ class Service:
               output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
               output_yaml.get('downstream_data_timeout', 60),
-            notifications_enabled =
-              output_yaml.get('notifications_enabled', True),
+            notification_enabled =
+              output_yaml.get('notification_enabled', True),
             notification_factory=lambda: self.config.notification_endpoint(),
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),

@@ -36,14 +36,15 @@ class StorageTestBase(unittest.TestCase):
         self.s.engine.dispose()
 
     def dump_db(self):
-        with self.s.conn() as conn:
-            for l in conn.connection.iterdump():
+        with self.s.begin_transaction() as db_tx:
+            for l in db_tx.connection.iterdump():
                 logging.debug(l)
 
     def test_basic(self):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id', TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host'))
+
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
 
@@ -71,15 +72,16 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
-        tx_writer.write_envelope(TransactionMetadata(body='tx_rest_id',
-                                                     max_attempts =100),
-                                 reuse_blob_rest_id=['blob_rest_id'])
-
+        tx_writer.write_envelope(
+            TransactionMetadata(
+                body='tx_rest_id',
+                retry={'max_attempts': 100}),
+            reuse_blob_rest_id=['blob_rest_id'])
         logging.info('test_basic check tx input done')
         self.assertTrue(tx_writer.input_done)
 
         tx_reader.load()
-        self.assertEqual(tx_reader.tx.max_attempts, 100)
+        self.assertEqual(tx_reader.tx.retry['max_attempts'], 100)
         tx_reader.add_rcpt_response([Response(456, 'busy')])
         tx_reader.write_envelope(TransactionMetadata(),
                                  #output_done = False,
@@ -178,7 +180,8 @@ class StorageTestBase(unittest.TestCase):
         writer.create('xyz', TransactionMetadata(
             local_host=HostPort('local_host', 25),
             remote_host=HostPort('remote_host', 2525),
-            host='host'))
+            host='host',
+            retry={}))
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
@@ -208,7 +211,8 @@ class StorageTestBase(unittest.TestCase):
         writer.create('xyz', TransactionMetadata(
             host='host',
             local_host=HostPort('local_host', 25),
-            remote_host=HostPort('remote_host', 2525)),
+            remote_host=HostPort('remote_host', 2525),
+            retry={}),
             reuse_blob_rest_id=[blob_writer.rest_id])
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -267,7 +271,8 @@ class StorageTestBase(unittest.TestCase):
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
         tx_cursor.create('xyz', TransactionMetadata(
-           host='outbound'))
+            host='outbound',
+            retry={}))
 
         # needs to be inflight to wait
         reader = self.s.load_one()

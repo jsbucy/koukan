@@ -69,7 +69,7 @@ class Config:
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
-            default_notifications=yaml.get('default_notifications', None))
+            default_notification=yaml.get('default_notification', None))
 
     def rest_id_factory(self):
         entropy = self.root_yaml.get('global', {}).get('rest_id_entropy', 16)

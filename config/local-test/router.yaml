@@ -20,14 +20,14 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
-    notifications_enabled: false
+    notification_enabled: false
   chain:
   - filter: exploder
     output_chain: msa-output
     msa: true
     rcpt_timeout: 4
     data_timeout: 4
-    default_notifications:
+    default_notification:
       host: msa-output
 
 - name: msa-output
@@ -69,13 +69,13 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
-    notifications_enabled: false
+    notification_enabled: false
   chain:
   - filter: exploder
     output_chain: mx-out
     rcpt_timeout: 4
     data_timeout: 4
-    default_notifications:
+    default_notification:
       host: msa-output
 
 - name: mx-out

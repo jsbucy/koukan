@@ -20,14 +20,14 @@ class OutputHandler:
     rest_id : str
     notification_factory : Callable[[], Filter]
     mailer_daemon_mailbox : Optional[str] = None
-    notifications_enabled : bool
+    notification_enabled : bool
 
     def __init__(self, cursor : TransactionCursor, endpoint : Filter,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 notifications_enabled = True,
+                 notification_enabled = True,
                  retry_params : Optional[dict] = {}):
         self.cursor = cursor
         self.endpoint = endpoint
@@ -36,7 +36,7 @@ class OutputHandler:
         self.data_timeout = downstream_data_timeout
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
-        self.notifications_enabled = notifications_enabled
+        self.notification_enabled = notification_enabled
         self.retry_params = retry_params
 
     def _output(self) -> Optional[Response]:
@@ -175,26 +175,32 @@ class OutputHandler:
         logging.info('OutputHandler.cursor_to_endpoint() %s done %s',
                      self.rest_id, resp)
 
-        logging.debug('OutputHandler.cursor_to_endpoint() %s attempt %d max %s',
-                      self.rest_id, self.cursor.attempt_id,
-                      self.cursor.tx.max_attempts)
-
-        next_attempt_time = None
-        final_attempt_reason = None
-        if resp.ok():
-            final_attempt_reason = 'upstream response success'
-        elif resp.perm():
-            final_attempt_reason = 'upstream response permfail'
-        elif not self.cursor.input_done:
-            final_attempt_reason = 'downstream timeout'
-        else:
-            final_attempt_reason, next_attempt_time = self._next_attempt_time(
-                time.time())
-
-        self._maybe_send_notification(resp, final_attempt_reason is not None)
+        logging.debug(
+            'OutputHandler.cursor_to_endpoint() %s attempt %d retry %s',
+            self.rest_id, self.cursor.attempt_id,
+            self.cursor.tx.retry)
 
         while True:
             try:
+                # something downstream (i.e. exploder) could have
+                # enabled retries as a result of an upstream error so
+                # include this logic in the storage version conflict
+                # retry loop
+                next_attempt_time = None
+                final_attempt_reason = None
+                if resp.ok():
+                    final_attempt_reason = 'upstream response success'
+                elif resp.perm():
+                    final_attempt_reason = 'upstream response permfail'
+                elif not self.cursor.input_done:
+                    final_attempt_reason = 'downstream timeout'
+                else:
+                    final_attempt_reason, next_attempt_time = (
+                        self._next_attempt_time(time.time()))
+
+                self._maybe_send_notification(
+                    resp, final_attempt_reason is not None)
+
                 delta = TransactionMetadata()
                 delta.attempt_count = self.cursor.attempt_id
                 self.cursor.write_envelope(
@@ -207,7 +213,10 @@ class OutputHandler:
                 self.cursor.load()
 
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
-        max_attempts = self.cursor.tx.max_attempts
+        if self.cursor.tx.retry is None:
+            return 'oneshot', None
+        max_attempts = self.cursor.tx.retry.get('max_attempts', None)
+        # TODO separate function to merge tx.retry, self.retry_params, defaults
         if max_attempts is None:
             max_attempts = self.retry_params.get('max_attempts', 30)
         if max_attempts is not None and (
@@ -223,7 +232,7 @@ class OutputHandler:
         # TODO jitter?
         logging.debug('OutputHandler._next_attempt_time %s %d %d',
                       self.rest_id, int(dt), next)
-        deadline = self.cursor.tx.deadline
+        deadline = self.cursor.tx.retry.get('deadline', None)
         if deadline is None:
             deadline = self.retry_params.get('deadline', 86400)
         if deadline is not None and ((next - self.cursor.creation) > deadline):
@@ -233,11 +242,11 @@ class OutputHandler:
     def _maybe_send_notification(self, resp, last_attempt : bool):
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s enabled %s last %s',
-                      self.rest_id, self.notifications_enabled, last_attempt)
+                      self.rest_id, self.notification_enabled, last_attempt)
 
-        if not self.notifications_enabled:
+        if not self.notification_enabled:
             return
-        if self.cursor.tx.notifications is None:
+        if self.cursor.tx.notification is None:
             return
         if resp.ok():
             return
@@ -270,14 +279,17 @@ class OutputHandler:
         # TODO link these transactions somehow
         # self.cursor.id should end up in this tx and this tx id
         # should get written back to self.cursor
-        notify_json = self.cursor.tx.notifications
+        notify_json = self.cursor.tx.notification
+        # The endpoint used for notifications should go out directly,
+        # *not* via the exploder which has the potential to enable
+        # bounces on this bounce, etc.
         notification_tx = TransactionMetadata(
             host=notify_json['host'],
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
             body_blob = InlineBlob(dsn),
-            max_attempts = notify_json.get('max_attempts', 10))
+            retry={})
         notification_endpoint = self.notification_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)
