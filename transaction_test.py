@@ -24,8 +24,6 @@ class TransactionTest(unittest.TestCase):
         for l in self.storage.db.iterdump():
             print(l)
 
-    # xxx this should create a new RestServiceTransaction for every
-    # call since that's how it's invoked, clear out state in tx_cursor
     def test_rest_transaction(self):
         rest_tx = RestServiceTransaction.create_tx(
             self.storage, 'host', rest_id_factory=lambda: str(time.time()))
@@ -96,12 +94,8 @@ class TransactionTest(unittest.TestCase):
         logging.info('%d %s', rest_resp.status_code, str(rest_resp.data))
         self.assertEqual(rest_resp.status_code, 200)
 
-        rest_tx = RestServiceTransaction.load_tx(self.storage, rest_id)
-        self.assertIsNotNone(rest_tx)
-        rest_resp = rest_tx.patch({'max_attempts': 100})
-        self.assertEqual(rest_resp.status_code, 200)
 
-    # test resue blob
+    # TODO test resue blob
 
 
     def put(self, blob_tx : RestServiceTransaction, offset, d, overall=None,

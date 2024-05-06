@@ -20,7 +20,6 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
-    notification_enabled: false
   chain:
   - filter: exploder
     output_chain: msa-output
@@ -69,7 +68,6 @@ endpoint:
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
-    notification_enabled: false
   chain:
   - filter: exploder
     output_chain: mx-out

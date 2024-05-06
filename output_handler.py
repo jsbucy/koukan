@@ -20,14 +20,12 @@ class OutputHandler:
     rest_id : str
     notification_factory : Callable[[], Filter]
     mailer_daemon_mailbox : Optional[str] = None
-    notification_enabled : bool
 
     def __init__(self, cursor : TransactionCursor, endpoint : Filter,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 notification_enabled = True,
                  retry_params : Optional[dict] = {}):
         self.cursor = cursor
         self.endpoint = endpoint
@@ -36,7 +34,6 @@ class OutputHandler:
         self.data_timeout = downstream_data_timeout
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
-        self.notification_enabled = notification_enabled
         self.retry_params = retry_params
 
     def _output(self) -> Optional[Response]:
@@ -177,8 +174,7 @@ class OutputHandler:
 
         logging.debug(
             'OutputHandler.cursor_to_endpoint() %s attempt %d retry %s',
-            self.rest_id, self.cursor.attempt_id,
-            self.cursor.tx.retry)
+            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry)
 
         while True:
             try:
@@ -241,11 +237,8 @@ class OutputHandler:
 
     def _maybe_send_notification(self, resp, last_attempt : bool):
         logging.debug('OutputHandler._maybe_send_notification '
-                      '%s enabled %s last %s',
-                      self.rest_id, self.notification_enabled, last_attempt)
+                      '%s last %s', self.rest_id, last_attempt)
 
-        if not self.notification_enabled:
-            return
         if self.cursor.tx.notification is None:
             return
         if resp.ok():

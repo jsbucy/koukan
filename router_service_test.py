@@ -33,7 +33,6 @@ root_yaml = {
             'output_handler': {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1,
-                'notification_enabled': False,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -71,7 +70,6 @@ root_yaml = {
             'output_handler': {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1,
-                'notification_enabled': False,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
@@ -144,10 +142,9 @@ class RouterServiceTest(unittest.TestCase):
         for i in range(1,3):
             rest_endpoint = RestEndpoint(
                 static_base_url=self.router_url,
-                http_host='inbound-gw')
+                http_host='submission')
             tx = TransactionMetadata(
-                mail_from = Mailbox('probe-from%d' % i),
-                max_attempts = 1)
+                mail_from = Mailbox('probe-from%d' % i))
             t = self.start_tx_update(rest_endpoint, tx)
             logging.info('setUp %s', tx.mail_response)
             self.service._dequeue()
@@ -190,7 +187,8 @@ class RouterServiceTest(unittest.TestCase):
     def test_retry(self):
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='submission')
-        rest_resp = rest_endpoint._start(TransactionMetadata(), {})
+        tx = TransactionMetadata(retry={})
+        rest_resp = rest_endpoint._start(tx, tx.to_json())
         tx_json = rest_resp.json()
         logging.debug('RouterServiceTest.test_retry create %s %s',
                       rest_resp, tx_json)
@@ -242,7 +240,6 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
         rest_endpoint.get_json()
-        rest_endpoint.on_update(TransactionMetadata(max_attempts=100))
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
