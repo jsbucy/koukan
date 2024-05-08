@@ -2,6 +2,7 @@ import unittest
 import logging
 
 from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
+from response import Response
 
 class FilterTest(unittest.TestCase):
 
@@ -76,6 +77,18 @@ class FilterTest(unittest.TestCase):
         tx = TransactionMetadata(retry = {})
         tx = TransactionMetadata.from_json(tx.to_json())
         self.assertEqual(tx.retry, {})
+
+    def testRespFields(self):
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to = [Mailbox('bob1'), Mailbox('bob2')])
+        self.assertTrue(tx.req_inflight())
+        tx.rcpt_response = [Response()]
+        json = tx.to_json(WhichJson.REST_READ)
+        self.assertEqual(json['mail_response'], {})
+        self.assertEqual(json['rcpt_response'], [
+            {'code': 200, 'message': 'ok'},
+            {}])
 
 if __name__ == '__main__':
     unittest.main()

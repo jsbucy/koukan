@@ -312,25 +312,85 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
+
+    # returns True if there is a request field (mail/rcpt/data)
+    # without a corresponding response field
+    def req_inflight(self) -> bool:
+        if self.mail_from and not self.mail_response:
+            return True
+        if len(self.rcpt_to) > len(self.rcpt_response):
+            return True
+        for i in range(0,len(self.rcpt_to)):
+            if self.rcpt_to[i] is not None and (
+                    i >= len(self.rcpt_response) or
+                    self.rcpt_response[i] is None):
+                return True
+        if self.body_blob and (self.body_blob.len() ==
+                                  self.body_blob.content_length()) and (
+            not self.data_response):
+            return True
+        return False
+
+    # Converts a response field (mail/rcpt/data) to json following the
+    # convention that if the corresponding request field is populated,
+    # return {} for the response to indicate that it is accepted and
+    # inflight.
+    # TODO in hindsight, this is perhaps not the best representation,
+    # probably it should just return the req fields instead
+    def _resp_field(self, name, field, which_js : WhichJson, json):
+        if which_js != WhichJson.REST_READ or (
+                name not in ["mail_response", "rcpt_response",
+                             "data_response"]):
+            return False
+        if name in ["mail_response", "data_response"]:
+            if ((name == 'mail_response' and self.mail_from and
+                 not self.mail_response) or
+                (name == 'data_response' and self.body and
+                 not self.data_response)):
+                json[name] = {}
+                return True
+            return False
+
+        assert name == 'rcpt_response'
+        if not self.rcpt_to:
+            return False
+
+        out = [{}] * len(self.rcpt_to)
+        for i in range(0, len(self.rcpt_to)):
+            if (self.rcpt_response and i < len(self.rcpt_response) and
+                self.rcpt_response[i] is not None):
+                out[i] = self.rcpt_response[i].to_json()
+
+        json[name] = out
+        return True
+
+    def _field_to_json(self, name, field, which_js : WhichJson, json):
+        if not field.valid_emit(which_js):
+            return
+
+        v_js = None
+        if self._resp_field(name, field, which_js, json):
+            return
+        if not hasattr(self, name):
+            return
+        if (v := getattr(self, name)) is None:
+            return
+
+        if isinstance(v, str) or isinstance(v, int) or isinstance(v, dict):
+            v_js = v
+        elif isinstance(v, list):
+            if v:
+                v_js = [vv.to_json() for vv in v]
+        else:
+            v_js = v.to_json()
+        if v_js is not None:
+            json[name] = v_js
+
+
     def to_json(self, which_js=WhichJson.ALL):
         json = {}
         for name,field in tx_json_fields.items():
-            if not field.valid_emit(which_js):
-                continue
-            if hasattr(self, name) and getattr(self, name) is not None:
-                v = getattr(self, name)
-                if v is None:
-                    continue
-                v_js = None
-                if isinstance(v, str) or isinstance(v, int) or isinstance(v, dict):
-                    v_js = v
-                elif isinstance(v, list):
-                    if v:
-                        v_js = [vv.to_json() for vv in v]
-                else:
-                    v_js = v.to_json()
-                if v_js is not None:
-                    json[name] = v_js
+            self._field_to_json(name, field, which_js, json)
         return json
 
     # apply a delta to self -> next

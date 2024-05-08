@@ -2,6 +2,8 @@ from typing import Any, Dict, Optional
 from abc import ABC, abstractmethod
 import logging
 import time
+from threading import Condition, Lock
+import copy
 
 from flask import Response as FlaskResponse, Request as FlaskRequest, jsonify
 from werkzeug.datastructures import ContentRange
@@ -11,21 +13,80 @@ from response import Response as MailResponse
 from blob import Blob, InlineBlob
 from blobs import BlobStorage
 from rest_service_handler import Handler, HandlerFactory
-from filter import TransactionMetadata, Filter
+from filter import TransactionMetadata, Filter, WhichJson
+from executor import Executor
 
-# XXX this expects the endpoint to look like SmtpEndpoint which is now
-# completely different from the current Filter api
+class FilterExecutor:
+    executor : Executor
+    filter : Filter
+    tx : Optional[TransactionMetadata] = None
+    mu : Lock
+    cv : Condition
+    inflight : bool = False
+    rest_id : str
+    _last_update : float
+
+    def __init__(self, executor : Executor, filter : Filter, rest_id : str):
+        self.executor = executor
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+        self.filter = filter
+        self.rest_id = rest_id
+        self._last_update = time.monotonic()
+
+    # for use in ttl/gc idle calcuation
+    # returns now if there is an update inflight i.e. do not gc
+    def last_update(self) -> float:
+        if self.inflight:
+            return time.monotonic()
+        return self._last_update
+
+    def _update(self, tx):
+        logging.debug('FilterExecutor._update %s', tx)
+        self.filter.on_update(tx)
+        logging.debug('FilterExecutor._update done %s', tx)
+        with self.mu:
+            if self.tx is None:
+                self.tx = copy.copy(tx)
+            else:
+                self.tx = self.tx.merge(tx)
+            logging.debug('FilterExecutor._update done merged %s', self.tx)
+            self.inflight = False
+            self.cv.notify_all()
+            self._last_update = time.monotonic()
+
+    def _get_locked(self, timeout) -> FlaskResponse:
+        self.cv.wait_for(
+            lambda: self.tx is not None and not self.tx.req_inflight(), timeout)
+        return jsonify(self.tx.to_json(WhichJson.REST_READ) if self.tx else {})
+
+    def update(self, tx : TransactionMetadata,
+               timeout : Optional[float] = None
+               ) -> FlaskResponse:
+        with self.mu:
+            if self.inflight:
+                return FlaskResponse(status=412, response=['write conflict'])
+            self.inflight = True
+            if self.executor.submit(lambda: self._update(tx)) is None:
+                return FlaskResponse(status=500, response=['server busy'])
+            return self._get_locked(timeout)
+
+    def get(self, timeout : Optional[float] = None) -> FlaskResponse:
+        with self.mu:
+            return self._get_locked(timeout)
+
+
 class RestEndpointAdapter(Handler):
-    endpoint : Any
+    executor : Optional[FilterExecutor]
     _tx_rest_id : str
 
     blob_storage : BlobStorage
     _blob_rest_id : str
 
-    def __init__(self, endpoint=None,
+    def __init__(self, executor : Optional[FilterExecutor] = None,
                  tx_rest_id=None,
                  blob_storage=None, blob_rest_id=None):
-        self.endpoint = endpoint
+        self.executor = executor
         self._tx_rest_id = tx_rest_id
         self.blob_storage = blob_storage
         self._blob_rest_id = blob_rest_id
@@ -36,58 +97,37 @@ class RestEndpointAdapter(Handler):
     def blob_rest_id(self):
         return self._blob_rest_id
 
-    # reject oneshot body, must PATCH
-    def _body(self, req_json):
-        if 'body' not in req_json:
-            return
-        if req_json['body'] != '':
-            raise NotImplementedError()
-
-    # TODO this running self.endpoint (i.e. SmtpEndpoint)
-    # synchronously in the wsgi handler. Probably should dispatch to
-    # Executor, wait on upstream result with timeout for rest resp.
     def start(self, req_json,
               timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
-        self.endpoint.start(tx)
-        self._body(req_json)
-        return self.get({})
+        return self.executor.update(tx)
 
     def get(self, req_json : Dict[str, Any],
             timeout : Optional[float] = None) -> FlaskResponse:
-        json_out = {}
-
-        # xxx inflight response fields per tx req fields
-        if self.endpoint.mail_resp:
-            json_out['mail_response'] = self.endpoint.mail_resp.to_json()
-        if self.endpoint.rcpt_resp:
-            json_out['rcpt_response'] = [
-                r.to_json() for r in self.endpoint.rcpt_resp]
-        if self.endpoint.data_response:
-            json_out['data_response'] = self.endpoint.data_response.to_json()
-
-        logging.debug('RestEndpointAdapter.get %s', json_out)
-
-        return jsonify(json_out)
+        return self.executor.get(timeout)
 
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.patch %s %s',
                       self._tx_rest_id, req_json)
-        if req_json.keys() != {'body'}:
-            raise NotImplementedError()
-        blob_id = req_json['body'].removeprefix('/blob/')
-        if not (blob := self.blob_storage.get(blob_id)):
-            return FlaskResponse(status=404, response=['blob not found'])
+        tx = TransactionMetadata.from_json(req_json)
+        if tx is None:
+            return FlaskResponse(status=400, response=['invalid request'])
+        if tx.body:
+            blob_id = tx.body.removeprefix('/blob/')
+            body_blob = self.blob_storage.get(blob_id)
+            if body_blob is None:
+                return FlaskResponse(status=404, response=['blob not found'])
+            tx.body_blob = body_blob
+        return self.executor.update(tx)
 
-        resp = self.endpoint.append_data(last=True, blob=blob)
-
-        # TODO this needs to yield something in the tx json, length, etc.
-
-        return self.get(req_json={})
-
-    def etag(self):
-        return None
+    def etag(self) -> str:
+        # TODO TBD exactly how to sort this out, possibly a subclass
+        # of Filter that provides this?
+        assert hasattr(self.executor.filter, 'version')
+        # pytype: disable=attribute-error
+        return ('%d' % self.executor.filter.version)
+        # pytype: enable=attribute-error
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = self.blob_storage.create()
@@ -121,29 +161,32 @@ class RestEndpointAdapter(Handler):
 
 class EndpointFactory(ABC):
     @abstractmethod
-    def create(self, http_host : str) -> Optional[object]:  # Endpoint
+    def create(self, http_host : str) -> FilterExecutor:
         pass
     @abstractmethod
-    def get(self, rest_id : str) -> Optional[object]:  # Endpoint
+    def get(self, rest_id : str) -> FilterExecutor:
         pass
 
 class RestEndpointAdapterFactory(HandlerFactory):
+    endpoint_factory : EndpointFactory
     blob_storage : BlobStorage
+
     def __init__(self, endpoint_factory, blob_storage : BlobStorage):
         self.endpoint_factory = endpoint_factory
         self.blob_storage = blob_storage
 
     def create_tx(self, http_host) -> Optional[RestEndpointAdapter]:
         endpoint = self.endpoint_factory.create(http_host)
-        if endpoint is None: return None
-        return RestEndpointAdapter(endpoint=endpoint,
+        if endpoint is None:
+            return None
+        return RestEndpointAdapter(executor=endpoint,
                                    tx_rest_id=endpoint.rest_id,
                                    blob_storage=self.blob_storage)
 
     def get_tx(self, tx_rest_id) -> Optional[RestEndpointAdapter]:
         endpoint = self.endpoint_factory.get(tx_rest_id)
         if endpoint is None: return None
-        return RestEndpointAdapter(endpoint=endpoint,
+        return RestEndpointAdapter(executor=endpoint,
                                    tx_rest_id=tx_rest_id,
                                    blob_storage=self.blob_storage)
 

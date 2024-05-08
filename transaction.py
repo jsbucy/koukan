@@ -160,61 +160,21 @@ class RestServiceTransaction(Handler):
             else:
                 break
 
-            # only wait if something is inflight upstream and we think the
-            # status might change soon
             logging.info('RestServiceTransaction.get rcpt_to=%s rcpt_resp=%s',
                          self.tx_cursor.tx.rcpt_to,
                          self.tx_cursor.tx.rcpt_response)
-            wait_mail = (self.tx_cursor.tx.mail_from is not None and
-                         self.tx_cursor.tx.mail_response is None)
-            wait_rcpt = (len(self.tx_cursor.tx.rcpt_response) <
-                         len(self.tx_cursor.tx.rcpt_to))
-            wait_data = ((self.tx_cursor.last or self.tx_cursor.tx.body) and
-                         self.tx_cursor.tx.data_response is None)
-            if not (wait_mail or wait_rcpt or wait_data):
+            if not self.tx_cursor.tx.req_inflight():
                 break
-            logging.info('RestServiceTransaction.get wait '
-                         'mail=%s rcpt=%s data=%s deadline_left=%f',
-                         wait_mail, wait_rcpt, wait_data, deadline_left)
             self.tx_cursor.wait(timeout=deadline_left)
             logging.info('RestServiceTransaction.get wait done')
 
-        resp_json = {}
-        resp_js = lambda r: r.to_json() if r is not None else {}
-        if (self.tx_cursor.tx.mail_from is not None or
-            self.tx_cursor.tx.mail_response is not None):
-            resp_json['mail_response'] = resp_js(
-                self.tx_cursor.tx.mail_response)
-        if self.tx_cursor.tx.rcpt_to:
-            rcpt_resp = self.tx_cursor.tx.rcpt_response
-            rcpt_resp_json = resp_json['rcpt_response'] = []
-            for i,r in enumerate(self.tx_cursor.tx.rcpt_to):
-                if i < len(rcpt_resp):
-                    rcpt_resp_json.append(rcpt_resp[i].to_json())
-                else:
-                    rcpt_resp_json.append({})
+        resp_json = self.tx_cursor.tx.to_json(WhichJson.REST_READ)
 
         # TODO surface more info about body here, finalized or not,
         # len, sha1, etc
 
-        data_resp = False
-        if self.tx_cursor.tx.data_response:
-            data_resp = True
-        if self.tx_cursor.tx.body:
-            data_resp = True
-
-        if data_resp:
-            resp_json['data_response'] = resp_js(
-                self.tx_cursor.tx.data_response)
-
-        if self.tx_cursor.tx.body:
-            resp_json['body'] = RestServiceTransaction._blob_id_to_uri(self.tx_cursor.tx.body)
-
         if self.tx_cursor.message_builder:
             resp_json['message_builder'] = {}
-
-        # xxx this needs the inflight -> {} logic
-        #resp_json = self.tx_cursor.tx.to_json(WhichJson.REST_READ)
 
         logging.info('RestServiceTransaction.get done %s %s',
                      self._tx_rest_id, resp_json)

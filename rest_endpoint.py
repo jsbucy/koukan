@@ -5,7 +5,7 @@ import time
 import json.decoder
 from urllib.parse import urljoin, urlparse
 
-from httpx import Client, RequestError
+from httpx import Client, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
@@ -128,7 +128,8 @@ class RestEndpoint(Filter):
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
-    def _update(self, req_json, timeout : Optional[float] = None):
+    def _update(self, req_json, timeout : Optional[float] = None
+                ) -> HttpResponse:
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
@@ -192,13 +193,15 @@ class RestEndpoint(Filter):
 
         if body_last:
             logging.debug('RestEndpoint.on_update body_blob')
-            data_resp = self._put_blob(tx.body_blob)
-            logging.debug('on_update %s', data_resp)
-            http_err = (data_resp is None)
+            rest_resp = self._put_blob(tx.body_blob)
+            logging.debug('on_update %s', rest_resp)
+            http_err = (rest_resp is None or rest_resp.status_code >= 300)
             self.data_last = True
-            self.get_tx_response(self.timeout_data, tx, {}, http_err)
+            self.get_tx_response(
+                self.timeout_data, tx,
+                get_resp_json(rest_resp) if not http_err else {}, http_err)
 
-    def _put_blob(self, blob) -> Optional[Response]:
+    def _put_blob(self, blob) -> Optional[HttpResponse]:
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
@@ -221,14 +224,9 @@ class RestEndpoint(Filter):
             self.body_len += chunk_out
         logging.debug('_put_blob %s', resp)
 
-        patch_tx_resp = self.client.patch(self.transaction_url,
-                                          json={'body': self.blob_url})
-        # TODO should this return endpoint Response or http/requests Response?
-        if patch_tx_resp.status_code > 299:
-            return Response(
-                400, 'RestEndpoint._put_blob_chunk PATCH err')
-
-        return Response()
+        # XXX _update()?
+        return self.client.patch(self.transaction_url,
+                                 json={'body': self.blob_url})
 
     # -> (resp, len)
     def _put_blob_chunk(self, offset, d : bytes, last : bool

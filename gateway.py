@@ -3,23 +3,31 @@ import sys
 import logging
 from threading import Thread
 import time
+import secrets
+from threading import Lock
 
 from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from blobs import BlobStorage
 from smtp_service import service as smtp_service
 import rest_service
-from rest_endpoint_adapter import RestEndpointAdapterFactory, EndpointFactory
+from rest_endpoint_adapter import (
+    FilterExecutor,
+    EndpointFactory,
+    RestEndpointAdapterFactory )
 import gunicorn_main
 import hypercorn_main
 from config import Config
+from executor import Executor
 
 from wsgiref.simple_server import make_server
 
 class SmtpGateway(EndpointFactory):
-    inflight : Dict[str, SmtpEndpoint]
+    inflight : Dict[str, FilterExecutor]
     config = None
     shutdown_gc = False
+    executor : Executor
+    lock : Lock
 
     def __init__(self, config):
         self.config = config
@@ -30,6 +38,15 @@ class SmtpGateway(EndpointFactory):
         self.smtp_factory = SmtpFactory()
 
         self.inflight = {}
+
+        self.lock = Lock()
+
+        global_yaml = self.config.root_yaml.get('global', {})
+        executor_yaml = global_yaml.get('executor', {})
+
+        self.executor = Executor(
+            executor_yaml.get('max_inflight', 10),
+            executor_yaml.get('watchdog_timeout', 30))
 
         self.gc_thread = Thread(target = lambda: self.gc_inflight(),
                                 daemon=True)
@@ -58,17 +75,44 @@ class SmtpGateway(EndpointFactory):
 
     # EndpointFactory
     def create(self, host):
+        rest_yaml = self.config.root_yaml['rest_listener']
+
         if host == 'outbound':  # xxx config??
             endpoint = self.smtp_factory.new(
                 ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
-            self.inflight[endpoint.rest_id] = endpoint
-            return endpoint
+
+            with self.lock:
+                while True:
+                    rest_id = secrets.token_urlsafe(
+                        rest_yaml.get('rest_id_entropy', 16))
+                    if rest_id not in self.inflight:
+                        break
+
+                executor = FilterExecutor(self.executor, endpoint, rest_id)
+                self.inflight[rest_id] = executor
+
+            return executor
         else:
             return None
 
     # EndpointFactory
     def get(self, rest_id):
         return self.inflight.get(rest_id, None)
+
+    def _gc_inflight(self, now : float, ttl : int):
+        with self.lock:
+            dele = []
+            for (rest_id, tx) in self.inflight.items():
+                tx_idle = time.monotonic() - tx.last_update()
+                if tx_idle > ttl:
+                    logging.info('SmtpGateway.gc_inflight shutdown idle %s',
+                                 tx.rest_id)
+                    assert isinstance(tx.filter, SmtpEndpoint)
+                    tx.filter._shutdown()
+                    dele.append(rest_id)
+
+        for d in dele:
+            del self.inflight[d]
 
     def gc_inflight(self):
         last_gc = 0
@@ -81,17 +125,7 @@ class SmtpGateway(EndpointFactory):
             if delta < gc_interval:
                 time.sleep(gc_interval - delta)
             last_gc = now
-            dele = []
-            for (rest_id, tx) in self.inflight.items():
-                tx_idle = now - tx.idle_start if tx.idle_start else 0
-                if tx_idle > rest_yaml.get('gc_tx_ttl', 600):
-                    logging.info('SmtpGateway.gc_inflight shutdown idle %s',
-                                 tx.rest_id)
-                    tx._shutdown()
-                    dele.append(rest_id)
-            for d in dele:
-                logging.info(d)
-                del self.inflight[d]
+            self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600))
             self.blob_storage.gc(rest_yaml.get('gc_blob_ttl', 60))
 
     def main(self):

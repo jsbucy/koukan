@@ -57,7 +57,7 @@ class GatewayTest(unittest.TestCase):
 
         self.gw_rest_url = 'http://localhost:%d' % rest_port
 
-        for i in range(0,5):
+        for i in range(0,2):
             logging.info('GatewayTest.setUp probe rest')
             try:
                 rest_endpoint = RestEndpoint(
@@ -70,13 +70,14 @@ class GatewayTest(unittest.TestCase):
                 rest_endpoint.on_update(tx)
                 logging.debug('probe %s', tx.mail_response)
                 if tx.mail_response.code >= 300:
-                    time.sleep(1)
+                    time.sleep(0.1)
                     continue
             except ConnectionError:
-                time.sleep(1)
+                time.sleep(0.1)
             else:
                 break
-
+        else:
+            self.fail('service not ready')
 
     def tearDown(self):
         logging.info('GatewayTest.tearDown')
