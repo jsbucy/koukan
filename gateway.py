@@ -12,7 +12,7 @@ from blobs import BlobStorage
 from smtp_service import service as smtp_service
 import rest_service
 from rest_endpoint_adapter import (
-    FilterExecutor,
+    SyncFilterAdapter,
     EndpointFactory,
     RestEndpointAdapterFactory )
 import gunicorn_main
@@ -23,7 +23,7 @@ from executor import Executor
 from wsgiref.simple_server import make_server
 
 class SmtpGateway(EndpointFactory):
-    inflight : Dict[str, FilterExecutor]
+    inflight : Dict[str, SyncFilterAdapter]
     config = None
     shutdown_gc = False
     executor : Executor
@@ -88,7 +88,7 @@ class SmtpGateway(EndpointFactory):
                     if rest_id not in self.inflight:
                         break
 
-                executor = FilterExecutor(self.executor, endpoint, rest_id)
+                executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
                 self.inflight[rest_id] = executor
 
             return executor

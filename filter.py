@@ -2,6 +2,7 @@ from enum import IntEnum
 from typing import Any, Dict, List, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
 import logging
+import copy
 
 from response import Response
 
@@ -119,12 +120,12 @@ class WhichJson(IntEnum):
 
 class TxField:
     json_field : str
-    accept = List[WhichJson]
-    emit = List[WhichJson]
+    accept = Optional[List[WhichJson]]
+    emit = Optional[List[WhichJson]]
     def __init__(self,
                  json_field : str,
-                 accept,
-                 emit,
+                 accept : Optional[List[WhichJson]],
+                 emit : Optional[List[WhichJson]],
                  from_json=None,
                  to_json=None):
         self.json_field = json_field
@@ -135,8 +136,12 @@ class TxField:
         self.to_json = to_json
 
     def valid_accept(self, which_json):
+        if self.accept is None:  # internal-only
+            return False
         return which_json == WhichJson.ALL or which_json in self.accept
     def valid_emit(self, which_json):
+        if self.emit is None:  # internal-only
+            return False
         return which_json == WhichJson.ALL or which_json in self.emit
 
 _tx_fields = [
@@ -205,7 +210,8 @@ _tx_fields = [
     TxField('smtp_meta',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.DB],
-            emit=[WhichJson.DB])
+            emit=[WhichJson.DB]),
+    TxField('body_blob', accept=None, emit=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -281,6 +287,8 @@ class TransactionMetadata:
             self.mail_from, self.mail_response)
         out += 'rcpt_to=%s rcpt_response=%s ' % (
             self.rcpt_to, self.rcpt_response)
+        out += 'body=%s ' % (self.body)
+        out += 'body_blob=%s ' % (self.body_blob)
         out += 'data_response=%s' % self.data_response
         return out
 
@@ -314,20 +322,22 @@ class TransactionMetadata:
 
 
     # returns True if there is a request field (mail/rcpt/data)
-    # without a corresponding response field
-    def req_inflight(self) -> bool:
-        if self.mail_from and not self.mail_response:
+    # without a corresponding response field in tx
+    def req_inflight(self, tx : Optional['TransactionMetadata'] = None) -> bool:
+        if tx is None:
+            tx = self
+        if self.mail_from and not tx.mail_response:
             return True
-        if len(self.rcpt_to) > len(self.rcpt_response):
+        if len(self.rcpt_to) > len(tx.rcpt_response):
             return True
         for i in range(0,len(self.rcpt_to)):
             if self.rcpt_to[i] is not None and (
-                    i >= len(self.rcpt_response) or
-                    self.rcpt_response[i] is None):
+                    i >= len(tx.rcpt_response) or
+                    tx.rcpt_response[i] is None):
                 return True
-        if self.body_blob and (self.body_blob.len() ==
-                                  self.body_blob.content_length()) and (
-            not self.data_response):
+        if self.body_blob is not None and (
+                self.body_blob.len() == self.body_blob.content_length()) and (
+                tx.data_response is None):
             return True
         return False
 
@@ -411,7 +421,9 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 return None  # invalid
             if not isinstance(old_v, list):
-                # could verify that old_v == new_v
+                # use the old value, assume the new one is the same
+                # TODO could verify that old_v == new_v
+                setattr(out, f, old_v)
                 continue
             l = []
             l.extend(old_v)
@@ -428,6 +440,7 @@ class TransactionMetadata:
             old_v = getattr(self, f, None)
             new_v = getattr(successor, f, None)
             if (old_v is not None) and (new_v is None):
+                logging.debug('tx.delta invalid del %s', f)
                 return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
@@ -440,19 +453,29 @@ class TransactionMetadata:
                 continue
 
             if isinstance(old_v, list) != isinstance(new_v, list):
+                logging.debug('tx.delta is-list != is-list %s', f)
                 return None  # invalid
             if not isinstance(old_v, list):
+                logging.debug('tx.delta value change %s', f)
                 if old_v != new_v:
                     return None  # invalid
                 continue
 
             old_len = len(old_v)
             if old_len > len(new_v):
+                logging.debug('tx.delta invalid list trunc %s', f)
                 return None  # invalid
             if new_v[0:old_len] != old_v:
+                logging.debug('tx.delta changed list prefix %s', f)
                 return None
             setattr(out, f, new_v[old_len:])
 
+        return out
+
+    def copy(self):
+        out = copy.copy(self)
+        out.rcpt_to = list(self.rcpt_to)
+        out.rcpt_response = list(self.rcpt_response)
         return out
 
 class Filter(ABC):

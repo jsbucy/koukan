@@ -310,11 +310,25 @@ py_test(name='smtp_service_test',
 
 pytype_library(name='rest_endpoint_adapter',
                srcs=['rest_endpoint_adapter.py'],
-               deps=[':rest_service_handler'])
+               deps=[':blob',
+                     ':blobs',
+                     ':executor',
+                     ':filter',
+                     ':response',
+                     ':rest_service_handler'])
+
+py_test(name='rest_endpoint_adapter_test',
+        srcs=['rest_endpoint_adapter_test.py'],
+        deps=[':rest_endpoint_adapter',
+              ':executor',
+              ':fake_endpoints',
+              ':filter',
+              ':response'])
 
 pytype_library(name='smtp_endpoint',
                srcs=['smtp_endpoint.py'],
                deps=[])
+
 
 pytype_library(name='gateway',
                srcs=['gateway.py'],

@@ -1,9 +1,9 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from abc import ABC, abstractmethod
 import logging
 import time
 from threading import Condition, Lock
-import copy
+import json
 
 from flask import Response as FlaskResponse, Request as FlaskRequest, jsonify
 from werkzeug.datastructures import ContentRange
@@ -16,15 +16,18 @@ from rest_service_handler import Handler, HandlerFactory
 from filter import TransactionMetadata, Filter, WhichJson
 from executor import Executor
 
-class FilterExecutor:
+# Wrapper for vanilla/sync Filter that provides async interface for REST
+class SyncFilterAdapter:
     executor : Executor
     filter : Filter
-    tx : Optional[TransactionMetadata] = None
+    prev_tx : TransactionMetadata
+    tx : TransactionMetadata
     mu : Lock
     cv : Condition
     inflight : bool = False
     rest_id : str
     _last_update : float
+    version = 0
 
     def __init__(self, executor : Executor, filter : Filter, rest_id : str):
         self.executor = executor
@@ -33,6 +36,8 @@ class FilterExecutor:
         self.filter = filter
         self.rest_id = rest_id
         self._last_update = time.monotonic()
+        self.prev_tx = TransactionMetadata()
+        self.tx = TransactionMetadata()
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -41,52 +46,96 @@ class FilterExecutor:
             return time.monotonic()
         return self._last_update
 
-    def _update(self, tx):
-        logging.debug('FilterExecutor._update %s', tx)
-        self.filter.on_update(tx)
-        logging.debug('FilterExecutor._update done %s', tx)
+    def _update(self):
+        try:
+            while self._update_once():
+                pass
+        except Exception:
+            logging.exception('SyncFilterAdapter._update_once() %s',
+                              self.rest_id)
+            with self.mu:
+                self.inflight = False
+                # TODO an exception here is unexpected so
+                # it's probably good enough to guarantee that callers
+                # fail quickly. Though it might be more polite to
+                # populate responses for infligt req fields here with
+                # a temp/internal error.
+                self.prev_tx = self.tx = None
+                self.cv.notify_all()
+            raise
+
+    def _update_once(self):
         with self.mu:
-            if self.tx is None:
-                self.tx = copy.copy(tx)
-            else:
-                self.tx = self.tx.merge(tx)
-            logging.debug('FilterExecutor._update done merged %s', self.tx)
-            self.inflight = False
+            assert self.inflight
+            delta = self.prev_tx.delta(self.tx)  # new reqs
+            assert delta is not None
+            logging.debug('SyncFilterAdapter._update prev %s tx %s delta %s',
+                          self.prev_tx, self.tx, delta)
+            self.prev_tx = self.tx
+            if not delta.req_inflight():
+                self.inflight = False
+                return False
+        reqs = delta.copy()
+        self.filter.on_update(delta)
+        resps = reqs.delta(delta)  # responses only
+        logging.debug('SyncFilterAdapter._update done pre %s out %s post %s',
+                      reqs, delta, resps)
+        with self.mu:
+            txx = self.tx.merge(resps)
+            assert txx is not None  # internal error
+            logging.debug('SyncFilterAdapter._update done merged %s', txx)
+            self.tx = txx
+            self.version += 1
             self.cv.notify_all()
             self._last_update = time.monotonic()
+        return True
 
-    def _get_locked(self, timeout) -> FlaskResponse:
-        self.cv.wait_for(
-            lambda: self.tx is not None and not self.tx.req_inflight(), timeout)
-        return jsonify(self.tx.to_json(WhichJson.REST_READ) if self.tx else {})
+    def _tx_done_locked(self, tx : TransactionMetadata):
+        return not tx.req_inflight(self.tx)
+
+    def _get_locked(self, tx, timeout) -> FlaskResponse:
+        self.cv.wait_for(lambda: self._tx_done_locked(tx), timeout)
+        # xxx flask jsonify() depends on app context which we may
+        # not have in tests?
+        rest_resp = FlaskResponse()
+        rest_resp.set_data(json.dumps(self.tx.to_json(WhichJson.REST_READ)))
+        rest_resp.content_type = 'application/json'
+        return rest_resp
 
     def update(self, tx : TransactionMetadata,
                timeout : Optional[float] = None
                ) -> FlaskResponse:
         with self.mu:
-            if self.inflight:
-                return FlaskResponse(status=412, response=['write conflict'])
-            self.inflight = True
-            if self.executor.submit(lambda: self._update(tx)) is None:
-                return FlaskResponse(status=500, response=['server busy'])
-            return self._get_locked(timeout)
+            txx = self.tx.merge(tx)
+
+            if txx is None:
+                return FlaskResponse(status=400, response=['invalid tx delta'])
+            self.tx = txx
+            self.version += 1
+
+            if not self.inflight:
+                if self.executor.submit(lambda: self._update()) is None:
+                    return FlaskResponse(status=500, response=['server busy'])
+                self.inflight = True
+            return self._get_locked(tx, timeout)
 
     def get(self, timeout : Optional[float] = None) -> FlaskResponse:
         with self.mu:
-            return self._get_locked(timeout)
+            return self._get_locked(self.tx.copy(), timeout)
+
 
 
 class RestEndpointAdapter(Handler):
-    executor : Optional[FilterExecutor]
+    sync_filter_adapter : Optional[SyncFilterAdapter]
     _tx_rest_id : str
 
     blob_storage : BlobStorage
     _blob_rest_id : str
 
-    def __init__(self, executor : Optional[FilterExecutor] = None,
+    def __init__(self, sync_filter_adapter : Optional[SyncFilterAdapter] = None,
                  tx_rest_id=None,
                  blob_storage=None, blob_rest_id=None):
-        self.executor = executor
+        self.sync_filter_adapter = sync_filter_adapter
         self._tx_rest_id = tx_rest_id
         self.blob_storage = blob_storage
         self._blob_rest_id = blob_rest_id
@@ -100,11 +149,11 @@ class RestEndpointAdapter(Handler):
     def start(self, req_json,
               timeout : Optional[float] = None) -> Optional[FlaskResponse]:
         tx = TransactionMetadata.from_json(req_json)
-        return self.executor.update(tx)
+        return self.sync_filter_adapter.update(tx)
 
     def get(self, req_json : Dict[str, Any],
             timeout : Optional[float] = None) -> FlaskResponse:
-        return self.executor.get(timeout)
+        return self.sync_filter_adapter.get(timeout)
 
     def patch(self, req_json : Dict[str, Any],
               timeout : Optional[float] = None) -> FlaskResponse:
@@ -119,15 +168,11 @@ class RestEndpointAdapter(Handler):
             if body_blob is None:
                 return FlaskResponse(status=404, response=['blob not found'])
             tx.body_blob = body_blob
-        return self.executor.update(tx)
+            del tx.body
+        return self.sync_filter_adapter.update(tx)
 
     def etag(self) -> str:
-        # TODO TBD exactly how to sort this out, possibly a subclass
-        # of Filter that provides this?
-        assert hasattr(self.executor.filter, 'version')
-        # pytype: disable=attribute-error
-        return ('%d' % self.executor.filter.version)
-        # pytype: enable=attribute-error
+        return ('%d' % self.sync_filter_adapter.version)
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = self.blob_storage.create()
@@ -161,10 +206,10 @@ class RestEndpointAdapter(Handler):
 
 class EndpointFactory(ABC):
     @abstractmethod
-    def create(self, http_host : str) -> FilterExecutor:
+    def create(self, http_host : str) -> SyncFilterAdapter:
         pass
     @abstractmethod
-    def get(self, rest_id : str) -> FilterExecutor:
+    def get(self, rest_id : str) -> SyncFilterAdapter:
         pass
 
 class RestEndpointAdapterFactory(HandlerFactory):
@@ -179,14 +224,14 @@ class RestEndpointAdapterFactory(HandlerFactory):
         endpoint = self.endpoint_factory.create(http_host)
         if endpoint is None:
             return None
-        return RestEndpointAdapter(executor=endpoint,
+        return RestEndpointAdapter(sync_filter_adapter=endpoint,
                                    tx_rest_id=endpoint.rest_id,
                                    blob_storage=self.blob_storage)
 
     def get_tx(self, tx_rest_id) -> Optional[RestEndpointAdapter]:
         endpoint = self.endpoint_factory.get(tx_rest_id)
         if endpoint is None: return None
-        return RestEndpointAdapter(executor=endpoint,
+        return RestEndpointAdapter(sync_filter_adapter=endpoint,
                                    tx_rest_id=tx_rest_id,
                                    blob_storage=self.blob_storage)
 

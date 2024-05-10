@@ -18,14 +18,11 @@ class Factory:
 class SmtpEndpoint(Filter):
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
-    version : int
 
     def __init__(self, ehlo_hostname):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
-
-        self.version = 0
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -82,7 +79,6 @@ class SmtpEndpoint(Filter):
         return ehlo_resp
 
     def on_update(self, tx : TransactionMetadata):
-        self.version += 1
         logging.info('SmtpEndpoint.on_update %s', tx.remote_host)
 
         if tx.mail_from is not None:
