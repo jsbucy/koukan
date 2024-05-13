@@ -237,9 +237,9 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertTrue(tx.data_response.temp())
 
+        tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry get after append %s',
                       tx_json)
-        rest_endpoint.get_json()
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)

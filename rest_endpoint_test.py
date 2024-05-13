@@ -426,17 +426,21 @@ class RestEndpointTest(unittest.TestCase):
 
     def testPutBlobBadResponse(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_data=1)
+                                     timeout_data=1,
+                                     chunk_size=4)
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(b'hello'))
+            rcpt_to=[Mailbox('bob')])
+
+        tx_out = TransactionMetadata(
+            mail_response=MailResponse(201),
+            rcpt_response=[MailResponse(202)])
 
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
             content_type = 'application/json',
-            body = json.dumps({}),
+            body = json.dumps(tx_out.to_json()),
             location = '/transactions/124'))
 
         # POST /blob
@@ -452,11 +456,31 @@ class RestEndpointTest(unittest.TestCase):
             content_range = 'bad range'))
 
         rest_endpoint.on_update(tx)
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        blob_bytes = b'hello'
+        tx = TransactionMetadata(
+            body_blob=InlineBlob(blob_bytes, len(blob_bytes)))
+        rest_endpoint.on_update(tx, 5)
         self.assertEqual(tx.data_response.code, 400)
 
     def testPutBlobTimeout(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      timeout_data=1, chunk_size=4)
+
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            body = json.dumps({
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]}),
+            location = '/transactions/123'))
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+        rest_endpoint.on_update(tx)
+
+
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         self.responses.append(Response(
             http_resp = '201 created',
@@ -542,8 +566,8 @@ class RestEndpointTest(unittest.TestCase):
                  'rcpt_response': [{'code': 202, 'message': 'ok'}],
                  'data_response': {'code': 203, 'message': 'ok'}})))
 
-        rest_endpoint.on_update(tx)
-        logging.debug('%s', tx.data_response)
+        rest_endpoint.on_update(tx, timeout=5)
+        logging.debug('testFilterApi data_response %s', tx.data_response)
         self.assertEqual(tx.data_response.code, 203)
 
         req = self.requests.pop(0)

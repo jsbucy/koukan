@@ -149,22 +149,29 @@ _tx_fields = [
             accept = [WhichJson.DB],
             emit = [WhichJson.DB]),
     TxField('remote_host',
-            # xxx really only accept from gw
+            # TODO these accept/emit criteria are more at the syntax
+            # level, there also needs to be a policy level e.g. to
+            # only accept remote_host from trusted/well-known peers
+            # i.e. the smtp gateway
             accept = [WhichJson.REST_CREATE,
                       WhichJson.DB],
-            emit = [WhichJson.REST_READ,
+            emit = [WhichJson.REST_CREATE,
+                    WhichJson.REST_READ,
                     WhichJson.DB],
             from_json=HostPort.from_seq),
     TxField('local_host',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.DB],
-            emit=[WhichJson.DB],
+            emit=[WhichJson.REST_CREATE,
+                  WhichJson.DB],
             from_json=HostPort.from_seq),
     TxField('mail_from',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE,
                     WhichJson.DB],
-            emit=[WhichJson.DB],
+            emit=[WhichJson.REST_CREATE,
+                  WhichJson.REST_UPDATE,
+                  WhichJson.DB],
             from_json=Mailbox.from_json),
     TxField('mail_response',
             accept=[],
@@ -174,7 +181,9 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE,
                     WhichJson.DB],
-            emit=[WhichJson.REST_READ,
+            emit=[WhichJson.REST_CREATE,
+                  WhichJson.REST_UPDATE,
+                  WhichJson.REST_READ,
                   WhichJson.DB],
             from_json=lambda js: list_from_js(js, Mailbox.from_json)),
     TxField('rcpt_response',
@@ -192,7 +201,9 @@ _tx_fields = [
     TxField('body',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
-            emit=[WhichJson.REST_READ]),
+            emit=[WhichJson.REST_CREATE,
+                  WhichJson.REST_UPDATE,
+                  WhichJson.REST_READ]),
     TxField('message_builder',
             accept=[WhichJson.REST_CREATE,
                     WhichJson.REST_UPDATE],
@@ -256,7 +267,9 @@ class TransactionMetadata:
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
+                 mail_response : Optional[Response] = None,
                  rcpt_to : Optional[List[Mailbox]] = None,
+                 rcpt_response : Optional[List[Response]] = None,
                  host : Optional[str] = None,
                  body : Optional[str] = None,
                  body_blob : Optional[Blob] = None,
@@ -266,8 +279,9 @@ class TransactionMetadata:
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
+        self.mail_response = mail_response
         self.rcpt_to = rcpt_to if rcpt_to else []
-        self.rcpt_response = []
+        self.rcpt_response = rcpt_response if rcpt_response else []
         self.host = host
         self.body = body
         self.body_blob = body_blob
@@ -335,9 +349,9 @@ class TransactionMetadata:
                     i >= len(tx.rcpt_response) or
                     tx.rcpt_response[i] is None):
                 return True
-        if self.body_blob is not None and (
-                self.body_blob.len() == self.body_blob.content_length()) and (
-                tx.data_response is None):
+        body_blob_last = self.body_blob is not None and (
+            self.body_blob.len() == self.body_blob.content_length())
+        if body_blob_last and tx.data_response is None:
             return True
         return False
 

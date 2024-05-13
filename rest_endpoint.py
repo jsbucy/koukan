@@ -9,7 +9,7 @@ from httpx import Client, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
-from filter import Filter, HostPort, TransactionMetadata
+from filter import Filter, HostPort, TransactionMetadata, WhichJson
 from response import Response, Esmtp
 from blob import Blob
 
@@ -143,10 +143,10 @@ class RestEndpoint(Filter):
                                        timeout=self.timeout_start)
         except RequestError:
             return None
-        logging.info('RestEndpoint.on_update resp %s %s',
+        logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.http_version)
         resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint.on_update resp_json %s', resp_json)
+        logging.info('RestEndpoint._update resp_json %s', resp_json)
         if not resp_json:
             return None
 
@@ -157,51 +157,68 @@ class RestEndpoint(Filter):
             # xxx err?
         return rest_resp
 
-
+    # NOTE/TODO: RestEndpoint is used as a rest submission client in
+    # some tests (at least router_service_test). Rest submission has
+    # weaker preconditions i.e. can send data as long as any rcpt
+    # hasn't permfailed. Contrast with:
+    # SmtpService: relays through Exploder which masks upstream temp errors
+    # OutputHandler: is structured to not send the data until at least
+    # one upstream rcpt has succeeded.
+    # It might be good for this code to enforce more of these
+    # preconditions to detect bugs in calling code but it seesm like
+    # it would have to have multiple modes (at least submission vs
+    # relay) which may be more trouble than it's worth...
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
-        if self.base_url is None and tx.rest_endpoint:
-            self.base_url = tx.rest_endpoint
+        which_json = (WhichJson.REST_CREATE if not self.transaction_url
+                      else WhichJson.REST_UPDATE)
+        req_json = tx.to_json(which_json)
 
-        req_json = tx.to_json()
-
-        logging.debug('RestEndpoint.on_update req_json %s', req_json)
-        if req_json:
-            if not self.transaction_url:
-                rest_resp = self._start(tx, req_json)
-            else:
-                rest_resp = self._update(req_json)
-
-            # xxx think a little more carefully about errors here, if
-            # we see a timeout on response but the server handled it,
-            # we'll get an etag failure on the next req?
-            if len(tx.rcpt_response) == len(tx.rcpt_to):
-                self.rcpts += len(tx.rcpt_to)
-
-            timeout = timeout if timeout is not None else self.timeout_start
-            # xxx filter api needs to accomodate returning an error here
-            # or else stuff the http error in the response for the first
-            # inflight req field in tx?
-            resp_json = get_resp_json(rest_resp) if rest_resp else None
-            http_err = (rest_resp is None or rest_resp.status_code >= 300 or
-                        resp_json is None)
-            resp_json = resp_json if resp_json else {}
-            self.get_tx_response(timeout, tx, resp_json, http_err)
-
-        body_last = tx.body_blob and (
+        self.data_last = tx.body_blob is not None and (
             tx.body_blob.len() == tx.body_blob.content_length())
 
-        if body_last:
-            logging.debug('RestEndpoint.on_update body_blob')
-            rest_resp = self._put_blob(tx.body_blob)
-            logging.debug('on_update %s', rest_resp)
-            http_err = (rest_resp is None or rest_resp.status_code >= 300)
-            self.data_last = True
-            self.get_tx_response(
-                self.timeout_data, tx,
-                get_resp_json(rest_resp) if not http_err else {}, http_err)
+        logging.debug('RestEndpoint.on_update '
+                      ' self.data_last=%s', self.data_last)
 
-    def _put_blob(self, blob) -> Optional[HttpResponse]:
+        put_blob_resp = None
+        if self.data_last:
+            logging.debug('RestEndpoint._update_once body_blob')
+            put_blob_resp = self._put_blob(tx.body_blob)
+            logging.debug('RestEndpoint._update_once put_blob_resp %s',
+                          put_blob_resp)
+            if put_blob_resp.ok():
+                req_json['body'] = self.blob_url
+            else:
+                tx.data_response = put_blob_resp
+
+        logging.debug('RestEndpoint._update_once req_json %s', req_json)
+
+        if not req_json:
+            return False
+
+        if not self.transaction_url:
+            rest_resp = self._start(tx, req_json)
+        else:
+            rest_resp = self._update(req_json)
+
+        # xxx think a little more carefully about errors here, if
+        # we see a timeout on response but the server handled it,
+        # we'll get an etag failure on the next req?
+        if len(tx.rcpt_response) == len(tx.rcpt_to):
+            self.rcpts += len(tx.rcpt_to)
+
+        timeout = timeout if timeout is not None else self.timeout_start
+        # xxx filter api needs to accomodate returning an error here
+        # or else stuff the http error in the response for the first
+        # inflight req field in tx?
+        resp_json = get_resp_json(rest_resp) if rest_resp else None
+        http_err = (rest_resp is None or rest_resp.status_code >= 300 or
+                    resp_json is None)
+        resp_json = resp_json if resp_json else {}
+        self.get_tx_response(timeout, tx, resp_json, http_err)
+
+
+    def _put_blob(self, blob) -> Response:
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
@@ -214,7 +231,9 @@ class RestEndpoint(Filter):
                 offset=self.body_len,
                 d=chunk,
                 last=chunk_last)
-            if resp is None or not resp.ok():
+            if resp is None:
+                return Response(400, 'RestEndpoint blob upload error')
+            elif not resp.ok():
                 return resp
             # how many bytes from chunk were actually accepted?
             chunk_out = result_length - self.body_len
@@ -223,10 +242,7 @@ class RestEndpoint(Filter):
             offset += chunk_out
             self.body_len += chunk_out
         logging.debug('_put_blob %s', resp)
-
-        # XXX _update()?
-        return self.client.patch(self.transaction_url,
-                                 json={'body': self.blob_url})
+        return Response()
 
     # -> (resp, len)
     def _put_blob_chunk(self, offset, d : bytes, last : bool
@@ -245,7 +261,7 @@ class RestEndpoint(Filter):
                     entity = None
                 rest_resp = self.client.post(
                     urljoin(self.base_url, endpoint), headers=headers,
-                    data=entity, timeout=self.timeout_data)
+                    content=entity, timeout=self.timeout_data)
                 logging.info('RestEndpoint._put_blob POST /blob %s %s %s',
                              rest_resp, rest_resp.headers,
                              rest_resp.http_version)
@@ -255,14 +271,14 @@ class RestEndpoint(Filter):
                 if not self.blob_url:
                     return None, None
                 self.full_blob_url = self._maybe_qualify_url(self.blob_url)
-                if not last:
+                if not last:  # i.e. chunked upload
                     return Response(), 0
             else:
                 range = ContentRange('bytes', offset, offset + len(d),
                                      offset + len(d) if last else None)
                 headers['content-range'] = range.to_header()
                 rest_resp = self.client.put(
-                    self.full_blob_url, headers=headers, data=d,
+                    self.full_blob_url, headers=headers, content=d,
                     timeout=self.timeout_data)
         except RequestError:
             return None, None
@@ -292,8 +308,6 @@ class RestEndpoint(Filter):
         return Response(), dlen
 
 
-    # XXX clearly distinguish internal, test methods
-
     def get_json(self, timeout : Optional[float] = None):
         try:
             req_headers = {}
@@ -312,6 +326,9 @@ class RestEndpoint(Filter):
             self.etag = None
         return get_resp_json(rest_resp)
 
+
+    # TODO the following can probably be considerably simplified by
+    # the TransactionMetadata delta/merge strategy used by SyncFilterAdapter
 
     # update tx response fields per json
     # timeout: have we reached the deadline and need to fill in temp
