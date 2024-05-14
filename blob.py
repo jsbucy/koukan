@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from abc import ABC, abstractmethod
 import os
 
@@ -140,3 +140,25 @@ class CompositeBlob(Blob):
         if not self.last:
             return None
         return self.len()
+
+class WritableBlob(ABC):
+    # write at offset which must be the current end
+    # bool: whether offset was correct/write was applied, resulting range
+    @abstractmethod
+    def append_data(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        pass
+
+class BlobStorage(ABC):
+    @abstractmethod
+    def create(self, rest_id : str) -> Optional[WritableBlob]:
+        pass
+
+    @abstractmethod
+    def get_for_append(self, rest_id) -> Optional[WritableBlob]:
+        pass
+
+    @abstractmethod
+    def get_finalized(self, rest_id) -> Optional[Blob]:
+        pass

@@ -11,7 +11,7 @@ from storage import Storage
 
 from message_builder_filter import MessageBuilderFilter
 
-class DkimEndpointTest(unittest.TestCase):
+class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
@@ -21,7 +21,7 @@ class DkimEndpointTest(unittest.TestCase):
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create(rest_id='xyz')
         d = b'hello, world!'
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         next = SyncEndpoint()
         message_builder = MessageBuilderFilter(

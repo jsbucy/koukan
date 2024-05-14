@@ -71,7 +71,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create('blob_rest_id')
         d = b'hello, '
-        blob_writer.append_data(d)
+        blob_writer.append_data(0, d)
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(rest_id='blob_rest_id'))
@@ -83,7 +83,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.join(t)
 
         d = b'world!'
-        blob_writer.append_data(d, blob_writer.length + len(d))
+        blob_writer.append_data(
+            blob_writer.length, d, blob_writer.length + len(d))
 
         blob_reader.load()
 
@@ -138,7 +139,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create('blob_rest_id')
         d = b'hello, world!'
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(rest_id='blob_rest_id'))

@@ -65,11 +65,11 @@ class StorageTestBase(unittest.TestCase):
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('blob_rest_id')
 
-        blob_writer.append_data(d=b'abc')
+        blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
-        blob_writer.append_data(d=b'xyz', content_length=9)
+        blob_writer.append_data(3, d=b'xyz', content_length=9)
         self.assertFalse(blob_writer.last)
-        blob_writer.append_data(d=b'uvw', content_length=9)
+        blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
 
         tx_writer.write_envelope(
@@ -122,8 +122,8 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(d[23], 0)  # contains null octets
         with self.assertRaises(UnicodeDecodeError):
             s = d.decode('utf-8')
-        blob_writer.append_data(d, len(d)*2)
-        blob_writer.append_data(d, len(d)*2)
+        blob_writer.append_data(0, d, len(d)*2)
+        blob_writer.append_data(len(d), d, len(d)*2)
         del blob_writer
         blob_reader = self.s.get_blob_reader()
         blob_reader.load(rest_id='blob_rest_id')
@@ -141,7 +141,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('body_rest_id')
         d = b'hello, world!'
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         # write a tx attempting to reuse a non-existent blob rest id,
         # this should fail
@@ -205,7 +205,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer = self.s.get_blob_writer()
         blob_writer.create(rest_id=str(time.time()))
         d = b'hello, world!'
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         writer = self.s.get_transaction_cursor()
         writer.create('xyz', TransactionMetadata(
@@ -363,7 +363,7 @@ class StorageTestBase(unittest.TestCase):
 
         for i in range(0, len(d)):
             logging.info('test_blob_waiting2 %d', i)
-            blob_writer.append_data(d[i:i+1], len(d))
+            blob_writer.append_data(i, d[i:i+1], len(d))
             self.assertEqual(blob_writer.length, i+1)
 
         t.join()

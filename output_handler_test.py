@@ -42,7 +42,7 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer.create(rest_id='blob_rest_id')
         d = b'hello, world!'
         for i in range(0,len(d)):
-            blob_writer.append_data(d[i:i+1], len(d))
+            blob_writer.append_data(i, d[i:i+1], len(d))
 
         tx_cursor.write_envelope(
             TransactionMetadata(
@@ -106,7 +106,7 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer = self.storage.get_blob_writer()
         self.assertIsNotNone(blob_writer.create('rest_blob_id'))
         d = b'hello, world!'
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         self.write_envelope(tx_cursor,
                             TransactionMetadata(body='rest_blob_id'),
@@ -307,7 +307,7 @@ class OutputHandlerTest(unittest.TestCase):
              b'message-id: <abc@xyz>\r\n'
              b'\r\n'
              b'hello\r\n')
-        blob_writer.append_data(d, len(d))
+        blob_writer.append_data(0, d, len(d))
 
         tx_cursor.write_envelope(
             TransactionMetadata(

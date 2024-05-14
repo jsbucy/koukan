@@ -9,11 +9,12 @@ from werkzeug.datastructures import ContentRange
 
 from rest_service_handler import Handler, HandlerFactory
 
-from storage import Storage, TransactionCursor, BlobReader, BlobWriter
-from storage_schema import InvalidActionException, VersionConflictException
+from storage import Storage, TransactionCursor
+from storage_schema import VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
 from message_builder import MessageBuilder
+from blob import WritableBlob
 
 # TODO could this be refactored to call upon StorageWriterFilter?
 class RestServiceTransaction(Handler):
@@ -22,7 +23,7 @@ class RestServiceTransaction(Handler):
     http_host : Optional[str]
     tx_cursor : TransactionCursor
     _blob_rest_id : Optional[str]
-    blob_writer : Optional[BlobWriter]
+    blob_writer : Optional[WritableBlob]
     rest_id_factory : Optional[Callable[[], str]]
 
     def __init__(self, storage,
@@ -70,16 +71,14 @@ class RestServiceTransaction(Handler):
 
     @staticmethod
     def create_blob_handler(storage, rest_id_factory):
-        blob_writer = storage.get_blob_writer()
-        return RestServiceTransaction(storage, blob_writer=blob_writer,
-                                      rest_id_factory=rest_id_factory)
+        return RestServiceTransaction(storage, rest_id_factory=rest_id_factory)
 
     @staticmethod
     def load_blob(storage, blob_uri) -> Optional["RestServiceTransaction"]:
         blob_rest_id = RestServiceTransaction._blob_uri_to_id(blob_uri)
 
-        blob_writer = storage.get_blob_writer()
-        if blob_writer.load(rest_id=blob_rest_id) is None:
+        blob_writer = storage.get_for_append(rest_id=blob_rest_id)
+        if blob_writer is None:
             return None
         return RestServiceTransaction(
             storage, blob_rest_id=blob_rest_id, blob_writer=blob_writer)
@@ -195,23 +194,12 @@ class RestServiceTransaction(Handler):
         return self._get_tx_json(timeout=timeout)
 
 
-    @staticmethod
-    def build_resp(code, msg, writer):
-        resp = FlaskResponse(status=code, response=[msg] if msg else None)
-        logging.info('build_resp code=%d msg=%s offset=%s content_length=%s',
-                     code, msg, writer.length, writer.content_length)
-        # NOTE chunked PUT with content-range is a ~custom protocol,
-        # ours is inspired by gcp cloud storage resumable uploads.
-        if writer.length > 0:
-            resp.headers.set(
-                'content-range',
-                ContentRange('bytes', 0, writer.length, writer.content_length))
-        return resp
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         assert self.rest_id_factory is not None
         self._blob_rest_id = self.rest_id_factory()
-        if self.blob_writer.create(self._blob_rest_id) is None:
+        self.blob_writer = self.storage.create(self._blob_rest_id)
+        if self.blob_writer is None:
             return FlaskResponse(status=500, response=['failed to create blob'])
         return FlaskResponse(status=201)
 
@@ -224,15 +212,26 @@ class RestServiceTransaction(Handler):
         # this is a little on the persnickety side in that it will
         # fail requests that we could treat as a noop but those should
         # be uncommon, only in case of timeout/retry, etc.
-        offset = content_range.start
-        if offset != self.blob_writer.length:
-            return RestServiceTransaction.build_resp(
-                416, 'invalid range', self.blob_writer)
 
-        self.blob_writer.append_data(request.data, content_range.length)
+        appended, length, content_length = self.blob_writer.append_data(
+            content_range.start, request.data, content_range.length)
+        logging.debug('RestServiceTransaction.put_blob %s %d %s',
+                      appended, length, content_length)
+        range_out = ContentRange('bytes', 0, length, content_length)
+        if not appended:
+            resp = FlaskResponse(status=416, response=['invalid range'])
+        else:
+            resp = FlaskResponse(status=200)
 
-        return RestServiceTransaction.build_resp(
-            200, None, self.blob_writer)
+        resp.headers.set('content-range', range_out)
+
+        logging.debug('RestServiceTransaction.put_blob %s %s %s',
+                      resp.status, resp.response, resp.headers)
+
+        # NOTE chunked PUT with content-range is a ~custom protocol,
+        # ours is inspired by gcp cloud storage resumable uploads.
+
+        return resp
 
 
     def abort(self):

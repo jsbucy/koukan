@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from abc import ABC, abstractmethod
 import logging
 import time
@@ -131,14 +131,19 @@ class RestEndpointAdapter(Handler):
 
     blob_storage : BlobStorage
     _blob_rest_id : str
+    rest_id_factory : Optional[Callable[[], str]]
+
 
     def __init__(self, sync_filter_adapter : Optional[SyncFilterAdapter] = None,
                  tx_rest_id=None,
-                 blob_storage=None, blob_rest_id=None):
+                 blob_storage=None,
+                 blob_rest_id=None,
+                 rest_id_factory : Optional[Callable[[], str]] = None):
         self.sync_filter_adapter = sync_filter_adapter
         self._tx_rest_id = tx_rest_id
         self.blob_storage = blob_storage
         self._blob_rest_id = blob_rest_id
+        self.rest_id_factory = rest_id_factory
 
     def tx_rest_id(self):
         return self._tx_rest_id
@@ -164,7 +169,9 @@ class RestEndpointAdapter(Handler):
             return FlaskResponse(status=400, response=['invalid request'])
         if tx.body:
             blob_id = tx.body.removeprefix('/blob/')
-            body_blob = self.blob_storage.get(blob_id)
+            # TODO this blob is not going to be reused and needs to be
+            # retired ~immediately
+            body_blob = self.blob_storage.get_finalized(blob_id)
             if body_blob is None:
                 return FlaskResponse(status=404, response=['blob not found'])
             tx.body_blob = body_blob
@@ -175,7 +182,9 @@ class RestEndpointAdapter(Handler):
         return ('%d' % self.sync_filter_adapter.version)
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
-        self._blob_rest_id = self.blob_storage.create()
+        self._blob_rest_id = self.rest_id_factory()
+        if self.blob_storage.create(self._blob_rest_id) is None:
+            return FlaskResponse(status=500)
         return FlaskResponse(status=201)
 
     def put_blob(self, request : FlaskRequest, content_range : ContentRange
@@ -185,40 +194,43 @@ class RestEndpointAdapter(Handler):
         offset = 0
         last = True
         offset = content_range.start
-        last = (content_range.length is not None and
-                content_range.stop == content_range.length)
-        result_len = self.blob_storage.append(
-            self._blob_rest_id, offset, request.data, last)
-        if result_len is None:
+        blob = self.blob_storage.get_for_append(self._blob_rest_id)
+        if blob is None:
             return FlaskResponse(status=404, response=['unknown blob'])
+        appended, result_len, content_length = blob.append_data(
+            offset, request.data, content_range.length)
+        logging.debug('RestEndpointAdapter.put_blob %s %d %s',
+                      appended, result_len, content_length)
         resp = FlaskResponse()
-        if result_len != offset + len(request.data):
+        if not appended:
             resp.status = 416
             resp.response = ['invalid range']
 
         resp = jsonify({})
         # cf RestTransactionHandler.build_resp() regarding content-range
         resp.headers.set('content-range',
-                         ContentRange('bytes', 0, result_len,
-                                      result_len if last else None))
+                         ContentRange('bytes', 0, result_len, content_length))
         return resp
 
 
 class EndpointFactory(ABC):
     @abstractmethod
-    def create(self, http_host : str) -> SyncFilterAdapter:
+    def create(self, http_host : str) -> Optional[SyncFilterAdapter]:
         pass
     @abstractmethod
-    def get(self, rest_id : str) -> SyncFilterAdapter:
+    def get(self, rest_id : str) -> Optional[SyncFilterAdapter]:
         pass
 
 class RestEndpointAdapterFactory(HandlerFactory):
     endpoint_factory : EndpointFactory
     blob_storage : BlobStorage
+    rest_id_factory : Callable[[], str]
 
-    def __init__(self, endpoint_factory, blob_storage : BlobStorage):
+    def __init__(self, endpoint_factory, blob_storage : BlobStorage,
+                 rest_id_factory : Callable[[], str]):
         self.endpoint_factory = endpoint_factory
         self.blob_storage = blob_storage
+        self.rest_id_factory = rest_id_factory
 
     def create_tx(self, http_host) -> Optional[RestEndpointAdapter]:
         endpoint = self.endpoint_factory.create(http_host)
@@ -236,7 +248,8 @@ class RestEndpointAdapterFactory(HandlerFactory):
                                    blob_storage=self.blob_storage)
 
     def create_blob(self) -> Optional[Handler]:
-        return RestEndpointAdapter(blob_storage=self.blob_storage)
+        return RestEndpointAdapter(blob_storage=self.blob_storage,
+                                   rest_id_factory=self.rest_id_factory)
 
     def get_blob(self, blob_rest_id) -> Optional[RestEndpointAdapter]:
         return RestEndpointAdapter(blob_storage=self.blob_storage,

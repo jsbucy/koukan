@@ -9,18 +9,29 @@ from base64 import b64encode
 from functools import reduce
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
-from sqlalchemy import LargeBinary, MetaData, String, Table, cast, case as sa_case, column, delete, event, func, insert, join, literal, not_, or_, select, true as sa_true, update, union_all, values
+
+from sqlalchemy import (
+    LargeBinary, MetaData, String, Table,
+    cast, case as sa_case, column,
+    delete, event, func, insert, join, literal, not_, or_, select,
+    true as sa_true, update, union_all, values)
 
 import psutil
 
-from blob import Blob, InlineBlob
+from blob import Blob, InlineBlob, WritableBlob, BlobStorage
 from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
 
+# the implementation of CursorResult.rowcount apparently involves too
+# much metaprogramming for pytype to infer correctly
+def rowcount(res : CursorResult) -> int:
+    count = res.rowcount
+    assert isinstance(count, int)
+    return count
 
 class TransactionCursor:
     id : Optional[int] = None
@@ -471,10 +482,10 @@ class TransactionCursor:
             return self.version > old  # xxx assert?
 
 
-class BlobWriter:
+class BlobWriter(WritableBlob):
     id = None
-    length = 0  # max offset+len from BlobContent, next offset to write
-    content_length = None  # overall length from content-range
+    length : int = 0  # max offset+len from BlobContent, next offset to write
+    content_length : Optional[int] = None  # overall length from content-range
     rest_id = None
     last = False
 
@@ -520,24 +531,34 @@ class BlobWriter:
 
         return self.id
 
+    # WritableBlob
     # TODO this should probably just take Blob and share the data
     # under the hood if isinstance(blob, BlobReader), etc
-    def append_data(self, d : bytes, content_length=None):
+    def append_data(self, offset: int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.id, self.rest_id, self.length, len(d),
                      self.content_length, content_length)
-        assert self.content_length is None or (
-            self.content_length == content_length)
-        assert not self.last
+
+        assert content_length is None or (
+            content_length >= (offset + len(d)))
 
         with self.parent.begin_transaction() as db_tx:
             stmt = select(
-                func.length(self.parent.blob_table.c.content)).where(
+                func.length(self.parent.blob_table.c.content),
+                self.parent.blob_table.c.length).where(
                     self.parent.blob_table.c.id == self.id)
             res = db_tx.execute(stmt)
             row = res.fetchone()
-            assert row[0] == self.length
+            db_length, db_content_length = row
+            if offset != db_length:
+                return False, db_length, db_content_length
+            if (db_content_length is not None) and (
+                    (content_length is None) or
+                    (content_length != db_content_length)):
+                return False, db_length, db_content_length
 
             upd = (update(self.parent.blob_table)
                    .where(self.parent.blob_table.c.id == self.id)
@@ -565,7 +586,7 @@ class BlobWriter:
             logging.debug('append_data %d %s last=%s',
                           self.length, self.content_length, self.last)
 
-        return True
+        return True, self.length, self.content_length
 
 
 class BlobReader(Blob):
@@ -731,7 +752,7 @@ class IdVersionMap:
             return waiter
 
 
-class Storage:
+class Storage(BlobStorage):
     session_id = None
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
@@ -747,7 +768,7 @@ class Storage:
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    def __init__(self, engine=None):
+    def __init__(self, engine : Optional[Engine] = None):
         self.engine = engine
         self.tx_versions = IdVersionMap()
 
@@ -794,8 +815,9 @@ class Storage:
         return s
 
     @staticmethod
-    def connect_postgres(db_user=None, db_name=None, host=None, port=None,
-                         unix_socket_dir=None):
+    def connect_postgres(
+            db_user=None, db_name=None, host=None, port=None,
+            unix_socket_dir=None):
         db_url = 'postgresql+psycopg://' + db_user + '@'
         if host:
             db_url += '%s:%d' % (host, port)
@@ -873,6 +895,27 @@ class Storage:
     def get_blob_reader(self) -> BlobReader:
         return BlobReader(self)
 
+    # BlobStorage
+    def create(self, rest_id : str) -> Optional[WritableBlob]:
+        writer = self.get_blob_writer()
+        writer.create(rest_id)
+        return writer
+
+    # BlobStorage
+    def get_for_append(self, rest_id) -> Optional[WritableBlob]:
+        writer = self.get_blob_writer()
+        if writer.load(rest_id) is None:
+            return None
+        return writer
+
+    # BlobStorage
+    def get_finalized(self, rest_id) -> Optional[Blob]:
+        reader = self.get_blob_reader()
+        if reader.load(rest_id=rest_id) is None:
+            return None
+        return reader
+
+
     def get_transaction_cursor(self) -> TransactionCursor:
         return TransactionCursor(self)
 
@@ -938,7 +981,7 @@ class Storage:
                 self.tx_table.c.final_attempt_reason.is_not(None)),
             (time.time() - self.tx_table.c.last_update) > ttl)
         res = db_tx.execute(del_tx)
-        deleted_tx = res.rowcount
+        deleted_tx = rowcount(res)
 
         # If you wanted to reuse a blob for longer than the ttl
         # (unlikely?), you might need tx creation reusing the
@@ -953,7 +996,7 @@ class Storage:
             self.blob_table.c.id.in_(sel)
         )
         res = db_tx.execute(del_blob)
-        deleted_blob = res.rowcount
+        deleted_blob = rowcount(res)
         return deleted_tx, deleted_blob
 
     def gc(self, ttl) -> Tuple[int, int]:

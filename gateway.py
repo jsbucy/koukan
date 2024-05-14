@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict, Optional
 import sys
 import logging
 from threading import Thread
@@ -8,7 +8,7 @@ from threading import Lock
 
 from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
-from blobs import BlobStorage
+from blobs import InMemoryBlobStorage
 from smtp_service import service as smtp_service
 import rest_service
 from rest_endpoint_adapter import (
@@ -28,13 +28,14 @@ class SmtpGateway(EndpointFactory):
     shutdown_gc = False
     executor : Executor
     lock : Lock
+    rest_id_factory : Optional[Callable[[], str]]
 
     def __init__(self, config):
         self.config = config
 
         rest_output  = config.root_yaml.get('rest_output', None)
 
-        self.blob_storage = BlobStorage()
+        self.blob_storage = InMemoryBlobStorage()
         self.smtp_factory = SmtpFactory()
 
         self.inflight = {}
@@ -51,6 +52,10 @@ class SmtpGateway(EndpointFactory):
         self.gc_thread = Thread(target = lambda: self.gc_inflight(),
                                 daemon=True)
         self.gc_thread.start()
+
+        rest_yaml = self.config.root_yaml['rest_listener']
+        self.rest_id_factory = lambda: secrets.token_urlsafe(
+            rest_yaml.get('rest_id_entropy', 16))
 
     def shutdown(self):
         if self.gc_thread:
@@ -82,11 +87,9 @@ class SmtpGateway(EndpointFactory):
                 ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
 
             with self.lock:
-                while True:
-                    rest_id = secrets.token_urlsafe(
-                        rest_yaml.get('rest_id_entropy', 16))
-                    if rest_id not in self.inflight:
-                        break
+                rest_id = self.rest_id_factory()
+                if rest_id in self.inflight:
+                    return None
 
                 executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
                 self.inflight[rest_id] = executor
@@ -152,7 +155,7 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
         self.adapter_factory = RestEndpointAdapterFactory(
-            self, self.blob_storage)
+            self, self.blob_storage, self.rest_id_factory)
 
         flask_app=rest_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']

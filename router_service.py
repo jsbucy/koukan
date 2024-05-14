@@ -11,7 +11,6 @@ import rest_service
 import gunicorn_main
 import hypercorn_main
 
-from blobs import BlobStorage
 from blob import InlineBlob
 
 from storage import Storage, TransactionCursor
@@ -48,8 +47,6 @@ class Service:
                  executor : Optional[Executor] = None):
         self.lock = Lock()
         self.cv = Condition(self.lock)
-
-        self.blobs = None
 
         self.config = config
         self.executor = executor
@@ -112,8 +109,6 @@ class Service:
         self.storage.recover()
 
         self.config.set_storage(self.storage)
-
-        self.blobs = BlobStorage()
 
         # TODO storage should manage this internally?
         if global_yaml.get('dequeue', True):

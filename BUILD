@@ -72,12 +72,13 @@ pytype_library(name='fake_endpoints',
 
 pytype_library(name='transaction',
                srcs=['transaction.py'],
-               deps=['rest_service_handler',
-                     'filter',
+               deps=[':blob',
+                     ':rest_service_handler',
+                     ':filter',
                      ':message_builder',
-                     'response',
-                     'storage',
-                     'storage_schema'])
+                     ':response',
+                     ':storage',
+                     ':storage_schema'])
 
 py_test(name='transaction_test',
         srcs=['transaction_test.py'],

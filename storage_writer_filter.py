@@ -56,8 +56,13 @@ class StorageWriterFilter(Filter):
                 rest_id = self.rest_id_factory()
                 blob_writer.create(rest_id)
                 d = tx.body_blob.read(0)
-                blob_writer.append_data(d, len(d))
-                body_tx.body=rest_id
+                appended, length, content_length = blob_writer.append_data(
+                    0, d, len(d))
+                if not appended or length != content_length or length != len(d):
+                    body_tx.data_response = Response(
+                        400, 'StorageWriterFilter: internal error')
+                else:
+                    body_tx.body=rest_id
             while True:
                 try:
                     self.tx_cursor.write_envelope(
