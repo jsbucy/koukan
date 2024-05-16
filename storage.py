@@ -61,7 +61,7 @@ class TransactionCursor:
         #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
 
     def create(self,
-               rest_id,
+               rest_id : str,
                tx : TransactionMetadata,
                reuse_blob_rest_id : List[str] = []):
         parent = self.parent

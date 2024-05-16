@@ -79,10 +79,13 @@ class Executor:
 
     def shutdown(self, timeout=None) -> bool:
         with self.lock:
-            if not self.cv.wait_for(lambda: len(self.inflight) == 0,
-                                    self.watchdog_timeout):
-                faulthandler.dump_traceback()
-                assert False
+            for i in range(0, int(self.watchdog_timeout)):
+                logging.debug('Executor.shutdown waiting on %d',
+                              len(self.inflight))
+                self._check_watchdog_locked()
+                if self.cv.wait_for(lambda: len(self.inflight) == 0,
+                                    timeout=1):
+                    break
 
         self.executor.shutdown(wait=True, cancel_futures=True)
         if self.debug_futures:

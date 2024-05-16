@@ -19,10 +19,12 @@ from executor import Executor
 root_yaml = {
     'global': {
         'use_gunicorn': False,
+        'use_hypercorn': False,
         'tx_idle_timeout': 5,
         'gc_interval': None,
         'dequeue': False,
-        'mailer_daemon_mailbox': 'mailer-daemon@d'
+        'mailer_daemon_mailbox': 'mailer-daemon@d',
+        'rest_id_entropy': 2
     },
     'rest_listener': {
     },
@@ -38,12 +40,14 @@ root_yaml = {
                     'min_attempt_time': 1,
                     'max_attempt_time': 1,
                     'backoff_factor': 0,
-                    'deadline': 10,
+                    'deadline': 300,
                 }
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
+                       'rcpt_timeout': 1,
+                       'data_timeout': 1,
                        'default_notification': {
                            'host': 'submission'
                        }}]
@@ -59,7 +63,7 @@ root_yaml = {
                     'min_attempt_time': 1,
                     'max_attempt_time': 1,
                     'backoff_factor': 0,
-                    'deadline': 10,
+                    'deadline': 300,
                 }
             },
             'chain': [{'filter': 'sync'}]
@@ -140,15 +144,17 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(s)
 
         for i in range(1,3):
+            logging.info('RouterServiceTest.setUp probe %d', i)
             rest_endpoint = RestEndpoint(
                 static_base_url=self.router_url,
-                http_host='submission')
+                http_host='submission',
+                timeout_start=1, timeout_data=1)
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
             t = self.start_tx_update(rest_endpoint, tx)
-            logging.info('setUp %s', tx.mail_response)
             self.service._dequeue()
             self.join_tx_update(t)
+            logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
             time.sleep(0.1)
@@ -165,6 +171,22 @@ class RouterServiceTest(unittest.TestCase):
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
         self.executor.shutdown(timeout=5)
+
+    def _update_tx(self, endpoint, tx, timeout=None):
+        logging.debug('RouterServiceTest._update_tx')
+        endpoint.on_update(tx, timeout)
+
+    def start_tx_update(self, rest_endpoint, tx, timeout=5):
+        return self.executor.submit(
+            lambda: self._update_tx(rest_endpoint, tx, timeout))
+
+    def join_tx_update(self, t, timeout=5):
+        logging.debug('RouterServiceTest.join_tx_update')
+        try:
+            t.result(timeout)
+        except Exception:
+            logging.exception('RouterServiceTest.join_tx_update exception')
+        logging.debug('RouterServiceTest.join_tx_update done')
 
     def dump_db(self):
         with self.service.storage.conn() as conn:
@@ -186,7 +208,8 @@ class RouterServiceTest(unittest.TestCase):
     # retry+success
     def test_retry(self):
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission')
+            static_base_url=self.router_url, http_host='submission',
+            timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(retry={})
         rest_resp = rest_endpoint._start(tx, tx.to_json())
         tx_json = rest_resp.json()
@@ -207,7 +230,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), None)
         self.assertEqual(tx_json.get('last', None), None)
 
-        tx_json = rest_endpoint.get_json()
+        tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
         tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
@@ -220,7 +243,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json.get('data_response', None), None)
         self.assertEqual(tx_json.get('last', None), None)
 
-        tx_json = rest_endpoint.get_json()
+        tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
                       tx_json)
 
@@ -237,9 +260,13 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertTrue(tx.data_response.temp())
 
-        tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_retry get after append %s',
+        logging.debug('RouterServiceTest.test_retry get after set body')
+        tx_json = rest_endpoint.get_json(5)
+        logging.debug('RouterServiceTest.test_retry get after set body %s',
                       tx_json)
+        self.assertEqual(tx_json.get('mail_response', None), {})
+        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
+        self.assertEqual(tx_json.get('data_response', None), {})
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
@@ -249,7 +276,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.set_mail_response(Response(201))
         upstream_endpoint.add_rcpt_response(Response(456))
 
-        tx_json = rest_endpoint.get_json(1.2)
+        tx_json = rest_endpoint.get_json(5)
 
         logging.debug('RouterServiceTest.test_retry get after first attempt '
                       '%s %s', rest_resp, tx_json)
@@ -269,7 +296,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_rcpt_response(Response(202))
         upstream_endpoint.add_data_response(Response(203))
 
-        tx_json = rest_endpoint.get_json(1.2)
+        tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after second attempt '
                       '%s %s', rest_resp, tx_json)
         mail_resp = Response.from_json(tx_json.get('mail_response', None))
@@ -277,16 +304,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertRcptJsonCodesEqual(tx_json, [202])
         data_resp = Response.from_json(tx_json.get('data_response', None))
         self.assertEqual(data_resp.code, 203)
-
-    def _update_tx(self, endpoint, tx):
-        endpoint.on_update(tx)
-
-    def start_tx_update(self, rest_endpoint, tx):
-        return self.executor.submit(lambda: self._update_tx(rest_endpoint, tx))
-
-
-    def join_tx_update(self, t):
-        t.result()
 
     # xxx need non-exploder test w/filter api, problems in
     # post-exploder/upstream tx won't be reported out synchronously,
@@ -344,9 +361,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertRcptCodesEqual(tx.rcpt_response, [203])
 
         # output of exploder tx buffers whole payload?
-        #upstream_endpoint.add_data_response(None)
         upstream_endpoint.add_data_response(Response(204))
-        #upstream_endpoint2.add_data_response(None)
         upstream_endpoint2.add_data_response(Response(204))
 
         logging.info('testExploderMultiRcpt patch body_blob')
@@ -362,16 +377,22 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url, http_host='smtp-msa')
 
 
-        logging.info('testExploderMultiRcpt start tx')
+        logging.info('test_notification start tx')
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx)
+        t = self.start_tx_update(rest_endpoint, tx, 10)
         # exploder tx
         self.assertTrue(self.service._dequeue())
-        self.join_tx_update(t)
+        self.join_tx_update(t, 10)
+        logging.debug('RouterServiceTest.test_notification after update %s',
+                      tx)
+        # msa store and forward, upstream temp errors upgraded to 250 downstream
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertEqual([r.code for r in tx.rcpt_response], [250])
+        self.assertEqual(tx.data_response.code, 250)
 
         for i in range(0,3):
             logging.debug('test_notification upstream tx %d', i)
@@ -408,4 +429,5 @@ class RouterServiceTest(unittest.TestCase):
                       dsn_endpoint.body_blob.read(0))
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.removeHandler()
+    unittest.main(catchbreak=False)

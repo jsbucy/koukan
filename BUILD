@@ -279,7 +279,8 @@ pytype_library(name='router_service',
                      ':blobs',
                      ':rest_service',
                      ':gunicorn_main',
-                     ':hypercorn_main'])
+                     ':hypercorn_main',
+                     ':rest_endpoint_adapter'])
 
 py_test(name='router_service_test',
         srcs=['router_service_test.py'],

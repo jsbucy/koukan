@@ -56,6 +56,8 @@ class SmtpEndpoint(Filter):
             logging.info('SmtpEndpoint.connect %s %s', e, tx.remote_host)
             return Response(400, 'SmtpEndpoint: connect error')
 
+        # TODO all of these smtplib.SMTP calls on self.smtp can throw
+        # e.g. on tcp reset/server hung up
         resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
         if resp.err():
             self._shutdown()

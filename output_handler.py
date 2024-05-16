@@ -154,6 +154,8 @@ class OutputHandler:
                 last_tx.message_builder = delta.message_builder
                 try:
                     self.cursor.set_data_response(delta.data_response)
+                    logging.debug('OutputHandler._output() %s data_response %s',
+                                  self.rest_id, delta.data_response)
                     return delta.data_response
                 except VersionConflictException:
                     self.cursor.load()
@@ -288,4 +290,6 @@ class OutputHandler:
         # but internal temp (e.g. db write fail, should be uncommon)
         # should result in the parent retrying even if it was
         # permfail, better to dupe than fail to emit the bounce
-        notification_endpoint.on_update(notification_tx, timeout=0)
+
+        # XXX BEFORE SUBMIT timeout?
+        notification_endpoint.update(notification_tx, timeout=0)

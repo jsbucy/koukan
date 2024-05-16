@@ -170,7 +170,7 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '200 ok',
             content_type = 'application/json',
             body = json.dumps(js)))
-        resp_json = rest_endpoint.get_json(timeout=1.2)
+        resp_json = rest_endpoint.get_json(timeout=2)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
         self.assertEqual(req.request_timeout, 1)

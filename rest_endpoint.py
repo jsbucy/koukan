@@ -60,8 +60,9 @@ class RestEndpoint(Filter):
     client : Client
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
-        if timeout and int(timeout):
-            headers['request-timeout'] = str(int(timeout))
+        if timeout and int(timeout) >= 2:
+            # allow for propagation delay
+            headers['request-timeout'] = str(int(timeout) - 1)
 
     # pass base_url/http_host or transaction_url
     def __init__(self,
@@ -133,21 +134,23 @@ class RestEndpoint(Filter):
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
+        # XXX double-check before submit
+        timeout = timeout if timeout is not None else self.timeout_start
         self._set_request_timeout(req_headers, timeout)
         if self.etag:
             req_headers['if-match'] = self.etag
         try:
             rest_resp = self.client.patch(self.transaction_url,
-                                       json=req_json,
-                                       headers=req_headers,
-                                       timeout=self.timeout_start)
+                                          json=req_json,
+                                          headers=req_headers,
+                                          timeout=timeout)
         except RequestError:
             return None
         logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.http_version)
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint._update resp_json %s', resp_json)
-        if not resp_json:
+        if resp_json is None:
             return None
 
         if rest_resp.status_code < 300:
@@ -182,16 +185,16 @@ class RestEndpoint(Filter):
 
         put_blob_resp = None
         if self.data_last:
-            logging.debug('RestEndpoint._update_once body_blob')
+            logging.debug('RestEndpoint.on_update body_blob')
             put_blob_resp = self._put_blob(tx.body_blob)
-            logging.debug('RestEndpoint._update_once put_blob_resp %s',
+            logging.debug('RestEndpoint.on_update put_blob_resp %s',
                           put_blob_resp)
             if put_blob_resp.ok():
                 req_json['body'] = self.blob_url
             else:
                 tx.data_response = put_blob_resp
 
-        logging.debug('RestEndpoint._update_once req_json %s', req_json)
+        logging.debug('RestEndpoint.on_update req_json %s', req_json)
 
         if not req_json:
             return False
@@ -207,6 +210,7 @@ class RestEndpoint(Filter):
         if len(tx.rcpt_response) == len(tx.rcpt_to):
             self.rcpts += len(tx.rcpt_to)
 
+        # xxx envelope vs data timeout
         timeout = timeout if timeout is not None else self.timeout_start
         # xxx filter api needs to accomodate returning an error here
         # or else stuff the http error in the response for the first
@@ -315,10 +319,11 @@ class RestEndpoint(Filter):
                 req_headers['host'] = self.http_host
             self._set_request_timeout(req_headers, timeout)
             rest_resp = self.client.get(self.transaction_url,
-                                     headers=req_headers,
-                                     timeout=timeout)
+                                        headers=req_headers,
+                                        timeout=timeout)
             logging.debug('RestEndpoint.get_json %s', rest_resp)
-        except RequestError:
+        except RequestError as e:
+            logging.exception('RestEndpoint.get_json')
             return None
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)
@@ -383,7 +388,8 @@ class RestEndpoint(Filter):
     # in tx_json
     def get_tx_response(self, timeout, tx : TransactionMetadata,
                         tx_json={}, http_err : bool = False):
-        logging.debug('get_tx_response %s %s', tx_json, http_err)
+        logging.debug('RestEndpoint.get_tx_response %s %s %s',
+                      tx_json, timeout, http_err)
         deadline = time.monotonic() + timeout
         prev = 0
         timedout = http_err
@@ -409,6 +415,19 @@ class RestEndpoint(Filter):
                 timedout = True
 
         return None
+
+
+    # def _get(self, timeout, tx):
+    #     while tx.req_inflight():
+    #         # if not deadline_left:
+    #         #   tx.fill_inflight_resps(Response(400, 'upstream timeout'))
+    #         #   break
+    #         prev = self.tx.copy()
+    #         # get
+    #         # if err:
+    #         #   continue
+    #         # resps = prev.delta(self.tx)
+    #         # merge resps into tx
 
 
     def abort(self):

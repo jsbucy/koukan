@@ -3,7 +3,7 @@ import logging
 from threading import Thread
 import time
 
-from filter import Filter, Mailbox, TransactionMetadata
+from filter import AsyncFilter, Filter, Mailbox, TransactionMetadata
 from blob import Blob
 from response import Response
 
@@ -42,7 +42,7 @@ from response import Response
 class Recipient:
     # error or final data response
     status : Optional[Response] = None
-    upstream : Optional[Filter] = None
+    upstream : Optional[AsyncFilter] = None
     mail_response : Optional[Response] = None
     rcpt_response : Optional[Response] = None
     thread : Optional[Thread] = None
@@ -52,7 +52,7 @@ class Recipient:
 
 class Exploder(Filter):
     output_chain : str
-    factory : Callable[[], Filter]
+    factory : Callable[[], AsyncFilter]
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
     msa : Optional[bool] = None
@@ -65,7 +65,7 @@ class Exploder(Filter):
     recipients : List[Recipient]
 
     def __init__(self, output_chain : str,
-                 factory : Callable[[], Filter],
+                 factory : Callable[[], AsyncFilter],
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  msa : Optional[bool] = None,
@@ -109,7 +109,20 @@ class Exploder(Filter):
             notification = None,
             smtp_meta = delta.smtp_meta)
         recipient.upstream = self.factory()
-        recipient.upstream.on_update(upstream_tx, self.rcpt_timeout)
+        recipient.upstream.update(upstream_tx, self.rcpt_timeout)
+
+        # this only handles 1 recipient so it doesn't have to worry
+        # about the delta
+        if upstream_tx.mail_response is None:
+            #recipient.mail_response = upstream_tx.mail_response
+            upstream_tx.mail_response = Response(
+                400, 'exploder upstream timeout')
+
+        if (len(upstream_tx.rcpt_response) != 1
+            or upstream_tx.rcpt_response[0] is None):
+            upstream_tx.rcpt_response = [upstream_tx.mail_response]
+            #recipient.rcpt_response = upstream_tx.rcpt_response[0]
+            #return
 
         # we accept upstream temp errors on mail/rcpt for
         # store&forward for msa but not mx here
@@ -212,7 +225,7 @@ class Exploder(Filter):
 
 
     def on_update(self, delta):
-        logging.info('Exploder.on_update %s', delta.to_json())
+        logging.info('Exploder.on_update %s', delta)
 
         if delta.mail_from is not None:
             self._on_mail(delta)
@@ -224,15 +237,19 @@ class Exploder(Filter):
 
     def _append_upstream(self, recipient : Recipient, blob, timeout):
         prev_resp = recipient.status
-        logging.debug('Exploder._append_upstream %s timeout=%s',
+        logging.debug('Exploder._append_upstream prev_resp %s, timeout=%s',
                       prev_resp, timeout)
         assert prev_resp is None or not prev_resp.perm()
         body_tx = TransactionMetadata()
         body_tx.body_blob = blob
-        recipient.upstream.on_update(body_tx, timeout)
+        last = blob.len() == blob.content_length()
+        #recipient.upstream.on_update(body_tx, timeout)
+        recipient.upstream.update(body_tx, timeout)
+        if last and body_tx.data_response is None:
+            body_tx.data_response = Response(
+                400, 'exploder upstream timeout DATA')
         data_resp = body_tx.data_response
         logging.info('Exploder.append_data %s', data_resp)
-        last = blob.len() == blob.content_length()
         assert last or data_resp is None or not data_resp.ok()
         assert not (last and data_resp is None)
         if data_resp is not None and prev_resp is None:
@@ -255,7 +272,7 @@ class Exploder(Filter):
             if rcpt_status and rcpt_status.perm():
                 continue
             timeout = self.data_timeout
-            if rcpt_status and rcpt_status.temp():
+            if (rcpt_status is not None) and rcpt_status.temp():
                 # TODO don't wait for a status since it's already
                 # failed, but maybe storage writer filter, etc, should
                 # know that and not wait?
@@ -321,10 +338,11 @@ class Exploder(Filter):
                 # OR into the query?
 
                 # TODO restore any saved downstream notification request
-                recipient.upstream.on_update(
+                recipient.upstream.update(
                     TransactionMetadata(
                         notification=self.default_notification,
-                        retry={}))
+                        retry={}),
+                    timeout=0)  # i.e. don't wait on inflight
 
         message = None
         if msa_async_temp:

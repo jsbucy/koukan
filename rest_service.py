@@ -45,8 +45,9 @@ def create_app(handler_factory : HandlerFactory):
 
     def _get_timeout(req) -> Tuple[Optional[int], FlaskResponse]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
+        # return 0 i.e. no waiting if header not present
         if not (timeout_header := request.headers.get('request-timeout', None)):
-            return None, None
+            return 0, None
         timeout = None
         try:
             timeout = min(int(timeout_header), MAX_TIMEOUT)
@@ -77,7 +78,7 @@ def create_app(handler_factory : HandlerFactory):
         rest_resp : Optional[FlaskResponse] = handler.start(
             request.get_json(), timeout)
         if rest_resp is None:
-            return FlaskResponse(status=500)
+            return FlaskResponse(status=500, response=['handler start failed'])
         if rest_resp.status_code > 299:
             return rest_resp
         tx_url = '/transactions/' + handler.tx_rest_id()

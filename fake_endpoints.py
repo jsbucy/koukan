@@ -5,7 +5,7 @@ import time
 
 from blob import Blob
 from response import Response, Esmtp
-from filter import Filter, Mailbox, TransactionMetadata
+from filter import AsyncFilter, Filter, Mailbox, TransactionMetadata
 
 class SyncEndpoint(Filter):
     mail_from : Optional[Mailbox] = None
@@ -94,3 +94,35 @@ class SyncEndpoint(Filter):
         for blob in self.blobs:
             out += blob.read(0)
         return out
+
+class FakeAsyncEndpoint(AsyncFilter):
+    tx : TransactionMetadata
+    mu : Lock
+    cv : Condition
+
+    def __init__(self):
+        self.tx = TransactionMetadata()
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+
+    def merge(self, tx):
+        with self.mu:
+            self.tx.merge_from(tx)
+            self.cv.notify_all()
+
+    # AsyncFilter
+    def update(self, delta : TransactionMetadata,
+               timeout : Optional[float] = None):
+        with self.mu:
+            assert self.tx.merge_from(delta)
+            self.cv.notify_all()
+            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
+            delta.replace_from(self.tx)
+
+
+    # AsyncFilter
+    def get(self, timeout : Optional[float] = None
+            ) -> Optional[TransactionMetadata]:
+        with self.mu:
+            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
+            return self.tx.copy()

@@ -183,7 +183,6 @@ _tx_fields = [
                     WhichJson.DB],
             emit=[WhichJson.REST_CREATE,
                   WhichJson.REST_UPDATE,
-                  WhichJson.REST_READ,
                   WhichJson.DB],
             from_json=lambda js: list_from_js(js, Mailbox.from_json)),
     TxField('rcpt_response',
@@ -200,7 +199,8 @@ _tx_fields = [
                   WhichJson.DB]),
     TxField('body',
             accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE],
+                    WhichJson.REST_UPDATE,
+                    WhichJson.DB],
             emit=[WhichJson.REST_CREATE,
                   WhichJson.REST_UPDATE,
                   WhichJson.REST_READ]),
@@ -351,7 +351,8 @@ class TransactionMetadata:
                 return True
         body_blob_last = self.body_blob is not None and (
             self.body_blob.len() == self.body_blob.content_length())
-        if body_blob_last and tx.data_response is None:
+        # xxx BEFORE SUBMIT
+        if (self.body or body_blob_last) and tx.data_response is None:
             return True
         return False
 
@@ -417,10 +418,12 @@ class TransactionMetadata:
             self._field_to_json(name, field, which_js, json)
         return json
 
-    # apply a delta to self -> next
-    def merge(self, delta : "TransactionMetadata"
+    # self + delta -> out or new tx obj if out is None
+    def merge(self, delta : "TransactionMetadata",
+              out : Optional["TransactionMetadata"] = None
               ) -> Optional["TransactionMetadata"]:
-        out = TransactionMetadata()
+        if out is None:
+            out = TransactionMetadata()
 
         for f in tx_json_fields.keys():
             old_v = getattr(self, f, None)
@@ -445,6 +448,14 @@ class TransactionMetadata:
             setattr(out, f, l)
 
         return out
+
+    # merge delta into self
+    def merge_from(self, delta):
+        return self.merge(delta, self)
+
+    def replace_from(self, tx):
+        for f in tx_json_fields.keys():
+            setattr(self, f, getattr(tx, f, None))
 
     # compute a delta from self to successor
     def delta(self, successor : "TransactionMetadata"
@@ -503,11 +514,28 @@ class Filter(ABC):
     # - is the tx object the same across multiple calls?
     # - mutation?
 
+    # TODO remove this timeout -> AsyncFilter
+    # only set by Exploder->StorageWriter and bounce injection
     @abstractmethod
     def on_update(self, transaction_metadata : TransactionMetadata,
                   timeout : Optional[float] = None):
         pass
 
-    @abstractmethod
     def abort(self):
+        raise NotImplementedError()
+
+
+class AsyncFilter(ABC):
+    # may return None for reqs on timeout
+    # returns full tx state
+    @abstractmethod
+    def update(self, transaction_metadata : TransactionMetadata,
+               timeout : Optional[float] = None):
         pass
+
+    @abstractmethod
+    def get(self, timeout : Optional[float] = None
+            ) -> Optional[TransactionMetadata]:
+        pass
+
+

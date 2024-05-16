@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional, Any
+from typing import Callable, Dict, List, Optional, Any
 import logging
 import json
 import secrets
@@ -7,120 +7,122 @@ import time
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
-from filter import Filter, HostPort, Mailbox, TransactionMetadata
+from filter import AsyncFilter, Filter, HostPort, Mailbox, TransactionMetadata
 from blob import Blob
 
-class StorageWriterFilter(Filter):
+# this is only going to implement AsyncFilter
+class StorageWriterFilter(AsyncFilter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
-    rest_id_factory : Callable[[], str]
+    rest_id_factory : Optional[Callable[[], str]] = None
+    rest_id : Optional[str] = None
 
     def __init__(self, storage,
-                 rest_id_factory : Callable[[], str]):
+                 rest_id_factory : Optional[Callable[[], str]] = None,
+                 rest_id : Optional[str] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
+        self.rest_id = rest_id
 
-    def _create(self, tx : TransactionMetadata):
+    def version(self):
+        # XXX BEFORE SUBMIT
+        if self.tx_cursor is None:
+            self._load()
+        return self.tx_cursor.version
+
+    def _create(self, tx : TransactionMetadata,
+                reuse_blob_rest_id : Optional[List[str]] = None):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
-        rest_id = self.rest_id_factory()
-        self.tx_cursor.create(rest_id, tx)
+        self.rest_id = self.rest_id_factory()
+        self.tx_cursor.create(
+            self.rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id)
 
-    def on_update(self, tx : TransactionMetadata,
-                  timeout : Optional[float] = None):
+    def _load(self):
+        self.tx_cursor = self.storage.get_transaction_cursor()
+        self.tx_cursor.load(rest_id=self.rest_id)
+
+    # AsyncFilter
+    def get(self, timeout : Optional[float] = None
+            ) -> Optional[TransactionMetadata]:
+        # XXX BEFORE SUBMIT
         if self.tx_cursor is None:
-            self._create(tx)
-        else:
-            while True:
-                try:
-                    self.tx_cursor.write_envelope(tx)
-                    break
-                except VersionConflictException:
-                    self.tx_cursor.load()
+            self._load()
 
-        wait_data_resp = False
-        if tx.body_blob:
-            logging.debug('on_update len %d content %s',
-                          tx.body_blob.len(), tx.body_blob.content_length())
-        if tx.body_blob and (
-                tx.body_blob.len() == tx.body_blob.content_length()):
-            # TODO this assumes cursor_to_endpoint buffers the entire
-            # payload and nothing between there and here re-chunks it
-            body_tx = TransactionMetadata()
-            # xxx move this into Storage
-            if isinstance(tx.body_blob, BlobReader):
-                body_tx.body = tx.body_blob.rest_id
-            else:
-                blob_writer = self.storage.get_blob_writer()
-                # xxx this should be able to use storage id instead of rest id
-                rest_id = self.rest_id_factory()
-                blob_writer.create(rest_id)
-                d = tx.body_blob.read(0)
-                appended, length, content_length = blob_writer.append_data(
-                    0, d, len(d))
-                if not appended or length != content_length or length != len(d):
-                    body_tx.data_response = Response(
-                        400, 'StorageWriterFilter: internal error')
-                else:
-                    body_tx.body=rest_id
-            while True:
-                try:
-                    self.tx_cursor.write_envelope(
-                        body_tx, reuse_blob_rest_id=[body_tx.body])
-                    break
-                except VersionConflictException:
-                    self.tx_cursor.load()
-            wait_data_resp = True
+        logging.debug('StorageWriterFilter.get %s %s %s', self.rest_id, timeout,
+                      self.tx_cursor.tx)
 
         start = time.monotonic()
-        timed_out = False
-        while True:
-            done = True
-            if self.tx_cursor.tx is None:
-                done = False
-            if done and tx.mail_from is not None and tx.mail_response is None:
-                if self.tx_cursor.tx.mail_response is not None:
-                    tx.mail_response = self.tx_cursor.tx.mail_response
-                elif timed_out:
-                    tx.mail_response = Response(
-                        400, 'storage writer filter upstream timeout MAIL')
-                else:
-                    done = False
-            # storage returns the full vector but we return the delta
-            rcpt_response = self.tx_cursor.tx.rcpt_response[-len(tx.rcpt_to):]
-            for i in range(0, len(tx.rcpt_to)):
-                if len(tx.rcpt_response) <= i:
-                    tx.rcpt_response.append(None)
-                if tx.rcpt_response[i] is not None:
-                    continue
-                elif timed_out:
-                    tx.rcpt_response[i] = Response(
-                        400, 'storage writer filter upstream timeout RCPT')
-                elif i >= len(rcpt_response):
-                    done = False
-                elif rcpt_response[i] is not None:
-                    tx.rcpt_response[i] = rcpt_response[i]
-                else:
-                    done = False
-
-            if done and wait_data_resp:
-                if self.tx_cursor.tx.data_response:
-                    tx.data_response = self.tx_cursor.tx.data_response
-                elif timed_out:
-                    tx.data_response = Response(
-                        400, 'storage writer filter upstream timeout DATA')
-                else:
-                    done = False
-            if done:
-                break
+        deadline = start + timeout if timeout is not None else None
+        while self.tx_cursor.tx.req_inflight():
             deadline_left = None
             if timeout is not None:
-                assert not timed_out
-                deadline_left = timeout - (time.monotonic() - start)
+                deadline_left = deadline - time.monotonic()
                 if deadline_left <= 0:
-                    timed_out = True
-                    continue
+                    break
+                logging.debug('StorageWriterFilter.get %s deadline_left %s '
+                              'tx %s',
+                              self.rest_id, deadline_left, self.tx_cursor.tx)
             self.tx_cursor.wait(deadline_left)
 
-    def abort(self):
-        pass
+        logging.debug('StorageWriterFilter.get %s %s', self.rest_id,
+                      self.tx_cursor.tx)
+
+        return self.tx_cursor.tx
+
+    def _body(self, tx):
+        if isinstance(tx.body_blob, BlobReader):
+            tx.body = tx.body_blob.rest_id
+            return
+
+        blob_writer = self.storage.get_blob_writer()
+        # xxx this should be able to use storage id instead of rest id
+        rest_id = self.rest_id_factory()
+        blob_writer.create(rest_id)
+        d = tx.body_blob.read(0)
+        appended, length, content_length = blob_writer.append_data(
+            0, d, len(d))
+        if not appended or length != content_length or length != len(d):
+            tx.data_response = Response(
+                400, 'StorageWriterFilter: internal error')
+        else:
+            tx.body=rest_id
+
+
+    # AsyncFilter
+    def update(self, tx : TransactionMetadata,
+               timeout : Optional[float] = None):
+        reuse_blob_rest_id=None
+        logging.debug('StorageWriterFilter.update body_blob %s',
+                      tx.body_blob)
+        if tx.body_blob is not None and (
+                tx.body_blob.len() == tx.body_blob.content_length()):
+            self._body(tx)
+            if tx.data_response is not None:
+                return
+            reuse_blob_rest_id=[tx.body]
+        # XXX BEFORE SUBMIT have been playing fast&loose with these mutations
+        del tx.body_blob
+
+        if self.rest_id is None:
+            self._create(tx, reuse_blob_rest_id=reuse_blob_rest_id)
+        else:
+            if self.tx_cursor is None:
+                self._load()
+
+            while True:  # tx
+                try:
+                    self.tx_cursor.write_envelope(
+                        tx, reuse_blob_rest_id=reuse_blob_rest_id)
+                    break
+                except VersionConflictException:
+                    self.tx_cursor.load()
+
+        logging.debug('StorageWriterFilter.update %s %s result %s',
+                      self.rest_id, timeout, self.tx_cursor.tx)
+
+        # xxx timeout_left, update might have taken some time
+        updated = self.get(timeout)
+        tx.replace_from(updated)
+
+

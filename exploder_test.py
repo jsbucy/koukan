@@ -372,7 +372,7 @@ class ExploderTest(unittest.TestCase):
 
     def test_msa(self):
         for i,t in enumerate(vec_msa):
-            logging.info('test_mx %d', i)
+            logging.info('test_msa %d', i)
             self._test_one(True, t)
 
     # Several of these one-off tests exercise the multi-rcpt fan-out

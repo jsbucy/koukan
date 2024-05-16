@@ -20,4 +20,5 @@ def run(bind : List[Tuple[str,int]], cert, key, app):
         logging.debug('cert %s key %s', cert, key)
         config.certfile = cert
         config.keyfile = key
-    asyncio.run(serve(WSGIMiddleware(app), config))
+    asyncio.run(serve(WSGIMiddleware(app), config,
+                      shutdown_trigger=lambda: asyncio.Future()))

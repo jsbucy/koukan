@@ -15,11 +15,26 @@ from blob import InlineBlob
 
 from storage import Storage, TransactionCursor
 from transaction import RestServiceTransactionFactory
+from rest_endpoint_adapter import (
+    EndpointFactory,
+    RestEndpointAdapterFactory )
 from output_handler import OutputHandler
 from response import Response
 from executor import Executor
 from config import Config
-from filter import Filter
+from filter import AsyncFilter, Filter
+
+from storage_writer_filter import StorageWriterFilter
+
+class StorageWriterFactory(EndpointFactory):
+    def __init__(self, service : 'Service'):
+        self.service = service
+
+    def create(self, http_host : str) -> Optional[AsyncFilter]:
+        return self.service.create_storage_writer(http_host)
+    def get(self, rest_id : str) -> Optional[AsyncFilter]:
+        return self.service.get_storage_writer(rest_id)
+
 
 class Service:
     lock : Lock
@@ -27,7 +42,9 @@ class Service:
     storage : Optional[Storage] = None
     last_gc = 0
 
-    rest_tx_factory : RestServiceTransactionFactory = None
+    rest_tx_factory : Optional[RestServiceTransactionFactory] = None
+    rest_handler_factory : Optional[RestEndpointAdapterFactory] = None
+    endpoint_factory : Optional[EndpointFactory] = None
 
     # dequeue watermark
     created_id : Optional[int] = None
@@ -125,16 +142,23 @@ class Service:
 
         # top-level: http host -> endpoint
 
-        handler_factory = None
-        self.rest_tx_factory = RestServiceTransactionFactory(
-            self.storage, self.config.rest_id_factory())
-        handler_factory = self.rest_tx_factory
+        # handler_factory = None
+        # self.rest_tx_factory = RestServiceTransactionFactory(
+        #     self.storage, self.config.rest_id_factory())
+        # handler_factory = self.rest_tx_factory
+
+        self.endpoint_factory = StorageWriterFactory(self)
+        self.rest_handler_factory = RestEndpointAdapterFactory(
+            endpoint_factory = self.endpoint_factory,
+            blob_storage = self.storage,
+            rest_id_factory = self.config.rest_id_factory())
 
         with self.lock:
             self.started = True
             self.cv.notify_all()
 
-        flask_app = rest_service.create_app(handler_factory)
+        flask_app = rest_service.create_app(self.rest_handler_factory)
+            #handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_hypercorn', False):
             hypercorn_main.run(
@@ -159,6 +183,16 @@ class Service:
                 flask_app)
             self.wsgi_server.serve_forever()
 
+    def create_storage_writer(
+            self, http_host : str):  # -> Optional[SyncFilterAdapter]:
+        return StorageWriterFilter(
+            storage=self.storage,
+            rest_id_factory=self.config.rest_id_factory())
+
+    def get_storage_writer(
+            self, rest_id : str):  # -> Optional[SyncFilterAdapter]:
+        return StorageWriterFilter(
+            storage=self.storage, rest_id=rest_id)
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : Filter,

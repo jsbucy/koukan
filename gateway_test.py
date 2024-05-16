@@ -104,6 +104,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
         tx = TransactionMetadata(body_blob=InlineBlob('hello'))
         rest_endpoint.on_update(tx)
+        logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
         self.assertEqual(tx.data_response.code, 250)
 
 

@@ -25,7 +25,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             print(l)
 
     def update(self, filter, tx, timeout):
-        filter.on_update(tx, timeout)
+        filter.update(tx, timeout)
 
     def start_update(self, filter, tx, timeout=None):
         t = Thread(target=lambda: self.update(filter, tx, timeout=timeout),
@@ -50,8 +50,12 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
 
-        while tx_cursor.tx.mail_from is None:
+        for i in range(0,5):
+            if tx_cursor.tx.mail_from is not None:
+                break
             tx_cursor.wait()
+        else:
+            self.fail('no mail_from')
         tx_cursor.set_mail_response(Response(201))
 
         self.join(t)
@@ -61,8 +65,12 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata()
         tx.rcpt_to = [Mailbox('bob')]
         t = self.start_update(filter, tx)
-        while len(tx_cursor.tx.rcpt_to) < 1:
-            tx_cursor.wait()
+        for i in range(0,5):
+            if len(tx_cursor.tx.rcpt_to) == 1:
+                break
+            tx_cursor.wait(1)
+        else:
+            self.fail('no rcpt')
         tx_cursor.add_rcpt_response([Response(202)])
         self.join(t)
 
@@ -83,15 +91,22 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.join(t)
 
         d = b'world!'
-        blob_writer.append_data(
+        appended, length, content_length = blob_writer.append_data(
             blob_writer.length, d, blob_writer.length + len(d))
+        self.assertTrue(appended)
+        self.assertEqual(length, content_length)
 
         blob_reader.load()
 
+        tx = TransactionMetadata(body_blob=blob_reader)
         t = self.start_update(filter, tx)
 
-        while not tx_cursor.tx.body:
-            tx_cursor.wait()
+        for i in range(0,5):
+            if tx_cursor.tx.body is not None:
+                break
+            tx_cursor.wait(1)
+        else:
+            self.fail('no body')
         tx_cursor.set_data_response(Response(203))
 
         self.join(t)
@@ -107,7 +122,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = self.start_update(filter, tx, timeout=1)
         self.join(t, 2)
-        self.assertEqual(tx.mail_response.code, 400)
+        self.assertIsNone(tx.mail_response)
 
     def testTimeoutRcpt(self):
         filter = StorageWriterFilter(
@@ -128,7 +143,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         self.join(t, 2)
         self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [400])
+        self.assertEqual(tx.rcpt_response, [])
 
     def testTimeoutData(self):
         filter = StorageWriterFilter(
@@ -160,7 +175,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.join(t, 2)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 400)
+        self.assertIsNone(tx.data_response)
 
 
 if __name__ == '__main__':
