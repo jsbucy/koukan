@@ -70,21 +70,6 @@ pytype_library(name='fake_endpoints',
                deps=['response',
                      'filter'])
 
-pytype_library(name='transaction',
-               srcs=['transaction.py'],
-               deps=[':blob',
-                     ':rest_service_handler',
-                     ':filter',
-                     ':message_builder',
-                     ':response',
-                     ':storage',
-                     ':storage_schema'])
-
-py_test(name='transaction_test',
-        srcs=['transaction_test.py'],
-        deps=[':transaction',
-              ':fake_endpoints'])
-
 pytype_library(name='dsn',
                srcs=['dsn.py'],
                deps=[':response'])
@@ -108,8 +93,7 @@ py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
         deps=[':output_handler',
               ':executor',
-              ':fake_endpoints',
-              ':transaction'])
+              ':fake_endpoints'])
 
 pytype_library(name='message_builder',
                srcs=['message_builder.py'],
@@ -269,7 +253,6 @@ pytype_library(name='rest_service',
 pytype_library(name='router_service',
                srcs=['router_service.py'],
                deps=[':storage',
-                     ':transaction',
                      ':output_handler',
                      ':response',
                      ':executor',

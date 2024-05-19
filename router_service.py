@@ -14,7 +14,6 @@ import hypercorn_main
 from blob import InlineBlob
 
 from storage import Storage, TransactionCursor
-from transaction import RestServiceTransactionFactory
 from rest_endpoint_adapter import (
     EndpointFactory,
     RestEndpointAdapterFactory )
@@ -42,7 +41,6 @@ class Service:
     storage : Optional[Storage] = None
     last_gc = 0
 
-    rest_tx_factory : Optional[RestServiceTransactionFactory] = None
     rest_handler_factory : Optional[RestEndpointAdapterFactory] = None
     endpoint_factory : Optional[EndpointFactory] = None
 
@@ -141,11 +139,6 @@ class Service:
             logging.warning('gc disabled')
 
         # top-level: http host -> endpoint
-
-        # handler_factory = None
-        # self.rest_tx_factory = RestServiceTransactionFactory(
-        #     self.storage, self.config.rest_id_factory())
-        # handler_factory = self.rest_tx_factory
 
         self.endpoint_factory = StorageWriterFactory(self)
         self.rest_handler_factory = RestEndpointAdapterFactory(
