@@ -21,7 +21,7 @@ class Executor:
     watchdog_timeout : int
     debug_futures : Optional[List[Future]] = None
 
-    def __init__(self, inflight_limit, watchdog_timeout,
+    def __init__(self, inflight_limit, watchdog_timeout : int,
                  debug_futures=False):
         self.inflight = {}
         self.inflight_sem = BoundedSemaphore(inflight_limit)
@@ -78,6 +78,8 @@ class Executor:
                 self.cv.notify_all()
 
     def shutdown(self, timeout=None) -> bool:
+        ex = self.executor
+        self.executor = None  # stop new work coming in
         with self.lock:
             for i in range(0, int(self.watchdog_timeout)):
                 logging.debug('Executor.shutdown waiting on %d',
@@ -87,7 +89,7 @@ class Executor:
                                     timeout=1):
                     break
 
-        self.executor.shutdown(wait=True, cancel_futures=True)
+        ex.shutdown(wait=True, cancel_futures=True)
         if self.debug_futures:
             for fut in self.debug_futures:
                 fut.result()  # propagate exceptions

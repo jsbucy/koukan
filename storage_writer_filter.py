@@ -124,5 +124,4 @@ class StorageWriterFilter(AsyncFilter):
         # xxx timeout_left, update might have taken some time
         updated = self.get(timeout)
         tx.replace_from(updated)
-
-
+        tx.rest_id = self.rest_id

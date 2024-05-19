@@ -116,6 +116,7 @@ class SyncFilterAdapter(AsyncFilter):
                 self.inflight = True
             self._get_locked(self.tx, timeout)
             tx.replace_from(self.tx)
+            tx.rest_id = self.rest_id
 
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
@@ -171,7 +172,8 @@ class RestEndpointAdapter(Handler):
         tx.host = self.http_host
         self._body(tx)
         self.async_filter.update(tx, timeout)
-        self._tx_rest_id = self.async_filter.rest_id
+        assert tx.rest_id is not None
+        self._tx_rest_id = tx.rest_id
         return jsonify(tx.to_json(WhichJson.REST_READ))
 
     def get(self, req_json : Dict[str, Any],
@@ -188,7 +190,9 @@ class RestEndpointAdapter(Handler):
         tx = TransactionMetadata.from_json(req_json)
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
-        self._body(tx)
+        err = self._body(tx)
+        if err is not None:
+            return err
         self.async_filter.update(tx, timeout)
         return jsonify(tx.to_json(WhichJson.REST_READ))
 
@@ -229,10 +233,10 @@ class RestEndpointAdapter(Handler):
 
 class EndpointFactory(ABC):
     @abstractmethod
-    def create(self, http_host : str) -> Optional[SyncFilterAdapter]:
+    def create(self, http_host : str) -> Optional[AsyncFilter]:
         pass
     @abstractmethod
-    def get(self, rest_id : str) -> Optional[SyncFilterAdapter]:
+    def get(self, rest_id : str) -> Optional[AsyncFilter]:
         pass
 
 class RestEndpointAdapterFactory(HandlerFactory):

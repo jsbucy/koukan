@@ -11,7 +11,7 @@ from storage_schema import VersionConflictException
 from response import Response
 from output_handler import OutputHandler
 from transaction import RestServiceTransaction
-from fake_endpoints import SyncEndpoint
+from fake_endpoints import FakeAsyncEndpoint, SyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
 
@@ -321,10 +321,12 @@ class OutputHandlerTest(unittest.TestCase):
         endpoint.set_mail_response(Response())
         endpoint.add_rcpt_response(Response(450))
 
-        notification_endpoint = SyncEndpoint()
-        notification_endpoint.set_mail_response(Response())
-        notification_endpoint.add_rcpt_response(Response())
-        notification_endpoint.add_data_response(Response())
+        notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
+        notification_endpoint.merge(
+            TransactionMetadata(
+                mail_response=Response(),
+                rcpt_response=[Response()],
+                data_response=Response()))
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -343,10 +345,10 @@ class OutputHandlerTest(unittest.TestCase):
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
 
-        self.assertEqual(notification_endpoint.mail_from.mailbox, '')
-        self.assertEqual(notification_endpoint.rcpt_to[0].mailbox, 'alice')
+        self.assertEqual(notification_endpoint.tx.mail_from.mailbox, '')
+        self.assertEqual(notification_endpoint.tx.rcpt_to[0].mailbox, 'alice')
 
-        dsn = notification_endpoint.body_blob.read(0).decode('utf-8')
+        dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
         logging.debug(dsn)
         self.assertIn('subject: Delivery Status Notification', dsn)
 

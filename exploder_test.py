@@ -7,21 +7,18 @@ import time
 
 from storage import Storage, TransactionCursor
 from response import Response
-from fake_endpoints import SyncEndpoint
+from fake_endpoints import FakeAsyncEndpoint
 from filter import Mailbox, TransactionMetadata
 
 from blob import CompositeBlob, InlineBlob
 
 from exploder import Exploder
-#from storage_writer_filter import StorageWriterFilter
-
-from fake_endpoints import SyncEndpoint
 
 class Rcpt:
     addr : str
     mail_resp : Optional[Response]
     rcpt_resp : Optional[Response]
-    data_resp : Optional[Response]
+    data_resp : List[Optional[Response]]
 
     def __init__(self, addr, m=None, r=None, d=None):
         self.addr = addr
@@ -30,12 +27,17 @@ class Rcpt:
         self.data_resp = d
 
     def set_endpoint(self, endpoint):
+        self.endpoint = endpoint
         if self.mail_resp:
-            endpoint.set_mail_response(self.mail_resp)
+            endpoint.merge(TransactionMetadata(mail_response=self.mail_resp))
         if self.rcpt_resp:
-            endpoint.add_rcpt_response(self.rcpt_resp)
-        for r in self.data_resp:
-            endpoint.add_data_response(r)
+            endpoint.merge(TransactionMetadata(rcpt_response=[self.rcpt_resp]))
+
+    def set_data_response(self, i):
+        if i < len(self.data_resp):
+            self.endpoint.merge(
+                TransactionMetadata(data_response=self.data_resp[i]))
+
 
 class Test:
     mail_from : str
@@ -43,7 +45,7 @@ class Test:
     data : List[bytes]
     expected_mail_resp : Response
     expected_rcpt_resp : List[Response]
-    expected_data_resp : List[Response]
+    expected_data_resp : List[Optional[Response]]
     def __init__(self, m, r, d, em, er, ed):
         self.mail_from = m
         self.rcpt = r
@@ -304,14 +306,14 @@ class ExploderTest(unittest.TestCase):
             print(l)
 
     def add_endpoint(self):
-        endpoint = SyncEndpoint()
+        endpoint = FakeAsyncEndpoint(rest_id='rest-id')
         with self.mu:
             self.upstream_endpoints.append(endpoint)
             self.cv.notify_all()
         return endpoint
 
     def factory(self):
-        endpoint = SyncEndpoint()
+        endpoint = FakeAsyncEndpoint(rest_id='rest-id')
         with self.mu:
             self.cv.wait_for(lambda: self.upstream_endpoints)
             return self.upstream_endpoints.pop(0)
@@ -357,6 +359,13 @@ class ExploderTest(unittest.TestCase):
             else:
                 blob.append(d)
             tx = TransactionMetadata(body_blob=blob)
+            # this is cheating a little in that we're setting the
+            # upstream response before sending the downstream data...
+            # for higher fidelity, we would have to do the whole
+            # song&dance of starting the downstream update in a thread
+            # and then set the upstream response, etc.
+            for r in t.rcpt:
+                r.set_data_response(i)
             exploder.on_update(tx)
             if t.expected_data_resp[i] is not None:
                 self.assertEqual(tx.data_response.code,
@@ -394,12 +403,10 @@ class ExploderTest(unittest.TestCase):
 
         t = self.start_update(exploder, tx)
 
-        up0.set_mail_response(Response(250))
-        up0.add_rcpt_response(Response(201))
-        up0.add_data_response(None)
-        up1.set_mail_response(Response(250))
-        up1.add_rcpt_response(Response(202))
-        up1.add_data_response(None)
+        up0.merge(TransactionMetadata(mail_response=Response(250)))
+        up0.merge(TransactionMetadata(rcpt_response=[Response(201)]))
+        up1.merge(TransactionMetadata(mail_response=Response(250)))
+        up1.merge(TransactionMetadata(rcpt_response=[Response(202)]))
 
         self.join(t)
 
@@ -418,8 +425,8 @@ class ExploderTest(unittest.TestCase):
 
         t = self.start_update(exploder, tx)
 
-        up0.add_data_response(Response(250))
-        up1.add_data_response(Response(250))
+        up0.merge(TransactionMetadata(data_response=Response(250)))
+        up1.merge(TransactionMetadata(data_response=Response(250)))
         self.join(t)
         logging.debug(tx.data_response.message)
         self.assertEqual(tx.data_response.code, 250)
@@ -442,10 +449,10 @@ class ExploderTest(unittest.TestCase):
 
         t = self.start_update(exploder, tx)
 
-        up0.set_mail_response(Response(250))
-        up0.add_rcpt_response(Response(201))
-        up1.set_mail_response(Response(250))
-        up1.add_rcpt_response(Response(450))
+        up0.merge(TransactionMetadata(mail_response=Response(250)))
+        up0.merge(TransactionMetadata(rcpt_response=[Response(201)]))
+        up1.merge(TransactionMetadata(mail_response=Response(250)))
+        up1.merge(TransactionMetadata(rcpt_response=[Response(450)]))
 
         self.join(t)
 
@@ -453,8 +460,8 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual(tx.rcpt_response[0].code, 201)
         self.assertEqual(tx.rcpt_response[1].code, 450)
 
-        up0.add_data_response(Response(202))
-        up1.add_data_response(Response(400))
+        up0.merge(TransactionMetadata(data_response=Response(202)))
+        up1.merge(TransactionMetadata(data_response=Response(400)))
 
         tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         exploder.on_update(tx)

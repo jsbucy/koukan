@@ -222,7 +222,9 @@ _tx_fields = [
             accept=[WhichJson.REST_CREATE,
                     WhichJson.DB],
             emit=[WhichJson.DB]),
-    TxField('body_blob', accept=None, emit=None)
+    TxField('body_blob', accept=None, emit=None),
+    TxField('rest_id', accept=None, emit=None),
+
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -263,6 +265,7 @@ class TransactionMetadata:
 
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
+    rest_id : Optional[str] = None
 
     def __init__(self, local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
@@ -273,6 +276,7 @@ class TransactionMetadata:
                  host : Optional[str] = None,
                  body : Optional[str] = None,
                  body_blob : Optional[Blob] = None,
+                 data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,
                  smtp_meta : Optional[dict] = None):
@@ -285,6 +289,7 @@ class TransactionMetadata:
         self.host = host
         self.body = body
         self.body_blob = body_blob
+        self.data_response = data_response
         self.notification = notification
         self.retry = retry
         self.smtp_meta = smtp_meta
@@ -538,4 +543,7 @@ class AsyncFilter(ABC):
             ) -> Optional[TransactionMetadata]:
         pass
 
-
+    # returns a "cached" value from the last get/update
+    @abstractmethod
+    def version(self) -> int:
+        pass

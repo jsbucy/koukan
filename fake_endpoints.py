@@ -99,15 +99,19 @@ class FakeAsyncEndpoint(AsyncFilter):
     tx : TransactionMetadata
     mu : Lock
     cv : Condition
+    _version : int = 0
+    rest_id : str
 
-    def __init__(self):
+    def __init__(self, rest_id):
         self.tx = TransactionMetadata()
         self.mu = Lock()
         self.cv = Condition(self.mu)
+        self.rest_id = rest_id
 
     def merge(self, tx):
         with self.mu:
             self.tx.merge_from(tx)
+            self._version += 1
             self.cv.notify_all()
 
     # AsyncFilter
@@ -115,10 +119,11 @@ class FakeAsyncEndpoint(AsyncFilter):
                timeout : Optional[float] = None):
         with self.mu:
             assert self.tx.merge_from(delta)
+            self._version += 1
             self.cv.notify_all()
             self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             delta.replace_from(self.tx)
-
+            delta.rest_id = self.rest_id
 
     # AsyncFilter
     def get(self, timeout : Optional[float] = None
@@ -126,3 +131,6 @@ class FakeAsyncEndpoint(AsyncFilter):
         with self.mu:
             self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             return self.tx.copy()
+
+    def version(self):
+        return self._version

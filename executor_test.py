@@ -30,9 +30,9 @@ class ExecutorTest(unittest.TestCase):
         fut.result()
 
     def testWatchdogTimeout(self):
-        ex = Executor(1, 0.1)
-        ex.submit(lambda: time.sleep(1))
-        time.sleep(0.1)
+        ex = Executor(1, watchdog_timeout=1)
+        ex.submit(lambda: time.sleep(5))
+        time.sleep(1)
         with self.assertRaises(Exception):
             ex.submit(lambda: None)
         with self.assertRaises(Exception):
