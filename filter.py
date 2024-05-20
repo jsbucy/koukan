@@ -375,7 +375,7 @@ class TransactionMetadata:
         if name in ["mail_response", "data_response"]:
             if ((name == 'mail_response' and self.mail_from and
                  not self.mail_response) or
-                (name == 'data_response' and self.body and
+                (name == 'data_response' and (self.body or self.body_blob) and
                  not self.data_response)):
                 json[name] = {}
                 return True

@@ -45,10 +45,11 @@ class InflightBlob(WritableBlob):
         return True, self.b.len(), self.content_length
 
 class InMemoryBlobStorage(BlobStorage):
-    blobs : Dict[str, InflightBlob] = {}
+    blobs : Dict[str, InflightBlob]
     mu : Lock
 
     def __init__(self):
+        self.blobs = {}
         self.mu = Lock()
 
     def _create(self, rest_id : str) -> Optional[InflightBlob]:

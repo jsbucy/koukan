@@ -1,16 +1,26 @@
-from typing import Any, Callable, Dict, List, Optional
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple )
+
 from abc import ABC, abstractmethod
 import logging
 import time
 from threading import Condition, Lock
 import json
 
-from flask import Response as FlaskResponse, Request as FlaskRequest, jsonify
+from flask import (
+    Request as FlaskRequest,
+    Response as FlaskResponse,
+    jsonify )
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
 from response import Response as MailResponse
-from blob import Blob, InlineBlob
+from blob import Blob, InlineBlob, WritableBlob
 from blobs import BlobStorage
 from rest_service_handler import Handler, HandlerFactory
 from filter import AsyncFilter, Filter, TransactionMetadata, WhichJson
@@ -125,6 +135,8 @@ class SyncFilterAdapter(AsyncFilter):
             self._get_locked(tx, timeout)
             return self.tx.copy()
 
+MAX_TIMEOUT=30
+
 class RestEndpointAdapter(Handler):
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
@@ -147,9 +159,6 @@ class RestEndpointAdapter(Handler):
         self.rest_id_factory = rest_id_factory
         self.http_host = http_host
 
-    def tx_rest_id(self):
-        return self._tx_rest_id
-
     def blob_rest_id(self):
         return self._blob_rest_id
 
@@ -164,57 +173,166 @@ class RestEndpointAdapter(Handler):
             tx.body_blob = body_blob
             del tx.body
 
-    def start(self, req_json,
-              timeout : Optional[float] = None) -> Optional[FlaskResponse]:
-        tx = TransactionMetadata.from_json(req_json)
+    def _get_timeout(self, req : FlaskRequest
+                     ) -> Tuple[Optional[int], FlaskResponse]:
+        # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
+        # return 0 i.e. no waiting if header not present
+        if not (timeout_header := req.headers.get('request-timeout', None)):
+            return 0, None
+        timeout = None
+        try:
+            timeout = min(int(timeout_header), MAX_TIMEOUT)
+        except ValueError:
+            return None, FlaskResponse(status=400, response=[
+                'invalid request-timeout header'])
+        return timeout, None
+
+    def _etag(self, version : int) -> str:
+        return '%d' % version
+
+    def create_tx(self, request : FlaskRequest) -> Optional[FlaskResponse]:
+        # TODO if request doesn't have remote_addr or is not from a
+        # well-known/trusted peer (i.e. smtp gateway), set remote_addr to wsgi
+        # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
+        # TODO only accept smtp_meta from trusted peer i.e. the
+        # well-known address of the gateway
+
+        tx = TransactionMetadata.from_json(request.json)
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
         tx.host = self.http_host
         self._body(tx)
+        timeout, err = self._get_timeout(request)
+        if self.async_filter is None:
+            return FlaskResponse(
+                status=500, respose=['internal error creating transaction'])
         self.async_filter.update(tx, timeout)
         assert tx.rest_id is not None
         self._tx_rest_id = tx.rest_id
-        return jsonify(tx.to_json(WhichJson.REST_READ))
 
-    def get(self, req_json : Dict[str, Any],
-            timeout : Optional[float] = None) -> FlaskResponse:
+        resp = FlaskResponse(status = 201)
+        # xxx move to separate "rest schema"
+        resp.headers.set('location', '/transactions/' + tx.rest_id)
+        resp.set_etag(self._etag(self.async_filter.version()))
+        resp.content_type = 'application/json'
+        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
+        return resp
+
+    def get_tx(self, request : FlaskRequest) -> FlaskResponse:
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        if self.async_filter is None:
+            return FlaskResponse(
+                status=404, response=['transaction not found'])
         tx = self.async_filter.get(timeout)
         if tx is None:
             return FlaskResponse(status=500, response=['get tx'])
-        return jsonify(tx.to_json(WhichJson.REST_READ))
 
-    def patch(self, req_json : Dict[str, Any],
-              timeout : Optional[float] = None) -> FlaskResponse:
+        resp = FlaskResponse(status = 200)
+        # xxx move to separate "rest schema"
+        resp.set_etag(self._etag(self.async_filter.version()))
+        resp.content_type = 'application/json'
+        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
+        return resp
+
+    def patch_tx(self, request : FlaskRequest) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.patch %s %s',
-                      self._tx_rest_id, req_json)
-        tx = TransactionMetadata.from_json(req_json)
+                      self._tx_rest_id, request.json)
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        tx = TransactionMetadata.from_json(request.json)
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
         err = self._body(tx)
         if err is not None:
             return err
+        req_etag = request.headers.get('if-match', None)
+        if req_etag is None:
+            return FlaskResponse(
+                status=400, response=['etags required for update'])
+        req_etag = req_etag.strip('"')
+        if req_etag != self._etag(self.async_filter.version()):
+            logging.debug('RestEndpointAdapter.patch_tx conflict %s %s',
+                          req_etag, self._etag(self.async_filter.version()))
+            return FlaskResponse(
+                status=412, response=['update conflict'])
         self.async_filter.update(tx, timeout)
-        return jsonify(tx.to_json(WhichJson.REST_READ))
+        resp = FlaskResponse(status = 200)
+        # xxx move to separate "rest schema"
+        resp.set_etag(self._etag(self.async_filter.version()))
+        resp.content_type = 'application/json'
+        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
+        return resp
 
-    def etag(self) -> str:
-        return ('%d' % self.async_filter.version())
+    def _get_range(self, request : FlaskRequest
+                   ) -> Tuple[Optional[FlaskResponse], Optional[ContentRange]]:
+        if (range_header := request.headers.get('content-range', None)) is None:
+            return None, ContentRange(
+                'bytes', 0, request.content_length, request.content_length)
+
+        range = werkzeug.http.parse_content_range_header(
+            request.headers.get('content-range'))
+        logging.info('put_blob content-range: %s', range)
+        if not range or range.units != 'bytes':
+            return FlaskResponse(400, 'bad range'), None
+        # no idea if underlying stack enforces this
+        assert(range.stop - range.start == request.content_length)
+        return None, range
 
     def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = self.rest_id_factory()
-        if self.blob_storage.create(self._blob_rest_id) is None:
-            return FlaskResponse(status=500)
-        return FlaskResponse(status=201)
+        logging.debug('RestEndpointAdapter.create_blob %s %s %s',
+                      request, request.headers, self._blob_rest_id)
 
-    def put_blob(self, request : FlaskRequest, content_range : ContentRange
-                 ) -> FlaskResponse:
+        if 'upload' not in request.args:
+            if 'content-range' in request.headers:
+                return FlaskResponse(
+                    status=400,
+                    response=['content-range only with chunked uploads'])
+        elif request.args.keys() != {'upload'} or (
+                request.args['upload'] != 'chunked'):
+            return FlaskResponse(status=400, response=['bad query'])
+        elif request.data:
+            return FlaskResponse(
+                status=400, response=['unimplemented metadata upload'])
+
+        logging.debug('RestEndpointAdapter.create_blob before create')
+
+        if (blob := self.blob_storage.create(self._blob_rest_id)) is None:
+            return FlaskResponse(
+                status=500, response=['internal error creating blob'])
+
+        if request.data:
+            range_err, range = self._get_range(request)
+            if range_err:
+                return range_err
+            rest_resp = self._put_blob(request, range, blob)
+
+        resp = FlaskResponse(status=201)
+        resp.status_code = 201
+        resp.headers.set('location', '/blob/' + self._blob_rest_id)
+        return resp
+
+    def put_blob(self, request : FlaskRequest):
+        range_err, range = self._get_range(request)
+        if range_err:
+            return range_err
+
+        blob = self.blob_storage.get_for_append(self._blob_rest_id)
+        if blob is None:
+            return FlaskResponse(status=404, response=['unknown blob'])
+
+        return self._put_blob(request, range, blob)
+
+    def _put_blob(self, request : FlaskRequest, content_range : ContentRange,
+                  blob : WritableBlob) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.put_blob %s content-range: %s',
                       self._blob_rest_id, content_range)
         offset = 0
         last = True
         offset = content_range.start
-        blob = self.blob_storage.get_for_append(self._blob_rest_id)
-        if blob is None:
-            return FlaskResponse(status=404, response=['unknown blob'])
         appended, result_len, content_length = blob.append_data(
             offset, request.data, content_range.length)
         logging.debug('RestEndpointAdapter.put_blob %s %d %s',
@@ -235,6 +353,7 @@ class EndpointFactory(ABC):
     @abstractmethod
     def create(self, http_host : str) -> Optional[AsyncFilter]:
         pass
+
     @abstractmethod
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         pass
@@ -250,25 +369,23 @@ class RestEndpointAdapterFactory(HandlerFactory):
         self.blob_storage = blob_storage
         self.rest_id_factory = rest_id_factory
 
-    def create_tx(self, http_host) -> Optional[RestEndpointAdapter]:
+    def create_tx(self, http_host) -> RestEndpointAdapter:
         endpoint = self.endpoint_factory.create(http_host)
-        if endpoint is None:
-            return None
-        return RestEndpointAdapter(async_filter=endpoint,
-                                   blob_storage=self.blob_storage,
-                                   http_host=http_host)
+        return RestEndpointAdapter(
+            async_filter=endpoint,
+            blob_storage=self.blob_storage,
+            http_host=http_host)
 
-    def get_tx(self, tx_rest_id) -> Optional[RestEndpointAdapter]:
-        endpoint = self.endpoint_factory.get(tx_rest_id)
-        if endpoint is None: return None
-        return RestEndpointAdapter(async_filter=endpoint,
-                                   tx_rest_id=tx_rest_id,
-                                   blob_storage=self.blob_storage)
+    def get_tx(self, tx_rest_id) -> RestEndpointAdapter:
+        return RestEndpointAdapter(
+            async_filter=self.endpoint_factory.get(tx_rest_id),
+            tx_rest_id=tx_rest_id,
+            blob_storage=self.blob_storage)
 
-    def create_blob(self) -> Optional[Handler]:
+    def create_blob(self) -> RestEndpointAdapter:
         return RestEndpointAdapter(blob_storage=self.blob_storage,
                                    rest_id_factory=self.rest_id_factory)
 
-    def get_blob(self, blob_rest_id) -> Optional[RestEndpointAdapter]:
+    def get_blob(self, blob_rest_id) -> RestEndpointAdapter:
         return RestEndpointAdapter(blob_storage=self.blob_storage,
                                    blob_rest_id=blob_rest_id)

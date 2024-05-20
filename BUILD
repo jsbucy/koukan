@@ -245,10 +245,7 @@ pytype_library(name='hypercorn_main',
 
 pytype_library(name='rest_service',
                srcs=['rest_service.py',
-                     'rest_service_handler',
-                     'blobs',
-                     'blob',
-                     'response'])
+                     'rest_service_handler'])
 
 pytype_library(name='router_service',
                srcs=['router_service.py'],
