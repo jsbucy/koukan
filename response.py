@@ -53,6 +53,9 @@ class Response:
     def to_json(self) -> Dict:
         return {'code': self.code, 'message': self.message}
 
+    def __eq__(self, r : 'Response'):
+        return self.code == r.code and self.message == r.message
+
     @staticmethod
     def from_json(d : Dict) -> Optional["Response"]:
         if 'code' not in d:

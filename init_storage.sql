@@ -81,9 +81,7 @@ CREATE TABLE TransactionAttempts (
   transaction_id INTEGER,
   attempt_id INTEGER NOT NULL,
 
-  mail_response JSON,
-  rcpt_response JSON,
-  data_response JSON,
+  responses JSON,
 
   PRIMARY KEY(transaction_id, attempt_id),
 

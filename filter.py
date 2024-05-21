@@ -117,6 +117,7 @@ class WhichJson(IntEnum):
     REST_CREATE = 2,
     REST_UPDATE = 3,
     DB = 4
+    DB_ATTEMPT = 5
 
 class TxField:
     json_field : str
@@ -174,8 +175,9 @@ _tx_fields = [
                   WhichJson.DB],
             from_json=Mailbox.from_json),
     TxField('mail_response',
-            accept=[],
-            emit=[WhichJson.REST_READ],
+            accept=[WhichJson.DB_ATTEMPT],
+            emit=[WhichJson.DB_ATTEMPT,
+                  WhichJson.REST_READ],
             from_json=Response.from_json),
     TxField('rcpt_to',
             accept=[WhichJson.REST_CREATE,
@@ -186,12 +188,14 @@ _tx_fields = [
                   WhichJson.DB],
             from_json=lambda js: list_from_js(js, Mailbox.from_json)),
     TxField('rcpt_response',
-            accept=[],
-            emit=[WhichJson.REST_READ],
+            accept=[WhichJson.DB_ATTEMPT],
+            emit=[WhichJson.DB_ATTEMPT,
+                  WhichJson.REST_READ],
             from_json=lambda js: list_from_js(js, Response.from_json)),
     TxField('data_response',
-            accept=[],
-            emit=[WhichJson.REST_READ],
+            accept=[WhichJson.DB_ATTEMPT],
+            emit=[WhichJson.DB_ATTEMPT,
+                  WhichJson.REST_READ],
             from_json=Response.from_json),
     TxField('attempt_count',
             accept=[WhichJson.DB],

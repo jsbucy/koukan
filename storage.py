@@ -235,6 +235,15 @@ class TransactionCursor:
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
 
+        attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
+        if attempt_json:
+            upd_att = (update(self.parent.attempt_table)
+                       .where(self.parent.attempt_table.c.transaction_id == self.id,
+                              self.parent.attempt_table.c.attempt_id ==
+                              self.attempt_id)
+                       .values({'responses': attempt_json }))
+            res = db_tx.execute(upd_att)
+
         if ((tx_delta.retry is not None) and
             self.final_attempt_reason == 'oneshot'):
             upd = upd.values(final_attempt_reason = None)
@@ -267,89 +276,6 @@ class TransactionCursor:
                      self.id, self.version)
 
         return True
-
-    # TODO fold all of this set-response stuff into write_envelope()
-    # since we read it via TransactionMetadata anyway?
-
-    def _set_response(self, col : str, response : Response):
-        assert(self.attempt_id is not None)
-        with self.parent.begin_transaction() as db_tx:
-            upd_att = (update(self.parent.attempt_table)
-                   .where(self.parent.attempt_table.c.transaction_id == self.id,
-                          self.parent.attempt_table.c.attempt_id ==
-                          self.attempt_id)
-                   .values({col: response.to_json()}))
-            res = db_tx.execute(upd_att)
-
-            new_version = self.version + 1
-            upd_tx = (update(self.parent.tx_table)
-                      .where(self.parent.tx_table.c.id == self.id,
-                             self.parent.tx_table.c.version == self.version)
-                      .values(version = new_version)
-                      .returning(self.parent.tx_table.c.version))
-            res = db_tx.execute(upd_tx)
-            if (row := res.fetchone()) is None or row[0] != new_version:
-                raise VersionConflictException()
-            self.version = row[0]
-        self.parent.tx_versions.update(self.id, new_version)
-
-
-    def set_mail_response(self, response : Response):
-        # XXX enforce that req field is populated
-        self._set_response('mail_response', response)
-
-    def add_rcpt_response(self, response : List[Response]):
-        assert(self.attempt_id is not None)
-        with self.parent.begin_transaction() as db_tx:
-            # TODO load-that's-not-a-load, cf write_envelope()
-            sel = (select(self.parent.tx_table.c.version,
-                          self.parent.tx_table.c.json)
-                   .where(self.parent.tx_table.c.id == self.id))
-            res = db_tx.execute(sel)
-            db_version,tx_json = res.fetchone()
-            if db_version != self.version:
-                raise VersionConflictException()
-
-            sel = (select(self.parent.attempt_table.c.rcpt_response)
-                   .where(self.parent.attempt_table.c.transaction_id == self.id,
-                          self.parent.attempt_table.c.attempt_id ==
-                          self.attempt_id))
-            res = db_tx.execute(sel)
-
-            old_resp = []
-            row = res.fetchone()
-            if row and row[0]:
-                old_resp = row[0]
-
-            old_resp.extend([r.to_json() for r in response])
-            if len(old_resp) > len(tx_json['rcpt_to']):
-                logging.critical(
-                    'add_rcpt_response %d %s %s %s',
-                    self.id, self.rest_id, old_resp, tx_json['rcpt_to'])
-                assert False
-
-            upd = (update(self.parent.attempt_table)
-                   .where(self.parent.attempt_table.c.transaction_id == self.id,
-                          self.parent.attempt_table.c.attempt_id ==
-                          self.attempt_id)
-                   .values(rcpt_response = old_resp))
-            res = db_tx.execute(upd)
-
-            new_version = self.version + 1
-            upd = (update(self.parent.tx_table)
-                   .where(self.parent.tx_table.c.id == self.id,
-                          self.parent.tx_table.c.version == self.version)
-                   .values(version = new_version)
-                   .returning(self.parent.tx_table.c.version))
-            res = db_tx.execute(upd)
-            if (row := res.fetchone()) is None or row[0] != new_version:
-                raise VersionConflictException()
-            self.version = row[0]
-
-        self.parent.tx_versions.update(self.id, new_version)
-
-    def set_data_response(self, response : Response):
-        self._set_response('data_response', response)
 
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
@@ -402,23 +328,18 @@ class TransactionCursor:
         self.tx.message_builder = self.message_builder
 
         sel = (select(self.parent.attempt_table.c.attempt_id,
-                     self.parent.attempt_table.c.mail_response,
-                     self.parent.attempt_table.c.rcpt_response,
-                     self.parent.attempt_table.c.data_response)
+                      self.parent.attempt_table.c.responses)
                .where(self.parent.attempt_table.c.transaction_id == self.id)
                .order_by(self.parent.attempt_table.c.attempt_id.desc())
                .limit(1))
         res = db_tx.execute(sel)
         row = res.fetchone()
         if row is not None:
-            self.attempt_id,mail_json,rcpt_json,data_json = row
-            if mail_json:
-                self.tx.mail_response = Response.from_json(mail_json)
-            if rcpt_json:
-                self.tx.rcpt_response = [
-                    Response.from_json(r) for r in rcpt_json]
-            if data_json:
-                self.tx.data_response = Response.from_json(data_json)
+            if row[1] is not None:
+                responses = TransactionMetadata.from_json(
+                    row[1], WhichJson.DB_ATTEMPT)
+                assert self.tx is not None  # set above
+                assert self.tx.merge_from(responses)
 
         return self.tx
 

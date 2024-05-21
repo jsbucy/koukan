@@ -56,7 +56,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             tx_cursor.wait()
         else:
             self.fail('no mail_from')
-        tx_cursor.set_mail_response(Response(201))
+        tx_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(201)))
 
         self.join(t)
 
@@ -71,7 +72,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             tx_cursor.wait(1)
         else:
             self.fail('no rcpt')
-        tx_cursor.add_rcpt_response([Response(202)])
+        tx_cursor.write_envelope(
+            TransactionMetadata(rcpt_response=[Response(202)]))
         self.join(t)
 
         self.assertEqual(tx.rcpt_response[0].code, 202)
@@ -107,7 +109,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             tx_cursor.wait(1)
         else:
             self.fail('no body')
-        tx_cursor.set_data_response(Response(203))
+        tx_cursor.write_envelope(
+            TransactionMetadata(data_response=Response(203)))
 
         self.join(t)
 
@@ -139,7 +142,8 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         while tx_cursor.tx.mail_from is None:
             tx_cursor.wait()
-        tx_cursor.set_mail_response(Response(201))
+        tx_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(201)))
 
         self.join(t, 2)
         self.assertEqual(tx.mail_response.code, 201)
@@ -169,8 +173,10 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         while tx_cursor.tx.mail_from is None:
             tx_cursor.wait()
-        tx_cursor.set_mail_response(Response(201))
-        tx_cursor.add_rcpt_response([Response(202)])
+        tx_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(201)))
+        tx_cursor.write_envelope(
+            TransactionMetadata(rcpt_response=[Response(202)]))
 
         self.join(t, 2)
         self.assertEqual(tx.mail_response.code, 201)

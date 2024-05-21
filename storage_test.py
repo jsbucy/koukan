@@ -51,7 +51,8 @@ class StorageTestBase(unittest.TestCase):
         tx_reader = self.s.load_one()
         self.assertIsNotNone(tx_reader)
         self.assertEqual(tx_writer.id, tx_reader.id)
-        tx_reader.set_mail_response(Response(450))
+        tx_reader.write_envelope(TransactionMetadata(
+            mail_response=Response(450)))
 
         tx_writer.load()  # pick up version
         tx_writer.write_envelope(TransactionMetadata(
@@ -82,7 +83,9 @@ class StorageTestBase(unittest.TestCase):
 
         tx_reader.load()
         self.assertEqual(tx_reader.tx.retry['max_attempts'], 100)
-        tx_reader.add_rcpt_response([Response(456, 'busy')])
+        tx_reader.write_envelope(TransactionMetadata(
+            rcpt_response=[Response(456)]))
+
         tx_reader.write_envelope(TransactionMetadata(),
                                  #output_done = False,
                                  finalize_attempt = True)
