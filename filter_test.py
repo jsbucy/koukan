@@ -3,6 +3,7 @@ import logging
 
 from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
 from response import Response
+from blob import InlineBlob
 
 class FilterTest(unittest.TestCase):
 
@@ -60,6 +61,59 @@ class FilterTest(unittest.TestCase):
             'mail_from': {'m': 'alice'},
             'rcpt_to': [{'m': 'bob'}, {'m': 'bob2'}]})
 
+    def test_rest_placeholder(self):
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')])
+        rest_js = tx.to_json(WhichJson.REST_READ)
+        self.assertEqual(rest_js, {
+            'mail_from': {},
+            'rcpt_to': [{}],
+        })
+        rest_tx_out = TransactionMetadata.from_json(
+            rest_js, WhichJson.REST_READ)
+
+        succ = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
+
+        delta = tx.delta(succ)
+        self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob2'}]})
+
+        merged = tx.merge(delta)
+        self.assertEqual(merged.to_json(), {
+            'mail_from': {'m': 'alice'},
+            'rcpt_to': [{'m': 'bob'}, {'m': 'bob2'}]})
+
+        logging.debug('test_rest_placeholder invalid delta: truncate rcpt_to')
+        self.assertIsNotNone(merged.mail_from)
+        self.assertEqual(len(merged.rcpt_to), 2)
+        self.assertIsNone(merged.delta(
+            TransactionMetadata(
+                mail_from=None,
+                rcpt_to=[None])), WhichJson.REST_READ)
+
+        logging.debug('test_rest_placeholder invalid delta: non-placeholder')
+        self.assertIsNone(merged.delta(
+            TransactionMetadata(
+                mail_from=None,
+                rcpt_to=[None, Mailbox('bob2')])), WhichJson.REST_READ)
+
+
+        succ = TransactionMetadata(
+            mail_from=None,
+            rcpt_to=[None, None],
+            body='xyz')
+
+        delta = merged.delta(succ, WhichJson.REST_READ)
+        self.assertEqual(delta.to_json(), {'body': 'xyz'})
+
+        merged = merged.merge(delta)
+        self.assertEqual(merged.to_json(), {
+            'mail_from': {'m': 'alice'},
+            'rcpt_to': [{'m': 'bob'}, {'m': 'bob2'}],
+            'body': 'xyz'})
+
+
     def testBadRcpt(self):
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
@@ -83,12 +137,37 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to = [Mailbox('bob1'), Mailbox('bob2')])
         self.assertTrue(tx.req_inflight())
-        tx.rcpt_response = [Response()]
+        tx.mail_response=Response()
+        self.assertTrue(tx.req_inflight())
+        tx.rcpt_response=[Response()]
+        self.assertTrue(tx.req_inflight())
+        tx.rcpt_response.append(Response())
+        self.assertFalse(tx.req_inflight())
         json = tx.to_json(WhichJson.REST_READ)
-        self.assertEqual(json['mail_response'], {})
-        self.assertEqual(json['rcpt_response'], [
-            {'code': 200, 'message': 'ok'},
-            {}])
+        logging.debug('testRespFields %s', json)
+        self.assertEqual(json['mail_from'], {})
+        self.assertEqual(json['rcpt_to'], [{}, {}])
+
+    def test_fill_inflight_responses(self):
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to = [Mailbox('bob1'), Mailbox('bob2')],
+            body_blob=InlineBlob(b'hello'))
+        tx.fill_inflight_responses(Response(123))
+        self.assertEqual(tx.mail_response.code, 123)
+        self.assertEqual([r.code for r in tx.rcpt_response], [123,123])
+        self.assertEqual(tx.data_response.code, 123)
+
+    def test_copy(self):
+        tx = TransactionMetadata(
+            rcpt_to=[Mailbox('alice')],
+            rcpt_response=[Response(234)])
+        tx2 = tx.copy()
+        tx2.rcpt_to.append(Mailbox('alice'))
+        tx2.rcpt_response.append(Response(456))
+        self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice'])
+        self.assertEqual([r.code for r in tx.rcpt_response], [234])
+
 
 if __name__ == '__main__':
     unittest.main()

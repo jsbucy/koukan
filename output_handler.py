@@ -176,6 +176,7 @@ class OutputHandler:
                     resp, final_attempt_reason is not None)
 
                 delta = TransactionMetadata()
+                # xxx why is this here?
                 delta.attempt_count = self.cursor.attempt_id
                 self.cursor.write_envelope(
                     delta,

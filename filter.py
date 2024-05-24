@@ -1,5 +1,5 @@
 from enum import IntEnum
-from typing import Any, Dict, List, Optional, Tuple, TypeAlias
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
 import logging
 import copy
@@ -79,18 +79,15 @@ class Mailbox:
 
     # NOTE this is mainly for invariant checking in merge/delta
     # (below), does not compare esmtp currently
-    def __eq__(self, x : "Mailbox"):
+    def __eq__(self, x):
+        if not isinstance(x, Mailbox):
+            return False
         return self.mailbox == x.mailbox
 
     def __str__(self):
         return self.mailbox
     def __repr__(self):
         return self.mailbox
-
-    #def local_part(self) -> Optional[str]:
-    #    pass
-    #def domain(self) -> Optional[str]:
-    #    pass
 
     def to_json(self):
         out = {'m': self.mailbox}
@@ -119,132 +116,139 @@ class WhichJson(IntEnum):
     DB = 4
     DB_ATTEMPT = 5
 
+FromJson = Callable[[Dict[object, object]], object]
+ToJson = Callable[[Any], Dict[object, object]]
 class TxField:
     json_field : str
-    accept = Optional[List[WhichJson]]
-    emit = Optional[List[WhichJson]]
+
+    validity = Optional[set[WhichJson]]
+
+    rest_placeholder : bool
+    from_json : Optional[FromJson] = None
+    to_json : Optional[ToJson] = None
+    is_list : bool = False
+
     def __init__(self,
                  json_field : str,
-                 accept : Optional[List[WhichJson]],
-                 emit : Optional[List[WhichJson]],
-                 from_json=None,
-                 to_json=None):
+                 validity : Optional[set[WhichJson]] = None,
+                 from_json : Optional[FromJson] = None,
+                 to_json : Optional[ToJson] = None,
+                 rest_placeholder : bool = False,
+                 is_list : bool = False):
         self.json_field = json_field
-        self.accept = accept
-        self.emit = emit
+        self.validity = validity
+
         # none here means identity i.e. plain old data/int/str
         self.from_json = from_json
         self.to_json = to_json
+        self.rest_placeholder = rest_placeholder
+        self.is_list = is_list
 
-    def valid_accept(self, which_json):
-        if self.accept is None:  # internal-only
+    def valid(self, which_json : WhichJson):
+        if self.validity is None:  # internal-only
             return False
-        return which_json == WhichJson.ALL or which_json in self.accept
-    def valid_emit(self, which_json):
-        if self.emit is None:  # internal-only
-            return False
-        return which_json == WhichJson.ALL or which_json in self.emit
+        return which_json == WhichJson.ALL or (which_json in self.validity)
+
+    def emit_rest_placeholder(self, which_json):
+        if which_json == WhichJson.REST_READ and self.rest_placeholder:
+            return True
+        return False
 
 _tx_fields = [
     TxField('host',
-            accept = [WhichJson.DB],
-            emit = [WhichJson.DB]),
+            validity = set([WhichJson.DB])),
     TxField('remote_host',
             # TODO these accept/emit criteria are more at the syntax
             # level, there also needs to be a policy level e.g. to
             # only accept remote_host from trusted/well-known peers
             # i.e. the smtp gateway
-            accept = [WhichJson.REST_CREATE,
-                      WhichJson.DB],
-            emit = [WhichJson.REST_CREATE,
-                    WhichJson.REST_READ,
-                    WhichJson.DB],
+            validity = set([WhichJson.REST_CREATE,
+                            WhichJson.REST_READ,
+                            WhichJson.DB]),
+            to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('local_host',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_CREATE,
-                  WhichJson.DB],
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_READ,
+                          WhichJson.DB]),
+            to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('mail_from',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_CREATE,
-                  WhichJson.REST_UPDATE,
-                  WhichJson.DB],
-            from_json=Mailbox.from_json),
+            rest_placeholder=True,
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_UPDATE,
+                          WhichJson.REST_READ,
+                          WhichJson.DB]),
+            from_json=Mailbox.from_json,
+            to_json=Mailbox.to_json),
     TxField('mail_response',
-            accept=[WhichJson.DB_ATTEMPT],
-            emit=[WhichJson.DB_ATTEMPT,
-                  WhichJson.REST_READ],
+            validity=set([WhichJson.DB_ATTEMPT,
+                          WhichJson.REST_READ]),
+            to_json=Response.to_json,
             from_json=Response.from_json),
     TxField('rcpt_to',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_CREATE,
-                  WhichJson.REST_UPDATE,
-                  WhichJson.DB],
-            from_json=lambda js: list_from_js(js, Mailbox.from_json)),
+            rest_placeholder=True,
+            is_list=True,
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_UPDATE,
+                          WhichJson.REST_READ,
+                          WhichJson.DB]),
+            to_json=Mailbox.to_json,
+            from_json=Mailbox.from_json),
     TxField('rcpt_response',
-            accept=[WhichJson.DB_ATTEMPT],
-            emit=[WhichJson.DB_ATTEMPT,
-                  WhichJson.REST_READ],
-            from_json=lambda js: list_from_js(js, Response.from_json)),
+            is_list=True,
+            validity=set([WhichJson.DB_ATTEMPT,
+                          WhichJson.REST_READ]),
+            to_json=Response.to_json,
+            from_json=Response.from_json),
     TxField('data_response',
-            accept=[WhichJson.DB_ATTEMPT],
-            emit=[WhichJson.DB_ATTEMPT,
-                  WhichJson.REST_READ],
+            validity=set([WhichJson.DB_ATTEMPT,
+                          WhichJson.REST_READ]),
+            to_json=Response.to_json,
             from_json=Response.from_json),
     TxField('attempt_count',
-            accept=[WhichJson.DB],
-            emit=[WhichJson.REST_READ,
-                  WhichJson.DB]),
+            validity=set([WhichJson.DB,
+                          WhichJson.REST_READ])),
     TxField('body',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_CREATE,
-                  WhichJson.REST_UPDATE,
-                  WhichJson.REST_READ]),
+            rest_placeholder=True,
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_UPDATE,
+                          WhichJson.REST_READ])),  # xxx WhichJson.DB],
     TxField('message_builder',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.REST_UPDATE],
-            emit=[WhichJson.REST_READ]),
+            rest_placeholder=True,
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_UPDATE,
+                          WhichJson.REST_READ ])),
     TxField('notification',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_READ,
-                  WhichJson.DB]),
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.DB])),
     TxField('retry',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.DB],
-            emit=[WhichJson.REST_READ,
-                  WhichJson.DB]),
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_READ,
+                          WhichJson.DB])),
     TxField('smtp_meta',
-            accept=[WhichJson.REST_CREATE,
-                    WhichJson.DB],
-            emit=[WhichJson.DB]),
-    TxField('body_blob', accept=None, emit=None),
-    TxField('rest_id', accept=None, emit=None),
-
+            validity=set([WhichJson.REST_CREATE,
+                          WhichJson.DB])),
+    TxField('body_blob', validity=None),
+    TxField('rest_id', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
-# NOTE in the Filter api/stack, this is usually interpreted as a delta where
-# field == None means "not present in the delta". As such, there is
-# currently no representation of "set this field to None".
+# NOTE in the Filter api/stack, this is usually interpreted as a delta
+# where field == None means "not present in the delta" as opposed to
+# "set field to None." In terms of json patch, it's a delta that
+# contains only "add" operations.
 class TransactionMetadata:
     host : Optional[str] = None
     rest_endpoint : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
-    # tls mumble
 
     mail_from : Optional[Mailbox] = None
     mail_response : Optional[Response] = None
-    rcpt_to : List[Mailbox]
+    # TODO more type-safe treatment of placeholder values, this should
+    # only contain None in a delta
+    rcpt_to : List[Optional[Mailbox]]
     rcpt_response : List[Response]
     data_response : Optional[Response] = None
 
@@ -271,7 +275,8 @@ class TransactionMetadata:
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
 
-    def __init__(self, local_host : Optional[HostPort] = None,
+    def __init__(self, 
+                 local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  mail_response : Optional[Response] = None,
@@ -298,12 +303,6 @@ class TransactionMetadata:
         self.retry = retry
         self.smtp_meta = smtp_meta
 
-#    def __bool__(self):
-#        for f in TransactionMetadata.all_fields:
-#            if hasattr(self, f) and bool(getattr(self, f)):
-#                return True
-#        return False
-
     def __repr__(self):
         out = ''
         out += 'mail_from=%s mail_response=%s ' % (
@@ -315,19 +314,12 @@ class TransactionMetadata:
         out += 'data_response=%s' % self.data_response
         return out
 
-    # err on resp fields
-    # from_rest_req()
-    # to_rest_resp()
-
-    # drop resp fields
-    # to_db_json()
-
     @staticmethod
     def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
         for f in json.keys():
             field = tx_json_fields.get(f, None)
-            if not field or not field.valid_accept(which_js):
+            if not field or not field.valid(which_js):
                 return None  # invalid
             js_v = json[f]
             if js_v is None:
@@ -336,10 +328,22 @@ class TransactionMetadata:
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
-            v = field.from_json(js_v) if field.from_json else js_v
-            # xxx v is None?
-            if v is None:
-                return None
+            if field.is_list:
+                if not isinstance(js_v, list):
+                    return None
+                if field.emit_rest_placeholder(which_js):
+                    v = [None for v in js_v]
+                else:
+                    v = [field.from_json(v) for v in js_v]
+            else:
+                if field.emit_rest_placeholder(which_js):
+                    if js_v != {}:
+                        return None
+                    else:
+                        v = None
+                else:
+                    v = field.from_json(js_v) if field.from_json else js_v
+
             setattr(tx, f, v)
         return tx
 
@@ -349,14 +353,13 @@ class TransactionMetadata:
     def req_inflight(self, tx : Optional['TransactionMetadata'] = None) -> bool:
         if tx is None:
             tx = self
-        if self.mail_from and not tx.mail_response:
+        if (self.mail_from is not None) and (tx.mail_response is None):
             return True
         if len(self.rcpt_to) > len(tx.rcpt_response):
             return True
         for i in range(0,len(self.rcpt_to)):
-            if self.rcpt_to[i] is not None and (
-                    i >= len(tx.rcpt_response) or
-                    tx.rcpt_response[i] is None):
+            # XXX rcpt_response should never be None now?
+            if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
         body_blob_last = self.body_blob is not None and (
             self.body_blob.len() == self.body_blob.content_length())
@@ -365,58 +368,42 @@ class TransactionMetadata:
             return True
         return False
 
-    # Converts a response field (mail/rcpt/data) to json following the
-    # convention that if the corresponding request field is populated,
-    # return {} for the response to indicate that it is accepted and
-    # inflight.
-    # TODO in hindsight, this is perhaps not the best representation,
-    # probably it should just return the req fields instead
-    def _resp_field(self, name, field, which_js : WhichJson, json):
-        if which_js != WhichJson.REST_READ or (
-                name not in ["mail_response", "rcpt_response",
-                             "data_response"]):
-            return False
-        if name in ["mail_response", "data_response"]:
-            if ((name == 'mail_response' and self.mail_from and
-                 not self.mail_response) or
-                (name == 'data_response' and (self.body or self.body_blob) and
-                 not self.data_response)):
-                json[name] = {}
-                return True
-            return False
+    # for sync filter api, e.g. if a rest call failed, fill resps for
+    # all inflight reqs
+    def fill_inflight_responses(self, resp : Response):
+        if self.mail_from and not self.mail_response:
+            self.mail_response = resp
+        self.rcpt_response.extend(
+            [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
+        body_blob_last = self.body_blob is not None and (
+            self.body_blob.len() == self.body_blob.content_length())
+        if body_blob_last and self.data_response is None:
+            self.data_response = resp
 
-        assert name == 'rcpt_response'
-        if not self.rcpt_to:
-            return False
-
-        out = [{}] * len(self.rcpt_to)
-        for i in range(0, len(self.rcpt_to)):
-            if (self.rcpt_response and i < len(self.rcpt_response) and
-                self.rcpt_response[i] is not None):
-                out[i] = self.rcpt_response[i].to_json()
-
-        json[name] = out
-        return True
-
-    def _field_to_json(self, name, field, which_js : WhichJson, json):
-        if not field.valid_emit(which_js):
+    def _field_to_json(self, name : str, field : TxField,
+                       which_js : WhichJson, json):
+        if not field.valid(which_js):
             return
 
         v_js = None
-        if self._resp_field(name, field, which_js, json):
-            return
         if not hasattr(self, name):
             return
         if (v := getattr(self, name)) is None:
             return
 
-        if isinstance(v, str) or isinstance(v, int) or isinstance(v, dict):
-            v_js = v
-        elif isinstance(v, list):
+        if isinstance(v, list):
             if v:
-                v_js = [vv.to_json() for vv in v]
-        else:
-            v_js = v.to_json()
+                if field.emit_rest_placeholder(which_js):
+                    v_js = [{}] * len(v)
+                else:
+                    v_js = [vv.to_json() for vv in v]
+        elif field.emit_rest_placeholder(which_js):
+            v_js = {}
+        elif field.to_json is not None:
+            v_js = field.to_json(v)
+        else:  # POD
+            v_js = v
+
         if v_js is not None:
             json[name] = v_js
 
@@ -467,45 +454,62 @@ class TransactionMetadata:
             setattr(self, f, getattr(tx, f, None))
 
     # compute a delta from self to successor
-    def delta(self, successor : "TransactionMetadata"
+    def delta(self, successor : "TransactionMetadata",
+              which_json : Optional[WhichJson] = None
               ) -> Optional["TransactionMetadata"]:
         out = TransactionMetadata()
-        for f in tx_json_fields.keys():
+        for (f,json_field) in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(successor, f, None)
+            # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
+            if ((which_json is not None) and not json_field.valid(which_json)):
+                continue  # ignore
+            if ((which_json is not None) and (
+                    json_field.emit_rest_placeholder(which_json)) and
+                (old_v is not None and new_v is None)):
+                continue
             if (old_v is not None) and (new_v is None):
                 logging.debug('tx.delta invalid del %s', f)
                 return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue
-            if old_v == new_v:
-                if isinstance(old_v, list):
-                    setattr(out, f, [])
-                else:
-                    setattr(out, f, None)
-                continue
-
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('tx.delta is-list != is-list %s', f)
                 return None  # invalid
             if not isinstance(old_v, list):
-                logging.debug('tx.delta value change %s', f)
                 if old_v != new_v:
+                    logging.debug('tx.delta value change %s %s %s',
+                                  f, old_v, new_v)
                     return None  # invalid
+                setattr(out, f, None)
+                continue
+
+            if json_field.emit_rest_placeholder(which_json):
+                if any([x != None for x in new_v]):
+                    return None
+                if len(new_v) < len(old_v):
+                    return None
                 continue
 
             old_len = len(old_v)
             if old_len > len(new_v):
                 logging.debug('tx.delta invalid list trunc %s', f)
                 return None  # invalid
-            if new_v[0:old_len] != old_v:
-                logging.debug('tx.delta changed list prefix %s', f)
-                return None
+            for i in range(0, old_len):
+                if old_v[i] is None and new_v[i] is not None:
+                    pass  #ok   XXX why would old_v be None?
+                if old_v[i] is not None and new_v[i] is None:
+                    return None  # bad
+                if old_v[i] != new_v[i]:
+                    return None  # bad
             setattr(out, f, new_v[old_len:])
 
         return out
 
+    # NOTE this copies the rcpt req/resp lists which we know we mutate
+    # but not the underlying Mailbox/Response objects which shouldn't
+    # be mutated.
     def copy(self):
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)

@@ -50,17 +50,21 @@ class Response:
     def temp(self):
         return self.code >= 400 and self.code <= 499
 
-    def to_json(self) -> Dict:
+    def to_json(self) -> Dict[object, object]:
         return {'code': self.code, 'message': self.message}
 
     def __eq__(self, r : 'Response'):
         return self.code == r.code and self.message == r.message
 
     @staticmethod
-    def from_json(d : Dict) -> Optional["Response"]:
-        if 'code' not in d:
+    def from_json(d : Dict[object, object]) -> Optional["Response"]:
+        code = d.get('code', None)
+        if not isinstance(code, int):
             return None
-        return Response(d['code'], d.get('message', None))
+        msg = d.get('message', None)
+        if msg is not None and not isinstance(msg, str):
+            return None
+        return Response(code, msg)
 
     def to_smtp_resp(self) -> bytes:
         assert(not self.internal())

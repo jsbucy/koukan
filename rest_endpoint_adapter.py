@@ -201,6 +201,13 @@ class RestEndpointAdapter(Handler):
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
         tx.host = self.http_host
+        prev_tx = tx.copy()
+        # TODO needing to manipulate the body fields like this (and below) is
+        # possibly a symptom that that the blob storage integration
+        # should be moved to SyncFilterAdapter and do nothing for
+        # StorageWriterFilter which will pass the blob id all the way
+        # to storage.
+        body = tx.body
         self._body(tx)
         timeout, err = self._get_timeout(request)
         if self.async_filter is None:
@@ -215,6 +222,8 @@ class RestEndpointAdapter(Handler):
         resp.headers.set('location', '/transactions/' + tx.rest_id)
         resp.set_etag(self._etag(self.async_filter.version()))
         resp.content_type = 'application/json'
+        tx.body = body
+        del tx.body_blob
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
         return resp
 
@@ -233,6 +242,9 @@ class RestEndpointAdapter(Handler):
         # xxx move to separate "rest schema"
         resp.set_etag(self._etag(self.async_filter.version()))
         resp.content_type = 'application/json'
+        if tx.body_blob is not None:
+            tx.body = ''
+            del tx.body_blob
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
         return resp
 
@@ -245,6 +257,7 @@ class RestEndpointAdapter(Handler):
         tx = TransactionMetadata.from_json(request.json)
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
+        body = tx.body
         err = self._body(tx)
         if err is not None:
             return err
@@ -263,6 +276,10 @@ class RestEndpointAdapter(Handler):
         # xxx move to separate "rest schema"
         resp.set_etag(self._etag(self.async_filter.version()))
         resp.content_type = 'application/json'
+        logging.debug('RestEndpointAdapter.patch_tx %s %s',
+                      self._tx_rest_id, tx)
+        tx.body = body
+        del tx.body_blob
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
         return resp
 

@@ -59,6 +59,8 @@ class RestEndpoint(Filter):
 
     client : Client
 
+    last_tx : Optional[TransactionMetadata] = None
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -96,16 +98,16 @@ class RestEndpoint(Filter):
             return url
         return urljoin(self.base_url, url)
 
-    def _start(self, tx : TransactionMetadata, req_json : Dict[Any,Any],
+    def _start(self, tx : TransactionMetadata,
                timeout : Optional[float] = None):
-        logging.debug('RestEndpoint._start %s', req_json)
+        logging.debug('RestEndpoint._start %s', tx)
 
         for remote_host in self.remote_host_resolution(tx.remote_host):
             logging.debug('RestEndpoint._start remote_host %s %s',
                           self.base_url, remote_host)
             # none if no remote_host/disco (above)
             if remote_host is not None:
-                req_json['remote_host'] = remote_host.to_tuple()
+                tx.remote_host = remote_host
                 self.remote_host = remote_host
 
             req_headers = {}
@@ -115,21 +117,22 @@ class RestEndpoint(Filter):
             try:
                 rest_resp = self.client.post(
                     urljoin(self.base_url, '/transactions'),
-                    json=req_json,
+                    json=tx.to_json(WhichJson.REST_CREATE),
                     headers=req_headers,
-                    timeout=self.timeout_start)
+                    timeout=self.timeout_start)  # xxx vs arg
             except RequestError:
                 return None
             if rest_resp.status_code != 201:
                 return rest_resp
-            logging.info('RestEndpoint.start resp %s %s',
+            logging.info('RestEndpoint._start resp %s %s',
                          rest_resp, rest_resp.http_version)
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
-    def _update(self, req_json, timeout : Optional[float] = None
+    def _update(self, tx : TransactionMetadata,
+                timeout : Optional[float] = None
                 ) -> HttpResponse:
         req_headers = {}
         if self.http_host:
@@ -139,11 +142,15 @@ class RestEndpoint(Filter):
         self._set_request_timeout(req_headers, timeout)
         if self.etag:
             req_headers['if-match'] = self.etag
+        json = tx.to_json(WhichJson.REST_UPDATE)
+        if json == {}:
+            return HttpResponse(status_code=200)
         try:
-            rest_resp = self.client.patch(self.transaction_url,
-                                          json=req_json,
-                                          headers=req_headers,
-                                          timeout=timeout)
+            rest_resp = self.client.patch(
+                self.transaction_url,
+                json=tx.to_json(WhichJson.REST_UPDATE),
+                headers=req_headers,
+                timeout=timeout)
         except RequestError:
             return None
         logging.info('RestEndpoint._update resp %s %s',
@@ -173,15 +180,19 @@ class RestEndpoint(Filter):
     # relay) which may be more trouble than it's worth...
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
-        which_json = (WhichJson.REST_CREATE if not self.transaction_url
-                      else WhichJson.REST_UPDATE)
-        req_json = tx.to_json(which_json)
-
         self.data_last = tx.body_blob is not None and (
             tx.body_blob.len() == tx.body_blob.content_length())
 
-        logging.debug('RestEndpoint.on_update '
-                      ' self.data_last=%s', self.data_last)
+        logging.debug('RestEndpoint.on_update %s %s '
+                      ' self.data_last=%s timeout=%s',
+                      self.transaction_url, tx,
+                      self.data_last, timeout)
+
+        # We are going to send a slightly different delta upstream per
+        # remote_host (discovery in _start()) and body_blob (below).
+        # When we look at the delta of what we got back, these fields
+        # should not appear so it will merge cleanly with the original input.
+        upstream_tx = tx.copy()
 
         put_blob_resp = None
         if self.data_last:
@@ -190,36 +201,67 @@ class RestEndpoint(Filter):
             logging.debug('RestEndpoint.on_update put_blob_resp %s',
                           put_blob_resp)
             if put_blob_resp.ok():
-                req_json['body'] = self.blob_url
+                upstream_tx.body = self.blob_url
             else:
                 tx.data_response = put_blob_resp
 
-        logging.debug('RestEndpoint.on_update req_json %s', req_json)
-
-        if not req_json:
-            return False
+        logging.debug('RestEndpoint.on_update req_json %s', upstream_tx)
 
         if not self.transaction_url:
-            rest_resp = self._start(tx, req_json)
+            which_js = WhichJson.REST_CREATE
+            rest_resp = self._start(upstream_tx)
+            self.last_tx = upstream_tx.copy()
+            if rest_resp is None or rest_resp.status_code != 201:
+                tx.fill_inflight_responses(
+                    Response(450, 'RestEndpoint upstream err creating tx'))
+                return
         else:
-            rest_resp = self._update(req_json)
-
-        # xxx think a little more carefully about errors here, if
-        # we see a timeout on response but the server handled it,
-        # we'll get an etag failure on the next req?
-        if len(tx.rcpt_response) == len(tx.rcpt_to):
-            self.rcpts += len(tx.rcpt_to)
+            assert self.last_tx.merge_from(upstream_tx) is not None
+            which_js = WhichJson.REST_UPDATE
+            rest_resp = self._update(upstream_tx)
+            # TODO handle 412 failed precondition
 
         # xxx envelope vs data timeout
-        timeout = timeout if timeout is not None else self.timeout_start
-        # xxx filter api needs to accomodate returning an error here
-        # or else stuff the http error in the response for the first
-        # inflight req field in tx?
+        if timeout is None:
+            timeout = self.timeout_start
         resp_json = get_resp_json(rest_resp) if rest_resp else None
-        http_err = (rest_resp is None or rest_resp.status_code >= 300 or
-                    resp_json is None)
+
         resp_json = resp_json if resp_json else {}
-        self.get_tx_response(timeout, tx, resp_json, http_err)
+
+        tx_out = TransactionMetadata.from_json(resp_json, WhichJson.REST_READ)
+        if tx_out is None:
+            logging.debug('RestEndpoint.on_update bad resp_json %s', resp_json)
+            tx.fill_inflight_responses(
+                Response(450, 'RestEndpoint bad resp_json'))
+            return
+
+        logging.debug('RestEndpoint.on_update %s tx_out %s',
+                      self.transaction_url, resp_json)
+        resps = self.last_tx.delta(tx_out, WhichJson.REST_READ)
+        logging.debug('RestEndpoint.on_update %s resps %s',
+                      self.transaction_url, resps)
+        if (resps is None or
+            (self.last_tx.merge_from(resps) is None) or
+            (tx.merge_from(resps) is None)):
+            tx.fill_inflight_responses(
+                Response(450,
+                         'RestEndpoint upstream invalid resp/delta update'))
+            return
+        if not tx.req_inflight():
+            return
+        tx_out = self._get(timeout)  # deadline left
+        resps = self.last_tx.delta(tx_out, WhichJson.REST_READ)
+        if (resps is None or
+            (self.last_tx.merge_from(resps) is None) or
+            (tx.merge_from(resps) is None)):
+            tx.fill_inflight_responses(
+                Response(450, 'RestEndpoint upstream invalid resp/delta get'))
+            return
+
+        logging.debug('RestEndpoint.on_update %s tx almost done %s',
+                      self.transaction_url, tx)
+        tx.fill_inflight_responses(
+            Response(450, 'RestEndpoint upstream timeout'))
 
 
     def _put_blob(self, blob) -> Response:
@@ -236,7 +278,7 @@ class RestEndpoint(Filter):
                 d=chunk,
                 last=chunk_last)
             if resp is None:
-                return Response(400, 'RestEndpoint blob upload error')
+                return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
                 return resp
             # how many bytes from chunk were actually accepted?
@@ -294,7 +336,7 @@ class RestEndpoint(Filter):
 
         if rest_resp.status_code > 299 and rest_resp.status_code != 416:
             return Response(
-                400, 'RestEndpoint._put_blob_chunk PUT err'), None
+                450, 'RestEndpoint._put_blob_chunk PUT err'), None
 
         # cf RestTransactionHandler.build_resp() re content-range
         dlen = len(d)
@@ -306,11 +348,10 @@ class RestEndpoint(Filter):
             # e.g. after a 416 to report the current length to resync
             if range is None or range.start != 0:
                 return Response(
-                    400, 'RestEndpoint._put_blob_chunk bad range'), None
+                    450, 'RestEndpoint._put_blob_chunk bad range'), None
             dlen = range.stop
 
         return Response(), dlen
-
 
     def get_json(self, timeout : Optional[float] = None):
         try:
@@ -323,7 +364,8 @@ class RestEndpoint(Filter):
                                         timeout=timeout)
             logging.debug('RestEndpoint.get_json %s', rest_resp)
         except RequestError as e:
-            logging.exception('RestEndpoint.get_json')
+            logging.debug('RestEndpoint.get_json() timeout %s',
+                          self.transaction_url)
             return None
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)
@@ -331,105 +373,42 @@ class RestEndpoint(Filter):
             self.etag = None
         return get_resp_json(rest_resp)
 
-
-    # TODO the following can probably be considerably simplified by
-    # the TransactionMetadata delta/merge strategy used by SyncFilterAdapter
-
-    # update tx response fields per json
-    # timeout: have we reached the deadline and need to fill in temp
-    # error responses for any unpopulated req fields
-    def _update_tx(self, tx, tx_json, timeout : bool):
-        done = True
-        if tx.mail_from and tx.mail_response is None:
-            if mail_resp := Response.from_json(
-                    tx_json.get('mail_response', {})):
-                tx.mail_response = mail_resp
-            elif timeout:
-                tx.mail_response = Response(
-                    400, 'RestEndpoint upstream timeout MAIL')
-            else:
-                done = False
-
-        rcpt_resp = [
-            Response.from_json(r)
-            for r in tx_json.get('rcpt_response', []) ]
-        new_rcpt_offset = self.rcpts - len(tx.rcpt_to)
-        rcpt_resp = rcpt_resp[new_rcpt_offset:]
-        for i in range(0,len(tx.rcpt_to)):
-            if len(tx.rcpt_response) <= i:
-                tx.rcpt_response.append(None)
-            if tx.rcpt_response[i] is not None:
-                continue
-            elif timeout:
-                tx.rcpt_response[i] = Response(
-                    400, 'RestEndpoint upstream timeout RCPT')
-            elif i >= len(rcpt_resp):
-                done = False
-            elif rcpt_resp[i] is not None:
-                tx.rcpt_response[i] = rcpt_resp[i]
-            else:
-                done = False
-
-        if tx.data_response is None and self.data_last:
-            if data_resp := Response.from_json(
-                    tx_json.get('data_response', {})):
-                tx.data_response = data_resp
-            elif timeout:
-                tx.data_response = Response(
-                    400, 'RestEndpoint upstream timeout DATA')
-            else:
-                done = False
-
-        return done
-
-    # poll/GET the tx until all mail/rcpts in tx have corresponding
-    # responses or timeout
-    # if you already have tx json from a previous POST/PATCH, pass it
-    # in tx_json
-    def get_tx_response(self, timeout, tx : TransactionMetadata,
-                        tx_json={}, http_err : bool = False):
-        logging.debug('RestEndpoint.get_tx_response %s %s %s',
-                      tx_json, timeout, http_err)
-        deadline = time.monotonic() + timeout
-        prev = 0
-        timedout = http_err
+    # does GET /tx at least once, polls as long as tx contains
+    # inflight reqs, returns the last tx it successfully retrieved
+    def _get(self, timeout : Optional[float] = None
+             ) -> Optional[TransactionMetadata]:
+        deadline = None
+        if timeout is not None:
+            deadline = timeout + time.monotonic()
+        tx_out = None
         while True:
-            if self._update_tx(tx, tx_json, timedout):
+            deadline_left = None
+            if deadline is not None:
+                deadline_left = deadline - time.monotonic()
+                if deadline_left <= 0:
+                    return tx_out
+            logging.debug('RestEndpoint._get() %s %s',
+                          self.transaction_url, deadline_left)
+
+            json = self.get_json(timeout = deadline_left)
+            logging.debug('RestEndpoint._get() %s done %s',
+                          self.transaction_url, json)
+
+            if json is not None:
+                tx_out = TransactionMetadata.from_json(
+                    json, WhichJson.REST_READ)
+
+            if (tx_out is not None) and (not self.last_tx.req_inflight(tx_out)):
+                logging.debug('RestEndpoint._get() %s done %s',
+                              self.transaction_url, tx_out)
+                return tx_out
+            logging.debug('RestEndpoint._get() %s inflight %s',
+                          self.transaction_url, tx_out)
+
+            # min delta
+            # XXX configurable
+            # XXX backoff?
+            if deadline_left is not None and deadline_left < 1:
                 break
-            now = time.monotonic()
-            deadline_left = deadline - now
-            if deadline_left < self.min_poll:
-                timedout = True
-                continue
-            delta = now - prev
-            prev = now
-            # retry at most once per self.min_poll
-            if delta < self.min_poll:
-                wait = self.min_poll - delta
-                time.sleep(wait)
+            time.sleep(1)
 
-            tx_json = self.get_json(deadline_left)
-            logging.info('RestEndpoint.get_tx_response done %s', tx_json)
-            if tx_json is None:
-                tx_json = {}
-                timedout = True
-
-        return None
-
-
-    # def _get(self, timeout, tx):
-    #     while tx.req_inflight():
-    #         # if not deadline_left:
-    #         #   tx.fill_inflight_resps(Response(400, 'upstream timeout'))
-    #         #   break
-    #         prev = self.tx.copy()
-    #         # get
-    #         # if err:
-    #         #   continue
-    #         # resps = prev.delta(self.tx)
-    #         # merge resps into tx
-
-
-    def abort(self):
-        # TODO
-        pass

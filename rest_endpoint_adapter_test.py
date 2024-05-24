@@ -77,6 +77,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
                                           http_host='msa')
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
+                'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
 
@@ -89,14 +90,17 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
             logging.debug('%s', resp.json)
             self.assertEqual(resp.json, {
+                'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{}]
+                'rcpt_to': [{}]
             })
 
             endpoint.merge(TransactionMetadata(rcpt_response=[Response(202)]))
 
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]
             })
@@ -110,14 +114,17 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
             logging.debug('%s', resp.json)
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'},
-                                  {}]
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]
             })
 
             endpoint.merge(TransactionMetadata(rcpt_response=[Response(203)]))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'},
                                   {'code': 203, 'message': 'ok'}]
@@ -145,16 +152,20 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
             logging.debug('RestEndpointAdapterTest patch body %s', resp.json)
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
+                'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'},
                                   {'code': 203, 'message': 'ok'}],
-                #xxx should be populated
-                'data_response': {}
             })
 
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
+                'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'},
                                   {'code': 203, 'message': 'ok'}],
@@ -171,6 +182,9 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
             logging.debug('RestEndpointAdapterTest get %s', resp.json)
             self.assertEqual(resp.json, {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
+                'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'},
                                   {'code': 203, 'message': 'ok'}],

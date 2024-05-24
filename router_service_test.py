@@ -211,37 +211,37 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url, http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(retry={})
-        rest_resp = rest_endpoint._start(tx, tx.to_json())
-        tx_json = rest_resp.json()
-        logging.debug('RouterServiceTest.test_retry create %s %s',
-                      rest_resp, tx_json)
-        self.assertEqual(tx_json.get('mail_response', None), None)
-        self.assertEqual(tx_json.get('rcpt_response', None), None)
-        self.assertEqual(tx_json.get('data_response', None), None)
-        self.assertEqual(tx_json.get('last', None), None)
+        rest_endpoint.on_update(tx)
+        tx_json = rest_endpoint.get_json()
+        logging.debug('RouterServiceTest.test_retry create %s',
+                      tx_json)
+        self.assertEqual(tx_json, {
+            'retry': {}
+        })
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        rest_resp = rest_endpoint._update(tx.to_json())
-        tx_json = rest_resp.json()
-        logging.debug('RouterServiceTest.test_retry patch mail_from %s %s',
-                      rest_resp, tx_json)
-        self.assertEqual(tx_json.get('mail_response', None), {})
-        self.assertEqual(tx_json.get('rcpt_response', None), None)
-        self.assertEqual(tx_json.get('data_response', None), None)
-        self.assertEqual(tx_json.get('last', None), None)
+        rest_endpoint.on_update(tx)
+        tx_json = rest_endpoint.get_json()
+        logging.debug('RouterServiceTest.test_retry patch mail_from %s',
+                      tx_json)
+        self.assertEqual(tx_json, {
+            'retry': {},
+            'mail_from': {}
+        })
 
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
         tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
-        rest_resp = rest_endpoint._update(tx.to_json())
-        tx_json = rest_resp.json()
-        logging.debug('RouterServiceTest.test_retry patch rcpt_to %s %s',
-                      rest_resp, tx_json)
-        self.assertEqual(tx_json.get('mail_response', None), {})
-        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
-        self.assertEqual(tx_json.get('data_response', None), None)
-        self.assertEqual(tx_json.get('last', None), None)
+        rest_endpoint.on_update(tx)
+        tx_json = rest_endpoint.get_json()
+        logging.debug('RouterServiceTest.test_retry patch rcpt_to %s',
+                      tx_json)
+        self.assertEqual(tx_json, {
+            'retry': {},
+            'mail_from': {},
+            'rcpt_to': [{}]
+        })
 
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
@@ -264,9 +264,12 @@ class RouterServiceTest(unittest.TestCase):
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after set body %s',
                       tx_json)
-        self.assertEqual(tx_json.get('mail_response', None), {})
-        self.assertEqual(tx_json.get('rcpt_response', None), [{}])
-        self.assertEqual(tx_json.get('data_response', None), {})
+        self.assertEqual(tx_json, {
+            'retry': {},
+            'mail_from': {},
+            'rcpt_to': [{}],
+            'body': {}
+        })
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
@@ -279,11 +282,16 @@ class RouterServiceTest(unittest.TestCase):
         tx_json = rest_endpoint.get_json(5)
 
         logging.debug('RouterServiceTest.test_retry get after first attempt '
-                      '%s %s', rest_resp, tx_json)
-        mail_resp = Response.from_json(tx_json.get('mail_response', None))
-        self.assertEqual(mail_resp.code, 201)
-        self.assertRcptJsonCodesEqual(tx_json, [456])
-        self.assertEqual(tx_json.get('data_response', None), {})
+                      '%s', tx_json)
+        self.assertEqual(tx_json, {
+            'attempt_count': 1,
+            'retry': {},
+            'mail_from': {},
+            'rcpt_to': [{}],
+            'body': {},
+            'mail_response': {'code': 201, 'message': 'ok'},
+            'rcpt_response': [{'code': 456, 'message': 'ok'}],
+        })
 
         upstream_endpoint = SyncEndpoint()
         self.add_endpoint(upstream_endpoint)
@@ -298,12 +306,17 @@ class RouterServiceTest(unittest.TestCase):
 
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after second attempt '
-                      '%s %s', rest_resp, tx_json)
-        mail_resp = Response.from_json(tx_json.get('mail_response', None))
-        self.assertEqual(mail_resp.code, 201)
-        self.assertRcptJsonCodesEqual(tx_json, [202])
-        data_resp = Response.from_json(tx_json.get('data_response', None))
-        self.assertEqual(data_resp.code, 203)
+                      '%s', tx_json)
+        self.assertEqual(tx_json, {
+            'attempt_count': 1,
+            'retry': {},
+            'mail_from': {},
+            'rcpt_to': [{}],
+            'body': {},
+            'mail_response': {'code': 201, 'message': 'ok'},
+            'rcpt_response': [{'code': 202, 'message': 'ok'}],
+            'data_response': {'code': 203, 'message': 'ok'},
+        })
 
     # xxx need non-exploder test w/filter api, problems in
     # post-exploder/upstream tx won't be reported out synchronously,

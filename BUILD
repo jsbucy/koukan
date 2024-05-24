@@ -17,7 +17,8 @@ pytype_library(name='filter',
 
 py_test(name='filter_test',
         srcs=['filter_test.py'],
-        deps=[':filter'])
+        deps=[':filter',
+              ':blob'])
 
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],
