@@ -1,11 +1,16 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 from threading import Lock, Condition
 import logging
 import time
 
 from blob import Blob
 from response import Response, Esmtp
-from filter import AsyncFilter, Filter, Mailbox, TransactionMetadata
+from filter import (
+    AsyncFilter,
+    Filter,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata )
 
 class SyncEndpoint(Filter):
     mail_from : Optional[Mailbox] = None
@@ -134,3 +139,32 @@ class FakeAsyncEndpoint(AsyncFilter):
 
     def version(self):
         return self._version
+
+
+Expectation = Callable[[TransactionMetadata,TransactionMetadata],
+                       Optional[TransactionMetadata]]
+class FakeSyncFilter(SyncFilter):
+    mu : Lock
+    cv : Condition
+    expectation : Optional[Expectation] = None
+
+    def __init__(self):
+        self.tx = TransactionMetadata()
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+
+    def add_expectation(self, exp : Expectation):
+        assert self.expectation is None
+        self.expectation = exp
+
+    # SyncFilter
+    def on_update(self,
+                  tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        with self.mu:
+            assert self.expectation is not None
+            upstream_delta = self.expectation(tx, tx_delta)
+            assert upstream_delta is not None
+            self.expectation = None
+            return upstream_delta

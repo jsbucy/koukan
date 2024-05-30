@@ -314,6 +314,21 @@ class TransactionMetadata:
         out += 'data_response=%s' % self.data_response
         return out
 
+    def __bool__(self):
+        for name,field in tx_json_fields.items():
+            if not hasattr(self, name):
+                continue
+            if (v:= getattr(self, name)) is None:
+                continue
+            if field.is_list:
+                if bool(v):
+                    return True
+            else:
+                return True
+
+        return False
+
+
     @staticmethod
     def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
@@ -517,18 +532,6 @@ class TransactionMetadata:
         return out
 
 class Filter(ABC):
-    # XXX needs to return some errors e.g. http 412 directly instead of via tx
-
-    # XXX we need to say a lot more about the protocol here
-    # - resp for all req
-    # - tx is a delta
-    #   -- but tx.body_blob isn't a delta: grows across successive calls
-    #   -- same object?
-    # - is the tx object the same across multiple calls?
-    # - mutation?
-
-    # TODO remove this timeout -> AsyncFilter
-    # only set by Exploder->StorageWriter and bounce injection
     @abstractmethod
     def on_update(self, transaction_metadata : TransactionMetadata,
                   timeout : Optional[float] = None):
@@ -538,11 +541,22 @@ class Filter(ABC):
         raise NotImplementedError()
 
 
+class SyncFilter(ABC):
+    # tx is the full state vector
+    # tx_delta is what's new since the last call
+    # returns delta of what was added upstream
+    # only returns None on invalid delta i.e. dropped fields
+    @abstractmethod
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        pass
+
 class AsyncFilter(ABC):
     # may return None for reqs on timeout
     # returns full tx state
     @abstractmethod
-    def update(self, transaction_metadata : TransactionMetadata,
+    def update(self, tx_delta : TransactionMetadata,
                timeout : Optional[float] = None):
         pass
 

@@ -109,10 +109,10 @@ class SyncFilterAdapter(AsyncFilter):
     def _get_locked(self, tx, timeout) -> bool:
         return self.cv.wait_for(lambda: self._tx_done_locked(tx), timeout)
 
-    def update(self, tx : TransactionMetadata,
+    def update(self, tx_delta : TransactionMetadata,
                timeout : Optional[float] = None):
         with self.mu:
-            txx = self.tx.merge(tx)
+            txx = self.tx.merge(tx_delta)
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
 
             if txx is None:
@@ -125,8 +125,8 @@ class SyncFilterAdapter(AsyncFilter):
                     return FlaskResponse(status=500, response=['server busy'])
                 self.inflight = True
             self._get_locked(self.tx, timeout)
-            tx.replace_from(self.tx)
-            tx.rest_id = self.rest_id
+            tx_delta.replace_from(self.tx)
+            tx_delta.rest_id = self.rest_id
 
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:

@@ -7,26 +7,26 @@ from email.parser import BytesHeaderParser
 from email import policy
 
 from blob import Blob, InlineBlob, CompositeBlob
-from filter import Filter, HostPort, Mailbox, TransactionMetadata
+from filter import (
+    HostPort,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata )
 from response import Response
 
-class ReceivedHeaderFilter(Filter):
-    next : Optional[Filter]
+class ReceivedHeaderFilter(SyncFilter):
+    upstream : Optional[SyncFilter]
     inject_time : Optional[datetime] = None
-    smtp_meta : Optional[dict] = None
-    mail_from : Optional[Mailbox] = None
-    rcpt_to : List[Mailbox]
     received_hostname : Optional[str] = None
-    remote_host : Optional[HostPort] = None
-    remote_hostname : Optional[str] = None
-    fcrdns : Optional[bool] = None
     max_received_headers : int
+    body_blob : Optional[Blob] = None
+    data_err : Optional[Response] = None
 
-    def __init__(self, next : Optional[Filter] = None,
+    def __init__(self, upstream : Optional[SyncFilter] = None,
                  received_hostname : Optional[str] = None,
                  inject_time = None,
                  max_received_headers = 30):
-        self.next = next
+        self.upstream = upstream
         self.inject_time = inject_time
         self.rcpt_to = []
         self.received_hostname = received_hostname
@@ -42,11 +42,11 @@ class ReceivedHeaderFilter(Filter):
     def _format_received(self, tx : TransactionMetadata) -> str:
         received_host = None
         received_host_literal = None
-        if self.remote_host and self.remote_host.host:
-            received_host_literal = '[' + self.remote_host.host + ']'
+        if tx.remote_host and tx.remote_host.host:
+            received_host_literal = '[' + tx.remote_host.host + ']'
 
-            if self.remote_hostname and self.fcrdns:
-                received_host = (self.remote_hostname + ' ' +
+            if tx.remote_hostname and tx.fcrdns:
+                received_host = (tx.remote_hostname + ' ' +
                                  received_host_literal)
             else:
                 received_host = received_host_literal
@@ -54,23 +54,23 @@ class ReceivedHeaderFilter(Filter):
         clauses = []
         ehlo = None
         with_protocol = None
-        if self.smtp_meta is not None:
-            ehlo = self.smtp_meta.get('ehlo_host', None)
+        if tx.smtp_meta is not None:
+            ehlo = tx.smtp_meta.get('ehlo_host', None)
 
-            if self.mail_from.esmtp and 'SMTPUTF8' in self.mail_from.esmtp:
+            if tx.mail_from.esmtp and 'SMTPUTF8' in tx.mail_from.esmtp:
                 with_protocol = 'UTF8SMTP'
-            elif self.smtp_meta.get('esmtp', False):
+            elif tx.smtp_meta.get('esmtp', False):
                 with_protocol = 'ESMTP'
             else:
                 with_protocol = 'SMTP'
-            if self.smtp_meta.get('tls', False):
+            if tx.smtp_meta.get('tls', False):
                 with_protocol += 'S'
-            if self.smtp_meta.get('auth', False):
+            if tx.smtp_meta.get('auth', False):
                 with_protocol += 'A'
             with_protocol = 'with ' + with_protocol
         else:
-            if self.remote_hostname and self.fcrdns:
-                ehlo = self.remote_hostname
+            if tx.remote_hostname and tx.fcrdns:
+                ehlo = tx.remote_hostname
             elif received_host_literal:
                 ehlo = received_host_literal
             with_protocol = 'with X-RESTMTP'
@@ -86,8 +86,8 @@ class ReceivedHeaderFilter(Filter):
 
         # TODO id?
 
-        if len(self.rcpt_to) == 1:
-            clauses.append('for ' + self.rcpt_to[0].mailbox)
+        if len(tx.rcpt_to) == 1 and tx.rcpt_to[0] is not None:
+            clauses.append('for ' + tx.rcpt_to[0].mailbox)
 
         # TODO tls info rfc8314
 
@@ -113,47 +113,44 @@ class ReceivedHeaderFilter(Filter):
         return None
 
     def on_update(self, tx : TransactionMetadata,
-                  timeout : Optional[float] = None):
-        if tx.smtp_meta:
-            self.smtp_meta = tx.smtp_meta
-        if tx.mail_from:
-            self.mail_from = tx.mail_from
-        if tx.rcpt_to:
-            self.rcpt_to.extend(tx.rcpt_to)
-        if tx.remote_host:
-            self.remote_host = tx.remote_host
-        if tx.remote_hostname:
-            self.remote_hostname = tx.remote_hostname
-        if tx.fcrdns:
-            self.fcrdns = tx.fcrdns
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        if tx.body_blob is None:
+            return self.upstream.on_update(tx, tx_delta)
 
         # TODO in this case, since the received header that's being
         # prepended onto the body doesn't depend on the body contents,
-        # we can trickle out the body as it comes through rather than
+        # we could trickle out the body as it comes through rather than
         # effectively buffering it all like this. However something
         # else in the chain is likely to do that anyway so it's
         # probably moot.
-        upstream_tx = tx
-        if tx.body_blob and tx.body_blob.len() == tx.body_blob.content_length():
-            resp = self._check_max_received_headers(tx.body_blob)
-            if resp:
-                tx.data_response = resp
-                return
 
-            upstream_body = CompositeBlob()
-            received = InlineBlob(self._format_received(tx).encode('ascii'))
-            upstream_body.append(received, 0, received.len())
-            upstream_body.append(tx.body_blob, 0, tx.body_blob.len(), True)
-            upstream_tx = copy.copy(tx)
-            upstream_tx.body_blob = upstream_body
+        blob_complete = (tx.body_blob.len() == tx.body_blob.content_length())
+        data_resp = None
+        if blob_complete and self.body_blob is None and self.data_err is None:
+            self.data_err = self._check_max_received_headers(tx.body_blob)
 
-        if self.next:
-            self.next.on_update(upstream_tx)
-            if upstream_tx != tx:
-                tx.mail_response = upstream_tx.mail_response
-                tx.rcpt_response = upstream_tx.rcpt_response
-                tx.data_response = upstream_tx.data_response
+            if self.data_err is None:
+                self.body_blob = CompositeBlob()
+                received = InlineBlob(self._format_received(tx).encode('ascii'))
+                self.body_blob.append(received, 0, received.len())
+                self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
 
+        assert self.body_blob is None or self.data_err is None
+        downstream_tx = tx.copy()
+        downstream_delta = tx_delta.copy()
+        downstream_tx.body_blob = self.body_blob
+        downstream_delta.body_blob = self.body_blob
 
-    def abort(self):
-        pass
+        if not bool(downstream_delta):
+            return TransactionMetadata()
+
+        # we continue upstream even if we already know we're going to
+        # fail the body to get authoritative responses for mail/rcpt
+        upstream_delta = self.upstream.on_update(
+            downstream_tx, downstream_delta)
+        if self.data_err is not None:
+            assert upstream_delta.data_response is None
+            upstream_delta.data_response = self.data_err
+        tx.merge_from(upstream_delta)
+        return upstream_delta

@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 import logging
 import sys
 import secrets
@@ -11,13 +11,19 @@ from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
 from message_builder_filter import MessageBuilderFilter
-from filter import Filter, HostPort
+from filter import Filter, HostPort, SyncFilter
+from filter_adapters import DeltaToFullAdapter, FullToDeltaAdapter
 from storage_writer_filter import StorageWriterFilter
 from exploder import Exploder
 from storage import Storage
 from remote_host_filter import RemoteHostFilter
 from received_header_filter import ReceivedHeaderFilter
 from relay_auth_filter import RelayAuthFilter
+
+class FilterSpec:
+    def __init__(self, builder, t):
+        self.builder = builder
+        self.t = t
 
 class Config:
     storage : Optional[Storage] = None
@@ -28,21 +34,21 @@ class Config:
             'dest_domain': self.router_policy_dest_domain,
             'local_domain': self.router_policy_local_domain}
         self.filters = {
-            'rest_output': self.rest_output,
-            'router': self.router,
-            'dkim': self.dkim,
-            'exploder': self.exploder,
-            'message_builder': self.message_builder,
-            'remote_host': self.remote_host,
-            'received_header': self.received_header,
-            'relay_auth': self.relay_auth
+            'rest_output': FilterSpec(self.rest_output, Filter),
+            'router': FilterSpec(self.router, Filter),
+            'dkim': FilterSpec(self.dkim, Filter),
+            'exploder': FilterSpec(self.exploder, Filter),
+            'message_builder': FilterSpec(self.message_builder, Filter),
+            'remote_host': FilterSpec(self.remote_host, Filter),
+            'received_header': FilterSpec(self.received_header, SyncFilter),
+            'relay_auth': FilterSpec(self.relay_auth, Filter)
        }
 
     def set_storage(self, storage : Storage):
         self.storage = storage
 
-    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any]):
-        self.filters[name] = fac
+    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any], t):
+        self.filters[name] = FilterSpec(fac, t)
 
     def inject_yaml(self, root_yaml):
         self.root_yaml = root_yaml
@@ -138,10 +144,23 @@ class Config:
 
     def get_endpoint(self, host) -> Tuple[Filter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]
-        next : Optional[Filter] = None
+        next : Optional[Union[Filter,SyncFilter]] = None
         for filter_yaml in reversed(endpoint_yaml['chain']):
             filter_name = filter_yaml['filter']
-            endpoint = self.filters[filter_name](filter_yaml, next)
+            logging.debug('config.get_endpoint %s', filter_name)
+            spec = self.filters[filter_name]
+            if next is None:
+                pass
+            elif isinstance(next, Filter) and spec.t == SyncFilter:
+                next = FullToDeltaAdapter(next)
+            elif isinstance(next, SyncFilter) and spec.t == Filter:
+                next = DeltaToFullAdapter(next)
+            else:
+                assert (isinstance(next, Filter) and spec.t == Filter) or (
+                    isinstance(next, SyncFilter) and spec.t == SyncFilter)
+            endpoint = spec.builder(filter_yaml, next)
             next = endpoint
         assert next is not None
+        if isinstance(next, SyncFilter):
+            next = DeltaToFullAdapter(next)
         return next, endpoint_yaml

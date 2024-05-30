@@ -324,6 +324,11 @@ class TransactionCursor:
                       self.rest_id, row, trans_json)
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
+        # TODO this (and the db col) are probably vestigal? The
+        # references are tracked in TransactionBlobRefs and the tx
+        # json is supposed to be opaque to the storage code. The
+        # message_builder spec makes somewhat more sense since it
+        # could have inline bodies in it and be ~large?
         self.tx.body = self.body_rest_id
         self.tx.message_builder = self.message_builder
 

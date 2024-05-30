@@ -13,7 +13,7 @@ from response import Response
 from blob import CompositeBlob, InlineBlob
 from config import Config
 from fake_endpoints import SyncEndpoint
-from filter import HostPort, Mailbox, TransactionMetadata
+from filter import Filter, HostPort, Mailbox, TransactionMetadata
 from executor import Executor
 
 root_yaml = {
@@ -131,7 +131,7 @@ class RouterServiceTest(unittest.TestCase):
         self.config = Config()
         self.config.inject_yaml(root_yaml)
         self.config.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint())
+            'sync', lambda yaml, next: self.get_endpoint(), Filter)
         self.service = Service(config=self.config,
                                executor = self.executor)
         self.executor.submit(lambda: self.service.main())

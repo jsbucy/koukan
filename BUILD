@@ -20,6 +20,16 @@ py_test(name='filter_test',
         deps=[':filter',
               ':blob'])
 
+pytype_library(name='filter_adapters',
+               srcs=['filter_adapters.py'],
+               deps=[':filter'])
+
+py_test(name='filter_adapters_test',
+        srcs=['filter_adapters_test.py'],
+        deps=[':filter_adapters',
+              ':fake_endpoints',
+              ':response'])
+
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],
                deps=['filter',
@@ -216,6 +226,7 @@ pytype_library(name='config',
                srcs=['config.py'],
                deps=[':storage',
                      ':filter',
+                     ':filter_adapters',
                      ':rest_endpoint',
                      ':local_domain_policy',
                      ':dest_domain_policy',

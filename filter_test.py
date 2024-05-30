@@ -168,6 +168,25 @@ class FilterTest(unittest.TestCase):
         self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice'])
         self.assertEqual([r.code for r in tx.rcpt_response], [234])
 
+    def test_tx_bool(self):
+        tx = TransactionMetadata()
+        self.assertFalse(bool(tx))
+
+        tx = TransactionMetadata(mail_from = Mailbox('alice'))
+        self.assertTrue(bool(tx))
+
+        tx = TransactionMetadata(rcpt_to = [])
+        self.assertFalse(bool(tx))
+
+        tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
+        self.assertTrue(bool(tx))
+
+        tx = TransactionMetadata(body_blob = InlineBlob(b'hello'))
+        self.assertTrue(bool(tx))
+
+        tx = TransactionMetadata(retry = {})
+        self.assertTrue(bool(tx))
+
 
 if __name__ == '__main__':
     unittest.main()

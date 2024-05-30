@@ -90,22 +90,22 @@ class StorageWriterFilter(AsyncFilter):
 
 
     # AsyncFilter
-    def update(self, tx : TransactionMetadata,
+    def update(self, tx_delta : TransactionMetadata,
                timeout : Optional[float] = None):
         reuse_blob_rest_id=None
         logging.debug('StorageWriterFilter.update body_blob %s',
-                      tx.body_blob)
-        if tx.body_blob is not None and (
-                tx.body_blob.len() == tx.body_blob.content_length()):
-            self._body(tx)
-            if tx.data_response is not None:
+                      tx_delta.body_blob)
+        if tx_delta.body_blob is not None and (
+                tx_delta.body_blob.len() == tx_delta.body_blob.content_length()):
+            self._body(tx_delta)
+            if tx_delta.data_response is not None:
                 return
-            reuse_blob_rest_id=[tx.body]
+            reuse_blob_rest_id=[tx_delta.body]
         # XXX BEFORE SUBMIT have been playing fast&loose with these mutations
-        del tx.body_blob
+        del tx_delta.body_blob
 
         if self.rest_id is None:
-            self._create(tx, reuse_blob_rest_id=reuse_blob_rest_id)
+            self._create(tx_delta, reuse_blob_rest_id=reuse_blob_rest_id)
         else:
             if self.tx_cursor is None:
                 self._load()
@@ -113,7 +113,7 @@ class StorageWriterFilter(AsyncFilter):
             while True:  # tx
                 try:
                     self.tx_cursor.write_envelope(
-                        tx, reuse_blob_rest_id=reuse_blob_rest_id)
+                        tx_delta, reuse_blob_rest_id=reuse_blob_rest_id)
                     break
                 except VersionConflictException:
                     self.tx_cursor.load()
@@ -123,5 +123,5 @@ class StorageWriterFilter(AsyncFilter):
 
         # xxx timeout_left, update might have taken some time
         updated = self.get(timeout)
-        tx.replace_from(updated)
-        tx.rest_id = self.rest_id
+        tx_delta.replace_from(updated)
+        tx_delta.rest_id = self.rest_id

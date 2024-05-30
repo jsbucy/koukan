@@ -107,6 +107,7 @@ class Exploder(Filter):
             rcpt_to = [rcpt],
             remote_host = delta.remote_host,
             notification = None,
+            # BUG: this is probably only populated in the initial req
             smtp_meta = delta.smtp_meta)
         recipient.upstream = self.factory()
         recipient.upstream.update(upstream_tx, self.rcpt_timeout)
