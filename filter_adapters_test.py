@@ -69,9 +69,10 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
         upstream.add_rcpt_response(Response(203))
-        tx.rcpt_to.append(Mailbox('bob2'))
-        upstream_delta = adapter.on_update(
-            tx, TransactionMetadata(rcpt_to=[tx.rcpt_to[1]]))
+        delta = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
+        assert tx.merge_from(delta)
+        upstream_delta = adapter.on_update(tx, delta)
+        self.assertEqual(delta.rcpt_response, [])
         self.assertEqual(tx.mail_response.code, 201)
         self.assertIsNone(upstream_delta.mail_response)
         self.assertEqual([r.code for r in tx.rcpt_response], [202, 203])
