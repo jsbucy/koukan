@@ -25,7 +25,9 @@ class StorageWriterFilterTest(unittest.TestCase):
             print(l)
 
     def update(self, filter, tx, tx_delta, timeout):
-        filter.update(tx, tx_delta, timeout)
+        upstream_delta = filter.update(tx, tx_delta, timeout)
+        self.assertTrue(len(upstream_delta.rcpt_response) <=
+                        len(tx.rcpt_to))
 
     def start_update(self, filter, tx, tx_delta, timeout=None):
         t = Thread(target=lambda: self.update(
@@ -79,7 +81,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             TransactionMetadata(rcpt_response=[Response(202)]))
         self.join(t)
 
-        self.assertEqual(tx.rcpt_response[0].code, 202)
+        self.assertEqual(
+            [rr.code for rr in tx.rcpt_response], [202])
 
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create('blob_rest_id')

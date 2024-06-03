@@ -219,10 +219,12 @@ class TransactionCursor:
         # e.g. overwriting an existing field
         # xxx return/throw
         assert tx_to_db is not None
+        tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
+        attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
         logging.debug(
-            'TransactionCursor._write %d %s final_attempt_reason=%s %s',
+            'TransactionCursor._write %d %s final_attempt_reason=%s %s %s',
             self.id, self.rest_id, final_attempt_reason,
-            tx_to_db.to_json(WhichJson.DB))
+            tx_to_db_json, attempt_json)
         new_version = self.version + 1
         # TODO all updates '... WHERE inflight_session_id =
         #   self.parent.session' ?
@@ -230,12 +232,11 @@ class TransactionCursor:
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == self.id,
                       self.parent.tx_table.c.version == self.version)
-               .values(json = tx_to_db.to_json(WhichJson.DB),
+               .values(json = tx_to_db_json,
                        version = new_version,
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
 
-        attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
                        .where(self.parent.attempt_table.c.transaction_id == self.id,
@@ -320,9 +321,6 @@ class TransactionCursor:
          self.input_done, self.final_attempt_reason, self.body_rest_id,
          self.message_builder) = row
 
-        logging.debug('TransactionCursor._load_db %s %s %s',
-                      self.rest_id, row, trans_json)
-
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         # TODO this (and the db col) are probably vestigal? The
         # references are tracked in TransactionBlobRefs and the tx
@@ -339,12 +337,18 @@ class TransactionCursor:
                .limit(1))
         res = db_tx.execute(sel)
         row = res.fetchone()
+        resp_json = None
         if row is not None:
-            if row[1] is not None:
+            resp_json = row[1]
+            if resp_json is not None:
                 responses = TransactionMetadata.from_json(
-                    row[1], WhichJson.DB_ATTEMPT)
+                    resp_json, WhichJson.DB_ATTEMPT)
                 assert self.tx is not None  # set above
                 assert self.tx.merge_from(responses)
+
+        logging.debug('TransactionCursor._load_db %s %s %s %s',
+                      self.rest_id, row, trans_json, resp_json)
+
 
         return self.tx
 

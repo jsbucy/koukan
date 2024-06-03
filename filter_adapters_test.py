@@ -8,7 +8,7 @@ from fake_endpoints import (
 from filter import Mailbox, TransactionMetadata
 from response import Response
 
-class ReceivedHeaderFilterTest(unittest.TestCase):
+class FilterAdaptersTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')

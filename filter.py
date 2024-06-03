@@ -527,6 +527,7 @@ class TransactionMetadata:
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
     def copy(self):
+        # TODO probably this should use tx_json_fields?
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)

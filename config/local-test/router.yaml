@@ -70,6 +70,7 @@ endpoint:
     downstream_data_timeout: 5
   chain:
   - filter: exploder
+    msa: false
     output_chain: mx-out
     rcpt_timeout: 4
     data_timeout: 4

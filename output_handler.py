@@ -117,6 +117,9 @@ class OutputHandler:
 
             reqs = delta.copy()
             self.endpoint.on_update(delta)
+            logging.info('OutputHandler._output() %s '
+                         'tx after upstream update %s', self.rest_id, delta)
+            assert len(delta.rcpt_response) <= len(delta.rcpt_to)
             resps = reqs.delta(delta)
             assert resps is not None
 

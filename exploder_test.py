@@ -146,6 +146,18 @@ vec_mx = [
         [Response(202)],  # upstream
         [None, Response(203)],  # upstream
     ),
+
+    # multi-rcpt
+    # first succeeds, second fails at rcpt
+    Test(
+        'alice',
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
+          Rcpt('bob2', Response(204), Response(405), [None, None]) ],
+        [b'hello, ', b'world!'],
+        Response(250),  # injected
+        [Response(202), Response(405)],  # upstream
+        [None, Response(250)],  # injected
+    ),
 ]
 
 vec_msa = [
@@ -318,8 +330,9 @@ class ExploderTest(unittest.TestCase):
             self.cv.wait_for(lambda: self.upstream_endpoints)
             return self.upstream_endpoints.pop(0)
 
-    def start_update(self, filter, tx):
-        t = Thread(target=lambda: filter.on_update(tx), daemon=True)
+    def start_update(self, filter, tx, tx_delta):
+        # XXX capture upstream_delta
+        t = Thread(target=lambda: filter.on_update(tx, tx_delta), daemon=True)
         t.start()
         time.sleep(0.1)
         return t
@@ -340,13 +353,18 @@ class ExploderTest(unittest.TestCase):
             r.set_endpoint(endpoint)
 
         tx = TransactionMetadata(mail_from=Mailbox(t.mail_from))
-        exploder.on_update(tx)
+        exploder.on_update(tx, tx)
         self.assertEqual(tx.mail_response.code, t.expected_mail_resp.code)
         for i,r in enumerate(t.rcpt):
-            tx = TransactionMetadata(rcpt_to=[Mailbox(r.addr)])
-            exploder.on_update(tx)
-            self.assertEqual([rr.code for rr in tx.rcpt_response],
-                             [t.expected_rcpt_resp[i].code])
+            tx_delta = TransactionMetadata(rcpt_to=[Mailbox(r.addr)])
+            assert tx.merge_from(tx_delta)
+            upstream_delta = exploder.on_update(tx, tx_delta)
+            self.assertEqual(
+                [rr.code for rr in upstream_delta.rcpt_response],
+                [t.expected_rcpt_resp[i].code])
+
+        self.assertEqual([rr.code for rr in tx.rcpt_response],
+                         [rr.code for rr in t.expected_rcpt_resp])
 
         blob = None
         content_length = 0
@@ -358,7 +376,8 @@ class ExploderTest(unittest.TestCase):
                 blob = InlineBlob(d, content_length=content_length)
             else:
                 blob.append(d)
-            tx = TransactionMetadata(body_blob=blob)
+            tx_delta = TransactionMetadata(body_blob=blob)
+            tx.merge_from(tx_delta)
             # this is cheating a little in that we're setting the
             # upstream response before sending the downstream data...
             # for higher fidelity, we would have to do the whole
@@ -366,7 +385,7 @@ class ExploderTest(unittest.TestCase):
             # and then set the upstream response, etc.
             for r in t.rcpt:
                 r.set_data_response(i)
-            exploder.on_update(tx)
+            exploder.on_update(tx, tx_delta)
             if t.expected_data_resp[i] is not None:
                 self.assertEqual(tx.data_response.code,
                                  t.expected_data_resp[i].code)
@@ -392,38 +411,41 @@ class ExploderTest(unittest.TestCase):
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        exploder.on_update(tx)
+        exploder.on_update(tx, tx)
         self.assertEqual(tx.mail_response.code, 250)
-
-        tx = TransactionMetadata()
-        tx.rcpt_to = [ Mailbox('bob'), Mailbox('bob2') ]
 
         up0 = self.add_endpoint()
         up1 = self.add_endpoint()
 
-        t = self.start_update(exploder, tx)
 
-        up0.merge(TransactionMetadata(mail_response=Response(250)))
-        up0.merge(TransactionMetadata(rcpt_response=[Response(201)]))
-        up1.merge(TransactionMetadata(mail_response=Response(250)))
-        up1.merge(TransactionMetadata(rcpt_response=[Response(202)]))
+        tx_delta = TransactionMetadata(
+            rcpt_to = [ Mailbox('bob'), Mailbox('bob2') ])
+        assert tx.merge_from(tx_delta) is not None
+        t = self.start_update(exploder, tx, tx_delta)
+
+        up0.merge(TransactionMetadata(mail_response=Response(250),
+                                      rcpt_response=[Response(201)]))
+        up1.merge(TransactionMetadata(mail_response=Response(250),
+                                      rcpt_response=[Response(202)]))
 
         self.join(t)
 
         body_blob = CompositeBlob()
         b = InlineBlob(b'hello, ')
         body_blob.append(b, 0, b.len())
-        tx = TransactionMetadata()
-        tx.body_blob = body_blob
 
-        t = self.start_update(exploder, tx)
+        tx_delta = TransactionMetadata()
+        tx_delta.body_blob = body_blob
+        assert tx.merge_from(tx_delta) is not None
+        t = self.start_update(exploder, tx, tx_delta)
 
         self.join(t)
 
         b = InlineBlob(b'world!')
         body_blob.append(b, 0, b.len(), True)
 
-        t = self.start_update(exploder, tx)
+        # same delta: body has grown
+        t = self.start_update(exploder, tx, tx_delta)
 
         up0.merge(TransactionMetadata(data_response=Response(250)))
         up1.merge(TransactionMetadata(data_response=Response(250)))
@@ -447,7 +469,7 @@ class ExploderTest(unittest.TestCase):
         up0 = self.add_endpoint()
         up1 = self.add_endpoint()
 
-        t = self.start_update(exploder, tx)
+        t = self.start_update(exploder, tx, tx)
 
         up0.merge(TransactionMetadata(mail_response=Response(250)))
         up0.merge(TransactionMetadata(rcpt_response=[Response(201)]))
@@ -463,8 +485,9 @@ class ExploderTest(unittest.TestCase):
         up0.merge(TransactionMetadata(data_response=Response(202)))
         up1.merge(TransactionMetadata(data_response=Response(400)))
 
-        tx = TransactionMetadata(body_blob=InlineBlob(b'hello'))
-        exploder.on_update(tx)
+        tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
+        tx.merge_from(tx_delta)
+        exploder.on_update(tx, tx_delta)
         self.assertEqual(tx.data_response.code, 250)
         # validate that we set notification on the one that tempfailed
         # and didn't on the one that succeeded

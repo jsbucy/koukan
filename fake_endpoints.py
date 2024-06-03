@@ -115,7 +115,7 @@ class FakeAsyncEndpoint(AsyncFilter):
 
     def merge(self, tx):
         with self.mu:
-            self.tx.merge_from(tx)
+            assert self.tx.merge_from(tx) is not None
             self._version += 1
             self.cv.notify_all()
 
@@ -131,6 +131,7 @@ class FakeAsyncEndpoint(AsyncFilter):
             self.cv.notify_all()
             self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             upstream_delta = tx.delta(self.tx)
+            assert upstream_delta is not None
             tx.replace_from(self.tx)
             return upstream_delta
 
