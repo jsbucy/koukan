@@ -7,6 +7,7 @@ from filter import (
     SyncFilter,
     TransactionMetadata )
 
+
 class DeltaToFullAdapter(Filter):
     upstream : SyncFilter
     prev_tx : Optional[TransactionMetadata] = None
@@ -26,6 +27,7 @@ class DeltaToFullAdapter(Filter):
         assert len(self.prev_tx.rcpt_response) <= len(self.prev_tx.rcpt_to)
         assert len(upstream_delta.rcpt_response) <= len(self.prev_tx.rcpt_to)
         assert tx_delta.merge_from(upstream_delta) is not None
+        assert len(tx_delta.rcpt_response) <= len(tx_delta.rcpt_to)
 
 
 class FullToDeltaAdapter(SyncFilter):
@@ -37,12 +39,10 @@ class FullToDeltaAdapter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
+        downstream_delta = tx_delta.copy()
         req = tx_delta.copy()
-        logging.debug('FullToDeltaAdapter start')
-        self.upstream.on_update(tx_delta)
-        logging.debug('FullToDeltaAdapter done')
-        assert len(tx_delta.rcpt_response) <= len(tx.rcpt_to)
-        upstream_delta = req.delta(tx_delta)
+        self.upstream.on_update(downstream_delta)
+        upstream_delta = req.delta(downstream_delta)
         tx.merge_from(upstream_delta)
         return upstream_delta
 
