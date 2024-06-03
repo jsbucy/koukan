@@ -9,6 +9,7 @@ from httpx import Client, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
+from deadline import Deadline
 from filter import Filter, HostPort, TransactionMetadata, WhichJson
 from response import Response, Esmtp
 from blob import Blob
@@ -99,7 +100,7 @@ class RestEndpoint(Filter):
         return urljoin(self.base_url, url)
 
     def _start(self, tx : TransactionMetadata,
-               timeout : Optional[float] = None):
+                deadline : Deadline) -> HttpResponse:
         logging.debug('RestEndpoint._start %s', tx)
 
         for remote_host in self.remote_host_resolution(tx.remote_host):
@@ -113,13 +114,14 @@ class RestEndpoint(Filter):
             req_headers = {}
             if self.http_host:
                 req_headers['host'] = self.http_host
-            self._set_request_timeout(req_headers, timeout)
+            deadline_left = deadline.deadline_left()
+            self._set_request_timeout(req_headers, deadline_left)
             try:
                 rest_resp = self.client.post(
                     urljoin(self.base_url, '/transactions'),
                     json=tx.to_json(WhichJson.REST_CREATE),
                     headers=req_headers,
-                    timeout=self.timeout_start)  # xxx vs arg
+                    timeout=deadline_left)
             except RequestError:
                 return None
             if rest_resp.status_code != 201:
@@ -132,14 +134,12 @@ class RestEndpoint(Filter):
             return rest_resp
 
     def _update(self, tx : TransactionMetadata,
-                timeout : Optional[float] = None
-                ) -> HttpResponse:
+                deadline : Deadline) -> HttpResponse:
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
-        # XXX double-check before submit
-        timeout = timeout if timeout is not None else self.timeout_start
-        self._set_request_timeout(req_headers, timeout)
+        deadline_left = deadline.deadline_left()
+        self._set_request_timeout(req_headers, deadline_left)
         if self.etag:
             req_headers['if-match'] = self.etag
         json = tx.to_json(WhichJson.REST_UPDATE)
@@ -150,7 +150,7 @@ class RestEndpoint(Filter):
                 self.transaction_url,
                 json=tx.to_json(WhichJson.REST_UPDATE),
                 headers=req_headers,
-                timeout=timeout)
+                timeout=deadline_left)
         except RequestError:
             return None
         logging.info('RestEndpoint._update resp %s %s',
@@ -180,6 +180,10 @@ class RestEndpoint(Filter):
     # relay) which may be more trouble than it's worth...
     def on_update(self, tx : TransactionMetadata,
                   timeout : Optional[float] = None):
+        # xxx envelope vs data timeout
+        if timeout is None:
+            timeout = self.timeout_start
+        deadline = Deadline(timeout)
         self.data_last = tx.body_blob is not None and (
             tx.body_blob.len() == tx.body_blob.content_length())
 
@@ -209,7 +213,7 @@ class RestEndpoint(Filter):
 
         if not self.transaction_url:
             which_js = WhichJson.REST_CREATE
-            rest_resp = self._start(upstream_tx)
+            rest_resp = self._start(upstream_tx, deadline)
             self.last_tx = upstream_tx.copy()
             if rest_resp is None or rest_resp.status_code != 201:
                 tx.fill_inflight_responses(
@@ -218,14 +222,10 @@ class RestEndpoint(Filter):
         else:
             assert self.last_tx.merge_from(upstream_tx) is not None
             which_js = WhichJson.REST_UPDATE
-            rest_resp = self._update(upstream_tx)
+            rest_resp = self._update(upstream_tx, deadline)
             # TODO handle 412 failed precondition
 
-        # xxx envelope vs data timeout
-        if timeout is None:
-            timeout = self.timeout_start
         resp_json = get_resp_json(rest_resp) if rest_resp else None
-
         resp_json = resp_json if resp_json else {}
 
         tx_out = TransactionMetadata.from_json(resp_json, WhichJson.REST_READ)
@@ -249,9 +249,16 @@ class RestEndpoint(Filter):
             return
         if not tx.req_inflight():
             return
-        tx_out = self._get(timeout)  # deadline left
-        resps = self.last_tx.delta(tx_out, WhichJson.REST_READ)
-        if (resps is None or
+
+
+        tx_out = self._get(deadline)
+        logging.debug('RestEndpoint.on_update %s after _get() last_tx %s',
+                      self.transaction_url, self.last_tx)
+        logging.debug('RestEndpoint.on_update %s after _get() tx_out %s',
+                      self.transaction_url, tx_out)
+
+        if (tx_out is None or
+            (resps := self.last_tx.delta(tx_out, WhichJson.REST_READ)) is None or
             (self.last_tx.merge_from(resps) is None) or
             (tx.merge_from(resps) is None)):
             tx.fill_inflight_responses(
@@ -375,22 +382,13 @@ class RestEndpoint(Filter):
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
-    def _get(self, timeout : Optional[float] = None
-             ) -> Optional[TransactionMetadata]:
-        deadline = None
-        if timeout is not None:
-            deadline = timeout + time.monotonic()
+    def _get(self, deadline : Deadline) -> Optional[TransactionMetadata]:
         tx_out = None
-        while True:
-            deadline_left = None
-            if deadline is not None:
-                deadline_left = deadline - time.monotonic()
-                if deadline_left <= 0:
-                    return tx_out
+        while deadline.remaining():
             logging.debug('RestEndpoint._get() %s %s',
-                          self.transaction_url, deadline_left)
+                          self.transaction_url, deadline.deadline_left())
 
-            json = self.get_json(timeout = deadline_left)
+            json = self.get_json(timeout=deadline.deadline_left())
             logging.debug('RestEndpoint._get() %s done %s',
                           self.transaction_url, json)
 
@@ -408,7 +406,7 @@ class RestEndpoint(Filter):
             # min delta
             # XXX configurable
             # XXX backoff?
-            if deadline_left is not None and deadline_left < 1:
+            if not deadline.remaining(1):
                 break
             time.sleep(1)
-
+        return tx_out

@@ -1,5 +1,8 @@
 load(':pytype.bzl', 'pytype_library')
 
+pytype_library(name='deadline',
+               srcs=['deadline.py'])
+
 pytype_library(name='blob',
                srcs=['blob.py'])
 
@@ -32,9 +35,10 @@ py_test(name='filter_adapters_test',
 
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],
-               deps=['filter',
-                     'response',
-                     'blob'])
+               deps=[':blob',
+                     ':deadline',
+                     ':filter',
+                     ':response'])
 
 py_test(name='rest_endpoint_test',
         srcs=['rest_endpoint_test.py'],
@@ -172,7 +176,13 @@ pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'])
 
 pytype_library(name='storage_writer_filter',
-               srcs=['storage_writer_filter.py'])
+               srcs=['storage_writer_filter.py'],
+               deps=[':blob',
+                     ':deadline',
+                     ':storage',
+                     ':storage_schema',
+                     ':filter',
+                     ':response'])
 
 py_test(name='storage_writer_filter_test',
         srcs=['storage_writer_filter_test.py'],
@@ -306,6 +316,7 @@ pytype_library(name='rest_endpoint_adapter',
                srcs=['rest_endpoint_adapter.py'],
                deps=[':blob',
                      ':blobs',
+                     ':deadline',
                      ':executor',
                      ':filter',
                      ':response',

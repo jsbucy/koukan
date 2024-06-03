@@ -472,6 +472,7 @@ class TransactionMetadata:
     def delta(self, successor : "TransactionMetadata",
               which_json : Optional[WhichJson] = None
               ) -> Optional["TransactionMetadata"]:
+        assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
             old_v = getattr(self, f, None)
@@ -553,11 +554,15 @@ class SyncFilter(ABC):
         pass
 
 class AsyncFilter(ABC):
-    # may return None for reqs on timeout
+    # may return None for reqs on timeout/still inflight
+    # may continue after this
     # returns full tx state
     @abstractmethod
-    def update(self, tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None):
+    def update(self,
+               tx : TransactionMetadata,
+               tx_delta : TransactionMetadata,
+               timeout : Optional[float] = None
+               ) -> Optional[TransactionMetadata]:
         pass
 
     @abstractmethod

@@ -12,6 +12,7 @@ import wsgiref.util
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
+from deadline import Deadline
 from rest_endpoint import RestEndpoint
 from filter import HostPort, Mailbox, TransactionMetadata
 from blob import CompositeBlob, InlineBlob
@@ -147,7 +148,7 @@ class RestEndpointTest(unittest.TestCase):
             content_type = 'application/json',
             body = json.dumps({}),
             location='/transactions/123'))
-        rest_resp = rest_endpoint._start(tx, tx.to_json())
+        rest_resp = rest_endpoint._start(tx, Deadline())
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions')
@@ -209,15 +210,18 @@ class RestEndpointTest(unittest.TestCase):
     def testCreateNoSpin(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        # POST
         self.responses.append(Response(
             http_resp = '201 created',
             content_type = 'application/json',
             body = json.dumps({ 'mail_from': {} }),
             location = '/transactions/123'))
+        # GET
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
             body = json.dumps({ 'mail_from': {} })))
+        # GET
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -241,7 +245,7 @@ class RestEndpointTest(unittest.TestCase):
             location = '/transactions/124'))
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        rest_resp = rest_endpoint._update(tx)
+        rest_resp = rest_endpoint._update(tx, Deadline())
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions/124')

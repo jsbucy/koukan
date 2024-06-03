@@ -120,15 +120,19 @@ class FakeAsyncEndpoint(AsyncFilter):
             self.cv.notify_all()
 
     # AsyncFilter
-    def update(self, delta : TransactionMetadata,
-               timeout : Optional[float] = None):
+    def update(self,
+               tx : TransactionMetadata,
+               delta : TransactionMetadata,
+               timeout : Optional[float] = None
+               ) -> Optional[TransactionMetadata]:
         with self.mu:
             assert self.tx.merge_from(delta)
             self._version += 1
             self.cv.notify_all()
             self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
-            delta.replace_from(self.tx)
-            delta.rest_id = self.rest_id
+            upstream_delta = tx.delta(self.tx)
+            tx.replace_from(self.tx)
+            return upstream_delta
 
     # AsyncFilter
     def get(self, timeout : Optional[float] = None

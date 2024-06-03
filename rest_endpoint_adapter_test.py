@@ -29,11 +29,12 @@ class SyncFilterAdapterTest(unittest.TestCase):
             self.executor, sync_endpoint, 'rest_id')
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        sync_filter_adapter.update(tx, 1)
+        sync_filter_adapter.update(tx, tx, 1)
         self.assertIsNotNone(tx.mail_from)
 
-        tx = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        sync_filter_adapter.update(tx, 1)
+        delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
+        tx.merge_from(delta)
+        sync_filter_adapter.update(tx, delta, 1)
         self.assertIsNotNone(tx.mail_from)
         self.assertEqual(len(tx.rcpt_to), 1)
 
@@ -48,13 +49,13 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
 
-
-
 class RestEndpointAdapterTest(unittest.TestCase):
     def test_create_tx(self):
         app = Flask(__name__)
         endpoint = FakeAsyncEndpoint(rest_id='rest-id')
-        endpoint.rest_id = 'rest_id'
+        tx = TransactionMetadata()
+        tx.rest_id = 'rest_id'
+        endpoint.merge(tx)
         blob_storage = InMemoryBlobStorage()
 
         with app.test_request_context():

@@ -241,9 +241,12 @@ class OutputHandler:
             blob_reader.load(rest_id = self.cursor.tx.body)
             orig_headers = read_headers(blob_reader)
 
+        assert bool(self.cursor.tx.rcpt_to)
+        rcpt_to = self.cursor.tx.rcpt_to[0]
+        assert rcpt_to is not None
         dsn = generate_dsn(self.mailer_daemon_mailbox,
                            mail_from.mailbox,
-                           self.cursor.tx.rcpt_to[0].mailbox, orig_headers,
+                           rcpt_to.mailbox, orig_headers,
                            received_date=self.cursor.creation,
                            now=int(time.time()),
                            response=resp)
@@ -269,4 +272,5 @@ class OutputHandler:
         # permfail, better to dupe than fail to emit the bounce
 
         # XXX BEFORE SUBMIT timeout?
-        notification_endpoint.update(notification_tx, timeout=0)
+        notification_endpoint.update(notification_tx, notification_tx,
+                                     timeout=0)

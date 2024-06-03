@@ -46,6 +46,7 @@ class Recipient:
     mail_response : Optional[Response] = None
     rcpt_response : Optional[Response] = None
     thread : Optional[Thread] = None
+    tx :  Optional[TransactionMetadata] = None
 
     def __init__(self):
         pass
@@ -101,7 +102,7 @@ class Exploder(Filter):
         # requested from downstream since we're going to report it downstream
         # synchronously
         # TODO save any downstream notification/retry params
-        upstream_tx = TransactionMetadata(
+        recipient.tx = TransactionMetadata(
             host = self.output_chain,
             mail_from = self.mail_from,
             rcpt_to = [rcpt],
@@ -110,29 +111,33 @@ class Exploder(Filter):
             # BUG: this is probably only populated in the initial req
             smtp_meta = delta.smtp_meta)
         recipient.upstream = self.factory()
-        recipient.upstream.update(upstream_tx, self.rcpt_timeout)
+        upstream_delta = recipient.upstream.update(
+            recipient.tx, recipient.tx, self.rcpt_timeout)
+
+        if upstream_delta is None:
+            recipient.mail_response = Response(
+                400, 'Exploder._on_rcpt internal error: upstream_delta is None')
+            return
 
         # this only handles 1 recipient so it doesn't have to worry
         # about the delta
-        if upstream_tx.mail_response is None:
-            #recipient.mail_response = upstream_tx.mail_response
-            upstream_tx.mail_response = Response(
+        if upstream_delta.mail_response is None:
+            upstream_delta.mail_response = Response(
                 400, 'exploder upstream timeout')
 
-        if (len(upstream_tx.rcpt_response) != 1
-            or upstream_tx.rcpt_response[0] is None):
-            upstream_tx.rcpt_response = [upstream_tx.mail_response]
-            #recipient.rcpt_response = upstream_tx.rcpt_response[0]
-            #return
+        if (len(upstream_delta.rcpt_response) != 1
+            or upstream_delta.rcpt_response[0] is None):
+            upstream_delta.rcpt_response = [upstream_delta.mail_response]
 
-        # we accept upstream temp errors on mail/rcpt for
-        # store&forward for msa but not mx here
+        # we continue to store&forward after upstream temp errors on
+        # mail/rcpt for for msa but not mx here
         assert recipient.mail_response is None
-        recipient.mail_response = upstream_tx.mail_response
-        rcpt_resp = upstream_tx.rcpt_response
+        recipient.mail_response = upstream_delta.mail_response
+        rcpt_resp = upstream_delta.rcpt_response
         assert len(rcpt_resp) == 1 and rcpt_resp[0] is not None
         recipient.rcpt_response = rcpt_resp[0]
-        logging.debug('_on_rcpt %s %s', upstream_tx.mail_response, rcpt_resp[0])
+        logging.debug('_on_rcpt %s %s',
+                      recipient.mail_response, rcpt_resp[0])
 
     def _on_rcpts(self, delta):
         rcpts = []
@@ -241,15 +246,22 @@ class Exploder(Filter):
         logging.debug('Exploder._append_upstream prev_resp %s, timeout=%s',
                       prev_resp, timeout)
         assert prev_resp is None or not prev_resp.perm()
-        body_tx = TransactionMetadata()
-        body_tx.body_blob = blob
+        body_delta = TransactionMetadata()
+        body_delta.body_blob = blob
         last = blob.len() == blob.content_length()
-        #recipient.upstream.on_update(body_tx, timeout)
-        recipient.upstream.update(body_tx, timeout)
-        if last and body_tx.data_response is None:
-            body_tx.data_response = Response(
+        recipient.tx.merge_from(body_delta)
+        upstream_delta = recipient.upstream.update(
+            recipient.tx, body_delta, timeout)
+        if upstream_delta is None:
+            data_resp = Response(
+                400, 'Exploder._append_upstream internal error: '
+                'upstream_delta is None')
+        else:
+            data_resp = upstream_delta.data_response
+
+        if last and data_resp is None:
+            data_resp = Response(
                 400, 'exploder upstream timeout DATA')
-        data_resp = body_tx.data_response
         logging.info('Exploder.append_data %s', data_resp)
         assert last or data_resp is None or not data_resp.ok()
         assert not (last and data_resp is None)
@@ -339,10 +351,12 @@ class Exploder(Filter):
                 # OR into the query?
 
                 # TODO restore any saved downstream notification request
+                retry_delta = TransactionMetadata(
+                    notification=self.default_notification,
+                    retry={})
+                recipient.tx.merge_from(retry_delta)
                 recipient.upstream.update(
-                    TransactionMetadata(
-                        notification=self.default_notification,
-                        retry={}),
+                    recipient.tx, retry_delta,
                     timeout=0)  # i.e. don't wait on inflight
 
         message = None

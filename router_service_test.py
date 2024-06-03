@@ -46,8 +46,8 @@ root_yaml = {
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
-                       'rcpt_timeout': 1,
-                       'data_timeout': 1,
+                       'rcpt_timeout': 2,
+                       'data_timeout': 2,
                        'default_notification': {
                            'host': 'submission'
                        }}]

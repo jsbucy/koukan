@@ -19,6 +19,7 @@ from flask import (
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
+from deadline import Deadline
 from response import Response as MailResponse
 from blob import Blob, InlineBlob, WritableBlob
 from blobs import BlobStorage
@@ -109,8 +110,11 @@ class SyncFilterAdapter(AsyncFilter):
     def _get_locked(self, tx, timeout) -> bool:
         return self.cv.wait_for(lambda: self._tx_done_locked(tx), timeout)
 
-    def update(self, tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None):
+    def update(self,
+               tx : TransactionMetadata,
+               tx_delta : TransactionMetadata,
+               timeout : Optional[float] = None
+               ) -> Optional[TransactionMetadata]:
         with self.mu:
             txx = self.tx.merge(tx_delta)
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
@@ -125,8 +129,10 @@ class SyncFilterAdapter(AsyncFilter):
                     return FlaskResponse(status=500, response=['server busy'])
                 self.inflight = True
             self._get_locked(self.tx, timeout)
-            tx_delta.replace_from(self.tx)
+            upstream_delta = tx.delta(self.tx)
+            assert tx.merge_from(upstream_delta) is not None  # XXX
             tx_delta.rest_id = self.rest_id
+            return upstream_delta
 
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
@@ -135,7 +141,9 @@ class SyncFilterAdapter(AsyncFilter):
             self._get_locked(tx, timeout)
             return self.tx.copy()
 
+
 MAX_TIMEOUT=30
+
 
 class RestEndpointAdapter(Handler):
     async_filter : Optional[AsyncFilter]
@@ -213,7 +221,7 @@ class RestEndpointAdapter(Handler):
         if self.async_filter is None:
             return FlaskResponse(
                 status=500, respose=['internal error creating transaction'])
-        self.async_filter.update(tx, timeout)
+        self.async_filter.update(tx, tx, timeout)
         assert tx.rest_id is not None
         self._tx_rest_id = tx.rest_id
 
@@ -254,11 +262,12 @@ class RestEndpointAdapter(Handler):
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
-        tx = TransactionMetadata.from_json(request.json)
-        if tx is None:
+        deadline = Deadline(timeout)
+        downstream_delta = TransactionMetadata.from_json(request.json)
+        if downstream_delta is None:
             return FlaskResponse(status=400, response=['invalid request'])
-        body = tx.body
-        err = self._body(tx)
+        body = downstream_delta.body
+        err = self._body(downstream_delta)
         if err is not None:
             return err
         req_etag = request.headers.get('if-match', None)
@@ -266,18 +275,32 @@ class RestEndpointAdapter(Handler):
             return FlaskResponse(
                 status=400, response=['etags required for update'])
         req_etag = req_etag.strip('"')
+
+        # TODO optimization in the case of StorageWriterFilter, this
+        # should be able to return the tx that was just loaded in the cursor
+        tx = self.async_filter.get(deadline.deadline_left())
+        if tx is None:
+            return FlaskResponse(
+                status=500,
+                response=['RestEndpointAdapter.patch_tx timeout reading tx'])
+
+        if tx.merge_from(downstream_delta) is None:
+            return FlaskResponse(
+                status=400,
+                response=['RestEndpointAdapter.patch_tx merge failed'])
+
         if req_etag != self._etag(self.async_filter.version()):
             logging.debug('RestEndpointAdapter.patch_tx conflict %s %s',
                           req_etag, self._etag(self.async_filter.version()))
             return FlaskResponse(
                 status=412, response=['update conflict'])
-        self.async_filter.update(tx, timeout)
-        resp = FlaskResponse(status = 200)
+        self.async_filter.update(tx, downstream_delta, deadline.deadline_left())
+        resp = FlaskResponse(status=200)
         # xxx move to separate "rest schema"
         resp.set_etag(self._etag(self.async_filter.version()))
         resp.content_type = 'application/json'
         logging.debug('RestEndpointAdapter.patch_tx %s %s',
-                      self._tx_rest_id, tx)
+                      self._tx_rest_id, downstream_delta)
         tx.body = body
         del tx.body_blob
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
