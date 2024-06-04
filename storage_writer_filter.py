@@ -103,14 +103,15 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
-        if tx_delta.body_blob is not None and (
-                tx_delta.body_blob.len() == tx_delta.body_blob.content_length()):
-            self._body(tx_delta)
-            if tx_delta.data_response is not None:
-                return  # XXX
-            reuse_blob_rest_id=[tx_delta.body]
-        del downstream_tx.body_blob
-        del tx_delta.body_blob
+        if tx_delta.body_blob is not None:
+            if tx_delta.body_blob.len() == tx_delta.body_blob.content_length():
+                self._body(tx_delta)
+                if tx_delta.data_response is not None:
+                    return  # XXX
+                reuse_blob_rest_id=[tx_delta.body]
+            del tx_delta.body_blob
+        if downstream_tx.body_blob is not None:
+            del downstream_tx.body_blob
 
         if self.rest_id is None:
             self._create(tx_delta, reuse_blob_rest_id=reuse_blob_rest_id)
@@ -136,6 +137,7 @@ class StorageWriterFilter(AsyncFilter):
                       self.rest_id, updated)
 
         upstream_delta = downstream_tx.delta(updated)
+        assert upstream_delta is not None
         assert len(upstream_delta.rcpt_response) <= len(tx.rcpt_to)
 
         tx.merge_from(upstream_delta)

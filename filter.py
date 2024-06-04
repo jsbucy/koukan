@@ -365,6 +365,8 @@ class TransactionMetadata:
 
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
+    # XXX depending on the context, the upstream will not populate
+    # replies e.g. after upstream mail_resp err?
     def req_inflight(self, tx : Optional['TransactionMetadata'] = None) -> bool:
         if tx is None:
             tx = self

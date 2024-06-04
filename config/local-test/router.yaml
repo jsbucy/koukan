@@ -79,6 +79,13 @@ endpoint:
 
 - name: mx-out
   msa: false
+  output_handler:
+    retry_params:
+      max_attempts: 3
+      min_attempt_time: 2
+      max_attempt_time: 5
+      backoff_factor: 1.5
+      deadline: 30
   chain:
   - filter: remote_host
   - filter: received_header

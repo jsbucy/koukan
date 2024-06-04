@@ -47,13 +47,18 @@ class Recipient:
     # error or final data response
     status : Optional[Response] = None
     upstream : Optional[AsyncFilter] = None
+    # upgraded/returned downstream
     mail_response : Optional[Response] = None
     rcpt_response : Optional[Response] = None
     thread : Optional[Thread] = None
     tx :  Optional[TransactionMetadata] = None
+    # tempfail upstream was upgraded to success downstream -> enable
+    # retries/notifications
+    store_and_forward : bool = False
 
     def __init__(self):
         pass
+
 
 class Exploder(SyncFilter):
     output_chain : str
@@ -117,11 +122,15 @@ class Exploder(SyncFilter):
         recipient.tx.rcpt_to = [rcpt]
         recipient.tx.rcpt_response = []
         recipient.tx.notification = None
+        if recipient.tx.body:
+            del recipient.tx.body
+        if recipient.tx.body_blob:
+            del recipient.tx.body_blob
 
         recipient.upstream = self.factory()
         logging.debug('Exploder._on_rcpt() downstream_tx %s', recipient.tx)
         upstream_delta = recipient.upstream.update(
-            recipient.tx, recipient.tx, self.rcpt_timeout)
+            recipient.tx, recipient.tx.copy(), self.rcpt_timeout)
 
         logging.debug('Exploder._on_rcpt() %s', upstream_delta)
 
@@ -144,15 +153,34 @@ class Exploder(SyncFilter):
             or upstream_delta.rcpt_response[0] is None):
             upstream_delta.rcpt_response = [upstream_delta.mail_response]
 
+        assert recipient.mail_response is None
+
+        mail_resp = upstream_delta.mail_response
+        assert len(upstream_delta.rcpt_response) == 1
+        assert upstream_delta.rcpt_response[0] is not None
+        rcpt_resp = upstream_delta.rcpt_response[0]
+
         # we continue to store&forward after upstream temp errors on
         # mail/rcpt for for msa but not mx here
-        assert recipient.mail_response is None
-        recipient.mail_response = upstream_delta.mail_response
-        rcpt_resp = upstream_delta.rcpt_response
-        assert len(rcpt_resp) == 1 and rcpt_resp[0] is not None
-        recipient.rcpt_response = rcpt_resp[0]
-        logging.debug('_on_rcpt %s %s',
-                      recipient.mail_response, rcpt_resp[0])
+        if self.msa:
+            if upstream_delta.mail_response.temp():
+                mail_resp = Response(250, 'MAIL ok (exploder async upstream)')
+                rcpt_resp = Response(
+                    250, 'RCPT ok (exploder async upstream after MAIL temp)')
+                recipient.store_and_forward = True
+            if (upstream_delta.mail_response.ok() and
+                upstream_delta.rcpt_response[0].temp()):
+                rcpt_resp = Response(250, 'RCPT ok (exploder async upstream)')
+                recipient.store_and_forward = True
+
+        recipient.mail_response = mail_resp
+        recipient.rcpt_response = rcpt_resp
+        if recipient.mail_response.err():
+            recipient.status = recipient.mail_response
+        elif recipient.rcpt_response.err():
+            recipient.status = recipient.rcpt_response
+        logging.debug('Exploder._on_rcpt() %s %s', mail_resp, rcpt_resp)
+
 
     def _on_rcpts(self,
                   downstream_tx : TransactionMetadata,
@@ -206,16 +234,7 @@ class Exploder(SyncFilter):
                           i, mail_resp, rcpt_resp)
 
             if mail_resp.err():
-                assert rcpt_resp is None or rcpt_resp.err()
-                recipient.status = mail_resp
-                if self.msa and mail_resp.temp():
-                    mail_resp = (
-                        Response(250, 'MAIL ok (exploder async upstream)'))
-                    rcpt_resp = (
-                        Response(250, 'RCPT ok '
-                                 '(exploder async upstream after MAIL temp)'))
-                else:
-                    upstream_delta.rcpt_response[i] = mail_resp
+                upstream_delta.rcpt_response[i] = mail_resp
 
             # TODO the following is moot until we get pipelining from the
             # smtp gw but for the record:
@@ -240,13 +259,6 @@ class Exploder(SyncFilter):
                     (upstream_delta.mail_response.temp() and mail_resp.ok())):
                     upstream_delta.mail_response = mail_resp
 
-            # rcpt err
-            if recipient.status is None and rcpt_resp.err():
-                recipient.status = rcpt_resp
-                if self.msa and rcpt_resp.temp():
-                    upstream_delta.rcpt_response[i] = (
-                        Response(250, 'RCPT ok (exploder async upstream)'))
-                    continue
             if upstream_delta.rcpt_response[i] is None:
                 upstream_delta.rcpt_response[i] = rcpt_resp
 
@@ -270,14 +282,12 @@ class Exploder(SyncFilter):
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
-    def _append_upstream(self, recipient : Recipient, blob, timeout):
-        prev_resp = recipient.status
-        logging.debug('Exploder._append_upstream prev_resp %s, timeout=%s',
-                      prev_resp, timeout)
-        assert prev_resp is None or not prev_resp.perm()
+    def _append_upstream(self, recipient : Recipient, blob, last, timeout):
+        logging.debug('Exploder._append_upstream status %s, timeout=%s',
+                      recipient.status, timeout)
+        assert recipient.status is None or recipient.store_and_forward
         body_delta = TransactionMetadata()
         body_delta.body_blob = blob
-        last = blob.len() == blob.content_length()
         recipient.tx.merge_from(body_delta)
         upstream_delta = recipient.upstream.update(
             recipient.tx, body_delta, timeout)
@@ -288,16 +298,27 @@ class Exploder(SyncFilter):
         else:
             data_resp = upstream_delta.data_response
 
-        if last and data_resp is None:
-            data_resp = Response(
-                400, 'exploder upstream timeout DATA')
-        logging.info('Exploder.append_data %s', data_resp)
-        assert last or data_resp is None or not data_resp.ok()
-        assert not (last and data_resp is None)
-        if data_resp is not None and prev_resp is None:
+        # data resp None on !last -> ok/continue
+        if self.msa and data_resp is not None and data_resp.temp():
+            recipient.store_and_forward = True
+
+        if last:
+            if recipient.store_and_forward:
+                data_resp = Response(250, 'exploder msa store&forward data')
+            elif data_resp is None:
+                data_resp = Response(
+                    450, 'exploder upstream timeout DATA')
+
+        if data_resp is not None:
+            assert recipient.status is None
             recipient.status = data_resp
 
+        logging.info('Exploder._append_upstream %s', data_resp)
+        assert last or data_resp is None or not data_resp.ok()
+        assert not (last and data_resp is None)
+
     def _append_data(self, blob : Blob) -> Optional[Response]:
+        last = blob.len() == blob.content_length()
         logging.info('Exploder._append_data %d %s',
                      blob.len(), blob.content_length())
 
@@ -310,74 +331,63 @@ class Exploder(SyncFilter):
             assert any([r.status is None for r in self.recipients])
 
         for recipient in self.recipients:
-            rcpt_status = recipient.status
-            if rcpt_status and rcpt_status.perm():
+            if recipient.status is not None and (
+                    not (recipient.status.ok() or recipient.store_and_forward)):
                 continue
             timeout = self.data_timeout
-            if (rcpt_status is not None) and rcpt_status.temp():
+            if recipient.store_and_forward:
                 # TODO don't wait for a status since it's already
                 # failed, but maybe storage writer filter, etc, should
                 # know that and not wait?
                 timeout = 0
             recipient.thread = Thread(
                 target = lambda: self._append_upstream(
-                    recipient, blob, timeout),
+                    recipient, blob, last, timeout),
                 daemon = True)
             recipient.thread.start()
-
-        last = blob.len() == blob.content_length()
 
         for recipient in self.recipients:
             t = recipient.thread
             if t is None:
                 continue
-            # NOTE: we don't set a timeout on this join()
-            # because we expect the next hop is something
-            # internal (i.e. storage writer filter) that
-            # respects the timeout
+            # NOTE: we don't set a timeout on this join() because we
+            # expect the next hop is something internal (i.e. storage
+            # writer filter) that respects the timeout
             t.join()
             assert not (last and recipient.status is None)
 
+        # for all the recipients that didn't return a downstream error
+        # for mail/rcpt
+        # if all the data responses are the same and none require
+        # store&forward (after a temp upstream error for msa)
+        # return that response directly
         r0 = self.recipients[0].status
         codes = [ int(r.status.code/100) if r.status is not None else None
-                  for r in self.recipients]
-        msa_async_temp = False
-        if len([c for c in codes if c == codes[0]]) == len(codes):
-            # same status for all recipients
-            # but msa store-and-forward temp since the client expects that
-            if self.msa:
-                if r0 is None or r0.ok() or r0.perm():
-                    logging.debug('Exploder msa same resp')
-                    return r0
-                elif r0.temp():
-                    msa_async_temp = True
-            else:
-                logging.debug('Exploder mx same resp')
-                return r0
+                  for r in self.recipients
+                  if (r.mail_response.ok() and r.rcpt_response.ok()) ]
+        store_and_forward = [r.store_and_forward for r in self.recipients]
+        logging.debug('Exploder._append_data codes %s sf %s',
+                      codes, store_and_forward)
+        if len([c for c in codes if c == codes[0]]) == len(codes) and (
+                not any(store_and_forward)):
+            if r0 is not None:
+                r0.message = 'exploder same status' + r0.message
+            logging.debug('Exploder._append_data same status data_resp %s', r0)
+            return r0
 
         if not last:
             return None
 
-        # temp or needs notification
-        for recipient in [r for r in self.recipients if r.status.temp()]:
-            if self.default_notification is not None:
-                # The upstream tx could have permfailed right after we
-                # timed out the first/sync attempt w/notification
-                # disabled. The final upstream response will set
-                # final_attempt_reason in the tx so it isn't recoverable.  But
-                # we still need to send a notification.
+        for r in self.recipients:
+            if r.status.temp():
+                r.store_and_forward = True
 
-                # For the time being, Storage._write() clears
-                # final_attempt_reason if setting notification. This opens a
-                # small window within which we will dupe/resend to the
-                # upstream after it previously permfailed.
-
-                # TODO It may actually not be that hard for
-                # OutputHandler to skip directly to the notification
-                # logic if it has a final upstream response in the
-                # previous attempt? Or add another notification_done bool
-                # on the db tx that this sets to false that load_one can
-                # OR into the query?
+        # XXX this will blackhole if unset!
+        if self.default_notification is not None:
+            for recipient in [r for r in self.recipients
+                              if r.store_and_forward]:
+                logging.debug('Exploder._append_data enable '
+                              'notifications/retries %s',  r)
 
                 # TODO restore any saved downstream notification request
                 retry_delta = TransactionMetadata(
@@ -388,13 +398,7 @@ class Exploder(SyncFilter):
                     recipient.tx, retry_delta,
                     timeout=0)  # i.e. don't wait on inflight
 
-        message = None
-        if msa_async_temp:
-            message = 'exploder async msa upstream temp'
-        else:
-            message = 'exploder async mixed upstream responses'
-        return Response(
-            250, 'accepted (' + message + ')')
+        return Response(250, 'accepted (exploder store&forward)')
 
 
     def abort(self):

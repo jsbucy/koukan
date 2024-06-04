@@ -19,12 +19,14 @@ class Rcpt:
     mail_resp : Optional[Response]
     rcpt_resp : Optional[Response]
     data_resp : List[Optional[Response]]
+    store_and_forward : bool
 
-    def __init__(self, addr, m=None, r=None, d=None):
+    def __init__(self, addr, m=None, r=None, d=None, store_and_forward=False):
         self.addr = addr
         self.mail_resp = m
         self.rcpt_resp = r
         self.data_resp = d
+        self.store_and_forward = store_and_forward
 
     def set_endpoint(self, endpoint):
         self.endpoint = endpoint
@@ -60,7 +62,8 @@ vec_mx = [
     # mail perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(501), Response(502), []) ],
+        [ Rcpt('bob', Response(501), Response(502), [],
+               store_and_forward=False) ],
         [],
         Response(250),  # noop mail/injected
         [Response(501)],  # upstream
@@ -70,7 +73,8 @@ vec_mx = [
     # mail temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(401), Response(500), []) ],
+        [ Rcpt('bob', Response(401), Response(500), [],
+               store_and_forward=False) ],
         [],
         Response(250),  # injected
         [Response(401)],  # upstream
@@ -80,7 +84,8 @@ vec_mx = [
     # mail success, rcpt perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(501), []) ],
+        [ Rcpt('bob', Response(201), Response(501), [],
+               store_and_forward=False) ],
         [],
         Response(250),  # injected
         [Response(501)],  # upstream
@@ -90,7 +95,8 @@ vec_mx = [
     # mail success, rcpt temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(401), []) ],
+        [ Rcpt('bob', Response(201), Response(401), [],
+               store_and_forward=False) ],
         [],
         Response(250),  # injected
         [Response(401)],  # upstreawm
@@ -100,7 +106,8 @@ vec_mx = [
     # mail, rcpt success, data !last perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [Response(501)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [Response(501)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -110,7 +117,8 @@ vec_mx = [
     # mail, rcpt success, data !last temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [Response(401)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [Response(401)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -120,7 +128,8 @@ vec_mx = [
     # mail, rcpt success, data !last success, last perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, Response(501)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [None, Response(501)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -140,7 +149,8 @@ vec_mx = [
     # mail, rcpt, !last success, last success
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, Response(203)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -151,12 +161,14 @@ vec_mx = [
     # first succeeds, second fails at rcpt
     Test(
         'alice',
-        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(204), Response(405), [None, None]) ],
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(204), Response(405), [],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(405)],  # upstream
-        [None, Response(250)],  # injected
+        [None, Response(203)],  # injected
     ),
 ]
 
@@ -165,7 +177,8 @@ vec_msa = [
     # mail perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(501), Response(502), []) ],
+        [ Rcpt('bob', Response(501), None, [],
+               store_and_forward=False) ],
         [],
         Response(250),  # noop mail/injected
         [Response(501)],  # upstream
@@ -175,17 +188,19 @@ vec_msa = [
     # mail temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(401), Response(500), []) ],
-        [],
+        [ Rcpt('bob', Response(401), None, [],
+               store_and_forward=True) ],
+        ['hello, world!'],
         Response(250),  # noop mail/injected
         [Response(250)],  # injected/upgraded
-        None,
+        [Response(250)],
     ),
 
     # mail success, rcpt perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(501), []) ],
+        [ Rcpt('bob', Response(201), Response(501), [],
+               store_and_forward=False) ],
         [],
         Response(250),  # injected
         [Response(501)],  # upstream
@@ -195,17 +210,19 @@ vec_msa = [
     # mail success, rcpt temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(401), []) ],
-        [],
+        [ Rcpt('bob', Response(201), Response(401), [],
+               store_and_forward=True) ],
+        ['hello, world!'],
         Response(250),  # injected
         [Response(250)],  # injected/upgraded
-        None,
+        [Response(250)],
     ),
 
     # mail, rcpt success, data !last perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [Response(501)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [Response(501)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -215,7 +232,8 @@ vec_msa = [
     # mail, rcpt success, data !last temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [Response(401)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [Response(401)],
+               store_and_forward=True) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -225,7 +243,8 @@ vec_msa = [
     # mail, rcpt success, data !last ok, last perm
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, Response(501)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [None, Response(501)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -235,7 +254,8 @@ vec_msa = [
     # mail, rcpt success, data !last ok, last temp
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, Response(401)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [None, Response(401)],
+               store_and_forward=True) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -245,7 +265,8 @@ vec_msa = [
     # mail, rcpt, data success
     Test(
         'alice',
-        [ Rcpt('bob', Response(201), Response(202), [None, Response(203)]) ],
+        [ Rcpt('bob', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False) ],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202)],  # upstream
@@ -256,32 +277,38 @@ vec_msa = [
     # first recipient succeeds, second permfails after MAIL
     Test(
         'alice',
-        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(501), Response(502), [])],
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(501), Response(502), [],
+               store_and_forward=False)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(501)],  # upstream mail err -> rcpt resp
-        [None, Response(250)],  # 'async mixed upstream'
+        [None, Response(203)],  # same data resp
     ),
 
     # multi-rcpt
     # first recipient succeeds, second permfails after RCPT
     Test(
         'alice',
-        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(201), Response(501), [])],
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(201), Response(501), [],
+               store_and_forward=False)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(501)],  # upstream
-        [None, Response(250)],  # 'async mixed upstream'
+        [None, Response(203)],  # same data resp
     ),
 
     # multi-rcpt
     # first recipient succeeds, second permfails after !last data
     Test(
         'alice',
-        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(204), Response(205), [Response(501)])],
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(204), Response(205), [Response(501)],
+               store_and_forward=False)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(205)],  # upstream
@@ -292,8 +319,10 @@ vec_msa = [
     # first recipient succeeds, second permfails after last data
     Test(
         'alice',
-        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)]),
-          Rcpt('bob2', Response(204), Response(205), [None, Response(501)])],
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(204), Response(205), [None, Response(501)],
+               store_and_forward=False)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(205)],  # upstream
@@ -346,7 +375,8 @@ class ExploderTest(unittest.TestCase):
     def _test_one(self, msa, t : Test):
         exploder = Exploder('output-chain', lambda: self.factory(),
                             rcpt_timeout=1,
-                            msa=msa)
+                            msa=msa,
+                            default_notification={})
 
         for r in t.rcpt:
             endpoint = self.add_endpoint()
@@ -392,6 +422,14 @@ class ExploderTest(unittest.TestCase):
                 break
             else:
                 self.assertIsNone(tx.data_response)
+
+        for i,r in enumerate(t.rcpt):
+            if r.store_and_forward:
+                self.assertIsNotNone(r.endpoint.tx.retry)
+                self.assertIsNotNone(r.endpoint.tx.notification)
+            else:
+                self.assertIsNone(r.endpoint.tx.retry)
+                self.assertIsNone(r.endpoint.tx.notification)
 
     def test_mx(self):
         for i,t in enumerate(vec_mx):
@@ -455,12 +493,19 @@ class ExploderTest(unittest.TestCase):
         for endpoint in self.upstream_endpoints:
             self.assertEqual(endpoint.body_blob.read(0), b'hello, world!')
 
+        self.assertIsNone(up0.tx.retry)
+        self.assertIsNone(up0.tx.notification)
+        self.assertIsNone(up1.tx.retry)
+        self.assertIsNone(up1.tx.notification)
+
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', lambda: self.factory(),
                             rcpt_timeout=1, msa=False,
                             default_notification={'host': 'smtp-out'})
 
-        # xxx need to add rcpts in multiple updates to catch index bug
+        # The vector tests cover the non-pipelined updates we expect
+        # to get from the current gw implementation. This exercises
+        # the multi-update case.
         tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob'),
@@ -488,11 +533,13 @@ class ExploderTest(unittest.TestCase):
         tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         tx.merge_from(tx_delta)
         exploder.on_update(tx, tx_delta)
-        self.assertEqual(tx.data_response.code, 250)
-        # validate that we set notification on the one that tempfailed
-        # and didn't on the one that succeeded
+        self.assertEqual(tx.data_response.code, 202)
+        # first rcpt succeeded -> no retry
+        # second failed at rcpt -> wasn't accepted -> no retry
+        self.assertIsNone(up0.tx.retry)
         self.assertIsNone(up0.tx.notification)
-        self.assertEqual(up1.tx.notification['host'], 'smtp-out')
+        self.assertIsNone(up1.tx.retry)
+        self.assertIsNone(up1.tx.notification)
 
 
 if __name__ == '__main__':

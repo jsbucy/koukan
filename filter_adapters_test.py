@@ -55,7 +55,7 @@ class FilterAdaptersTest(unittest.TestCase):
         upstream.set_mail_response(Response(201))
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        upstream_delta = adapter.on_update(tx, tx)
+        upstream_delta = adapter.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual(upstream_delta.mail_response.code, 201)
 
