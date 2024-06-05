@@ -163,6 +163,9 @@ class OutputHandler:
                 # enabled retries as a result of an upstream error so
                 # include this logic in the storage version conflict
                 # retry loop
+
+                # XXX actually exploder will probably enable retries
+                # after this returns
                 next_attempt_time = None
                 final_attempt_reason = None
                 if resp.ok():
@@ -219,7 +222,8 @@ class OutputHandler:
 
     def _maybe_send_notification(self, resp, last_attempt : bool):
         logging.debug('OutputHandler._maybe_send_notification '
-                      '%s last %s', self.rest_id, last_attempt)
+                      '%s last %s notify %s', self.rest_id, last_attempt,
+                      self.cursor.tx.notification)
 
         if self.cursor.tx.notification is None:
             return

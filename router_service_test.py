@@ -384,7 +384,8 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx)
         self.assertEqual(tx.data_response.code, 204)
 
-    def test_notification(self):
+
+    def test_notification_retry_timeout(self):
         logging.info('test_notification')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
@@ -420,6 +421,72 @@ class RouterServiceTest(unittest.TestCase):
                 time.sleep(1)
             else:
                 self.fail('failed to dequeue')
+
+        dsn_endpoint = SyncEndpoint()
+        dsn_endpoint.set_mail_response(Response(250))
+        dsn_endpoint.add_rcpt_response(Response(250))
+        dsn_endpoint.add_data_response(Response(250))
+        self.add_endpoint(dsn_endpoint)
+        self.assertTrue(self.service._dequeue())
+
+        # xxx kludge, fix SyncEndpoint to wait on this
+        for i in range(0,5):
+            if dsn_endpoint.body_blob is not None:
+                break
+            time.sleep(1)
+        else:
+            self.fail('didn\'t get dsn')
+        self.assertEqual(dsn_endpoint.mail_from.mailbox, '')
+        self.assertEqual([m.mailbox for m in dsn_endpoint.rcpt_to],
+                         ['alice'])
+        self.assertIn(b'subject: Delivery Status Notification',
+                      dsn_endpoint.body_blob.read(0))
+
+    def disabled_test_notification_fast_perm(self):
+        logging.info('test_notification')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='smtp-msa')
+
+
+        logging.info('test_notification start tx')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob1'),
+                     Mailbox('bob2')],
+            body_blob=InlineBlob(b'Hello, World!'),
+            remote_host=HostPort('1.2.3.4', 12345))
+        t = self.start_tx_update(rest_endpoint, tx, 10)
+        # exploder tx
+        self.assertTrue(self.service._dequeue())
+        upstream_endpoint = SyncEndpoint()
+        upstream_endpoint.set_mail_response(Response(250))
+        upstream_endpoint.add_rcpt_response(Response(250))
+        upstream_endpoint.add_data_response(Response(550))
+        self.add_endpoint(upstream_endpoint)
+        upstream_endpoint = SyncEndpoint()
+        upstream_endpoint.set_mail_response(Response(250))
+        upstream_endpoint.add_rcpt_response(Response(250))
+        upstream_endpoint.add_data_response(Response(250))
+        self.add_endpoint(upstream_endpoint)
+
+        dequeued = 0
+        for i in range(0, 5):
+            if self.service._dequeue():
+                dequeued += 1
+            if dequeued == 2:
+                break
+            time.sleep(1)
+        else:
+            self.fail('failed to dequeue')
+
+        self.join_tx_update(t, 10)
+        logging.debug('RouterServiceTest.test_notification after update %s',
+                      tx)
+        # msa store and forward, upstream temp errors upgraded to 250 downstream
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertEqual([r.code for r in tx.rcpt_response], [250, 250])
+        self.assertEqual(tx.data_response.code, 250)
+
 
         dsn_endpoint = SyncEndpoint()
         dsn_endpoint.set_mail_response(Response(250))
