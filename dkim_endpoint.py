@@ -6,42 +6,51 @@ import dkim
 
 from response import Response, Esmtp
 from blob import Blob, InlineBlob, CompositeBlob
-from filter import Filter, TransactionMetadata
+from filter import (
+    SyncFilter,
+    TransactionMetadata )
 
-class DkimEndpoint(Filter):
+class DkimEndpoint(SyncFilter):
     data : bytes = None
+    upstream_tx : Optional[TransactionMetadata] = None
+    upstream : SyncFilter
 
-    def __init__(self, domain : str, selector : str, privkey, next : Filter):
-        f = open(privkey, "rb")
+    def __init__(self, domain : str, selector : str, privkey,
+                 upstream : SyncFilter):
         self.domain = domain
         self.selector = selector
-        self.privkey = f.read()
-        self.next = next
-        self.blobs = []
+        with open(privkey, "rb") as f:
+            self.privkey = f.read()
+        self.upstream = upstream
 
-    def on_update(self, tx : TransactionMetadata):
-        self.ok_resp = False
-        if tx.body_blob is None or (
-                tx.body_blob.len() != tx.body_blob.content_length()):
-            return self.next.on_update(tx)
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        if self.upstream_tx is None:
+            self.upstream_tx = tx.copy()
 
-        upstream_tx = copy.copy(tx)
-        self.blobs = [tx.body_blob]
-        upstream_body = CompositeBlob()
-        sig = InlineBlob(self.sign())
-        upstream_body.append(sig, 0, sig.len())
-        upstream_body.append(tx.body_blob, 0, tx.body_blob.len(), True)
-        upstream_tx.body_blob = upstream_body
+        downstream_delta = tx_delta.copy()
 
-        self.next.on_update(upstream_tx)
-        tx.mail_response = upstream_tx.mail_response
-        tx.rcpt_response = upstream_tx.rcpt_response
-        tx.data_response = upstream_tx.data_response
+        body_blob = tx_delta.body_blob
+        if body_blob is not None and (
+                body_blob.len() == body_blob.content_length()):
+            upstream_body = CompositeBlob()
+            sig = InlineBlob(self.sign(body_blob))
+            upstream_body.append(sig, 0, sig.len())
+            upstream_body.append(tx.body_blob, 0, body_blob.len(), True)
+            downstream_delta.body_blob = upstream_body
+        else:
+            self.upstream_tx.body_blob = downstream_delta.body_blob = None
 
-    def sign(self):
-        data = b''
-        for blob in self.blobs:
-            data += blob.read(0)
+        assert self.upstream_tx.merge_from(downstream_delta) is not None
+
+        upstream_delta = self.upstream.on_update(
+            self.upstream_tx, downstream_delta)
+        assert tx.merge_from(upstream_delta) is not None
+        return upstream_delta
+
+    def sign(self, blob : Blob):
+        data = blob.read(0)
         # TODO dkimpy wants to get the entire message as a single
         # bytes value, a better interface for this would be to push
         # chunks into it, I don't think that would be a huge change
@@ -58,5 +67,3 @@ class DkimEndpoint(Filter):
         return sig
 
 
-    def abort(self):
-        if self.next: self.next.abort()

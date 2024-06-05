@@ -36,7 +36,7 @@ class Config:
         self.filters = {
             'rest_output': FilterSpec(self.rest_output, Filter),
             'router': FilterSpec(self.router, Filter),
-            'dkim': FilterSpec(self.dkim, Filter),
+            'dkim': FilterSpec(self.dkim, SyncFilter),
             'exploder': FilterSpec(self.exploder, Filter),
             'message_builder': FilterSpec(self.message_builder, Filter),
             'remote_host': FilterSpec(self.remote_host, Filter),

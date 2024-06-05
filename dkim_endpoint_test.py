@@ -8,7 +8,7 @@ from dkim import dknewkey
 from blob import InlineBlob
 from dkim_endpoint import DkimEndpoint
 from filter import HostPort, Mailbox, TransactionMetadata
-from fake_endpoints import SyncEndpoint
+from fake_endpoints import FakeSyncFilter
 from response import Response
 
 class DkimEndpointTest(unittest.TestCase):
@@ -27,13 +27,10 @@ class DkimEndpointTest(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_basic(self):
-        next = SyncEndpoint()
+        upstream = FakeSyncFilter()
         dkim_endpoint = DkimEndpoint('example.com', 'selector123',
-                                     self.privkey, next)
+                                     self.privkey, upstream)
 
-        next.set_mail_response(Response(201))
-        next.add_rcpt_response(Response(202))
-        next.add_data_response(Response(203))
         tx = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
@@ -44,12 +41,22 @@ class DkimEndpointTest(unittest.TestCase):
             b'\r\n'
             b'hello\r\n')
 
-        dkim_endpoint.on_update(tx)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 203)
-        signed_msg = next.body_blob.read(0)
-        self.assertTrue(signed_msg.startswith(b'DKIM-Signature:'))
+        def exp(tx, delta):
+            self.assertTrue(delta.body_blob.read(0).startswith(
+                b'DKIM-Signature:'))
+
+            upstream_delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        upstream.add_expectation(exp)
+
+        upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        self.assertEqual(upstream_delta.data_response.code, 203)
 
 if __name__ == '__main__':
     unittest.main()

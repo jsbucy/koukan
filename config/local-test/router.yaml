@@ -48,15 +48,15 @@ endpoint:
   - filter: router
     policy:
       name: dest_domain
-# - filter: dkim
-#   key
-#   domain:
-#   selector:
+  - filter: dkim
+    key: config/local-test/dkim.key
+    domain: d
+    selector: sel
   - filter: rest_output
     static_endpoint: https://localhost:8001
     verify: localhost.crt
     http_host: outbound
-#    remote_host_discovery: mx
+    # remote_host_discovery: mx
     static_remote_host:
       host: 127.0.0.1
       port: 3025
