@@ -2,6 +2,7 @@ from typing import Callable, List, Optional
 import logging
 from threading import Thread
 import time
+from functools import partial
 
 from filter import (
     AsyncFilter,
@@ -44,20 +45,155 @@ from response import Response
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    # error or final data response
-    status : Optional[Response] = None
-    upstream : Optional[AsyncFilter] = None
+    upstream : AsyncFilter
+    tx :  Optional[TransactionMetadata] = None
+
     # upgraded/returned downstream
     mail_response : Optional[Response] = None
     rcpt_response : Optional[Response] = None
-    thread : Optional[Thread] = None
-    tx :  Optional[TransactionMetadata] = None
+
+    # error (reported downstream) that caused this recipient to fail
+    # or final data response
+    status : Optional[Response] = None
+
     # tempfail upstream was upgraded to success downstream -> enable
     # retries/notifications
     store_and_forward : bool = False
+    output_chain: str
+    rcpt_timeout : Optional[float] = None
+    data_timeout : Optional[float] = None
+    msa : bool
+    rcpt : Mailbox
 
-    def __init__(self):
-        pass
+    def __init__(self,
+                 output_chain: str,
+                 upstream : AsyncFilter,
+                 msa : bool,
+                 rcpt : Mailbox,
+                 rcpt_timeout : Optional[float] = None,
+                 data_timeout : Optional[float] = None):
+        self.output_chain = output_chain
+        self.upstream = upstream
+        self.rcpt_timeout = rcpt_timeout
+        self.data_timeout = data_timeout
+        self.msa = msa
+        self.rcpt = rcpt
+
+    def _on_rcpt(self,
+                 tx : TransactionMetadata,
+                 delta : TransactionMetadata):
+        logging.info('exploder.Recipient._on_rcpt %s', self.rcpt)
+
+        # just send the envelope, we'll deal with any data below
+        # disable retry/notification for this first attempt even if it's
+        # requested from downstream since we're may report errors downstream
+        # synchronously
+        # TODO save any downstream notification/retry params
+        self.tx = tx.copy()
+        self.tx.mail_response = None
+        self.tx.host = self.output_chain
+        self.tx.rcpt_to = [self.rcpt]
+        self.tx.rcpt_response = []
+        self.tx.notification = None
+        if self.tx.body:
+            del self.tx.body
+        if self.tx.body_blob:
+            del self.tx.body_blob
+
+        logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
+        upstream_delta = self.upstream.update(
+            self.tx, self.tx.copy(), self.rcpt_timeout)
+
+        logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
+
+        if upstream_delta is None:
+            self.mail_response = Response(
+                400, 'exploder.Recipient._on_rcpt internal error: '
+                'bad upstream response')
+            return
+
+        # this only handles 1 recipient so it doesn't have to worry
+        # about the delta
+        if upstream_delta.mail_response is None:
+            self.mail_response = Response(
+                450, 'exploder upstream timeout MAIL')
+            assert not(upstream_delta.rcpt_response)  # buggy upstream
+        else:
+            self.mail_response = upstream_delta.mail_response
+
+        # if mail failed upstream, return this in the rcpt response
+        # Exploder often has to return a no-op 250 to mail and this is
+        # the real problem. The rcpt response after mail failed will
+        # probably be "failed precondition/bad sequence of commands"
+        if self.mail_response.err():
+            self.rcpt_response = self.mail_response
+        elif (len(upstream_delta.rcpt_response) != 1
+            or upstream_delta.rcpt_response[0] is None):
+            self.rcpt_response = Response(450, 'exploder upstream timeout RCPT')
+        else:
+            self.rcpt_response = upstream_delta.rcpt_response[0]
+
+        # we continue to store&forward after upstream temp errors on
+        # mail/rcpt for for msa but not mx here
+        if self.msa:
+            if self.mail_response.temp():
+                self.mail_response = Response(
+                    250, 'MAIL ok (exploder store&forward MAIL)')
+                self.rcpt_response = Response(
+                    250, 'RCPT ok (exploder store&forward MAIL)')
+                self.store_and_forward = True
+            if (self.mail_response.ok() and
+                self.rcpt_response.temp()):
+                self.rcpt_response = Response(
+                    250, 'RCPT ok (exploder store&forward RCPT)')
+                self.store_and_forward = True
+
+        if self.mail_response.err():
+            self.status = self.mail_response
+        elif self.rcpt_response.err():
+            self.status = self.rcpt_response
+        logging.debug('exploder.Recipient._on_rcpt() %s %s',
+                      self.mail_response, self.rcpt_response)
+
+
+    def _append_upstream(self, blob, last):
+        assert self.status is None or self.store_and_forward
+
+        # don't wait for a status if it's already failed
+        # TODO maybe storage writer filter, etc, should know that and
+        # not wait?
+        timeout = 0 if self.store_and_forward else self.data_timeout
+        logging.debug('exploder Recipient._append_upstream %d/%s timeout=%s',
+                      blob.len(), blob.content_length(), timeout)
+        body_delta = TransactionMetadata()
+        body_delta.body_blob = blob
+        self.tx.merge_from(body_delta)
+        upstream_delta = self.upstream.update(self.tx, body_delta, timeout)
+        if upstream_delta is None:
+            data_resp = Response(
+                450, 'exploder Recipient._append_upstream internal error: '
+                'bad upstream response')
+        elif last and upstream_delta.data_response is None:
+            # data resp None on !last -> ok/continue
+            data_resp = Response(450, 'exploder upstream timeout DATA')
+        else:
+            data_resp = upstream_delta.data_response
+
+        if self.msa and data_resp is not None and data_resp.temp():
+            self.store_and_forward = True
+            data_resp = None
+
+        if last and self.store_and_forward:
+            data_resp = Response(
+                250, 'accepted (exploder store&forward DATA)')
+
+        if last or (data_resp is not None and data_resp.err()):
+            assert self.status is None
+            self.status = data_resp
+
+        logging.info('exploder Recipient._append_upstream %s', data_resp)
+        assert last or data_resp is None or not data_resp.ok()
+        assert not (last and data_resp is None)
 
 
 class Exploder(SyncFilter):
@@ -95,7 +231,6 @@ class Exploder(SyncFilter):
         # to MAIL FROM before you know who the RCPT is so if they
         # didn't pipeline those together, we just accept MAIL and hope
         # for the best
-        # TODO possibly move this to a separate filter
         assert self.mail_from is None
         self.mail_from = delta.mail_from
         if not delta.rcpt_to:
@@ -103,138 +238,53 @@ class Exploder(SyncFilter):
             upstream_delta.mail_response = Response(
                 250, 'MAIL ok; exploder noop')
 
-    def _on_rcpt(self,
-                 tx : TransactionMetadata,
-                 delta : TransactionMetadata,
-                 rcpt : Mailbox, recipient : Recipient):
-        logging.info('Exploder._on_rcpt %s', rcpt)
-
-        # just send the envelope, we'll deal with any data below
-        # TODO copy.copy() here?
-
-        # disable notification for this first attempt even if it's
-        # requested from downstream since we're going to report it downstream
-        # synchronously
-        # TODO save any downstream notification/retry params
-        recipient.tx = tx.copy()
-        recipient.tx.mail_response = None
-        recipient.tx.host = self.output_chain
-        recipient.tx.rcpt_to = [rcpt]
-        recipient.tx.rcpt_response = []
-        recipient.tx.notification = None
-        if recipient.tx.body:
-            del recipient.tx.body
-        if recipient.tx.body_blob:
-            del recipient.tx.body_blob
-
-        recipient.upstream = self.factory()
-        logging.debug('Exploder._on_rcpt() downstream_tx %s', recipient.tx)
-        upstream_delta = recipient.upstream.update(
-            recipient.tx, recipient.tx.copy(), self.rcpt_timeout)
-
-        logging.debug('Exploder._on_rcpt() %s', upstream_delta)
-
-        if upstream_delta is None:
-            recipient.mail_response = Response(
-                400, 'Exploder._on_rcpt internal error: upstream_delta is None')
+    def _run(self, fns):
+        if len(fns) == 1:
+            fns[0]()
             return
 
-        # this only handles 1 recipient so it doesn't have to worry
-        # about the delta
-        if upstream_delta.mail_response is None:
-            upstream_delta.mail_response = Response(
-                400, 'exploder upstream timeout')
-            assert not(upstream_delta.rcpt_response)  # buggy upstream
-            upstream_delta.rcpt_response = [upstream_delta.mail_response]
-
-        assert len(upstream_delta.rcpt_response) <= 1
-
-        if (len(upstream_delta.rcpt_response) != 1
-            or upstream_delta.rcpt_response[0] is None):
-            upstream_delta.rcpt_response = [upstream_delta.mail_response]
-
-        assert recipient.mail_response is None
-
-        mail_resp = upstream_delta.mail_response
-        assert len(upstream_delta.rcpt_response) == 1
-        assert upstream_delta.rcpt_response[0] is not None
-        rcpt_resp = upstream_delta.rcpt_response[0]
-
-        # we continue to store&forward after upstream temp errors on
-        # mail/rcpt for for msa but not mx here
-        if self.msa:
-            if upstream_delta.mail_response.temp():
-                mail_resp = Response(250, 'MAIL ok (exploder async upstream)')
-                rcpt_resp = Response(
-                    250, 'RCPT ok (exploder async upstream after MAIL temp)')
-                recipient.store_and_forward = True
-            if (upstream_delta.mail_response.ok() and
-                upstream_delta.rcpt_response[0].temp()):
-                rcpt_resp = Response(250, 'RCPT ok (exploder async upstream)')
-                recipient.store_and_forward = True
-
-        recipient.mail_response = mail_resp
-        recipient.rcpt_response = rcpt_resp
-        if recipient.mail_response.err():
-            recipient.status = recipient.mail_response
-        elif recipient.rcpt_response.err():
-            recipient.status = recipient.rcpt_response
-        logging.debug('Exploder._on_rcpt() %s %s', mail_resp, rcpt_resp)
-
+        threads = []
+        for fn in fns:
+            # TODO executor
+            t = Thread(target=fn)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            logging.debug('_on_rcpts_parallel join')
+            # NOTE: we don't set a timeout on this join() because
+            # we expect the next hop is something internal
+            # (i.e. storage writer filter) that respects the timeout
+            t.join()
 
     def _on_rcpts(self,
                   downstream_tx : TransactionMetadata,
                   downstream_delta : TransactionMetadata,
                   upstream_delta  : TransactionMetadata):
-        rcpts = []
-        for i,rcpt in enumerate(downstream_delta.rcpt_to):
-            recipient = Recipient()
-            self.recipients.append(recipient)
-            rcpts.append(recipient)
-        upstream_delta.rcpt_response = [None] * len(downstream_delta.rcpt_to)
-
         # NOTE smtplib/gateway don't currently don't support SMTP
         # PIPELINING so it will only send one at a time here
-        if len(downstream_delta.rcpt_to) == 1:
-            self._on_rcpt(downstream_tx, downstream_delta,
-                          downstream_delta.rcpt_to[0], rcpts[0])
-        else:
-            for i,rcpt in enumerate(downstream_delta.rcpt_to):
-                recipient = rcpts[i]
-                # TODO executor
-                recipient.thread = Thread(
-                    target=lambda: self._on_rcpt(
-                        downstream_tx, downstream_delta,
-                        rcpt, self.recipients[i]))
-                recipient.thread.start()
-                for r in self.recipients:
-                    logging.debug('_on_rcpts_parallel join')
-                    if not r.thread:
-                        continue
-                    # NOTE: we don't set a timeout on this join()
-                    # because we expect the next hop is something
-                    # internal (i.e. storage writer filter) that
-                    # respects the timeout
-                    r.thread.join()
-                    r.thread = None
+        rcpts = []
+        fns = []
+        upstream_delta.rcpt_response = [None] * len(downstream_delta.rcpt_to)
+        for i,rcpt in enumerate(downstream_delta.rcpt_to):
+            recipient = Recipient(self.output_chain,
+                                  self.factory(),
+                                  self.msa,
+                                  rcpt,
+                                  self.rcpt_timeout,
+                                  self.data_timeout)
+            self.recipients.append(recipient)
+            rcpts.append(recipient)
+            fns.append(
+                partial(lambda r: r._on_rcpt(downstream_tx, downstream_delta),
+                        recipient))
+        self._run(fns)
 
         for i, recipient in enumerate(rcpts):
             mail_resp = recipient.mail_response
             rcpt_resp = recipient.rcpt_response
 
-            # In the absence of pipelining, we returned a noop 2xx to
-            # MAIL downstream in _on_mail(). If mail failed upstream
-            # for a rcpt, if rcpt had a response at all, it's
-            # something like failed precondition/invalid sequence of
-            # commands. In this case, return the upstream mail err as
-            # the rcpt response here which is the real error and
-            # ignore the rcpt response which is moot.
-
             logging.debug('Exploder()._on_rcpts() %d %s %s',
                           i, mail_resp, rcpt_resp)
-
-            if mail_resp.err():
-                upstream_delta.rcpt_response[i] = mail_resp
 
             # TODO the following is moot until we get pipelining from the
             # smtp gw but for the record:
@@ -259,6 +309,7 @@ class Exploder(SyncFilter):
                     (upstream_delta.mail_response.temp() and mail_resp.ok())):
                     upstream_delta.mail_response = mail_resp
 
+            # vs mail err (above)
             if upstream_delta.rcpt_response[i] is None:
                 upstream_delta.rcpt_response[i] = rcpt_resp
 
@@ -282,123 +333,71 @@ class Exploder(SyncFilter):
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
-    def _append_upstream(self, recipient : Recipient, blob, last, timeout):
-        logging.debug('Exploder._append_upstream status %s, timeout=%s',
-                      recipient.status, timeout)
-        assert recipient.status is None or recipient.store_and_forward
-        body_delta = TransactionMetadata()
-        body_delta.body_blob = blob
-        recipient.tx.merge_from(body_delta)
-        upstream_delta = recipient.upstream.update(
-            recipient.tx, body_delta, timeout)
-        if upstream_delta is None:
-            data_resp = Response(
-                400, 'Exploder._append_upstream internal error: '
-                'upstream_delta is None')
+
+    def _cutthrough_data(self) -> Optional[Response]:
+        # for all the recipients that didn't return a downstream error
+        # for mail/rcpt
+        # if all the data responses are the same major code (2xx/4xx/5xx)
+        # and none require store&forward (after some temp upstream
+        # errors) return that response directly
+
+        if any([r.store_and_forward for r in self.recipients]):
+            return None
+
+        r0 = self.recipients[0].status
+        for r in self.recipients[1:]:
+            if not r.mail_response.ok() or not r.rcpt_response.ok():
+                continue
+            if r.status is None != r0 is None or (
+                    r0 is not None and r0.code/100 != r.status.code/100):
+                return None
         else:
-            data_resp = upstream_delta.data_response
+            if r0 is not None:
+                r0.message = 'exploder same status: ' + r0.message
+            logging.debug('Exploder._append_data same status data_resp %s', r0)
+            return r0
 
-        # data resp None on !last -> ok/continue
-        if self.msa and data_resp is not None and data_resp.temp():
-            recipient.store_and_forward = True
-
-        if last:
-            if recipient.store_and_forward:
-                data_resp = Response(250, 'exploder msa store&forward data')
-            elif data_resp is None:
-                data_resp = Response(
-                    450, 'exploder upstream timeout DATA')
-
-        if data_resp is not None:
-            assert recipient.status is None
-            recipient.status = data_resp
-
-        logging.info('Exploder._append_upstream %s', data_resp)
-        assert last or data_resp is None or not data_resp.ok()
-        assert not (last and data_resp is None)
+        return None
 
     def _append_data(self, blob : Blob) -> Optional[Response]:
         last = blob.len() == blob.content_length()
         logging.info('Exploder._append_data %d %s',
                      blob.len(), blob.content_length())
 
-        if self.msa:
-            # at least one recipient hasn't permfailed
-            assert any([r.status is None or not r.status.perm()
-                        for r in self.recipients])
-        else:
-            # at least one recipient hasn't failed
-            assert any([r.status is None for r in self.recipients])
-
+        fns = []
         for recipient in self.recipients:
-            if recipient.status is not None and (
-                    not (recipient.status.ok() or recipient.store_and_forward)):
+            if recipient.status is not None and not recipient.status.ok():
                 continue
-            timeout = self.data_timeout
-            if recipient.store_and_forward:
-                # TODO don't wait for a status since it's already
-                # failed, but maybe storage writer filter, etc, should
-                # know that and not wait?
-                timeout = 0
-            recipient.thread = Thread(
-                target = lambda: self._append_upstream(
-                    recipient, blob, last, timeout),
-                daemon = True)
-            recipient.thread.start()
+            fns.append(
+                partial(lambda r: r._append_upstream(blob, last), recipient))
+        self._run(fns)
 
-        for recipient in self.recipients:
-            t = recipient.thread
-            if t is None:
-                continue
-            # NOTE: we don't set a timeout on this join() because we
-            # expect the next hop is something internal (i.e. storage
-            # writer filter) that respects the timeout
-            t.join()
-            assert not (last and recipient.status is None)
-
-        # for all the recipients that didn't return a downstream error
-        # for mail/rcpt
-        # if all the data responses are the same and none require
-        # store&forward (after a temp upstream error for msa)
-        # return that response directly
-        r0 = self.recipients[0].status
-        codes = [ int(r.status.code/100) if r.status is not None else None
-                  for r in self.recipients
-                  if (r.mail_response.ok() and r.rcpt_response.ok()) ]
-        store_and_forward = [r.store_and_forward for r in self.recipients]
-        logging.debug('Exploder._append_data codes %s sf %s',
-                      codes, store_and_forward)
-        if len([c for c in codes if c == codes[0]]) == len(codes) and (
-                not any(store_and_forward)):
-            if r0 is not None:
-                r0.message = 'exploder same status' + r0.message
-            logging.debug('Exploder._append_data same status data_resp %s', r0)
-            return r0
+        if (data_resp := self._cutthrough_data()) is not None:
+            return data_resp
 
         if not last:
             return None
 
-        for r in self.recipients:
-            if r.status.temp():
-                r.store_and_forward = True
+        for i,recipient in enumerate(self.recipients):
+            logging.debug('Exploder._append_data enable '
+                          'notifications/retries %d', i)
 
-        # XXX this will blackhole if unset!
-        if self.default_notification is not None:
-            for recipient in [r for r in self.recipients
-                              if r.store_and_forward]:
-                logging.debug('Exploder._append_data enable '
-                              'notifications/retries %s',  r)
+            # TODO restore any saved downstream notification request
+            if not recipient.rcpt_response.ok():
+                continue
+            if recipient.status.ok() and not recipient.store_and_forward:
+                continue
+            retry_delta = TransactionMetadata(
+                retry = {},
+                # XXX this will blackhole if unset!
+                notification=self.default_notification)
 
-                # TODO restore any saved downstream notification request
-                retry_delta = TransactionMetadata(
-                    notification=self.default_notification,
-                    retry={})
-                recipient.tx.merge_from(retry_delta)
-                recipient.upstream.update(
-                    recipient.tx, retry_delta,
-                    timeout=0)  # i.e. don't wait on inflight
+            recipient.tx.merge_from(retry_delta)
+            recipient.upstream.update(
+                recipient.tx, retry_delta,
+                timeout=0)  # i.e. don't wait on inflight
 
-        return Response(250, 'accepted (exploder store&forward)')
+        return Response(250, 'accepted (exploder store&forward DATA)')
 
 
     def abort(self):

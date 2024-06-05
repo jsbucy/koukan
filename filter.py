@@ -372,6 +372,9 @@ class TransactionMetadata:
             tx = self
         if (self.mail_from is not None) and (tx.mail_response is None):
             return True
+        # cannot make forward progress
+        if tx.mail_response is not None and tx.mail_response.err():
+            return False
         if len(self.rcpt_to) > len(tx.rcpt_response):
             return True
         for i in range(0,len(self.rcpt_to)):

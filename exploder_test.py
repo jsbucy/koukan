@@ -12,7 +12,7 @@ from filter import Mailbox, TransactionMetadata
 
 from blob import CompositeBlob, InlineBlob
 
-from exploder import Exploder
+from exploder import Exploder, Recipient
 
 class Rcpt:
     addr : str
@@ -308,7 +308,7 @@ vec_msa = [
         [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
                store_and_forward=False),
           Rcpt('bob2', Response(204), Response(205), [Response(501)],
-               store_and_forward=False)],
+               store_and_forward=True)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(205)],  # upstream
@@ -322,7 +322,7 @@ vec_msa = [
         [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
                store_and_forward=False),
           Rcpt('bob2', Response(204), Response(205), [None, Response(501)],
-               store_and_forward=False)],
+               store_and_forward=True)],
         [b'hello, ', b'world!'],
         Response(250),  # injected
         [Response(202), Response(205)],  # upstream
@@ -335,9 +335,6 @@ class ExploderTest(unittest.TestCase):
     def setUp(self):
         self.mu = Lock()
         self.cv = Condition(self.mu)
-
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
 
         self.storage = Storage.get_sqlite_inmemory_for_test()
         self.upstream_endpoints = []
@@ -542,5 +539,251 @@ class ExploderTest(unittest.TestCase):
         self.assertIsNone(up1.tx.notification)
 
 
+class ExploderRecipientTest(unittest.TestCase):
+    def assertEqualStatus(self, x, y):
+        self.assertEqual(x is None, y is None)
+        if x is None:
+            return
+        self.assertEqual(x.code, y.code)
+
+    def _test(
+            self,
+            msa,
+            upstream_mail_resp,
+            upstream_rcpt_resp,
+            exp_mail_resp,
+            exp_rcpt_resp,
+            exp_sf_after_env,
+            exp_status_after_env,
+
+            upstream_data_resp = None,
+            exp_sf_after_data = None,
+            exp_status_after_data = None,
+
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = None,
+            exp_status_after_data_last = None):
+        endpoint = FakeAsyncEndpoint(rest_id='rest-id')
+
+        downstream_tx = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')])
+        downstream_delta = downstream_tx.copy()
+
+        rcpt = Recipient('smtp-out',
+                         endpoint,
+                         msa=msa,
+                         rcpt=downstream_tx.rcpt_to[0],
+                         rcpt_timeout=1,
+                         data_timeout=1)
+
+        upstream_delta = TransactionMetadata()
+        if upstream_mail_resp:
+            upstream_delta.mail_response = upstream_mail_resp
+        if upstream_rcpt_resp:
+            upstream_delta.rcpt_response = [upstream_rcpt_resp]
+        endpoint.merge(upstream_delta)
+
+        rcpt._on_rcpt(downstream_tx, downstream_delta)
+        self.assertEqual(rcpt.mail_response.code, exp_mail_resp.code)
+        self.assertEqual(rcpt.rcpt_response.code, exp_rcpt_resp.code)
+        self.assertEqual(rcpt.store_and_forward, exp_sf_after_env)
+        self.assertEqualStatus(rcpt.status, exp_status_after_env)
+
+        if exp_mail_resp.err() or exp_rcpt_resp.err():
+            return
+
+        if upstream_data_resp:
+            endpoint.merge(TransactionMetadata(
+                data_response=upstream_data_resp))
+
+        d = 'hello, world!'
+        rcpt._append_upstream(InlineBlob(d[0:7], len(d)), False)
+        self.assertEqual(rcpt.store_and_forward, exp_sf_after_data)
+        self.assertEqualStatus(rcpt.status, exp_status_after_data)
+
+        if exp_status_after_data is not None and exp_status_after_data.err():
+            return
+
+        if upstream_data_resp_last:
+            endpoint.merge(TransactionMetadata(
+                data_response=upstream_data_resp_last))
+        rcpt._append_upstream(InlineBlob(d, len(d)), True)
+        self.assertEqual(rcpt.store_and_forward, exp_sf_after_data_last)
+        self.assertEqualStatus(rcpt.status, exp_status_after_data_last)
+
+    def test_msa_store_and_forward_after_mail_timeout(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = None,
+            upstream_rcpt_resp = None,
+            exp_mail_resp = Response(250),
+            exp_rcpt_resp = Response(250),
+            exp_sf_after_env = True,
+            exp_status_after_env = None,
+            upstream_data_resp = None,
+            exp_sf_after_data = True,
+            exp_status_after_data = None,
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+
+    def test_msa_store_and_forward_after_mail_temp(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(401),
+            upstream_rcpt_resp = None,
+            exp_mail_resp = Response(250),
+            exp_rcpt_resp = Response(250),
+            exp_sf_after_env = True,
+            exp_status_after_env = None,
+            upstream_data_resp = None,
+            exp_sf_after_data = True,
+            exp_status_after_data = None,
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_msa_store_and_forward_after_rcpt_timeout(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = None,
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(250),
+            exp_sf_after_env = True,
+            exp_status_after_env = None,
+            upstream_data_resp = None,
+            exp_sf_after_data = True,
+            exp_status_after_data = None,
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_msa_store_and_forward_after_rcpt_temp(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(401),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(250),
+            exp_sf_after_env = True,
+            exp_status_after_env = None,
+            upstream_data_resp = None,
+            exp_sf_after_data = True,
+            exp_status_after_data = None,
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_msa_store_and_forward_after_data_timeout(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(202),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(202),
+            exp_sf_after_env = False,
+            exp_status_after_env = None,
+
+            upstream_data_resp = None,
+            exp_sf_after_data = False,
+            exp_status_after_data = None,
+
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_msa_store_and_forward_after_data_temp(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(202),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(202),
+            exp_sf_after_env = False,
+            exp_status_after_env = None,
+
+            upstream_data_resp = Response(401),
+            exp_sf_after_data = True,
+            exp_status_after_data = None,
+
+            upstream_data_resp_last = None,
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_msa_store_and_forward_after_data_last(self):
+        self._test(
+            msa=True,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(202),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(202),
+            exp_sf_after_env = False,
+            exp_status_after_env = None,
+
+            upstream_data_resp = None,
+            exp_sf_after_data = False,
+            exp_status_after_data = None,
+
+            upstream_data_resp_last = Response(401),
+            exp_sf_after_data_last = True,
+            exp_status_after_data_last = Response(250))
+
+    def test_mx_mail_fail(self):
+        self._test(
+            msa=False,
+            upstream_mail_resp = Response(401),
+            upstream_rcpt_resp = None,
+            exp_mail_resp = Response(401),
+            exp_rcpt_resp = Response(401),
+            exp_sf_after_env = False,
+            exp_status_after_env = Response(401))
+
+    def test_mx_rcpt_fail(self):
+        self._test(
+            msa=False,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(401),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(401),
+            exp_sf_after_env = False,
+            exp_status_after_env = Response(401))
+
+    def test_mx_data_fail(self):
+        self._test(
+            msa=False,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(202),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(202),
+            exp_sf_after_env = False,
+            exp_status_after_env = None,
+            upstream_data_resp = Response(401),
+            exp_sf_after_data = False,
+            exp_status_after_data = Response(401))
+
+    def test_mx_data_last_fail(self):
+        self._test(
+            msa=False,
+            upstream_mail_resp = Response(201),
+            upstream_rcpt_resp = Response(202),
+            exp_mail_resp = Response(201),
+            exp_rcpt_resp = Response(202),
+            exp_sf_after_env = False,
+            exp_status_after_env = None,
+            upstream_data_resp = None,
+            exp_sf_after_data = False,
+            exp_status_after_data = None,
+            upstream_data_resp_last = Response(401),
+            exp_sf_after_data_last = False,
+            exp_status_after_data_last = Response(401))
+
+
+
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(message)s')
+
     unittest.main()
