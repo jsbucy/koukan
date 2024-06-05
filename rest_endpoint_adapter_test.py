@@ -29,7 +29,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             self.executor, sync_endpoint, 'rest_id')
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        sync_filter_adapter.update(tx, tx, 1)
+        sync_filter_adapter.update(tx, tx.copy(), 1)
         self.assertIsNotNone(tx.mail_from)
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])

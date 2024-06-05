@@ -438,6 +438,7 @@ class TransactionMetadata:
     def merge(self, delta : "TransactionMetadata",
               out : Optional["TransactionMetadata"] = None
               ) -> Optional["TransactionMetadata"]:
+        assert delta is not None
         if out is None:
             out = TransactionMetadata()
 
