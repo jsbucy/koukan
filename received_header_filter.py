@@ -19,8 +19,7 @@ class ReceivedHeaderFilter(SyncFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
-    body_blob : Optional[Blob] = None
-    data_err : Optional[Response] = None
+    upstream_tx : Optional[TransactionMetadata] = None
 
     def __init__(self, upstream : Optional[SyncFilter] = None,
                  received_hostname : Optional[str] = None,
@@ -28,7 +27,6 @@ class ReceivedHeaderFilter(SyncFilter):
                  max_received_headers = 30):
         self.upstream = upstream
         self.inject_time = inject_time
-        self.rcpt_to = []
         self.received_hostname = received_hostname
         self.max_received_headers = max_received_headers
 
@@ -115,8 +113,12 @@ class ReceivedHeaderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if tx.body_blob is None:
-            return self.upstream.on_update(tx, tx_delta)
+        if self.upstream_tx is None:
+            self.upstream_tx = tx.copy()
+        else:
+            assert self.upstream_tx.merge_from(tx_delta) is not None
+
+        downstream_delta = tx_delta.copy()
 
         # TODO in this case, since the received header that's being
         # prepended onto the body doesn't depend on the body contents,
@@ -125,32 +127,37 @@ class ReceivedHeaderFilter(SyncFilter):
         # else in the chain is likely to do that anyway so it's
         # probably moot.
 
-        blob_complete = (tx.body_blob.len() == tx.body_blob.content_length())
-        data_resp = None
-        if blob_complete and self.body_blob is None and self.data_err is None:
-            self.data_err = self._check_max_received_headers(tx.body_blob)
+        data_err : Optional[Response] = None
+        body_blob = tx_delta.body_blob
+        if body_blob is not None and (
+                body_blob.len() == body_blob.content_length()):
 
-            if self.data_err is None:
-                self.body_blob = CompositeBlob()
+            data_err = self._check_max_received_headers(body_blob)
+
+            upstream_body = None
+            if data_err is None:
+                upstream_body = CompositeBlob()
                 received = InlineBlob(self._format_received(tx).encode('ascii'))
-                self.body_blob.append(received, 0, received.len())
-                self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+                upstream_body.append(received, 0, received.len())
+                upstream_body.append(body_blob, 0, body_blob.len(), True)
 
-        assert self.body_blob is None or self.data_err is None
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-        downstream_tx.body_blob = self.body_blob
-        downstream_delta.body_blob = self.body_blob
+            body_blob = upstream_body
+            assert body_blob is None or data_err is None
+        else:
+            body_blob = None
+        self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
 
-        if not bool(downstream_delta):
+        if not(downstream_delta):
             return TransactionMetadata()
 
         # we continue upstream even if we already know we're going to
         # fail the body to get authoritative responses for mail/rcpt
         upstream_delta = self.upstream.on_update(
-            downstream_tx, downstream_delta)
-        if self.data_err is not None:
+            self.upstream_tx, downstream_delta)
+        assert upstream_delta is not None
+        if data_err is not None:
             assert upstream_delta.data_response is None
-            upstream_delta.data_response = self.data_err
-        tx.merge_from(upstream_delta)
+            upstream_delta.data_response = data_err
+        assert tx.merge_from(upstream_delta) is not None
+        logging.debug('ReceivedHeaderFilter done %s', upstream_delta)
         return upstream_delta

@@ -69,6 +69,11 @@ class FileLikeBlob(Blob):
     def len(self) -> int:
         return self._len
 
+    def __del__(self):
+        if self.f:
+            self.f.close()
+        self.f = None
+
 class Chunk:
     # byte offset in CompositeBlob
     offset : int

@@ -38,7 +38,7 @@ class Config:
             'router': FilterSpec(self.router, Filter),
             'dkim': FilterSpec(self.dkim, SyncFilter),
             'exploder': FilterSpec(self.exploder, Filter),
-            'message_builder': FilterSpec(self.message_builder, Filter),
+            'message_builder': FilterSpec(self.message_builder, SyncFilter),
             'remote_host': FilterSpec(self.remote_host, Filter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, Filter)

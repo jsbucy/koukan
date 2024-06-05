@@ -3,12 +3,16 @@ import copy
 from tempfile import TemporaryFile
 import logging
 
-from filter import Filter, TransactionMetadata
+from filter import (
+    SyncFilter,
+    TransactionMetadata )
 from message_builder import MessageBuilder
 from storage import Storage
 from blob import FileLikeBlob
 
-class MessageBuilderFilter(Filter):
+class MessageBuilderFilter(SyncFilter):
+    upstream_tx : Optional[TransactionMetadata] = None
+
     def __init__(self, storage : Storage, upstream):
         self.storage = storage
         self.upstream = upstream
@@ -18,28 +22,33 @@ class MessageBuilderFilter(Filter):
         blob_reader.load(rest_id=blob_id)
         return blob_reader
 
-    def on_update(self, tx : TransactionMetadata):
-        if tx.message_builder is None:
-            return self.upstream.on_update(tx)
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata] :
+        if self.upstream_tx is None:
+            self.upstream_tx = tx.copy()
+        else:
+            assert self.upstream_tx.merge_from(tx_delta) is not None
 
-        builder = MessageBuilder(tx.message_builder,
-                                 lambda blob_id: self._blob_factory(blob_id))
+        downstream_delta = tx_delta.copy()
 
-        file = TemporaryFile('w+b')
-        builder.build(file)
-        upstream_tx = copy.copy(tx)
-        del upstream_tx.message_builder
-        file.flush()
+        if tx_delta.message_builder is not None:
+            builder = MessageBuilder(
+                tx_delta.message_builder,
+                lambda blob_id: self._blob_factory(blob_id))
 
-        body_blob = FileLikeBlob(file)
-        upstream_tx.body_blob = body_blob
-        logging.debug('MessageBuilderFilter.on_update %d %d',
+            file = TemporaryFile('w+b')
+            builder.build(file)
+            file.flush()
+            body_blob = FileLikeBlob(file)
+            self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
+            del self.upstream_tx.message_builder
+            del downstream_delta.message_builder
+            logging.debug('MessageBuilderFilter.on_update %d %d',
                       body_blob.len(), body_blob.content_length())
 
-        self.upstream.on_update(upstream_tx)
-        tx.mail_response = upstream_tx.mail_response
-        tx.rcpt_response = upstream_tx.rcpt_response
-        tx.data_response = upstream_tx.data_response
-
-    def abort(self):
-        pass
+        upstream_delta = self.upstream.on_update(
+            self.upstream_tx, downstream_delta)
+        assert tx.merge_from(upstream_delta) is not None
+        logging.debug('MessageBuilderFilter upstream_delta %s', upstream_delta)
+        return upstream_delta

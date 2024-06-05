@@ -28,6 +28,8 @@ class DkimEndpoint(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         if self.upstream_tx is None:
             self.upstream_tx = tx.copy()
+        else:
+            assert self.upstream_tx.merge_from(tx_delta) is not None
 
         downstream_delta = tx_delta.copy()
 
@@ -38,11 +40,13 @@ class DkimEndpoint(SyncFilter):
             sig = InlineBlob(self.sign(body_blob))
             upstream_body.append(sig, 0, sig.len())
             upstream_body.append(tx.body_blob, 0, body_blob.len(), True)
-            downstream_delta.body_blob = upstream_body
+            body_blob = upstream_body
         else:
-            self.upstream_tx.body_blob = downstream_delta.body_blob = None
+            body_blob = None
+        self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
 
-        assert self.upstream_tx.merge_from(downstream_delta) is not None
+        if not(downstream_delta):
+            return TransactionMetadata()
 
         upstream_delta = self.upstream.on_update(
             self.upstream_tx, downstream_delta)
