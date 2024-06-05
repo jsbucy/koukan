@@ -95,6 +95,11 @@ class StorageWriterFilter(AsyncFilter):
                tx_delta : TransactionMetadata,
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
+
+        # XXX didn't carry over MessageBuilder.get_blobs() from
+        # RestServiceTransaction!
+        # 3611753a4f1c66bb86afb6b24b2ab57f610b27fe
+
         deadline = Deadline(timeout)
         downstream_tx = tx.copy()
         if getattr(downstream_tx, 'rest_id', None) is not None:
