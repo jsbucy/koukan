@@ -211,7 +211,8 @@ pytype_library(name='remote_host_filter',
 
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
-        deps=[':remote_host_filter'])
+        deps=[':remote_host_filter',
+              ':fake_endpoints'])
 
 pytype_library(name='received_header_filter',
                srcs=['received_header_filter.py'],

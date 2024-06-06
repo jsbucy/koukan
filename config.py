@@ -39,9 +39,9 @@ class Config:
             'dkim': FilterSpec(self.dkim, SyncFilter),
             'exploder': FilterSpec(self.exploder, SyncFilter),
             'message_builder': FilterSpec(self.message_builder, SyncFilter),
-            'remote_host': FilterSpec(self.remote_host, Filter),
+            'remote_host': FilterSpec(self.remote_host, SyncFilter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
-            'relay_auth': FilterSpec(self.relay_auth, Filter)
+            'relay_auth': FilterSpec(self.relay_auth, SyncFilter)
        }
 
     def set_storage(self, storage : Storage):

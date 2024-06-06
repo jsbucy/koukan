@@ -231,6 +231,8 @@ _tx_fields = [
                           WhichJson.DB])),
     TxField('body_blob', validity=None),
     TxField('rest_id', validity=None),
+    TxField('remote_hostname', validity=None),
+    TxField('fcrdns', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 

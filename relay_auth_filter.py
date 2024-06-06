@@ -1,33 +1,34 @@
 from typing import Optional
-from filter import Filter, Response, TransactionMetadata
+from filter import (
+    SyncFilter,
+    TransactionMetadata )
+from response import Response
 
 # Filter that fails MAIL in the absence of a positive signal to
 # authorize relaying.
-class RelayAuthFilter(Filter):
-    next : Optional[Filter] = None
+class RelayAuthFilter(SyncFilter):
+    upstream : SyncFilter
     smtp_auth : Optional[bool] = False
 
-    def __init__(self, next : Optional[Filter] = None,
+    def __init__(self, upstream : SyncFilter,
                  # allow relaying if smtp auth present
                  smtp_auth : Optional[bool] = False):
-        self.next = next
+        self.upstream = upstream
         self.smtp_auth = smtp_auth
 
-    def _check(self, tx : TransactionMetadata):
-        if tx.mail_from is None:
-            return
+    def on_update(self, tx : TransactionMetadata,
+               tx_delta : TransactionMetadata
+               ) -> Optional[TransactionMetadata]:
+        if tx_delta.mail_from is not None:
+            if (not self.smtp_auth or
+                tx.smtp_meta is None or
+                not tx.smtp_meta.get('auth', False)):
+                upstream_delta = TransactionMetadata(
+                    mail_response = Response(550, '5.7.1 not authorized'))
+                tx.merge_from(upstream_delta)
+                return upstream_delta
+        return self.upstream.on_update(tx, tx_delta)
 
-        if (self.smtp_auth and
-            tx.smtp_meta is not None and
-            tx.smtp_meta.get('auth', False)):
-            return
-
-        tx.mail_response = Response(550, '5.7.1 not authorized')
-
-    def on_update(self, tx : TransactionMetadata):
-        self._check(tx)
-        if tx.mail_response is None and self.next:
-            self.next.on_update(tx)
 
     def abort(self):
         pass
