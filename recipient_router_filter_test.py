@@ -6,7 +6,7 @@ from blob import InlineBlob
 from recipient_router_filter import RecipientRouterFilter, RoutingPolicy
 from filter import HostPort, Mailbox, TransactionMetadata
 from response import Response
-from fake_endpoints import SyncEndpoint
+from fake_endpoints import FakeSyncFilter
 from response import Response
 
 class SuccessPolicy(RoutingPolicy):
@@ -26,12 +26,20 @@ class RecipientRouterFilterTest(unittest.TestCase):
                             format='%(asctime)s %(message)s')
 
     def test_success(self):
-        next = SyncEndpoint()
-        r = RecipientRouterFilter(SuccessPolicy(), next)
+        upstream = FakeSyncFilter()
+        router = RecipientRouterFilter(SuccessPolicy(), upstream)
 
-        next.set_mail_response(Response(201))
-        next.add_rcpt_response(Response(202))
-        next.add_data_response(Response(203))
+        def exp(tx, delta):
+            self.assertEqual(tx.rest_endpoint, 'http://gateway')
+            self.assertEqual(tx.remote_host, HostPort('example.com', 1234))
+
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
@@ -42,23 +50,19 @@ class RecipientRouterFilterTest(unittest.TestCase):
             b'\r\n'
             b'hello\r\n')
 
-        r.on_update(tx)
+        upstream.add_expectation(exp)
+        upstream_delta = router.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
 
-        self.assertEqual(next.tx.rest_endpoint, 'http://gateway')
-        self.assertEqual(next.tx.remote_host, HostPort('example.com', 1234))
 
     # TODO: exercise "buffer mail"
 
     def test_failure(self):
-        next = SyncEndpoint()
-        r = RecipientRouterFilter(FailurePolicy(), next)
+        upstream = FakeSyncFilter()
+        router = RecipientRouterFilter(FailurePolicy(), upstream)
 
-        next.set_mail_response(Response(201))
-        next.add_rcpt_response(Response(202))
-        next.add_data_response(Response(203))
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
@@ -69,13 +73,12 @@ class RecipientRouterFilterTest(unittest.TestCase):
             b'\r\n'
             b'hello\r\n')
 
-        r.on_update(tx)
+        # no expectation on upstream: should not be called
+        upstream_delta = router.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [500])
         self.assertIsNone(tx.data_response)
 
-        # upstream never invoked
-        self.assertIsNone(next.tx)
 
 
 if __name__ == '__main__':

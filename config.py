@@ -35,9 +35,9 @@ class Config:
             'local_domain': self.router_policy_local_domain}
         self.filters = {
             'rest_output': FilterSpec(self.rest_output, Filter),
-            'router': FilterSpec(self.router, Filter),
+            'router': FilterSpec(self.router, SyncFilter),
             'dkim': FilterSpec(self.dkim, SyncFilter),
-            'exploder': FilterSpec(self.exploder, Filter),
+            'exploder': FilterSpec(self.exploder, SyncFilter),
             'message_builder': FilterSpec(self.message_builder, SyncFilter),
             'remote_host': FilterSpec(self.remote_host, Filter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
@@ -159,6 +159,7 @@ class Config:
                 assert (isinstance(next, Filter) and spec.t == Filter) or (
                     isinstance(next, SyncFilter) and spec.t == SyncFilter)
             endpoint = spec.builder(filter_yaml, next)
+            assert isinstance(endpoint, spec.t)
             next = endpoint
         assert next is not None
         if isinstance(next, SyncFilter):

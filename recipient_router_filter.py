@@ -3,8 +3,11 @@ from abc import ABC, abstractmethod
 import logging
 
 from response import Response, Esmtp
-from filter import Filter, HostPort, Mailbox, TransactionMetadata
-
+from filter import (
+    HostPort,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata )
 
 class RoutingPolicy(ABC):
     # called on the first recipient in the transaction
@@ -18,52 +21,54 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(Filter):
-    endpoint: Filter
+class RecipientRouterFilter(SyncFilter):
+    upstream: SyncFilter
     policy : RoutingPolicy
     upstream_tx : Optional[TransactionMetadata] = None
 
-    def __init__(self, policy : RoutingPolicy, next : Filter):
+    def __init__(self, policy : RoutingPolicy, upstream : SyncFilter):
         self.policy = policy
-        self.endpoint = next
-        self.rcpt_to = []
+        self.upstream = upstream
 
-    def _route(self, tx : TransactionMetadata):
+    def _route(self, downstream_delta : TransactionMetadata
+               ) -> Optional[TransactionMetadata]:
+        logging.debug('Router._route() %s %s',
+                      self.upstream_tx.mail_from, self.upstream_tx.rcpt_to)
+        mailbox = self.upstream_tx.rcpt_to[0]
+        assert mailbox is not None
         rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(
-            tx.rcpt_to[0].mailbox)
-        # TODO validate that other mailboxes route to the same place
-        # else -> internal error?
+            mailbox.mailbox)
+        # TODO if we ever have multi-rcpt in the output chain, this
+        # should validate that other mailboxes route to the same place
         if resp and resp.err():
-            if tx.mail_from:
-                tx.mail_response = Response(
+            upstream_delta = TransactionMetadata()
+            if self.upstream_tx.mail_from:
+                upstream_delta.mail_response = Response(
                     250, 'MAIL ok (RecipientRouterFilter')
-            tx.rcpt_response = [resp]
-            return
-        self.upstream_tx = TransactionMetadata()
+            upstream_delta.rcpt_response = [resp]
+            return upstream_delta
+
+        downstream_delta.rest_endpoint = rest_endpoint
         self.upstream_tx.rest_endpoint = rest_endpoint
-        self.upstream_tx.remote_host = next_hop
+        downstream_delta.remote_host = self.upstream_tx.remote_host = next_hop
 
-    def on_update(self, tx : TransactionMetadata):
-        logging.debug('Router.start %s %s', tx.mail_from, tx.rcpt_to)
 
-        # xxx "buffer mail" return 250 if mail no rcpt
-
-        if self.upstream_tx is None and tx.rcpt_to:
-            self._route(tx)
-            if tx.rcpt_response:
-                return
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        if self.upstream_tx is None:
+            self.upstream_tx = tx.copy()
         else:
-            self.upstream_tx = TransactionMetadata()
+            assert self.upstream_tx.merge_from(tx_delta) is not None
 
-        self.upstream_tx.mail_from = tx.mail_from
-        self.upstream_tx.rcpt_to = tx.rcpt_to
-        self.upstream_tx.body_blob = tx.body_blob
+        downstream_delta = tx_delta.copy()
 
-        self.endpoint.on_update(self.upstream_tx)
-        tx.mail_response = self.upstream_tx.mail_response
-        tx.rcpt_response = self.upstream_tx.rcpt_response
-        tx.data_response = self.upstream_tx.data_response
+        upstream_delta = None
+        if len(tx.rcpt_to) == len(tx_delta.rcpt_to) == 1:
+            upstream_delta = self._route(downstream_delta)
 
-
-    def abort(self):
-        if self.endpoint: self.endpoint.abort()
+        if upstream_delta is None:
+            upstream_delta = self.upstream.on_update(
+                self.upstream_tx, downstream_delta)
+        assert tx.merge_from(upstream_delta) is not None
+        return upstream_delta
