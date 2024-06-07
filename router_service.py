@@ -21,7 +21,7 @@ from output_handler import OutputHandler
 from response import Response
 from executor import Executor
 from config import Config
-from filter import AsyncFilter, Filter
+from filter import AsyncFilter, SyncFilter
 
 from storage_writer_filter import StorageWriterFilter
 
@@ -188,7 +188,7 @@ class Service:
             storage=self.storage, rest_id=rest_id)
 
     def handle_tx(self, storage_tx : TransactionCursor,
-                  endpoint : Filter,
+                  endpoint : SyncFilter,
                   endpoint_yaml):
         output_yaml = endpoint_yaml.get('output_handler', {})
         handler = OutputHandler(

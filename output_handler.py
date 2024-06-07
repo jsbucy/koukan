@@ -7,7 +7,12 @@ import time
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
-from filter import Filter, HostPort, Mailbox, TransactionMetadata, WhichJson
+from filter import (
+    HostPort,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata,
+    WhichJson )
 from dsn import read_headers, generate_dsn
 from blob import InlineBlob
 
@@ -16,12 +21,14 @@ def default_notification_factory():
 
 class OutputHandler:
     cursor : TransactionCursor
-    endpoint : Filter
+    endpoint : SyncFilter
     rest_id : str
-    notification_factory : Callable[[], Filter]
+    notification_factory : Callable[[], SyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
 
-    def __init__(self, cursor : TransactionCursor, endpoint : Filter,
+    def __init__(self,
+                 cursor : TransactionCursor,
+                 endpoint : SyncFilter,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
@@ -132,6 +139,8 @@ class OutputHandler:
             logging.info('OutputHandler._output() %s '
                          'tx after upstream update %s',
                          self.rest_id, upstream_tx)
+            if upstream_delta is None:
+                return None  # internal error
             assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
 
             while True:

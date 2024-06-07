@@ -560,15 +560,9 @@ class TransactionMetadata:
             setattr(out, name, v)
         return out
 
-class Filter(ABC):
-    @abstractmethod
-    def on_update(self, transaction_metadata : TransactionMetadata,
-                  timeout : Optional[float] = None):
-        pass
 
-    def abort(self):
-        raise NotImplementedError()
-
+# NOTE Sync and Async here are with respect to the transaction
+# responses, not program execution.
 
 class SyncFilter(ABC):
     # tx is the full state vector

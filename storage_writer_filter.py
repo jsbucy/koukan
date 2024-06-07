@@ -7,7 +7,11 @@ import time
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
-from filter import AsyncFilter, Filter, HostPort, Mailbox, TransactionMetadata
+from filter import (
+    AsyncFilter,
+    HostPort,
+    Mailbox,
+    TransactionMetadata )
 from blob import Blob
 from deadline import Deadline
 

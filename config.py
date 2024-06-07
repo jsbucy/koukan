@@ -11,8 +11,9 @@ from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
 from message_builder_filter import MessageBuilderFilter
-from filter import Filter, HostPort, SyncFilter
-from filter_adapters import DeltaToFullAdapter, FullToDeltaAdapter
+from filter import (
+    HostPort,
+    SyncFilter )
 from storage_writer_filter import StorageWriterFilter
 from exploder import Exploder
 from storage import Storage
