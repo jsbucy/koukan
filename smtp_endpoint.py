@@ -6,7 +6,10 @@ import time
 
 from blob import Blob
 from response import Response, Esmtp
-from filter import Filter, HostPort, TransactionMetadata
+from filter import (
+    HostPort,
+    SyncFilter,
+    TransactionMetadata )
 
 class Factory:
     def __init__(self):
@@ -15,7 +18,7 @@ class Factory:
     def new(self, ehlo_hostname):
         return SmtpEndpoint(ehlo_hostname)
 
-class SmtpEndpoint(Filter):
+class SmtpEndpoint(SyncFilter):
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
 
@@ -80,39 +83,54 @@ class SmtpEndpoint(Filter):
 
         return ehlo_resp
 
-    def on_update(self, tx : TransactionMetadata):
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
         logging.info('SmtpEndpoint.on_update %s', tx.remote_host)
 
-        if tx.mail_from is not None:
+        upstream_delta = self._update(tx, tx_delta)
+        assert tx.merge_from(upstream_delta) is not None
+        return upstream_delta
+
+    def _update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+
+        upstream_delta = TransactionMetadata()
+
+        if tx_delta.mail_from is not None:
             resp = self._connect(tx)
             if resp.err():
-                tx.mail_response = resp
+                upstream_delta.mail_response = resp
                 self._shutdown()
                 return
             assert self.smtp is not None
-            for e in tx.mail_from.esmtp:
+            for e in tx_delta.mail_from.esmtp:
                 if not self.smtp.has_extn(e.keyword):
-                    return Response(
+                    upstream_delta.mail_response = Response(
                         504, 'smtp_endpoint: MAIL esmtp param not advertised '
                         'by peer: %s' % e.keyword)
-
-            tx.mail_response = Response.from_smtp(
-                self.smtp.mail(tx.mail_from.mailbox,
-                               [e.to_str() for e in tx.mail_from.esmtp]))
-            logging.debug('SmtpClient mail_resp %s', tx.mail_response)
-            if tx.mail_response.err():
+                    break
+            else:
+                upstream_delta.mail_response = Response.from_smtp(
+                    self.smtp.mail(
+                        tx_delta.mail_from.mailbox,
+                        [e.to_str() for e in tx_delta.mail_from.esmtp]))
+            logging.debug('SmtpClient mail_resp %s',
+                          upstream_delta.mail_response)
+            if upstream_delta.mail_response.err():
                 self._shutdown()
-                return
+                return upstream_delta
         assert self.smtp is not None
 
-        for rcpt in tx.rcpt_to:
+        for rcpt in tx_delta.rcpt_to:
             bad_ext = None
             for e in rcpt.esmtp:
                 if not self.smtp.has_extn(e.keyword):
                     bad_ext = e
                     break
             if bad_ext is not None:
-                tx.rcpt_response.append(Response(
+                upstream_delta.rcpt_response.append(Response(
                     504, 'smtp_endpoint: RCPT esmtp param not advertised '
                     'by peer: %s' % bad_ext.keyword))
                 continue
@@ -122,19 +140,25 @@ class SmtpEndpoint(Filter):
                                [e.to_str() for e in rcpt.esmtp]))
             if resp.ok():
                 self.good_rcpt = True
-            tx.rcpt_response.append(resp)
+            upstream_delta.rcpt_response.append(resp)
 
-        if tx.body_blob is not None and (
-                tx.body_blob.len() == tx.body_blob.content_length()):
-            logging.info('SmtpEndpoint.append_data len=%d', tx.body_blob.len())
+        if tx_delta.body_blob is not None and (
+                tx_delta.body_blob.len() ==
+                tx_delta.body_blob.content_length()):
+            logging.info('SmtpEndpoint.append_data len=%d',
+                         tx_delta.body_blob.len())
             if not self.good_rcpt:
-                tx.data_response = Response(
+                upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
-                tx.data_response = Response.from_smtp(
-                    self.smtp.data(tx.body_blob.read(0)))
-            logging.info('SmtpEndpoint data_resp %s', tx.data_response)
+                upstream_delta.data_response = Response.from_smtp(
+                    self.smtp.data(tx_delta.body_blob.read(0)))
+            logging.info('SmtpEndpoint data_resp %s',
+                         upstream_delta.data_response)
+
             self._shutdown()
+
+        return upstream_delta
 
     def abort(self):
         raise NotImplementedError()

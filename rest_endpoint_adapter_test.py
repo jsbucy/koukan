@@ -9,7 +9,7 @@ from flask import (
 from werkzeug.datastructures import ContentRange
 
 from rest_endpoint_adapter import RestEndpointAdapter, SyncFilterAdapter
-from fake_endpoints import SyncEndpoint, FakeAsyncEndpoint
+from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
 from executor import Executor
 from filter import Mailbox, TransactionMetadata
 from response import Response
@@ -24,26 +24,36 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.executor.shutdown(timeout=5)
 
     def test_basic(self):
-        sync_endpoint = SyncEndpoint()
+        upstream = FakeSyncFilter()
         sync_filter_adapter = SyncFilterAdapter(
-            self.executor, sync_endpoint, 'rest_id')
+            self.executor, upstream, 'rest_id')
+
+        def exp_mail(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, 'alice')
+            upstream_delta=TransactionMetadata(
+                mail_response = Response(201))
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream.add_expectation(exp_mail)
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         sync_filter_adapter.update(tx, tx.copy(), 1)
-        self.assertIsNotNone(tx.mail_from)
+        self.assertEqual(tx.mail_response.code, 201)
+
+        def exp_rcpt(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, 'alice')
+            self.assertEqual([r.mailbox for r in tx.rcpt_to], ['bob'])
+            upstream_delta=TransactionMetadata(
+                rcpt_response = [Response(202)])
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream.add_expectation(exp_rcpt)
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
         sync_filter_adapter.update(tx, delta, 1)
-        self.assertIsNotNone(tx.mail_from)
-        self.assertEqual(len(tx.rcpt_to), 1)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
-        sync_endpoint.set_mail_response(Response(201))
-        tx = sync_filter_adapter.get(1)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual(len(tx.rcpt_response), 0)
-
-        sync_endpoint.add_rcpt_response(Response(202))
         tx = sync_filter_adapter.get(1)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])

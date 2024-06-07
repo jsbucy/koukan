@@ -581,6 +581,8 @@ class SyncFilter(ABC):
                   ) -> Optional[TransactionMetadata]:
         pass
 
+# TODO update to match sync filter:
+# returns upstream delta
 class AsyncFilter(ABC):
     # may return None for reqs on timeout/still inflight
     # may continue after this

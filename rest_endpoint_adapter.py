@@ -24,13 +24,17 @@ from response import Response as MailResponse
 from blob import Blob, InlineBlob, WritableBlob
 from blobs import BlobStorage
 from rest_service_handler import Handler, HandlerFactory
-from filter import AsyncFilter, Filter, TransactionMetadata, WhichJson
+from filter import (
+    AsyncFilter,
+    SyncFilter,
+    TransactionMetadata,
+    WhichJson )
 from executor import Executor
 
 # Wrapper for vanilla/sync Filter that provides async interface for REST
 class SyncFilterAdapter(AsyncFilter):
     executor : Executor
-    filter : Filter
+    filter : SyncFilter
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
     mu : Lock
@@ -40,7 +44,7 @@ class SyncFilterAdapter(AsyncFilter):
     _last_update : float
     _version = 0
 
-    def __init__(self, executor : Executor, filter : Filter, rest_id : str):
+    def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
         self.mu = Lock()
         self.cv = Condition(self.mu)
@@ -49,6 +53,7 @@ class SyncFilterAdapter(AsyncFilter):
         self._last_update = time.monotonic()
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
+        self.tx.rest_id = rest_id
 
     def version(self):
         return self._version
@@ -83,22 +88,18 @@ class SyncFilterAdapter(AsyncFilter):
             assert self.inflight
             delta = self.prev_tx.delta(self.tx)  # new reqs
             assert delta is not None
-            logging.debug('SyncFilterAdapter._update prev %s tx %s delta %s',
-                          self.prev_tx, self.tx, delta)
-            self.prev_tx = self.tx
+            logging.debug('SyncFilterAdapter._update_once() '
+                          'downstream_delta %s', delta)
+            self.prev_tx = self.tx.copy()
             if not delta.req_inflight():
                 self.inflight = False
                 return False
-        reqs = delta.copy()
-        self.filter.on_update(delta)
-        resps = reqs.delta(delta)  # responses only
-        logging.debug('SyncFilterAdapter._update done pre %s out %s post %s',
-                      reqs, delta, resps)
+
+        upstream_delta = self.filter.on_update(self.tx, delta)
+
+        logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
+                      self.tx)
         with self.mu:
-            txx = self.tx.merge(resps)
-            assert txx is not None  # internal error
-            logging.debug('SyncFilterAdapter._update done merged %s', txx)
-            self.tx = txx
             self._version += 1
             self.cv.notify_all()
             self._last_update = time.monotonic()
@@ -120,18 +121,19 @@ class SyncFilterAdapter(AsyncFilter):
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
 
             if txx is None:
-                return FlaskResponse(status=400, response=['invalid tx delta'])
+                return None
             self.tx = txx
             self._version += 1
 
             if not self.inflight:
-                if self.executor.submit(lambda: self._update()) is None:
-                    return FlaskResponse(status=500, response=['server busy'])
+                fut = self.executor.submit(lambda: self._update())
+                # TODO we need a better way to report this error but
+                # throwing here will -> http 500
+                assert fut is not None
                 self.inflight = True
             self._get_locked(self.tx, timeout)
             upstream_delta = tx.delta(self.tx)
             assert tx.merge_from(upstream_delta) is not None  # XXX
-            tx_delta.rest_id = self.rest_id
             return upstream_delta
 
     def get(self, timeout : Optional[float] = None
@@ -221,7 +223,9 @@ class RestEndpointAdapter(Handler):
         if self.async_filter is None:
             return FlaskResponse(
                 status=500, respose=['internal error creating transaction'])
-        self.async_filter.update(tx, tx, timeout)
+        upstream = self.async_filter.update(tx, tx.copy(), timeout)
+        if upstream is None:
+            return FlaskResponse(status=400, respose=['bad request'])
         assert tx.rest_id is not None
         self._tx_rest_id = tx.rest_id
 
@@ -294,7 +298,13 @@ class RestEndpointAdapter(Handler):
                           req_etag, self._etag(self.async_filter.version()))
             return FlaskResponse(
                 status=412, response=['update conflict'])
-        self.async_filter.update(tx, downstream_delta, deadline.deadline_left())
+        upstream = self.async_filter.update(
+            tx, downstream_delta, deadline.deadline_left())
+        if upstream is None:
+            return FlaskResponse(
+                status=400,
+                response=['RestEndpointAdapter.patch_tx bad request'])
+
         resp = FlaskResponse(status=200)
         # xxx move to separate "rest schema"
         resp.set_etag(self._etag(self.async_filter.version()))
