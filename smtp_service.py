@@ -14,7 +14,12 @@ from aiosmtpd.controller import Controller
 from blob import Blob, InlineBlob
 from response import ok_resp, to_smtp_resp, Response
 from smtp_auth import Authenticator
-from filter import EsmtpParam, Filter, HostPort, Mailbox, TransactionMetadata
+from filter import (
+    EsmtpParam,
+    HostPort,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata )
 from executor import Executor
 
 _next_cx = 0
@@ -27,12 +32,12 @@ def next_cx():
     return rv
 
 class SmtpHandler:
-    endpoint_factory : Callable[[], Filter]
+    endpoint_factory : Callable[[], SyncFilter]
     executor : Executor
     smtp : Optional[SMTP] = None
     cx_id : str  # connection id, log token
 
-    endpoint : Optional[Filter] = None
+    endpoint : Optional[SyncFilter] = None
     tx : Optional[TransactionMetadata] = None
 
     local_socket = None
@@ -41,7 +46,7 @@ class SmtpHandler:
     ehlo = False
     quit = False
 
-    def __init__(self, endpoint_factory : Callable[[], Filter],
+    def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
                  timeout_rcpt=60,
@@ -102,18 +107,21 @@ class SmtpHandler:
         self.tx = None
         return b'250 ok'
 
-    def _update_tx(self, endpoint, tx):
+    def _update_tx(self, endpoint, tx_delta):
         logging.debug('SmtpHandler._update_tx %s', self.cx_id)
-        endpoint.on_update(tx)
+        if self.tx is None:
+            self.tx = tx_delta.copy()
+        assert self.tx.merge_from(tx_delta) is not None
+        upstream_delta = endpoint.on_update(self.tx, tx_delta)
         logging.debug('SmtpHandler._update_tx %s done', self.cx_id)
 
     async def handle_MAIL(
             self, server, session, envelope, mail_from : str,
             mail_esmtp : List[str]):
         self.endpoint = self.endpoint_factory()
-        self.tx = TransactionMetadata()
+        tx_delta = TransactionMetadata()
 
-        self.tx.smtp_meta = {
+        tx_delta.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
             'tls': session.ssl is not None,
@@ -123,14 +131,14 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_MAIL %s %s %s',
                      self.cx_id, mail_from, mail_esmtp)
         if self.peername:
-            self.tx.remote_host = HostPort.from_seq(self.peername)
+            tx_delta.remote_host = HostPort.from_seq(self.peername)
         if self.local_socket:
-            self.tx.local_host = HostPort.from_seq(self.local_socket)
+            tx_delta.local_host = HostPort.from_seq(self.local_socket)
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
-        self.tx.mail_from = Mailbox(mail_from, params)
+        tx_delta.mail_from = Mailbox(mail_from, params)
         fut = self.executor.submit(
-            lambda: self._update_tx(self.endpoint, self.tx), timeout=0)
+            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -152,10 +160,10 @@ class SmtpHandler:
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
 
-        self.tx = TransactionMetadata(
+        tx_delta = TransactionMetadata(
             rcpt_to=[Mailbox(rcpt_to, params)])
         fut = self.executor.submit(
-            lambda: self._update_tx(self.endpoint, self.tx), timeout=0)
+            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -165,9 +173,9 @@ class SmtpHandler:
                      self.cx_id, self.tx.rcpt_response)
 
         # for now without pipelining we send one rcpt upstream at a time
-        if len(self.tx.rcpt_response) != 1:
+        if len(self.tx.rcpt_response) != len(self.tx.rcpt_to):
             return b'450 RCPT upstream timeout/internal err'
-        rcpt_resp = self.tx.rcpt_response[0]
+        rcpt_resp = self.tx.rcpt_response[-1]
 
         if rcpt_resp is None:
             return b'450 RCPT upstream timeout/internal err'
@@ -177,24 +185,15 @@ class SmtpHandler:
             envelope.rcpt_options.append(rcpt_esmtp)
         return rcpt_resp.to_smtp_resp()
 
-    def append_data(self, envelope, blob : Blob):
-        logging.debug('SmtpHandler.append_data %s len=%d',
-                     self.cx_id, blob.len())
-        tx = TransactionMetadata()
-        tx.body_blob = blob
-        self.endpoint.on_update(tx)
-        self.tx.data_response = tx.data_response
-        logging.debug('SmtpHandler.append_data %s %s',
-                     self.cx_id, self.tx.data_response)
-
     async def handle_DATA(self, server, session, envelope):
         logging.info('SmtpHandler.handle_DATA %s %d bytes',
                      self.cx_id, len(envelope.content))
 
         blob = InlineBlob(envelope.content)
 
+        tx_delta = TransactionMetadata(body_blob = blob)
         fut = self.executor.submit(
-            lambda: self.append_data(envelope, blob=blob), timeout=0)
+            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],

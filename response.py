@@ -31,6 +31,9 @@ class Response:
     def __repr__(self):
         return str(self)
 
+    def major_code(self):
+        return int(self.code/100)
+
     @staticmethod
     def from_smtp(t : Tuple[int, bytes]) -> "Response":
         return Response(t[0], t[1].decode('utf-8'))

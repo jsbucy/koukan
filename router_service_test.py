@@ -4,6 +4,7 @@ import logging
 import unittest
 import socketserver
 import time
+from functools import partial
 
 from requests.exceptions import ConnectionError
 
@@ -12,8 +13,12 @@ from rest_endpoint import RestEndpoint
 from response import Response
 from blob import CompositeBlob, InlineBlob
 from config import Config
-from fake_endpoints import SyncEndpoint
-from filter import Filter, HostPort, Mailbox, TransactionMetadata
+from fake_endpoints import FakeSyncFilter
+from filter import (
+    HostPort,
+    Mailbox,
+    SyncFilter,
+    TransactionMetadata )
 from executor import Executor
 
 root_yaml = {
@@ -100,7 +105,7 @@ root_yaml = {
 class RouterServiceTest(unittest.TestCase):
     lock : Lock
     cv : Condition
-    endpoints : List[SyncEndpoint]
+    endpoints : List[FakeSyncFilter]
     executor : Executor
 
     def get_endpoint(self):
@@ -131,7 +136,7 @@ class RouterServiceTest(unittest.TestCase):
         self.config = Config()
         self.config.inject_yaml(root_yaml)
         self.config.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint(), Filter)
+            'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)
         self.service = Service(config=self.config,
                                executor = self.executor)
         self.executor.submit(lambda: self.service.main())
@@ -139,9 +144,14 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service.wait_started(1))
 
         # probe for startup
-        s = SyncEndpoint()
-        s.set_mail_response(Response())
-        self.add_endpoint(s)
+        upstream = FakeSyncFilter()
+        def exp(tx, tx_delta):
+            upstream_delta = TransactionMetadata(
+                mail_response = Response())
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream.add_expectation(exp)
+        self.add_endpoint(upstream)
 
         for i in range(1,3):
             logging.info('RouterServiceTest.setUp probe %d', i)
@@ -151,7 +161,7 @@ class RouterServiceTest(unittest.TestCase):
                 timeout_start=1, timeout_data=1)
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
-            t = self.start_tx_update(rest_endpoint, tx)
+            t = self.start_tx_update(rest_endpoint, tx, tx.copy())
             self.service._dequeue()
             self.join_tx_update(t)
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
@@ -172,13 +182,13 @@ class RouterServiceTest(unittest.TestCase):
         self.service.shutdown()
         self.executor.shutdown(timeout=5)
 
-    def _update_tx(self, endpoint, tx, timeout=None):
+    def _update_tx(self, endpoint, tx, tx_delta, timeout=None):
         logging.debug('RouterServiceTest._update_tx')
-        endpoint.on_update(tx, timeout)
+        endpoint.on_update(tx, tx_delta, timeout)
 
-    def start_tx_update(self, rest_endpoint, tx, timeout=5):
+    def start_tx_update(self, rest_endpoint, tx, tx_delta, timeout=5):
         return self.executor.submit(
-            lambda: self._update_tx(rest_endpoint, tx, timeout))
+            lambda: self._update_tx(rest_endpoint, tx, tx_delta, timeout))
 
     def join_tx_update(self, t, timeout=5):
         logging.debug('RouterServiceTest.join_tx_update')
@@ -211,7 +221,7 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url, http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(retry={})
-        rest_endpoint.on_update(tx)
+        rest_endpoint.on_update(tx, tx.copy())
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry create %s',
                       tx_json)
@@ -219,8 +229,9 @@ class RouterServiceTest(unittest.TestCase):
             'retry': {}
         })
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        rest_endpoint.on_update(tx)
+        tx_delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        assert tx.merge_from(tx_delta) is not None
+        rest_endpoint.on_update(tx, tx_delta)
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry patch mail_from %s',
                       tx_json)
@@ -232,8 +243,9 @@ class RouterServiceTest(unittest.TestCase):
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
-        tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
-        rest_endpoint.on_update(tx)
+        tx_delta = TransactionMetadata(rcpt_to = [Mailbox('bob')])
+        assert tx.merge_from(tx_delta) is not None
+        rest_endpoint.on_update(tx, tx_delta)
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry patch rcpt_to %s',
                       tx_json)
@@ -250,14 +262,15 @@ class RouterServiceTest(unittest.TestCase):
         body_blob = CompositeBlob()
         b = InlineBlob(b'hello')
         body_blob.append(b, 0, b.len())
-        tx = TransactionMetadata(body_blob=body_blob)
-        rest_endpoint.on_update(tx)
+        tx_delta = TransactionMetadata(body_blob=body_blob)
+        assert tx.merge_from(tx_delta) is not None
+        rest_endpoint.on_update(tx, tx_delta)
         self.assertIsNone(tx.data_response)
 
         b = InlineBlob(b'world')
         body_blob.append(b, 0, b.len(), True)
-        tx = TransactionMetadata(body_blob=body_blob)
-        rest_endpoint.on_update(tx)
+        # same tx/delta
+        rest_endpoint.on_update(tx, tx_delta)
         self.assertTrue(tx.data_response.temp())
 
         logging.debug('RouterServiceTest.test_retry get after set body')
@@ -271,13 +284,18 @@ class RouterServiceTest(unittest.TestCase):
             'body': {}
         })
 
-        upstream_endpoint = SyncEndpoint()
+        upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
         self.assertTrue(self.service._dequeue())
 
-        # set upstream responses so output tempfails at rcpt
-        upstream_endpoint.set_mail_response(Response(201))
-        upstream_endpoint.add_rcpt_response(Response(456))
+        def exp(tx, tx_delta):
+            # set upstream responses so output tempfails at rcpt
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(456)])
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
 
         tx_json = rest_endpoint.get_json(5)
 
@@ -293,16 +311,22 @@ class RouterServiceTest(unittest.TestCase):
             'rcpt_response': [{'code': 456, 'message': 'ok'}],
         })
 
-        upstream_endpoint = SyncEndpoint()
+        upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
+        def exp(tx, tx_delta):
+            # set upstream responses so output (retry) succeeds
+            # upstream success, retry succeeds, propagates down to rest
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
+
         time.sleep(2)  # max_attempt_time
         self.assertTrue(self.service._dequeue())
 
-        # set upstream responses so output (retry) succeeds
-        # upstream success, retry succeeds, propagates down to rest
-        upstream_endpoint.set_mail_response(Response(201))
-        upstream_endpoint.add_rcpt_response(Response(202))
-        upstream_endpoint.add_data_response(Response(203))
 
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after second attempt '
@@ -323,6 +347,14 @@ class RouterServiceTest(unittest.TestCase):
     # would potentially bounce
     # and/or get ahold of those tx IDs and verify the status directly
 
+    def _dequeue(self):
+        for i in range(0,3):
+            if self.service._dequeue():
+                return
+            time.sleep(0.1)
+        else:
+            self.fail('failed to dequeue')
+
     def test_exploder_multi_rcpt(self):
         logging.info('testExploderMultiRcpt')
         rest_endpoint = RestEndpoint(
@@ -332,57 +364,80 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx)
+        t = self.start_tx_update(rest_endpoint, tx, tx.copy())
 
-        time.sleep(0.1)
         # exploder tx
-        self.assertTrue(self.service._dequeue())
+        self._dequeue()
 
         self.join_tx_update(t)
 
         # no rcpt -> buffered
         self.assertEqual(tx.mail_response.code, 250)
 
-        logging.info('testExploderMultiRcpt patch rcpt1')
-        tx = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        t = self.start_tx_update(rest_endpoint, tx)
-
         # upstream tx #1
-        upstream_endpoint = SyncEndpoint()
+        upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
-        self.assertTrue(self.service._dequeue())
+        def exp_rcpt1(tx, tx_delta):
+            # set upstream responses so output (retry) succeeds
+            # upstream success, retry succeeds, propagates down to rest
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)])
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp_rcpt1)
 
-        upstream_endpoint.set_mail_response(Response(250))
-        upstream_endpoint.add_rcpt_response(Response(202))
+        logging.info('testExploderMultiRcpt patch rcpt1')
+        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
+        self.assertIsNotNone(tx.merge_from(tx_delta))
+        t = self.start_tx_update(rest_endpoint, tx, tx_delta)
+
+        self._dequeue()
 
         self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [202])
 
-        logging.info('testExploderMultiRcpt patch rcpt2')
-        tx = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
-        t = self.start_tx_update(rest_endpoint, tx)
-
         # upstream tx #2
-        upstream_endpoint2 = SyncEndpoint()
+        upstream_endpoint2 = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint2)
-        self.assertTrue(self.service._dequeue())
 
-        upstream_endpoint2.set_mail_response(Response(250))
-        upstream_endpoint2.add_rcpt_response(Response(203))
+        def exp_rcpt2(tx, tx_delta):
+            # set upstream responses so output (retry) succeeds
+            # upstream success, retry succeeds, propagates down to rest
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(203),
+                rcpt_response = [Response(204)])
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint2.add_expectation(exp_rcpt2)
+
+        logging.info('testExploderMultiRcpt patch rcpt2')
+        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
+        self.assertIsNotNone(tx.merge_from(tx_delta))
+        t = self.start_tx_update(rest_endpoint, tx, tx_delta)
+        self._dequeue()
 
         self.join_tx_update(t)
-        self.assertRcptCodesEqual(tx.rcpt_response, [203])
+        self.assertRcptCodesEqual(tx.rcpt_response, [202, 204])
 
-        # output of exploder tx buffers whole payload?
-        upstream_endpoint.add_data_response(Response(204))
-        upstream_endpoint2.add_data_response(Response(204))
+        def exp_body(i, tx, tx_delta):
+            self.assertEqual(tx.body_blob.read(0),
+                             b'Hello, World!')
+            upstream_delta = TransactionMetadata(
+                data_response = Response(205 + i))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+
+        for i,upstream in enumerate([upstream_endpoint, upstream_endpoint2]):
+            upstream.add_expectation(partial(exp_body, i))
 
         logging.info('testExploderMultiRcpt patch body_blob')
 
-        tx = TransactionMetadata(
+        tx_delta = TransactionMetadata(
             body_blob=InlineBlob(b'Hello, World!'))
-        rest_endpoint.on_update(tx)
-        self.assertEqual(tx.data_response.code, 204)
+        self.assertIsNotNone(tx.merge_from(tx_delta))
+        rest_endpoint.on_update(tx, tx_delta)
+        self.assertEqual(tx.data_response.code, 205)
 
 
     def test_notification_retry_timeout(self):
@@ -397,7 +452,7 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx, 10)
+        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
         # exploder tx
         self.assertTrue(self.service._dequeue())
         self.join_tx_update(t, 10)
@@ -410,9 +465,18 @@ class RouterServiceTest(unittest.TestCase):
 
         for i in range(0,3):
             logging.debug('test_notification upstream tx %d', i)
-            upstream_endpoint = SyncEndpoint()
-            upstream_endpoint.set_mail_response(Response(250))
-            upstream_endpoint.add_rcpt_response(Response(450))
+            upstream_endpoint = FakeSyncFilter()
+            def exp(tx, tx_delta):
+                self.assertEqual(tx.mail_from.mailbox, 'alice')
+                self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
+                # set upstream responses so output (retry) succeeds
+                # upstream success, retry succeeds, propagates down to rest
+                upstream_delta = TransactionMetadata(
+                    mail_response = Response(201),
+                    rcpt_response = [Response(402)])
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+            upstream_endpoint.add_expectation(exp)
 
             self.add_endpoint(upstream_endpoint)
             for j in range(0,3):
@@ -422,25 +486,33 @@ class RouterServiceTest(unittest.TestCase):
             else:
                 self.fail('failed to dequeue')
 
-        dsn_endpoint = SyncEndpoint()
-        dsn_endpoint.set_mail_response(Response(250))
-        dsn_endpoint.add_rcpt_response(Response(250))
-        dsn_endpoint.add_data_response(Response(250))
+        dsn_endpoint = FakeSyncFilter()
+        def exp_dsn(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, '')
+            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice'])
+            self.assertIn(b'subject: Delivery Status Notification',
+                          tx.body_blob.read(0))
+
+            # set upstream responses so output (retry) succeeds
+            # upstream success, retry succeeds, propagates down to rest
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(203),
+                rcpt_response = [Response(204)],
+                data_response = Response(205))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        dsn_endpoint.add_expectation(exp_dsn)
+
         self.add_endpoint(dsn_endpoint)
         self.assertTrue(self.service._dequeue())
 
-        # xxx kludge, fix SyncEndpoint to wait on this
-        for i in range(0,5):
-            if dsn_endpoint.body_blob is not None:
-                break
-            time.sleep(1)
-        else:
-            self.fail('didn\'t get dsn')
-        self.assertEqual(dsn_endpoint.mail_from.mailbox, '')
-        self.assertEqual([m.mailbox for m in dsn_endpoint.rcpt_to],
-                         ['alice'])
-        self.assertIn(b'subject: Delivery Status Notification',
-                      dsn_endpoint.body_blob.read(0))
+        # # xxx kludge, fix SyncEndpoint to wait on this
+        # for i in range(0,5):
+        #     if dsn_endpoint.body_blob is not None:
+        #         break
+        #     time.sleep(1)
+        # else:
+        #     self.fail('didn\'t get dsn')
 
     def disabled_test_notification_fast_perm(self):
         logging.info('test_notification')

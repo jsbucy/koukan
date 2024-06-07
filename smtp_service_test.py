@@ -13,7 +13,7 @@ from aiosmtpd.controller import Controller
 from filter import TransactionMetadata
 from smtp_service import SmtpHandler, service
 from response import Response
-from fake_endpoints import SyncEndpoint
+from fake_endpoints import FakeSyncFilter
 
 def find_unused_port() -> int:
     with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -21,7 +21,7 @@ def find_unused_port() -> int:
 
 class SmtpServiceTest(unittest.TestCase):
     def setUp(self):
-        self.endpoint = SyncEndpoint()
+        self.endpoint = FakeSyncFilter()
 
         logging.basicConfig(level=logging.DEBUG)
         endpoint_factory = lambda: self.endpoint
@@ -47,14 +47,24 @@ class SmtpServiceTest(unittest.TestCase):
         resp = self.smtp_client.ehlo('gargantua1')
         self.assertEqual(resp[0], 250)
 
-        if tx_mail_resp:
-            self.endpoint.set_mail_response(tx_mail_resp)
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata()
+            if tx_mail_resp:
+                upstream_delta.mail_response = tx_mail_resp
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        self.endpoint.add_expectation(exp)
         resp = self.smtp_client.mail('alice')
         self.assertEqual(resp[0], exp_mail_resp.code)
 
         for i,(rcpt, tx_rcpt_resp, exp_rcpt_resp) in enumerate(rcpts):
-            if tx_rcpt_resp:
-                self.endpoint.add_rcpt_response(tx_rcpt_resp)
+            def exp(tx, tx_delta):
+                upstream_delta=TransactionMetadata()
+                if tx_rcpt_resp:
+                    upstream_delta.rcpt_response=[tx_rcpt_resp]
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+            self.endpoint.add_expectation(exp)
             resp = self.smtp_client.rcpt(rcpt)
             self.assertEqual(resp[0], exp_rcpt_resp.code)
 
@@ -62,8 +72,13 @@ class SmtpServiceTest(unittest.TestCase):
         if exp_data_resp is None:
             return
 
-        if tx_data_resp:
-            self.endpoint.add_data_response(tx_data_resp)
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata()
+            if tx_data_resp:
+                upstream_delta.data_response = tx_data_resp
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        self.endpoint.add_expectation(exp)
         resp = self.smtp_client.data(b'hello')
         self.assertEqual(resp[0], exp_data_resp.code)
 

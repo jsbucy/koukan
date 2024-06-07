@@ -34,7 +34,7 @@ class Config:
             'dest_domain': self.router_policy_dest_domain,
             'local_domain': self.router_policy_local_domain}
         self.filters = {
-            'rest_output': FilterSpec(self.rest_output, Filter),
+            'rest_output': FilterSpec(self.rest_output, SyncFilter),
             'router': FilterSpec(self.router, SyncFilter),
             'dkim': FilterSpec(self.dkim, SyncFilter),
             'exploder': FilterSpec(self.exploder, SyncFilter),
@@ -142,26 +142,15 @@ class Config:
     def relay_auth(self, yaml, next):
         return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
 
-    def get_endpoint(self, host) -> Tuple[Filter, bool]:
+    def get_endpoint(self, host) -> Tuple[SyncFilter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]
-        next : Optional[Union[Filter,SyncFilter]] = None
+        next : Optional[SyncFilter] = None
         for filter_yaml in reversed(endpoint_yaml['chain']):
             filter_name = filter_yaml['filter']
             logging.debug('config.get_endpoint %s', filter_name)
             spec = self.filters[filter_name]
-            if next is None:
-                pass
-            elif isinstance(next, Filter) and spec.t == SyncFilter:
-                next = FullToDeltaAdapter(next)
-            elif isinstance(next, SyncFilter) and spec.t == Filter:
-                next = DeltaToFullAdapter(next)
-            else:
-                assert (isinstance(next, Filter) and spec.t == Filter) or (
-                    isinstance(next, SyncFilter) and spec.t == SyncFilter)
             endpoint = spec.builder(filter_yaml, next)
             assert isinstance(endpoint, spec.t)
             next = endpoint
         assert next is not None
-        if isinstance(next, SyncFilter):
-            next = DeltaToFullAdapter(next)
         return next, endpoint_yaml

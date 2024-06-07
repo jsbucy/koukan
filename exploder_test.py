@@ -157,6 +157,19 @@ vec_mx = [
         [None, Response(203)],  # upstream
     ),
 
+    # multi-rcpt: all success/cutthrough
+    Test(
+        'alice',
+        [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+               store_and_forward=False),
+          Rcpt('bob2', Response(204), Response(205), [None, Response(206)],
+               store_and_forward=False) ],
+        [b'hello, ', b'world!'],
+        Response(250),  # injected
+        [Response(202), Response(205)],  # upstream
+        [None, Response(203)],  # upstream/cutthrough
+    ),
+
     # multi-rcpt
     # first succeeds, second fails at rcpt
     Test(

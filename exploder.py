@@ -344,18 +344,21 @@ class Exploder(SyncFilter):
         if any([r.store_and_forward for r in self.recipients]):
             return None
 
-        r0 = self.recipients[0].status
-        for r in self.recipients[1:]:
-            if not r.mail_response.ok() or not r.rcpt_response.ok():
+        s0 = self.recipients[0].status
+        for i,ri in enumerate(self.recipients[1:]):
+            if not ri.mail_response.ok() or not ri.rcpt_response.ok():
                 continue
-            if r.status is None != r0 is None or (
-                    r0 is not None and r0.code/100 != r.status.code/100):
+            si = ri.status
+            if si is None != s0 is None:
+                return None
+            if s0 is not None and s0.major_code() != si.major_code():
                 return None
         else:
-            if r0 is not None:
-                r0.message = 'exploder same status: ' + r0.message
-            logging.debug('Exploder._append_data same status data_resp %s', r0)
-            return r0
+            if s0 is not None:
+                s0.message = 'exploder same status: ' + s0.message
+            logging.debug(
+                'Exploder._cutthrough_data same status data_resp %s', s0)
+            return s0
 
         return None
 

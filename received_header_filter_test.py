@@ -86,7 +86,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             return TransactionMetadata(data_response=tx.data_response)
         upstream.add_expectation(exp)
         upstream_delta = filter.on_update(tx, tx_delta=tx_delta)
-        self.assertIsNone(upstream.expectation)
+        self.assertFalse(upstream.expectation)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)

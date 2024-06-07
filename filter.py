@@ -392,15 +392,20 @@ class TransactionMetadata:
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs
-    def fill_inflight_responses(self, resp : Response):
+    # TODO possibly this should populate the first of mail/rcpt/data
+    # and either leave the rest unset or set them to "failed
+    # precondition/bad sequence of commands"
+    def fill_inflight_responses(self, resp : Response, dest=None):
+        if dest is None:
+            dest = self
         if self.mail_from and not self.mail_response:
-            self.mail_response = resp
-        self.rcpt_response.extend(
+            dest.mail_response = resp
+        dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
         body_blob_last = self.body_blob is not None and (
             self.body_blob.len() == self.body_blob.content_length())
         if body_blob_last and self.data_response is None:
-            self.data_response = resp
+            dest.data_response = resp
 
     def _field_to_json(self, name : str, field : TxField,
                        which_js : WhichJson, json):
@@ -494,6 +499,7 @@ class TransactionMetadata:
                 continue
             if (old_v is not None) and (new_v is None):
                 logging.debug('tx.delta invalid del %s', f)
+                #raise ValueError()
                 return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
@@ -539,6 +545,19 @@ class TransactionMetadata:
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)
+        return out
+
+    def copy_valid(self, valid : WhichJson):
+        out = TransactionMetadata()
+        for name,field in tx_json_fields.items():
+            if not field.valid(valid):
+                continue
+            v = getattr(self, name, None)
+            if v is None:
+                continue
+            if field.is_list:
+                v = list(v)
+            setattr(out, name, v)
         return out
 
 class Filter(ABC):

@@ -67,7 +67,7 @@ class GatewayTest(unittest.TestCase):
                     remote_host=HostPort('localhost', self.fake_smtpd_port))
                 tx.mail_from = Mailbox('probe-from%d' % i)
                 tx.rcpt_to = [Mailbox('probe-to%d' % i)]
-                rest_endpoint.on_update(tx)
+                upstream_delta = rest_endpoint.on_update(tx, tx.copy())
                 logging.debug('probe %s', tx.mail_response)
                 if tx.mail_response.code >= 300:
                     time.sleep(0.1)
@@ -98,12 +98,13 @@ class GatewayTest(unittest.TestCase):
             remote_host=HostPort('localhost', self.fake_smtpd_port))
         tx.mail_from = Mailbox('alice')
         tx.rcpt_to = [Mailbox('bob')]
-        rest_endpoint.on_update(tx)
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
-        tx = TransactionMetadata(body_blob=InlineBlob('hello'))
-        rest_endpoint.on_update(tx)
+        tx_delta = TransactionMetadata(body_blob=InlineBlob('hello'))
+        self.assertIsNotNone(tx.merge_from(tx_delta))
+        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
         self.assertEqual(tx.data_response.code, 250)
 
@@ -115,7 +116,7 @@ class GatewayTest(unittest.TestCase):
         tx=TransactionMetadata(
             remote_host=HostPort('localhost', self.fake_smtpd_port))
         tx.mail_from = Mailbox('alice')
-        rest_endpoint.on_update(tx)
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 250)
 
         for i in range(0,5):

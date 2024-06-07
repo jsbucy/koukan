@@ -67,17 +67,25 @@ class OutputHandler:
         ok_rcpt = False
         rcpt0_resp = None
         # full vector after last upstream update
-        last_tx = TransactionMetadata()
+        last_tx = None
+        upstream_tx = None
 
         while True:
-            logging.debug('OutputHandler._output() %s %s',
+            logging.debug('OutputHandler._output() %s db tx %s',
                          self.rest_id, self.cursor.tx)
 
-            delta = last_tx.delta(self.cursor.tx)
-            assert delta is not None
+            if last_tx is None:
+                last_tx = self.cursor.tx.copy()
+                upstream_tx = self.cursor.tx.copy()
+                delta = last_tx.copy()
+            else:
+                delta = last_tx.delta(self.cursor.tx)
+                last_tx = self.cursor.tx.copy()
+                assert delta is not None
+                assert upstream_tx.merge_from(delta) is not None
 
-            logging.info('OutputHandler._output() %s delta %s',
-                         self.rest_id, delta)
+            assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
+            assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
 
             have_body = ((self.cursor.input_done) and
                          ((self.cursor.tx.body is not None) or
@@ -104,7 +112,12 @@ class OutputHandler:
                 blob_reader = self.cursor.parent.get_blob_reader()
                 blob_reader.load(rest_id = self.cursor.tx.body)
                 assert blob_reader.length == blob_reader.content_length()
-                delta.body_blob = blob_reader
+                upstream_tx.body_blob = delta.body_blob = blob_reader
+
+            if upstream_tx.body:
+                del upstream_tx.body
+            if delta.body:
+                del delta.body
 
             # TODO possibly dead code, presence of message builder
             # entails input_done?
@@ -115,31 +128,29 @@ class OutputHandler:
                 self.cursor.input_done and (
                     delta.body_blob or delta.message_builder))
 
-            reqs = delta.copy()
-            self.endpoint.on_update(delta)
+            upstream_delta = self.endpoint.on_update(upstream_tx, delta)
             logging.info('OutputHandler._output() %s '
-                         'tx after upstream update %s', self.rest_id, delta)
-            assert len(delta.rcpt_response) <= len(delta.rcpt_to)
-            resps = reqs.delta(delta)
-            assert resps is not None
+                         'tx after upstream update %s',
+                         self.rest_id, upstream_tx)
+            assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
 
             while True:
                 try:
-                    self.cursor.write_envelope(resps)
-                    assert last_tx.merge_from(reqs) is not None
-                    del last_tx.body_blob
-                    assert last_tx.merge_from(resps) is not None
+                    self.cursor.write_envelope(upstream_delta)
+                    assert last_tx.merge_from(upstream_delta) is not None
                     break
                 except VersionConflictException:
                     self.cursor.load()
-            if resps.mail_response is not None and resps.mail_response.err():
-                return resps.mail_response
-            if rcpt0_resp is None and resps.rcpt_response:
-                rcpt0_resp = resps.rcpt_response[0]
-            if not ok_rcpt and any([r.ok() for r in resps.rcpt_response]):
+            if (upstream_delta.mail_response is not None and
+                upstream_delta.mail_response.err()):
+                return upstream_delta.mail_response
+            if rcpt0_resp is None and upstream_delta.rcpt_response:
+                rcpt0_resp = upstream_delta.rcpt_response[0]
+            if not ok_rcpt and any(
+                    [r.ok() for r in upstream_delta.rcpt_response]):
                 ok_rcpt = True
-            if resps.data_response is not None:
-                return resps.data_response
+            if upstream_delta.data_response is not None:
+                return upstream_delta.data_response
 
 
     def cursor_to_endpoint(self):
