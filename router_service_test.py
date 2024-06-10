@@ -18,7 +18,8 @@ from filter import (
     HostPort,
     Mailbox,
     SyncFilter,
-    TransactionMetadata )
+    TransactionMetadata,
+    WhichJson )
 from executor import Executor
 
 root_yaml = {
@@ -243,8 +244,13 @@ class RouterServiceTest(unittest.TestCase):
         tx_json = rest_endpoint.get_json(5)
         logging.debug('RouterServiceTest.test_retry get after mail_from %s',
                       tx_json)
-        tx_delta = TransactionMetadata(rcpt_to = [Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
+
+
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob'))
+        tx_delta = tx.delta(updated_tx)
+        self.assertEqual(tx_delta.rcpt_to_list_offset, 0)
+        tx = updated_tx
         rest_endpoint.on_update(tx, tx_delta)
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_retry patch rcpt_to %s',
@@ -380,16 +386,19 @@ class RouterServiceTest(unittest.TestCase):
         def exp_rcpt1(tx, tx_delta):
             # set upstream responses so output (retry) succeeds
             # upstream success, retry succeeds, propagates down to rest
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response = [Response(202)])
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(201)
+            updated_tx.rcpt_response.append(Response(202))
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         upstream_endpoint.add_expectation(exp_rcpt1)
 
         logging.info('testExploderMultiRcpt patch rcpt1')
-        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        self.assertIsNotNone(tx.merge_from(tx_delta))
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob'))
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
         t = self.start_tx_update(rest_endpoint, tx, tx_delta)
 
         self._dequeue()
@@ -404,16 +413,19 @@ class RouterServiceTest(unittest.TestCase):
         def exp_rcpt2(tx, tx_delta):
             # set upstream responses so output (retry) succeeds
             # upstream success, retry succeeds, propagates down to rest
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(203),
-                rcpt_response = [Response(204)])
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(203)
+            updated_tx.rcpt_response.append(Response(204))
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         upstream_endpoint2.add_expectation(exp_rcpt2)
 
         logging.info('testExploderMultiRcpt patch rcpt2')
-        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
-        self.assertIsNotNone(tx.merge_from(tx_delta))
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob2'))
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
         t = self.start_tx_update(rest_endpoint, tx, tx_delta)
         self._dequeue()
 
@@ -423,8 +435,9 @@ class RouterServiceTest(unittest.TestCase):
         def exp_body(i, tx, tx_delta):
             self.assertEqual(tx.body_blob.read(0),
                              b'Hello, World!')
-            upstream_delta = TransactionMetadata(
-                data_response = Response(205 + i))
+            updated_tx = tx.copy()
+            updated_tx.data_response = Response(205 + i)
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
 

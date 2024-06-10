@@ -117,8 +117,9 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
             self.assertEqual(tx_delta.rcpt_to[0].mailbox, 'bob2')
 
-            upstream_delta = TransactionMetadata(
-                rcpt_response = [Response(203)])
+            updated_tx = tx.copy()
+            updated_tx.rcpt_response.append(Response(203))
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
@@ -153,14 +154,18 @@ class OutputHandlerTest(unittest.TestCase):
         rcpt_resp = [202, 203]
         for i in range(0,2):
             # write rcpt
-            tx = TransactionMetadata(rcpt_to=[Mailbox(rcpt[i])])
+            updated_tx = tx.copy()
+            updated_tx.rcpt_to.append(Mailbox(rcpt[i]))
+            delta = tx.delta(updated_tx)
+            tx = updated_tx
             tx_cursor.load()
-            tx_cursor.write_envelope(tx)
+            tx_cursor.write_envelope(delta)
 
             # read rcpt resp
             for j in range(0,3):
                 tx_cursor.load()
-                if [r.code for r in tx_cursor.tx.rcpt_response] == rcpt_resp[0:i+1]:
+                if ([r.code for r in tx_cursor.tx.rcpt_response] ==
+                    rcpt_resp[0:i+1]):
                     break
                 time.sleep(0.1)
             else:
@@ -219,19 +224,20 @@ class OutputHandlerTest(unittest.TestCase):
     def test_no_valid_rcpt(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
-        tx_meta = TransactionMetadata(
+        tx = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob1')],
             retry={})
-        tx_cursor.write_envelope(tx_meta)
+        tx_cursor.write_envelope(tx)
 
         endpoint = FakeSyncFilter()
 
         def exp_rcpt1(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1'])
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response = [Response(402)])
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(201)
+            updated_tx.rcpt_response.append(Response(402))
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_rcpt1)
@@ -240,14 +246,17 @@ class OutputHandlerTest(unittest.TestCase):
 
         def exp_rcpt2(tx, tx_delta):
             self.assertEqual([m.mailbox for m in tx_delta.rcpt_to], ['bob2'])
-            upstream_delta = TransactionMetadata(
-                rcpt_response = [Response(403)])
+            updated_tx = tx.copy()
+            updated_tx.rcpt_response.append(Response(403))
+            upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
 
-        self.write_envelope(tx_cursor,
-                            TransactionMetadata(rcpt_to=[Mailbox('bob2')]))
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob2'))
+
+        self.write_envelope(tx_cursor, tx.delta(updated_tx))
 
 
         # no additional expectation on endpoint, should not send blob

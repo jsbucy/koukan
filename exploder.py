@@ -259,12 +259,12 @@ class Exploder(SyncFilter):
     def _on_rcpts(self,
                   downstream_tx : TransactionMetadata,
                   downstream_delta : TransactionMetadata,
-                  upstream_delta  : TransactionMetadata):
+                  updated_tx  : TransactionMetadata):
         # NOTE smtplib/gateway don't currently don't support SMTP
         # PIPELINING so it will only send one at a time here
         rcpts = []
         fns = []
-        upstream_delta.rcpt_response = [None] * len(downstream_delta.rcpt_to)
+        rcpt_response = [None] * len(downstream_delta.rcpt_to)
         for i,rcpt in enumerate(downstream_delta.rcpt_to):
             recipient = Recipient(self.output_chain,
                                   self.factory(),
@@ -304,16 +304,17 @@ class Exploder(SyncFilter):
             if downstream_delta.mail_from is not None:
                 logging.debug('Exploder._on_rcpts() %d mail_resp %s',
                               i, mail_resp)
-                if (upstream_delta.mail_response is None or
-                    (upstream_delta.mail_response.perm() and mail_resp.temp()) or
-                    (upstream_delta.mail_response.temp() and mail_resp.ok())):
-                    upstream_delta.mail_response = mail_resp
+                if (updated_tx.mail_response is None or
+                    (updated_tx.mail_response.perm() and mail_resp.temp()) or
+                    (updated_tx.mail_response.temp() and mail_resp.ok())):
+                    updated_tx.mail_response = mail_resp
 
             # vs mail err (above)
-            if upstream_delta.rcpt_response[i] is None:
-                upstream_delta.rcpt_response[i] = rcpt_resp
+            if rcpt_response[i] is None:
+                rcpt_response[i] = rcpt_resp
 
-
+        updated_tx.rcpt_response.extend(rcpt_response)
+        assert len(updated_tx.rcpt_response) == len(updated_tx.rcpt_to)
 
     def on_update(self,
                   tx : TransactionMetadata,
@@ -321,15 +322,16 @@ class Exploder(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         logging.info('Exploder.on_update %s', tx_delta)
 
-        upstream_delta = TransactionMetadata()
+        updated_tx = tx.copy()
         if tx_delta.mail_from is not None:
-            self._on_mail(tx_delta, upstream_delta)
+            self._on_mail(tx_delta, updated_tx)
 
-        self._on_rcpts(tx, tx_delta, upstream_delta)
+        self._on_rcpts(tx, tx_delta, updated_tx)
 
         if tx_delta.body_blob:
-            upstream_delta.data_response = self._append_data(tx_delta.body_blob)
+            updated_tx.data_response = self._append_data(tx_delta.body_blob)
 
+        upstream_delta = tx.delta(updated_tx)
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 

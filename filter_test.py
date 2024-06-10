@@ -54,7 +54,9 @@ class FilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
 
         delta = tx.delta(succ)
-        self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob2'}]})
+        self.assertEqual(delta.to_json(WhichJson.REST_UPDATE), {
+            'rcpt_to': [{'m': 'bob2'}],
+            'rcpt_to_list_offset': 1 })
 
         merged = tx.merge(delta)
         self.assertEqual(merged.to_json(), {
@@ -77,7 +79,9 @@ class FilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
 
         delta = tx.delta(succ)
-        self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob2'}]})
+        self.assertEqual(delta.to_json(WhichJson.REST_UPDATE), {
+            'rcpt_to': [{'m': 'bob2'}],
+            'rcpt_to_list_offset': 1 })
 
         merged = tx.merge(delta)
         self.assertEqual(merged.to_json(), {
@@ -98,6 +102,8 @@ class FilterTest(unittest.TestCase):
                 mail_from=None,
                 rcpt_to=[None, Mailbox('bob2')])), WhichJson.REST_READ)
 
+
+        logging.debug('test_rest_placeholder valid delta')
 
         succ = TransactionMetadata(
             mail_from=None,
@@ -187,6 +193,44 @@ class FilterTest(unittest.TestCase):
         tx = TransactionMetadata(retry = {})
         self.assertTrue(bool(tx))
 
+
+    def test_idempotence(self):
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob1')])
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob2'))
+        delta = tx.delta(updated_tx)
+        self.assertIsNotNone(delta)
+        self.assertEqual(delta.rcpt_to_list_offset, 1)
+        self.assertEqual(
+            [m.mailbox for m in delta.rcpt_to], ['bob2'])
+
+        delta_json = delta.to_json(WhichJson.REST_UPDATE)
+        self.assertEqual(delta_json, {
+            'rcpt_to': [{'m': 'bob2'}],
+            'rcpt_to_list_offset': 1
+        })
+
+        delta_from_json = TransactionMetadata.from_json(
+            delta_json, WhichJson.REST_UPDATE)
+        delta_copy = delta.copy_valid(WhichJson.REST_UPDATE)
+        for d in [delta_from_json, delta_copy]:
+            updated_tx = tx.copy()
+            self.assertIsNotNone(updated_tx.merge_from(d))
+            self.assertEqual(
+                [m.mailbox for m in updated_tx.rcpt_to], ['bob1', 'bob2'])
+
+        tx = updated_tx
+        updated_tx = tx.copy()
+        updated_tx.rcpt_response.append(Response(201))
+        updated_tx.rcpt_response.append(Response(202))
+        delta = tx.delta(updated_tx)
+        self.assertEqual(delta.rcpt_response_list_offset, 0)
+
+        merged = tx.merge(delta)
+        self.assertEqual([r.code for r in merged.rcpt_response], [201,202])
+        self.assertIsNone(merged.merge(delta))
 
 if __name__ == '__main__':
     unittest.main()

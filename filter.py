@@ -154,6 +154,10 @@ class TxField:
             return True
         return False
 
+    def list_offset(self):
+        assert self.is_list
+        return self.json_field + '_list_offset'
+
 _tx_fields = [
     TxField('host',
             validity = set([WhichJson.DB])),
@@ -335,6 +339,8 @@ class TransactionMetadata:
     def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
         for f in json.keys():
+            if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX FIX BEFORE SUBMIT
+                continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
                 return None  # invalid
@@ -352,6 +358,9 @@ class TransactionMetadata:
                     v = [None for v in js_v]
                 else:
                     v = [field.from_json(v) for v in js_v]
+                if field.list_offset() in json and which_js == WhichJson.REST_UPDATE:
+                    offset = json.get(field.list_offset())
+                    setattr(tx, field.list_offset(), offset)
             else:
                 if field.emit_rest_placeholder(which_js):
                     if js_v != {}:
@@ -424,6 +433,9 @@ class TransactionMetadata:
                     v_js = [{}] * len(v)
                 else:
                     v_js = [vv.to_json() for vv in v]
+                offset = getattr(self, field.list_offset(), None)
+                if which_js == WhichJson.REST_UPDATE and offset:
+                    json[field.list_offset()] = offset
         elif field.emit_rest_placeholder(which_js):
             v_js = {}
         elif field.to_json is not None:
@@ -449,7 +461,7 @@ class TransactionMetadata:
         if out is None:
             out = TransactionMetadata()
 
-        for f in tx_json_fields.keys():
+        for f,field in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(delta, f, None)
             if old_v is None and new_v is not None:
@@ -459,13 +471,23 @@ class TransactionMetadata:
                 setattr(out, f, old_v)
                 continue
 
+            # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
+                logging.debug('list-ness mismatch')
                 return None  # invalid
             if not isinstance(old_v, list):
                 # use the old value, assume the new one is the same
                 # TODO could verify that old_v == new_v
                 setattr(out, f, old_v)
                 continue
+            if not(new_v):
+                setattr(out, f, old_v)
+                continue
+            offset = getattr(delta, field.list_offset(), 0)
+            if offset != len(old_v):
+                logging.debug('list offset mismatch %s old %d new %s',
+                              f, len(old_v), offset)
+                return None
             l = []
             l.extend(old_v)
             l.extend(new_v)
@@ -504,6 +526,8 @@ class TransactionMetadata:
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue
+
+            # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('tx.delta is-list != is-list %s', f)
                 return None  # invalid
@@ -520,6 +544,8 @@ class TransactionMetadata:
                     return None
                 if len(new_v) < len(old_v):
                     return None
+                # XXX need this??
+                # setattr(out, json_field.list_offset(), len(old_v))
                 continue
 
             old_len = len(old_v)
@@ -534,6 +560,7 @@ class TransactionMetadata:
                 if old_v[i] != new_v[i]:
                     return None  # bad
             setattr(out, f, new_v[old_len:])
+            setattr(out, json_field.list_offset(), old_len)
 
         return out
 
@@ -557,6 +584,10 @@ class TransactionMetadata:
                 continue
             if field.is_list:
                 v = list(v)
+                if valid == WhichJson.REST_UPDATE and (
+                        hasattr(self, field.list_offset())):
+                    setattr(out, field.list_offset(),
+                            getattr(self, field.list_offset()))
             setattr(out, name, v)
         return out
 

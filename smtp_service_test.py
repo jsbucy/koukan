@@ -60,9 +60,11 @@ class SmtpServiceTest(unittest.TestCase):
         for i,(rcpt, tx_rcpt_resp, exp_rcpt_resp) in enumerate(rcpts):
             def exp(tx, tx_delta):
                 upstream_delta=TransactionMetadata()
+                updated_tx = tx.copy()
                 if tx_rcpt_resp:
-                    upstream_delta.rcpt_response=[tx_rcpt_resp]
-                assert tx.merge_from(upstream_delta) is not None
+                    updated_tx.rcpt_response.append(tx_rcpt_resp)
+                upstream_delta = tx.delta(updated_tx)
+                self.assertIsNotNone(tx.merge_from(upstream_delta))
                 return upstream_delta
             self.endpoint.add_expectation(exp)
             resp = self.smtp_client.rcpt(rcpt)
@@ -74,9 +76,11 @@ class SmtpServiceTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata()
+            updated_tx = tx.copy()
             if tx_data_resp:
-                upstream_delta.data_response = tx_data_resp
-            assert tx.merge_from(upstream_delta) is not None
+                updated_tx.data_response = tx_data_resp
+            upstream_delta = tx.delta(updated_tx)
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         self.endpoint.add_expectation(exp)
         resp = self.smtp_client.data(b'hello')

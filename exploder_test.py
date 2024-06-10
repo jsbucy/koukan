@@ -396,8 +396,10 @@ class ExploderTest(unittest.TestCase):
         exploder.on_update(tx, tx)
         self.assertEqual(tx.mail_response.code, t.expected_mail_resp.code)
         for i,r in enumerate(t.rcpt):
-            tx_delta = TransactionMetadata(rcpt_to=[Mailbox(r.addr)])
-            assert tx.merge_from(tx_delta)
+            updated = tx.copy()
+            updated.rcpt_to.append(Mailbox(r.addr))
+            tx_delta = tx.delta(updated)
+            tx = updated
             upstream_delta = exploder.on_update(tx, tx_delta)
             self.assertEqual(
                 [rr.code for rr in upstream_delta.rcpt_response],

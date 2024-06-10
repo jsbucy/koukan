@@ -11,7 +11,7 @@ from werkzeug.datastructures import ContentRange
 from rest_endpoint_adapter import RestEndpointAdapter, SyncFilterAdapter
 from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
 from executor import Executor
-from filter import Mailbox, TransactionMetadata
+from filter import Mailbox, TransactionMetadata, WhichJson
 from response import Response
 from blobs import InMemoryBlobStorage
 
@@ -120,7 +120,8 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
             resp = handler.patch_tx(FlaskRequest.from_values(
-                json={"rcpt_to": [{"m": "bob2"}]},
+                json={"rcpt_to": [{"m": "bob2"}],
+                      "rcpt_to_list_offset": 1},
                 headers={'if-match': resp.headers['etag']}))
             self.assertEqual(resp.status, '200 OK')
             logging.debug('%s', resp.json)
@@ -131,7 +132,13 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]
             })
 
-            endpoint.merge(TransactionMetadata(rcpt_response=[Response(203)]))
+            tx = TransactionMetadata.from_json(resp.json, WhichJson.REST_READ)
+            updated = tx.copy()
+            updated.rcpt_response.append(Response(203))
+            delta = tx.delta(updated)
+            tx = updated
+
+            endpoint.merge(delta)
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
                 'mail_from': {},

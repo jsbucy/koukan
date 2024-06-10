@@ -109,9 +109,6 @@ class SmtpHandler:
 
     def _update_tx(self, endpoint, tx_delta):
         logging.debug('SmtpHandler._update_tx %s', self.cx_id)
-        if self.tx is None:
-            self.tx = tx_delta.copy()
-        assert self.tx.merge_from(tx_delta) is not None
         upstream_delta = endpoint.on_update(self.tx, tx_delta)
         logging.debug('SmtpHandler._update_tx %s done', self.cx_id)
 
@@ -119,9 +116,10 @@ class SmtpHandler:
             self, server, session, envelope, mail_from : str,
             mail_esmtp : List[str]):
         self.endpoint = self.endpoint_factory()
-        tx_delta = TransactionMetadata()
+        self.tx = TransactionMetadata()
 
-        tx_delta.smtp_meta = {
+        updated_tx = TransactionMetadata()
+        updated_tx.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
             'tls': session.ssl is not None,
@@ -131,12 +129,14 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_MAIL %s %s %s',
                      self.cx_id, mail_from, mail_esmtp)
         if self.peername:
-            tx_delta.remote_host = HostPort.from_seq(self.peername)
+            updated_tx.remote_host = HostPort.from_seq(self.peername)
         if self.local_socket:
-            tx_delta.local_host = HostPort.from_seq(self.local_socket)
+            updated_tx.local_host = HostPort.from_seq(self.local_socket)
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
-        tx_delta.mail_from = Mailbox(mail_from, params)
+        updated_tx.mail_from = Mailbox(mail_from, params)
+        tx_delta = self.tx.delta(updated_tx)
+        self.tx = updated_tx
         fut = self.executor.submit(
             lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:
@@ -160,8 +160,11 @@ class SmtpHandler:
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
 
-        tx_delta = TransactionMetadata(
-            rcpt_to=[Mailbox(rcpt_to, params)])
+        rcpt_num = len(self.tx.rcpt_to)
+        updated_tx = self.tx.copy()
+        updated_tx.rcpt_to.append(Mailbox(rcpt_to, params))
+        tx_delta = self.tx.delta(updated_tx)
+        self.tx = updated_tx
         fut = self.executor.submit(
             lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:
@@ -175,7 +178,7 @@ class SmtpHandler:
         # for now without pipelining we send one rcpt upstream at a time
         if len(self.tx.rcpt_response) != len(self.tx.rcpt_to):
             return b'450 RCPT upstream timeout/internal err'
-        rcpt_resp = self.tx.rcpt_response[-1]
+        rcpt_resp = self.tx.rcpt_response[rcpt_num]
 
         if rcpt_resp is None:
             return b'450 RCPT upstream timeout/internal err'
@@ -191,7 +194,10 @@ class SmtpHandler:
 
         blob = InlineBlob(envelope.content)
 
-        tx_delta = TransactionMetadata(body_blob = blob)
+        updated_tx = self.tx.copy()
+        updated_tx.body_blob = blob
+        tx_delta = self.tx.delta(updated_tx)
+        self.tx = updated_tx
         fut = self.executor.submit(
             lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
         if fut is None:

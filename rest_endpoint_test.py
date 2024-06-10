@@ -665,8 +665,10 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_response': [rcpt0_resp.to_json(),
                                   rcpt1_resp.to_json()]})))
 
-        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob2')])
-        assert tx.merge_from(tx_delta) is not None
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob2'))
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
         logging.debug('RestEndpointTest.testFilterApiMultiRcpt '
                       'after patch 2nd rcpt %s', tx)

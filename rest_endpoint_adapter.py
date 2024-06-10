@@ -207,7 +207,7 @@ class RestEndpointAdapter(Handler):
         # TODO only accept smtp_meta from trusted peer i.e. the
         # well-known address of the gateway
 
-        tx = TransactionMetadata.from_json(request.json)
+        tx = TransactionMetadata.from_json(request.json, WhichJson.REST_CREATE)
         if tx is None:
             return FlaskResponse(status=400, response=['invalid request'])
         tx.host = self.http_host
@@ -267,7 +267,8 @@ class RestEndpointAdapter(Handler):
         if err is not None:
             return err
         deadline = Deadline(timeout)
-        downstream_delta = TransactionMetadata.from_json(request.json)
+        downstream_delta = TransactionMetadata.from_json(
+            request.json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
             return FlaskResponse(status=400, response=['invalid request'])
         body = downstream_delta.body
