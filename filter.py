@@ -564,6 +564,7 @@ class TransactionMetadata:
 # NOTE Sync and Async here are with respect to the transaction
 # responses, not program execution.
 
+# state after previous call to sync_filter.on_update()
 # prev_tx : TransactionMetadata
 # delta : TransactionMetadata
 # tx = prev_tx.merge(delta)
