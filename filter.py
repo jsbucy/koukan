@@ -564,6 +564,13 @@ class TransactionMetadata:
 # NOTE Sync and Async here are with respect to the transaction
 # responses, not program execution.
 
+# prev_tx : TransactionMetadata
+# delta : TransactionMetadata
+# tx = prev_tx.merge(delta)
+# new_tx = tx.copy()
+# upstream_delta = sync_filter.on_update(new_tx, downstream_delta)
+# assert tx.merge(upstream_delta) == new_tx
+
 class SyncFilter(ABC):
     # tx is the full state vector
     # tx_delta is what's new since the last call
@@ -575,12 +582,9 @@ class SyncFilter(ABC):
                   ) -> Optional[TransactionMetadata]:
         pass
 
-# TODO update to match sync filter:
-# returns upstream delta
 class AsyncFilter(ABC):
     # may return None for reqs on timeout/still inflight
     # may continue after this
-    # returns full tx state
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,
