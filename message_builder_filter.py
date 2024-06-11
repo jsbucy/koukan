@@ -17,9 +17,10 @@ class MessageBuilderFilter(SyncFilter):
         self.storage = storage
         self.upstream = upstream
 
-    def _blob_factory(self, blob_id):
+    def _blob_factory(self, tx_rest_id, blob_id):
         blob_reader = self.storage.get_blob_reader()
-        blob_reader.load(rest_id=blob_id)
+        if blob_reader.load(rest_id=blob_id, tx_id=tx_rest_id) is None:
+            return None
         return blob_reader
 
     def on_update(self, tx : TransactionMetadata,
@@ -35,7 +36,7 @@ class MessageBuilderFilter(SyncFilter):
         if tx_delta.message_builder is not None:
             builder = MessageBuilder(
                 tx_delta.message_builder,
-                lambda blob_id: self._blob_factory(blob_id))
+                lambda blob_id: self._blob_factory(tx.tx_db_id, blob_id))
 
             file = TemporaryFile('w+b')
             builder.build(file)

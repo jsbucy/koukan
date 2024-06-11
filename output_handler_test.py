@@ -26,8 +26,8 @@ class OutputHandlerTest(unittest.TestCase):
         self.executor.shutdown(timeout=5)
 
     def dump_db(self):
-        with self.storage.conn() as conn:
-            for l in conn.connection.iterdump():
+        with self.storage.begin_transaction() as db_tx:
+            for l in db_tx.connection.iterdump():
                 logging.debug(l)
 
     def output(self, rest_id, endpoint):

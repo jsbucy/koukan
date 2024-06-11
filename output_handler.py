@@ -117,7 +117,9 @@ class OutputHandler:
             body_blob = None
             if self.cursor.input_done and delta.body:
                 blob_reader = self.cursor.parent.get_blob_reader()
-                blob_reader.load(rest_id = self.cursor.tx.body)
+                assert blob_reader.load(
+                    rest_id = self.cursor.tx.body,
+                    tx_id = self.cursor.id) is not None
                 assert blob_reader.length == blob_reader.content_length()
                 upstream_tx.body_blob = delta.body_blob = blob_reader
 
@@ -265,7 +267,8 @@ class OutputHandler:
                 orig_headers = b'Message-ID: <' + msgid + b'>\r\n\r\n'
         elif self.cursor.tx.body is not None:
             blob_reader = self.cursor.parent.get_blob_reader()
-            blob_reader.load(rest_id = self.cursor.tx.body)
+            blob_reader.load(rest_id = self.cursor.tx.body,
+                             tx_id = self.cursor.id)
             orig_headers = read_headers(blob_reader)
 
         assert bool(self.cursor.tx.rcpt_to)

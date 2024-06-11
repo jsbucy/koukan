@@ -85,7 +85,7 @@ def main(mail_from, rcpt_to):
         ["from", [{"display_name": "alice a", "address": mail_from}]],
         ["to", [{"display_name": "bob b", "address": rcpt_to}]]]
 
-    resp = session.post(
+    create_tx_resp = session.post(
         base_url + '/transactions',
         headers={'host': 'msa-output'},
         json={
@@ -93,11 +93,11 @@ def main(mail_from, rcpt_to):
             'rcpt_to': [{'m': rcpt_to}],
         })
 
-    if resp.status_code != 201:
+    if create_tx_resp.status_code != 201:
         return
 
-    tx_json = resp.json()
-    tx_url = urljoin(base_url, resp.headers['location'])
+    tx_json = create_tx_resp.json()
+    tx_url = urljoin(base_url, create_tx_resp.headers['location'])
 
     rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
     for resp_field in ['mail_response', 'rcpt_response']:
@@ -116,8 +116,12 @@ def main(mail_from, rcpt_to):
         return
     logging.info('main message_builder spec %s', message_builder)
 
-    resp = session.patch(tx_url, json={'message_builder': message_builder})
+    resp = session.patch(
+        tx_url,
+        json={'message_builder': message_builder},
+        headers = {'if-match': rest_resp.headers['etag']})
     if resp.status_code >= 300:
+        logging.info('patch message builder spec resp %s', resp)
         return
 
     done = False

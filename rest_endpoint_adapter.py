@@ -31,6 +31,8 @@ from filter import (
     WhichJson )
 from executor import Executor
 
+from rest_service import blob_to_uri, uri_to_blob
+
 # Wrapper for vanilla/sync Filter that provides async interface for REST
 class SyncFilterAdapter(AsyncFilter):
     executor : Executor
@@ -174,7 +176,7 @@ class RestEndpointAdapter(Handler):
 
     def _body(self, tx : TransactionMetadata):
         if tx.body:
-            blob_id = tx.body.removeprefix('/blob/')
+            blob_id = uri_to_blob(tx.body)
             # TODO this blob is not going to be reused and needs to be
             # retired ~immediately
             body_blob = self.blob_storage.get_finalized(blob_id)
@@ -363,7 +365,7 @@ class RestEndpointAdapter(Handler):
 
         resp = FlaskResponse(status=201)
         resp.status_code = 201
-        resp.headers.set('location', '/blob/' + self._blob_rest_id)
+        resp.headers.set('location', blob_to_uri(self._blob_rest_id))
         return resp
 
     def put_blob(self, request : FlaskRequest):

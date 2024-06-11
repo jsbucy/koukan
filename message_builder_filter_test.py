@@ -26,18 +26,6 @@ class MessageBuilderFilterTest(unittest.TestCase):
         upstream = FakeSyncFilter()
         message_builder = MessageBuilderFilter(self.storage, upstream)
 
-        def exp(tx, delta):
-            self.assertNotEqual(
-                delta.body_blob.read(0).find(b'MIME-Version'), -1)
-            self.assertIsNone(tx.message_builder)
-            self.assertIsNone(delta.message_builder)
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
         tx = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
@@ -50,8 +38,23 @@ class MessageBuilderFilterTest(unittest.TestCase):
                 }
             ]
         }
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_id', tx, reuse_blob_rest_id=['xyz'])
+
+        def exp(tx, delta):
+            self.assertNotEqual(
+                delta.body_blob.read(0).find(b'MIME-Version'), -1)
+            self.assertIsNone(tx.message_builder)
+            self.assertIsNone(delta.message_builder)
+            upstream_delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
 
         upstream.add_expectation(exp)
+        tx.tx_db_id = tx_cursor.id
         upstream_delta = message_builder.on_update(tx, tx.copy())
         self.assertEqual(upstream_delta.mail_response.code, 201)
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])

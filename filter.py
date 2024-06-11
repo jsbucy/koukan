@@ -237,6 +237,7 @@ _tx_fields = [
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
+    TxField('tx_db_id', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -280,6 +281,7 @@ class TransactionMetadata:
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
+    tx_db_id : Optional[int] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,

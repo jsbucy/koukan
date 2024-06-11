@@ -72,7 +72,10 @@ root_yaml = {
                     'deadline': 300,
                 }
             },
-            'chain': [{'filter': 'sync'}]
+            'chain': [
+                {'filter': 'message_builder'},
+                {'filter': 'sync'}
+            ]
         },
         {
             'name': 'smtp-in',
@@ -592,6 +595,88 @@ class RouterServiceTest(unittest.TestCase):
                          ['alice'])
         self.assertIn(b'subject: Delivery Status Notification',
                       dsn_endpoint.body_blob.read(0))
+
+
+
+    # message builder is a rest submission feature; first-class rest
+    # never uses the exploder
+    def test_message_builder(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='submission')
+
+        upstream_endpoint = FakeSyncFilter()
+        self.add_endpoint(upstream_endpoint)
+
+        logging.info('test_notification start tx')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob1')],
+            remote_host=HostPort('1.2.3.4', 12345))
+        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
+
+        def exp_env(tx, tx_delta):
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(201)
+            updated_tx.rcpt_response.append(Response(202))
+            upstream_delta = tx.delta(updated_tx)
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+
+        upstream_endpoint.add_expectation(exp_env)
+
+        self.assertTrue(self.service._dequeue())
+
+        self.join_tx_update(t, 10)
+
+        blob = InlineBlob("hello, world!")
+        blob_resp = rest_endpoint._put_blob(blob)
+        self.assertEqual(blob_resp.code, 200)
+
+        updated_tx = tx.copy()
+        updated_tx.message_builder = {
+            "headers": [
+                ["from", [{"display_name": "alice a",
+                           "address": "alice@example.com"}]],
+                ["to", [{"address": "bob@example.com"}]],
+                ["subject", "hello"],
+                ["date", {"unix_secs": 1709750551, "tz_offset": -28800}],
+                ["message-id", ["abc@xyz"]],
+            ],
+            "text_body": [{
+                "content_type": "text/plain",
+                "content_uri": rest_endpoint.blob_url
+            }]
+        }
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
+
+        del rest_endpoint.blob_url
+
+        def exp_body(tx, tx_delta):
+            body = tx.body_blob.read(0)
+            logging.debug(body)
+            self.assertIn(b'subject: hello\r\n', body)
+            updated_tx = tx.copy()
+            updated_tx.data_response = Response(203)
+            upstream_delta = tx.delta(updated_tx)
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+
+        upstream_endpoint.add_expectation(exp_body)
+
+        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+
+        for i in range(0,3):
+            json = rest_endpoint.get_json()
+            tx = TransactionMetadata.from_json(json, WhichJson.REST_READ)
+            if tx.data_response and tx.data_response.code == 203:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail('data response')
+
+        self.assertFalse(upstream_endpoint.expectation)
+
 
 if __name__ == '__main__':
     unittest.removeHandler()

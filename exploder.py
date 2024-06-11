@@ -89,7 +89,10 @@ class Recipient:
         # requested from downstream since we're may report errors downstream
         # synchronously
         # TODO save any downstream notification/retry params
+        # TODO copy_valid(REST_CREATE) ?
         self.tx = tx.copy()
+        if self.tx.tx_db_id:
+            del self.tx.tx_db_id
         self.tx.mail_response = None
         self.tx.host = self.output_chain
         self.tx.rcpt_to = [self.rcpt]

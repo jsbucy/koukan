@@ -179,10 +179,12 @@ pytype_library(name='storage_writer_filter',
                srcs=['storage_writer_filter.py'],
                deps=[':blob',
                      ':deadline',
+                     ':message_builder',
                      ':storage',
                      ':storage_schema',
                      ':filter',
-                     ':response'])
+                     ':response',
+                     ':rest_service'])
 
 py_test(name='storage_writer_filter_test',
         srcs=['storage_writer_filter_test.py'],
@@ -321,6 +323,7 @@ pytype_library(name='rest_endpoint_adapter',
                      ':executor',
                      ':filter',
                      ':response',
+                     ':rest_service',
                      ':rest_service_handler'])
 
 py_test(name='rest_endpoint_adapter_test',

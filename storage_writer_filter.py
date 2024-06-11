@@ -14,6 +14,10 @@ from filter import (
     TransactionMetadata )
 from blob import Blob
 from deadline import Deadline
+from message_builder import MessageBuilder
+
+from rest_service import blob_to_uri, uri_to_blob
+
 
 # this is only going to implement AsyncFilter
 class StorageWriterFilter(AsyncFilter):
@@ -53,19 +57,19 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self._load()
 
-        logging.debug('StorageWriterFilter.get %s %s %s', self.rest_id,
+        logging.debug('StorageWriterFilter._get %s %s %s', self.rest_id,
                       deadline.deadline_left(), self.tx_cursor.tx)
 
         while self.tx_cursor.tx.req_inflight():
             deadline_left = deadline.deadline_left()
             if not deadline.remaining(1):
                 break
-            logging.debug('StorageWriterFilter.get %s deadline_left %s '
+            logging.debug('StorageWriterFilter._get %s deadline_left %s '
                           'tx %s',
                           self.rest_id, deadline_left, self.tx_cursor.tx)
             self.tx_cursor.wait(deadline.deadline_left())
 
-        logging.debug('StorageWriterFilter.get %s %s', self.rest_id,
+        logging.debug('StorageWriterFilter._get %s %s', self.rest_id,
                       self.tx_cursor.tx)
 
         return self.tx_cursor.tx.copy()
@@ -99,16 +103,17 @@ class StorageWriterFilter(AsyncFilter):
                tx_delta : TransactionMetadata,
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
-
-        # XXX didn't carry over MessageBuilder.get_blobs() from
-        # RestServiceTransaction!
-        # 3611753a4f1c66bb86afb6b24b2ab57f610b27fe
+        reuse_blob_rest_id=None
+        if tx_delta.message_builder:
+            reuse_blob_rest_id = MessageBuilder.get_blobs(
+                tx_delta.message_builder, uri_to_blob)
+            logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
+                          reuse_blob_rest_id)
 
         deadline = Deadline(timeout)
         downstream_tx = tx.copy()
         if getattr(downstream_tx, 'rest_id', None) is not None:
             del downstream_tx.rest_id
-        reuse_blob_rest_id=None
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
