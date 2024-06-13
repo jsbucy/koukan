@@ -163,9 +163,43 @@ class OutputHandler:
             if upstream_delta.data_response is not None:
                 return upstream_delta.data_response
 
+    def handle(self):
+        logging.info('OutputHandler.handle() %s', self.rest_id)
 
-    def cursor_to_endpoint(self):
+        final_attempt_reason = None
+        next_attempt_time = None
+        delta = TransactionMetadata()
+        if not self.cursor.no_final_notification:
+            final_attempt_reason, next_attempt_time = self._cursor_to_endpoint()
+            # xxx why is this here?
+            delta.attempt_count = self.cursor.attempt_id
+        else:
+            final_attempt_reason = self.cursor.final_attempt_reason
+
+        if self.cursor.tx.notification:
+            self._maybe_send_notification(final_attempt_reason)
+
+        while True:
+            try:
+                # TODO it probably wouldn't be hard to merge this
+                # write with the one at the end of _output()
+                self.cursor.write_envelope(
+                    delta,
+                    final_attempt_reason=final_attempt_reason,
+                    next_attempt_time=next_attempt_time,
+                    finalize_attempt=True,
+                    notification_done=bool(self.cursor.tx.notification))
+                break
+            except VersionConflictException:
+                time.sleep(0.1)
+                self.cursor.load()
+
+
+
+    def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler.cursor_to_endpoint() %s', self.rest_id)
+
+
         resp = self._output()
         # TODO need another attempt column for internal errors?
         if resp is None:
@@ -179,41 +213,19 @@ class OutputHandler:
             'OutputHandler.cursor_to_endpoint() %s attempt %d retry %s',
             self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry)
 
-        while True:
-            try:
-                # something downstream (i.e. exploder) could have
-                # enabled retries as a result of an upstream error so
-                # include this logic in the storage version conflict
-                # retry loop
+        next_attempt_time = None
+        final_attempt_reason = None
+        if resp.ok():
+            final_attempt_reason = 'upstream response success'
+        elif resp.perm():
+            final_attempt_reason = 'upstream response permfail'
+        elif not self.cursor.input_done:
+            final_attempt_reason = 'downstream timeout'
+        else:
+            final_attempt_reason, next_attempt_time = (
+                self._next_attempt_time(time.time()))
+        return final_attempt_reason, next_attempt_time
 
-                # XXX actually exploder will probably enable retries
-                # after this returns
-                next_attempt_time = None
-                final_attempt_reason = None
-                if resp.ok():
-                    final_attempt_reason = 'upstream response success'
-                elif resp.perm():
-                    final_attempt_reason = 'upstream response permfail'
-                elif not self.cursor.input_done:
-                    final_attempt_reason = 'downstream timeout'
-                else:
-                    final_attempt_reason, next_attempt_time = (
-                        self._next_attempt_time(time.time()))
-
-                self._maybe_send_notification(
-                    resp, final_attempt_reason is not None)
-
-                delta = TransactionMetadata()
-                # xxx why is this here?
-                delta.attempt_count = self.cursor.attempt_id
-                self.cursor.write_envelope(
-                    delta,
-                    final_attempt_reason = final_attempt_reason,
-                    next_attempt_time = next_attempt_time,
-                    finalize_attempt = True)
-                break
-            except VersionConflictException:
-                self.cursor.load()
 
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
         if self.cursor.tx.retry is None:
@@ -242,13 +254,35 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
-    def _maybe_send_notification(self, resp, last_attempt : bool):
+    def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
+        resp : Optional[Response] = None
+        tx = self.cursor.tx
+        if tx.mail_response is None:
+            pass
+        elif tx.mail_response.err():
+            resp = tx.mail_response
+        elif not tx.rcpt_response:
+            pass
+        elif len(tx.rcpt_response) == 1 and tx.rcpt_response[0].err():
+            resp = tx.rcpt_response[0]
+        elif len(tx.rcpt_response) > 1:
+            logging.warning('OutputHandler._maybe_send_notification %s '
+                            'unexpected multi-rcpt', self.rest_id)
+            return
+        else:
+            resp = tx.data_response
+
+        if resp is None:
+            logging.info('OutputHandler._maybe_send_notification %s '
+                         'response is None, upstream timeout?', self.rest_id)
+            return
+
+        last_attempt = final_attempt_reason is not None
+
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s last %s notify %s', self.rest_id, last_attempt,
                       self.cursor.tx.notification)
 
-        if self.cursor.tx.notification is None:
-            return
         if resp.ok():
             return
         if resp.temp() and not last_attempt:
@@ -301,6 +335,6 @@ class OutputHandler:
         # should result in the parent retrying even if it was
         # permfail, better to dupe than fail to emit the bounce
 
-        # XXX BEFORE SUBMIT timeout?
+        # XXX timeout?
         notification_endpoint.update(notification_tx, notification_tx,
                                      timeout=0)

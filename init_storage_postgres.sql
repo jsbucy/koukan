@@ -48,6 +48,14 @@ CREATE TABLE Transactions (
 
   message_builder JSON,
 
+  -- json.notification is present and non-empty
+  notification BOOL,
+
+  -- notification was null when final_attempt_reason was set
+  -- the exploder may enable notifications on an upstream transaction
+  -- after it has reached a final status; this is to facilitate recovering these
+  no_final_notification BOOL,
+
   FOREIGN KEY(body_blob_id) REFERENCES Blob(id)
     ON UPDATE CASCADE
     ON DELETE SET NULL,

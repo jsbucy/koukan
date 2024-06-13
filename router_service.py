@@ -201,7 +201,7 @@ class Service:
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', {}))
-        handler.cursor_to_endpoint()
+        handler.handle()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 
     def _dequeue(self, wait : bool = True) -> bool:

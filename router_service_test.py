@@ -498,7 +498,7 @@ class RouterServiceTest(unittest.TestCase):
             for j in range(0,3):
                 if self.service._dequeue():
                     break
-                time.sleep(1)
+                time.sleep(0.1)
             else:
                 self.fail('failed to dequeue')
 
@@ -506,8 +506,9 @@ class RouterServiceTest(unittest.TestCase):
         def exp_dsn(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice'])
-            self.assertIn(b'subject: Delivery Status Notification',
-                          tx.body_blob.read(0))
+            dsn = tx.body_blob.read(0)
+            logging.debug('test_notification %s', dsn)
+            self.assertIn(b'subject: Delivery Status Notification', dsn)
 
             # set upstream responses so output (retry) succeeds
             # upstream success, retry succeeds, propagates down to rest
@@ -521,20 +522,17 @@ class RouterServiceTest(unittest.TestCase):
 
         self.add_endpoint(dsn_endpoint)
         self.assertTrue(self.service._dequeue())
+        for i in range(0,5):
+            if not(dsn_endpoint.expectation):
+                break
+            time.sleep(0.1)
+        else:
+            self.fail('no upstream dsn')
 
-        # # xxx kludge, fix SyncEndpoint to wait on this
-        # for i in range(0,5):
-        #     if dsn_endpoint.body_blob is not None:
-        #         break
-        #     time.sleep(1)
-        # else:
-        #     self.fail('didn\'t get dsn')
-
-    def disabled_test_notification_fast_perm(self):
+    def test_notification_fast_perm(self):
         logging.info('test_notification')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
-
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
@@ -543,59 +541,74 @@ class RouterServiceTest(unittest.TestCase):
                      Mailbox('bob2')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx, 10)
+        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
         # exploder tx
         self.assertTrue(self.service._dequeue())
-        upstream_endpoint = SyncEndpoint()
-        upstream_endpoint.set_mail_response(Response(250))
-        upstream_endpoint.add_rcpt_response(Response(250))
-        upstream_endpoint.add_data_response(Response(550))
-        self.add_endpoint(upstream_endpoint)
-        upstream_endpoint = SyncEndpoint()
-        upstream_endpoint.set_mail_response(Response(250))
-        upstream_endpoint.add_rcpt_response(Response(250))
-        upstream_endpoint.add_data_response(Response(250))
-        self.add_endpoint(upstream_endpoint)
 
-        dequeued = 0
-        for i in range(0, 5):
-            if self.service._dequeue():
-                dequeued += 1
-            if dequeued == 2:
-                break
-            time.sleep(1)
-        else:
-            self.fail('failed to dequeue')
+        def exp_rcpt(tx, tx_delta):
+            rcpt = tx_delta.rcpt_to[0].mailbox
+            self.assertIn(rcpt, ['bob1', 'bob2'])
+            data_resp = 550 if rcpt == 'bob2' else 250
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(data_resp))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+
+        # output for each of rcpt1, rcpt2
+        for j in range(0,2):
+            upstream = FakeSyncFilter()
+            upstream.add_expectation(exp_rcpt)
+            self.add_endpoint(upstream)
+            for i in range(0, 5):
+                if self.service._dequeue():
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail('failed to dequeue')
 
         self.join_tx_update(t, 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
-        # msa store and forward, upstream temp errors upgraded to 250 downstream
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertEqual([r.code for r in tx.rcpt_response], [250, 250])
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202, 202])
         self.assertEqual(tx.data_response.code, 250)
 
 
-        dsn_endpoint = SyncEndpoint()
-        dsn_endpoint.set_mail_response(Response(250))
-        dsn_endpoint.add_rcpt_response(Response(250))
-        dsn_endpoint.add_data_response(Response(250))
+        # no_final_notification OutputHandler handler for both rcpts
+        for i in range(0,2):
+            unused_upstream_endpoint = FakeSyncFilter()
+            self.add_endpoint(unused_upstream_endpoint)
+            self.assertTrue(self.service._dequeue())
+            del unused_upstream_endpoint
+
+        dsn_endpoint = FakeSyncFilter()
+        def exp_dsn(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, '')
+            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            dsn = tx.body_blob.read(0)
+            logging.debug('test_notification %s', dsn)
+            self.assertIn(b'subject: Delivery Status Notification', dsn)
+
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(250),
+                rcpt_response=[Response(250)],
+                data_response=Response(250))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
+        # dsn output
         self.assertTrue(self.service._dequeue())
 
         # xxx kludge, fix SyncEndpoint to wait on this
         for i in range(0,5):
-            if dsn_endpoint.body_blob is not None:
+            if not dsn_endpoint.expectation:
                 break
-            time.sleep(1)
+            time.sleep(0.1)
         else:
             self.fail('didn\'t get dsn')
-        self.assertEqual(dsn_endpoint.mail_from.mailbox, '')
-        self.assertEqual([m.mailbox for m in dsn_endpoint.rcpt_to],
-                         ['alice'])
-        self.assertIn(b'subject: Delivery Status Notification',
-                      dsn_endpoint.body_blob.read(0))
-
 
 
     # message builder is a rest submission feature; first-class rest

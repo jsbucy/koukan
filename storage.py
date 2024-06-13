@@ -15,7 +15,7 @@ from sqlalchemy.sql.functions import count, current_time
 
 from sqlalchemy import (
     LargeBinary, MetaData, String, Table,
-    cast, case as sa_case, column,
+    and_, cast, case as sa_case, column,
     delete, event, func, insert, join, literal, not_, or_, select,
     true as sa_true, update, union_all, values)
 
@@ -48,6 +48,8 @@ class TransactionCursor:
     tx : Optional[TransactionMetadata] = None
 
     message_builder : Optional[dict] = None  # json
+
+    no_final_notification : Optional[bool] = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -156,12 +158,14 @@ class TransactionCursor:
                        reuse_blob_rest_id : List[str] = [],
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
-                       next_attempt_time : Optional[int] = None):
+                       next_attempt_time : Optional[int] = None,
+                       notification_done : Optional[bool] = None):
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx, tx_delta, reuse_blob_rest_id,
                         final_attempt_reason,
                         finalize_attempt,
-                        next_attempt_time = next_attempt_time)
+                        next_attempt_time = next_attempt_time,
+                        notification_done=notification_done)
         self.parent.tx_versions.update(self.id, self.version)
 
     def _write_blob(self,
@@ -212,7 +216,8 @@ class TransactionCursor:
                reuse_blob_rest_id : List[str] = [],
                final_attempt_reason : Optional[str] = None,
                finalize_attempt : Optional[bool] = None,
-               next_attempt_time : Optional[int] = None):
+               next_attempt_time : Optional[int] = None,
+               notification_done : Optional[bool] = None):
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
         # e.g. overwriting an existing field
@@ -238,10 +243,11 @@ class TransactionCursor:
 
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
-                       .where(self.parent.attempt_table.c.transaction_id == self.id,
+                       .where(self.parent.attempt_table.c.transaction_id ==
+                                self.id,
                               self.parent.attempt_table.c.attempt_id ==
-                              self.attempt_id)
-                       .values({'responses': attempt_json }))
+                                self.attempt_id)
+                       .values(responses = attempt_json))
             res = db_tx.execute(upd_att)
 
         if ((tx_delta.retry is not None) and
@@ -250,6 +256,15 @@ class TransactionCursor:
 
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)
+
+        upd = upd.values(notification = bool(tx_to_db.notification))
+
+        if final_attempt_reason:
+            upd = upd.values(no_final_notification =
+                             not bool(tx_to_db.notification))
+        elif notification_done:
+            assert tx_to_db.notification
+            upd = upd.values(no_final_notification = False)
 
         if final_attempt_reason:
             upd = upd.values(final_attempt_reason = final_attempt_reason)
@@ -308,7 +323,8 @@ class TransactionCursor:
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.body_rest_id,
-                     self.parent.tx_table.c.message_builder)
+                     self.parent.tx_table.c.message_builder,
+                     self.parent.tx_table.c.no_final_notification)
 
 
         if db_id is not None:
@@ -320,10 +336,17 @@ class TransactionCursor:
         if not row:
             return None
 
-        (self.id, self.rest_id,
-         self.creation, trans_json, self.version, self.last,
-         self.input_done, self.final_attempt_reason, self.body_rest_id,
-         self.message_builder) = row
+        (self.id,
+         self.rest_id,
+         self.creation,
+         trans_json,
+         self.version,
+         self.last,
+         self.input_done,
+         self.final_attempt_reason,
+         self.body_rest_id,
+         self.message_builder,
+         self.no_final_notification) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         # TODO this (and the db col) are probably vestigal? The
@@ -377,6 +400,13 @@ class TransactionCursor:
         res = db_tx.execute(upd)
         assert res.fetchone()[0] == new_version
 
+        # This is a sort of pseudo-attempt for re-entering the
+        # notification logic if it was enabled after the transaction
+        # reached a final result.
+        if self.no_final_notification:
+            self.version = new_version
+            return
+
         max_attempt_id = (
             select(func.max(self.parent.attempt_table.c.attempt_id)
                    .label('max'))
@@ -392,7 +422,6 @@ class TransactionCursor:
                        attempt_id = new_attempt_id)
                .returning(self.parent.attempt_table.c.attempt_id))
         res = db_tx.execute(ins)
-
         assert (row := res.fetchone())
         self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
@@ -901,17 +930,23 @@ class Storage(BlobStorage):
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
-
-                          or_(self.tx_table.c.input_done.is_(True),
-                              self.tx_table.c.creation_session_id ==
-                              self.session_id),
-
-                          or_(self.tx_table.c.next_attempt_time.is_(None),
-                              self.tx_table.c.next_attempt_time <= now),
-
-                          self.tx_table.c.final_attempt_reason.is_(None),
-
-                          self.tx_table.c.json.is_not(None))
+                          or_(
+                              and_(
+                                  or_(self.tx_table.c.input_done.is_(True),
+                                      self.tx_table.c.creation_session_id ==
+                                      self.session_id),
+                                  or_(self.tx_table.c.next_attempt_time.is_(None),
+                                      self.tx_table.c.next_attempt_time <= now),
+                                  self.tx_table.c.final_attempt_reason.is_(None),
+                                  self.tx_table.c.json.is_not(None)),
+                              and_(
+                                  # TODO it seems like it should be possible to
+                                  # query effectively
+                                  # json.get('notification', {}) != {}
+                                  # but I haven't been able to get SA to do it
+                                  self.tx_table.c.notification.is_(True),
+                                  self.tx_table.c.no_final_notification.is_(True)
+                              )))
                    .limit(1))
             res = db_tx.execute(sel)
             row = res.fetchone()
@@ -921,7 +956,6 @@ class Storage(BlobStorage):
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(db_tx, db_id, version)
-
             self.tx_versions.update(tx.id, tx.version)
 
             # TODO: if the last n consecutive attempts weren't

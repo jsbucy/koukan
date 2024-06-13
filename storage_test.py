@@ -87,7 +87,6 @@ class StorageTestBase(unittest.TestCase):
             rcpt_response=[Response(456)]))
 
         tx_reader.write_envelope(TransactionMetadata(),
-                                 #output_done = False,
                                  finalize_attempt = True)
 
         expected_content = [
@@ -106,6 +105,11 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(b'yzu', b)
 
         r2 = self.s.load_one()
+        self.assertFalse(r2.no_final_notification)
+        r2.write_envelope(TransactionMetadata(),
+                          finalize_attempt=True)
+
+        r2 = self.s.load_one()
         self.assertIsNotNone(r2)
         self.assertEqual(r2.id, tx_writer.id)
         self.assertIsNone(r2.tx.mail_response)
@@ -115,7 +119,12 @@ class StorageTestBase(unittest.TestCase):
         r2.write_envelope(TransactionMetadata(),
                           final_attempt_reason = 'retry max attempts',
                           finalize_attempt = True)
+        self.assertIsNone(self.s.load_one())
+        r2.write_envelope(TransactionMetadata(notification={'yes': True}))
 
+        r2 = self.s.load_one()
+        self.assertTrue(r2.no_final_notification)
+        r2.write_envelope(TransactionMetadata(), notification_done=True)
         self.assertIsNone(self.s.load_one())
 
     def test_blob_8bitclean(self):

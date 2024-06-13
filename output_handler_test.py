@@ -36,10 +36,10 @@ class OutputHandlerTest(unittest.TestCase):
         handler = OutputHandler(tx_cursor, endpoint,
                                 downstream_env_timeout=1,
                                 downstream_data_timeout=1)
-        handler.cursor_to_endpoint()
+        handler.handle()
 
     # oneshot ~rest
-    def test_cursor_to_endpoint(self):
+    def test_handle(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
@@ -80,13 +80,13 @@ class OutputHandlerTest(unittest.TestCase):
         handler = OutputHandler(tx_cursor, endpoint,
                                 downstream_env_timeout=1,
                                 downstream_data_timeout=1)
-        handler.cursor_to_endpoint()
+        handler.handle()
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
 
     # multiple roundtrips ~smtp
-    def test_cursor_to_endpoint_multi(self):
+    def test_handle_multi(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
@@ -131,7 +131,7 @@ class OutputHandlerTest(unittest.TestCase):
             handler = OutputHandler(tx_cursor, endpoint,
                                     downstream_env_timeout=1,
                                     downstream_data_timeout=1)
-            handler.cursor_to_endpoint()
+            handler.handle()
         fut = self.executor.submit(run_handler)
         self.assertIsNotNone(fut)
 
@@ -309,7 +309,7 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_env_timeout=1,
             downstream_data_timeout=1,
             retry_params=retry_params)
-        handler.cursor_to_endpoint()
+        handler.handle()
 
         reader = self.storage.load_one()
         self.assertIsNone(reader)
@@ -366,13 +366,9 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNone(next_attempt_time)
 
 
-    def test_notification(self):
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
-        tx_meta = TransactionMetadata(
-            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        tx_cursor.write_envelope(tx_meta)
+    # 1: handle w/notification request set that permfails
+    def test_notification(self):
         blob_writer = self.storage.get_blob_writer()
         blob_writer.create(rest_id='blob_rest_id')
         d = (b'from: alice\r\n'
@@ -382,25 +378,27 @@ class OutputHandlerTest(unittest.TestCase):
              b'hello\r\n')
         blob_writer.append_data(0, d, len(d))
 
-        tx_cursor.write_envelope(
-            TransactionMetadata(
-                body='blob_rest_id',
-                retry={'max_attempts': 1},
-                notification = {'host': 'smtp-out'}),
-            reuse_blob_rest_id=['blob_rest_id'])
-        del tx_cursor
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body='blob_rest_id',
+            retry={'max_attempts': 1},
+            notification = {'host': 'smtp-out'})
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', tx,
+                         reuse_blob_rest_id=['blob_rest_id'])
 
         endpoint = FakeSyncFilter()
-        def exp_rcpt(tx, tx_delta):
-            self.assertEqual(tx.mail_from.mailbox, 'alice')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
+
+        def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
-                rcpt_response = [Response(402)])
+                rcpt_response = [Response(202)],
+                data_response = Response(550))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
-        endpoint.add_expectation(exp_rcpt)
-
+        endpoint.add_expectation(exp)
 
         notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
         notification_endpoint.merge(
@@ -414,11 +412,12 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            downstream_env_timeout=1,
-            downstream_data_timeout=1,
             notification_factory=lambda: notification_endpoint,
-            mailer_daemon_mailbox='mailer-daemon@example.com')
-        handler.cursor_to_endpoint()
+            mailer_daemon_mailbox='mailer-daemon@example.com',
+            downstream_env_timeout=1,
+            downstream_data_timeout=1)
+
+        handler.handle()
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
@@ -429,6 +428,84 @@ class OutputHandlerTest(unittest.TestCase):
         dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
         logging.debug(dsn)
         self.assertIn('subject: Delivery Status Notification', dsn)
+
+
+    # 2: handle w/o notification that permfails, recover, handle -> dsn
+    def test_notification_post_facto(self):
+        blob_writer = self.storage.get_blob_writer()
+        blob_writer.create(rest_id='blob_rest_id')
+        d = (b'from: alice\r\n'
+             b'to: bob\r\n'
+             b'message-id: <abc@xyz>\r\n'
+             b'\r\n'
+             b'hello\r\n')
+        blob_writer.append_data(0, d, len(d))
+
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body='blob_rest_id',
+            retry={'max_attempts': 1})
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', tx,
+                         reuse_blob_rest_id=['blob_rest_id'])
+        tx_id = tx_cursor.id
+
+        endpoint = FakeSyncFilter()
+
+        def exp(tx, tx_delta):
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(550))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        endpoint.add_expectation(exp)
+
+        # no notification_factory since not requested
+        tx_cursor = self.storage.load_one()
+        handler = OutputHandler(
+            tx_cursor, endpoint,
+            mailer_daemon_mailbox='mailer-daemon@example.com',
+            downstream_env_timeout=1,
+            downstream_data_timeout=1)
+        handler.handle()
+
+        # tx should not be loadable
+        self.assertIsNone(self.storage.load_one())
+
+        # now enable notifications on the tx
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.load(db_id=tx_id)
+        tx_cursor.write_envelope(TransactionMetadata(
+            notification={'host': 'smtp-out'}))
+
+        notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
+        notification_endpoint.merge(
+            TransactionMetadata(
+                mail_response=Response(),
+                rcpt_response=[Response()],
+                data_response=Response()))
+
+        tx_cursor = self.storage.load_one()
+        self.assertIsNotNone(tx_cursor)
+        handler = OutputHandler(
+            tx_cursor, endpoint,
+            notification_factory=lambda: notification_endpoint,
+            mailer_daemon_mailbox='mailer-daemon@example.com',
+            downstream_env_timeout=1,
+            downstream_data_timeout=1)
+
+        handler.handle()
+
+        self.assertEqual(notification_endpoint.tx.mail_from.mailbox, '')
+        self.assertEqual(notification_endpoint.tx.rcpt_to[0].mailbox, 'alice')
+
+        dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
+        logging.debug(dsn)
+        self.assertIn('subject: Delivery Status Notification', dsn)
+
 
 if __name__ == '__main__':
     unittest.main()
