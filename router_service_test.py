@@ -351,6 +351,9 @@ class RouterServiceTest(unittest.TestCase):
             'data_response': {'code': 203, 'message': 'ok'},
         })
 
+    # XXX add test for first-class rest with blob reuse
+
+
     # xxx need non-exploder test w/filter api, problems in
     # post-exploder/upstream tx won't be reported out synchronously,
     # would potentially bounce
@@ -615,7 +618,9 @@ class RouterServiceTest(unittest.TestCase):
     # never uses the exploder
     def test_message_builder(self):
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission')
+            static_base_url=self.router_url,
+            http_host='submission',
+            tx_blob=True)
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
@@ -642,6 +647,7 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t, 10)
 
         blob = InlineBlob("hello, world!")
+        rest_endpoint.blob_url = rest_endpoint.full_blob_url = None
         blob_resp = rest_endpoint._put_blob(blob)
         self.assertEqual(blob_resp.code, 200)
 
@@ -677,6 +683,9 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_body)
 
+        logging.debug('RouterServiceTest.test_message_builder tx before '
+                      'patch message_builder spec %s',
+                      rest_endpoint.get_json(timeout=1))
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
 
         for i in range(0,3):

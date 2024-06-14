@@ -1,8 +1,9 @@
-from typing import Callable, Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import json
 import secrets
 import time
+from functools import partial
 
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
@@ -25,6 +26,7 @@ class StorageWriterFilter(AsyncFilter):
     tx_cursor : Optional[TransactionCursor] = None
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
+    blob_writer : Optional[BlobWriter] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -96,7 +98,6 @@ class StorageWriterFilter(AsyncFilter):
         else:
             tx.body=rest_id
 
-
     # AsyncFilter
     def update(self,
                tx : TransactionMetadata,
@@ -104,11 +105,36 @@ class StorageWriterFilter(AsyncFilter):
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
         reuse_blob_rest_id=None
+
+        def uri_to_blob2(tx_blob, uri):
+            if uri.startswith('/transactions/'):
+                if tx_blob[0] is None:
+                    tx_blob[0] = True
+                else:
+                    assert tx_blob[0]
+                u = uri.removeprefix('/transactions/')
+                slash = u.find('/')
+                out = u[slash+1:]
+                out = out.removeprefix('blob/')
+                logging.debug('uri_to_blob2 %s %s', uri, out)
+                return out
+            else:
+                if tx_blob[0] is None:
+                    tx_blob[0] = False
+                else:
+                    assert not tx_blob
+                return uri_to_blob(uri)
+
         if tx_delta.message_builder:
+            # xxx skip the /tx/123/blob ones
+            # since they were ref'd when they were created
+            tx_blob = [None]
             reuse_blob_rest_id = MessageBuilder.get_blobs(
-                tx_delta.message_builder, uri_to_blob)
+                tx_delta.message_builder, partial(uri_to_blob2, tx_blob))
             logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                           reuse_blob_rest_id)
+            if tx_blob:
+                reuse_blob_rest_id = None
 
         deadline = Deadline(timeout)
         downstream_tx = tx.copy()
@@ -117,7 +143,7 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
-        if tx_delta.body_blob is not None:
+        if tx_delta.body_blob is not None and self.blob_writer is None:
             if tx_delta.body_blob.len() == tx_delta.body_blob.content_length():
                 self._body(tx_delta)
                 if tx_delta.data_response is not None:
@@ -158,3 +184,22 @@ class StorageWriterFilter(AsyncFilter):
         tx.rest_id = self.rest_id
         upstream_delta.rest_id = self.rest_id
         return upstream_delta
+
+
+    def append_body(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        if self.blob_writer is None:
+            self.blob_writer = self.storage.get_blob_writer()
+            rest_id = self.rest_id_factory()
+            self.blob_writer.create(rest_id)
+        rv = self.blob_writer.append_data(offset, d, content_length)
+        if not rv[0] or content_length is None or offset + len(d) != content_length:
+            return rv
+        tx_delta = TransactionMetadata(body=self.blob_writer.rest_id)
+        if self.tx_cursor is None:
+            self._load()
+        self.tx_cursor.write_envelope(tx_delta,
+                                      reuse_blob_rest_id=[tx_delta.body])
+
+        return rv

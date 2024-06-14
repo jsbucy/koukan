@@ -1,3 +1,5 @@
+import logging
+
 from flask import (
     Flask,
     Request as FlaskRequest,
@@ -34,6 +36,28 @@ def create_app(handler_factory : HandlerFactory):
         handler = handler_factory.get_tx(tx_rest_id)
         return handler.get_tx(request)
 
+    # new blob api
+    @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
+    def put_tx_body(tx_rest_id) -> FlaskResponse:
+        logging.debug('rest_service.put_tx_body %s', request)
+        handler = handler_factory.get_tx(tx_rest_id)
+        return handler.put_tx_body(request)
+
+    @app.route('/transactions/<tx_rest_id>/blob', methods=['POST'])
+    def create_tx_blob(tx_rest_id) -> FlaskResponse:
+        logging.debug('rest_service.create_tx_blob %s', request)
+        handler = handler_factory.get_tx(tx_rest_id)
+        return handler.create_blob(request, tx_rest_id=tx_rest_id)
+
+    @app.route('/transactions/<tx_rest_id>/blob/<blob_rest_id>',
+               methods=['PUT'])
+    def put_tx_blob(tx_rest_id, blob_rest_id) -> FlaskResponse:
+        handler = handler_factory.get_tx(tx_rest_id)
+        return handler.put_blob(request,
+                                tx_rest_id=tx_rest_id,
+                                blob_rest_id=blob_rest_id)
+
+    # old blob api
     @app.route('/blob', methods=['POST'])
     def create_blob() -> FlaskResponse:
         handler = handler_factory.create_blob()

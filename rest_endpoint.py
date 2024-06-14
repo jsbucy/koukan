@@ -66,6 +66,8 @@ class RestEndpoint(SyncFilter):
 
     upstream_tx : Optional[TransactionMetadata] = None
 
+    tx_blob : bool
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -82,7 +84,8 @@ class RestEndpoint(SyncFilter):
                  min_poll=1,
                  max_inline=1024,
                  chunk_size=1048576,
-                 verify=True):
+                 verify=True,
+                 tx_blob=True):
         self.base_url = self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
@@ -96,6 +99,7 @@ class RestEndpoint(SyncFilter):
         self.chunk_size = chunk_size
 
         self.client = Client(http2=True, verify=verify)
+        self.tx_blob = tx_blob
 
     def _maybe_qualify_url(self, url):
         parsed = urlparse(url)
@@ -104,7 +108,7 @@ class RestEndpoint(SyncFilter):
         return urljoin(self.base_url, url)
 
     def _start(self, tx : TransactionMetadata,
-                deadline : Deadline) -> HttpResponse:
+                deadline : Deadline) -> Optional[HttpResponse]:
         logging.debug('RestEndpoint._start %s', tx)
 
         for remote_host in self.remote_host_resolution(tx.remote_host):
@@ -134,11 +138,14 @@ class RestEndpoint(SyncFilter):
                          rest_resp, rest_resp.http_version)
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])
+            if self.tx_blob:
+                self.blob_url = rest_resp.headers['location'] + '/body'
+                self.full_blob_url = self.transaction_url + '/body'
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
     def _update(self, downstream_delta : TransactionMetadata,
-                deadline : Deadline) -> HttpResponse:
+                deadline : Deadline) -> Optional[HttpResponse]:
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
@@ -208,7 +215,8 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint.on_update put_blob_resp %s',
                           put_blob_resp)
             if put_blob_resp.ok():
-                body_delta = TransactionMetadata(body = self.blob_url)
+                if not self.tx_blob:
+                    body_delta = TransactionMetadata(body = self.blob_url)
             else:
                 upstream_delta = TransactionMetadata(
                     data_response = put_blob_resp)
@@ -246,36 +254,36 @@ class RestEndpoint(SyncFilter):
             which_js = WhichJson.REST_UPDATE
             rest_resp = self._update(downstream_delta, deadline)
             # TODO handle 412 failed precondition
-        else:
-            # !last blob upload, no tx change
+        elif not self.data_last:
             return TransactionMetadata()
 
-        resp_json = get_resp_json(rest_resp) if rest_resp else None
-        resp_json = resp_json if resp_json else {}
+        if not(self.tx_blob and self.data_last):
+            resp_json = get_resp_json(rest_resp) if rest_resp else None
+            resp_json = resp_json if resp_json else {}
 
-        tx_out = TransactionMetadata.from_json(resp_json, WhichJson.REST_READ)
-        if tx_out is None:
-            logging.debug('RestEndpoint.on_update bad resp_json %s', resp_json)
-            tx.fill_inflight_responses(
-                Response(450, 'RestEndpoint bad resp_json'))
-            return
+            tx_out = TransactionMetadata.from_json(resp_json, WhichJson.REST_READ)
+            if tx_out is None:
+                logging.debug('RestEndpoint.on_update bad resp_json %s', resp_json)
+                tx.fill_inflight_responses(
+                    Response(450, 'RestEndpoint bad resp_json'))
+                return
 
-        logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
-                      self.transaction_url, resp_json)
-        upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
-        if (upstream_delta is None or
-            (self.upstream_tx.merge_from(upstream_delta) is None) or
-            (tx.merge_from(upstream_delta) is None)):
-            errs = TransactionMetadata()
-            tx.fill_inflight_responses(
-                Response(450,
-                         'RestEndpoint upstream invalid resp/delta update'),
-                errs)
-            assert tx.merge_from(errs) is not None
-            return errs
+            logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
+                          self.transaction_url, resp_json)
+            upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
+            if (upstream_delta is None or
+                (self.upstream_tx.merge_from(upstream_delta) is None) or
+                (tx.merge_from(upstream_delta) is None)):
+                errs = TransactionMetadata()
+                tx.fill_inflight_responses(
+                    Response(450,
+                             'RestEndpoint upstream invalid resp/delta update'),
+                    errs)
+                assert tx.merge_from(errs) is not None
+                return errs
 
-        if not self.upstream_tx.req_inflight():
-            return upstream_delta
+            if not self.upstream_tx.req_inflight():
+                return upstream_delta
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -335,7 +343,10 @@ class RestEndpoint(SyncFilter):
             headers['host'] = self.http_host
         try:
             if self.blob_url is None:
-                endpoint = '/blob'
+                if self.tx_blob:
+                    endpoint = self.transaction_url + '/blob'
+                else:
+                    endpoint = '/blob'
                 entity = d
                 if not last:
                     endpoint += '?upload=chunked'
@@ -343,7 +354,8 @@ class RestEndpoint(SyncFilter):
                 rest_resp = self.client.post(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob POST /blob %s %s %s',
+                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s %s',
+                             endpoint,
                              rest_resp, rest_resp.headers,
                              rest_resp.http_version)
                 if rest_resp.status_code != 201:

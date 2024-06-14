@@ -19,12 +19,20 @@ class Handler(ABC):
     def patch_tx(self, request : FlaskRequest) -> FlaskResponse:
         pass
 
+    # new blob api
     @abstractmethod
-    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
+    def put_tx_body(self, request : FlaskRequest) -> FlaskResponse:
+        pass
+
+    # old blob api
+    @abstractmethod
+    def create_blob(self, request : FlaskRequest,
+                    tx_rest_id : Optional[str] = None) -> FlaskResponse:
         pass
 
     @abstractmethod
-    def put_blob(self, request : FlaskRequest) -> FlaskResponse:
+    def put_blob(self, request : FlaskRequest,
+                 tx_rest_id : Optional[str] = None) -> FlaskResponse:
         pass
 
 # These are called early in the request lifecycle i.e. at the

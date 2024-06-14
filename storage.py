@@ -198,9 +198,11 @@ class TransactionCursor:
 
         upd = upd.values(input_done = input_done)
 
-        reused_blob_ids = [y[0] for y in reuse_blob_id]
-        blobrefs = [{"transaction_id": self.id, "blob_id": blob_id}
-                    for blob_id in reused_blob_ids]
+        blobrefs = []
+        for id, rest_id, input_done in reuse_blob_id:
+            blobrefs.append({ "transaction_id": self.id,
+                              "blob_id": blob_id,
+                              "rest_id": rest_id })
         logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
 
         if blobrefs:
@@ -273,9 +275,10 @@ class TransactionCursor:
             upd = upd.values(inflight_session_id = None,
                              next_attempt_time = next_attempt_time)
 
-        if reuse_blob_rest_id and (
-                not tx_delta.body and not tx_delta.message_builder):
-            raise ValueError()
+# XXX update preconditions
+#        if reuse_blob_rest_id and (
+#                not tx_delta.body and not tx_delta.message_builder):
+#            raise ValueError()
 
         if reuse_blob_rest_id or tx_delta.message_builder:
             upd = self._write_blob(db_tx, tx_delta, upd, reuse_blob_rest_id)
@@ -456,7 +459,7 @@ class BlobWriter(WritableBlob):
     def __init__(self, storage):
         self.parent = storage
 
-    def _create(self, rest_id, db_tx):
+    def _create(self, rest_id : str, db_tx):
         ins = insert(self.parent.blob_table).values(
             last_update=int(time.time()),
             rest_id=rest_id,
@@ -470,21 +473,45 @@ class BlobWriter(WritableBlob):
         self.rest_id = rest_id
         return self.id
 
-    def create(self, rest_id):
+    def create(self, rest_id : str):
         with self.parent.begin_transaction() as db_tx:
             self._create(rest_id, db_tx)
             return self.id
 
-    def load(self, rest_id):
-        stmt = select(
-            self.parent.blob_table.c.id,
-            self.parent.blob_table.c.length,
-            self.parent.blob_table.c.last_update,
-            func.length(self.parent.blob_table.c.content)).where(
-                self.parent.blob_table.c.rest_id == rest_id)
-
+    def load(self, rest_id : str, tx_rest_id : Optional[str] = None):
         with self.parent.begin_transaction() as db_tx:
-            res = db_tx.execute(stmt)
+            blob_id = None
+            if tx_rest_id:
+                sel_tx = select(
+                    self.parent.tx_table.c.id
+                ).where(
+                    self.parent.tx_table.c.rest_id == tx_rest_id)
+
+                res = db_tx.execute(sel_tx)
+                tx_id = res.fetchone()[0]
+
+                sel_blobref = select(
+                    self.parent.tx_blobref_table.c.blob_id
+                ).where(
+                    self.parent.tx_blobref_table.c.transaction_id == tx_id,
+                    self.parent.tx_blobref_table.c.rest_id == rest_id)
+                res = db_tx.execute(sel_blobref)
+                blob_id = res.fetchone()[0]
+
+            sel_blob = select(
+                self.parent.blob_table.c.id,
+                self.parent.blob_table.c.length,
+                self.parent.blob_table.c.last_update,
+                func.length(self.parent.blob_table.c.content))
+
+            if blob_id:
+                sel_blob = sel_blob.where(
+                    self.parent.blob_table.c.id == blob_id)
+            else:
+                sel_blob = sel_blob.where(
+                    self.parent.blob_table.c.rest_id == rest_id)
+
+            res = db_tx.execute(sel_blob)
             row = res.fetchone()
 
         if not row:
@@ -887,15 +914,27 @@ class Storage(BlobStorage):
         return BlobReader(self)
 
     # BlobStorage
-    def create(self, rest_id : str) -> Optional[WritableBlob]:
-        writer = self.get_blob_writer()
-        writer.create(rest_id)
-        return writer
+    def create(self, rest_id : str,
+               tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
+        with self.begin_transaction() as db_tx:
+            writer = self.get_blob_writer()
+            writer._create(rest_id, db_tx)
+
+            if tx_rest_id:
+                cursor = self.get_transaction_cursor()
+                cursor._load_db(db_tx, rest_id=tx_rest_id)
+                cursor._write(db_tx,
+                              TransactionMetadata(),
+                              reuse_blob_rest_id=[rest_id])
+
+            return writer
 
     # BlobStorage
-    def get_for_append(self, rest_id) -> Optional[WritableBlob]:
+    def get_for_append(self, rest_id,
+                       tx_rest_id : Optional[str] = None
+                       ) -> Optional[WritableBlob]:
         writer = self.get_blob_writer()
-        if writer.load(rest_id) is None:
+        if writer.load(rest_id, tx_rest_id) is None:
             return None
         return writer
 

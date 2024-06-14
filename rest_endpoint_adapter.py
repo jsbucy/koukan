@@ -45,6 +45,7 @@ class SyncFilterAdapter(AsyncFilter):
     rest_id : str
     _last_update : float
     _version = 0
+    body_blob : Optional[InlineBlob] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -93,7 +94,10 @@ class SyncFilterAdapter(AsyncFilter):
             logging.debug('SyncFilterAdapter._update_once() '
                           'downstream_delta %s', delta)
             self.prev_tx = self.tx.copy()
-            if not delta.req_inflight():
+            if not delta.req_inflight() and (
+                    self.tx.body_blob is None or
+                    self.tx.body_blob.len() != self.tx.body_blob.content_length() or
+                    self.tx.data_response is not None):
                 self.inflight = False
                 return False
 
@@ -145,6 +149,28 @@ class SyncFilterAdapter(AsyncFilter):
             self._get_locked(tx, timeout)
             return self.tx.copy()
 
+    def append_body(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        if self.body_blob is None:
+            self.body_blob = InlineBlob(d, content_length)
+        elif offset != self.body_blob.len() or (
+                self.body_blob._content_length is not None and
+                self.body_blob._content_length != content_length):
+            return False, self.body_blob.len(), self.body_blob.content_length()
+        else:
+            self.body_blob.d += d
+        if content_length is not None:
+            self.body_blob._content_length = content_length
+        # The current delta/merge invariants are that any field is set
+        # exactly once though the filter may observe the body growing
+        # across multiple calls.
+        updated_tx = self.tx.copy()
+        tx_delta = TransactionMetadata()
+        if self.tx.body_blob is None:
+            tx_delta.body_blob = self.body_blob
+        self.update(updated_tx, tx_delta)
+        return True, self.body_blob.len(), self.body_blob.content_length()
 
 MAX_TIMEOUT=30
 
@@ -334,7 +360,36 @@ class RestEndpointAdapter(Handler):
         assert(range.stop - range.start == request.content_length)
         return None, range
 
-    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
+    # new blob api
+    def put_tx_body(self, request : FlaskRequest) -> FlaskResponse:
+        copy_from = request.headers.get('x-copy-from')
+        if copy_from:
+            # tx_rest_id, blob_rest_id = parse(copy_from)
+            #body_blob = self.blob_storage.get_finalized(
+            #  tx_rest_id, blob_rest_id)
+            # tx = self.async_filter.get(0)
+            # delta = TransactionMetadata(body_blob=body_blob)
+            # self.async_filter.update(tx, delta)
+
+            return FlaskResponse(status=400, response=['not implemented'])
+
+        range_err, range = self._get_range(request)
+        if range_err:
+            return range_err
+        appended, result_len, content_length = self.async_filter.append_body(
+            range.start, request.data, range.length)
+        resp = FlaskResponse()
+        if not appended:
+            resp.status = 416
+            resp.response = ['invalid range']
+
+        resp = jsonify({})
+        resp.headers.set('content-range',
+                         ContentRange('bytes', 0, result_len, content_length))
+        return resp
+
+    def create_blob(self, request : FlaskRequest,
+                    tx_rest_id : Optional[str] = None) -> FlaskResponse:
         self._blob_rest_id = self.rest_id_factory()
         logging.debug('RestEndpointAdapter.create_blob %s %s %s',
                       request, request.headers, self._blob_rest_id)
@@ -353,7 +408,8 @@ class RestEndpointAdapter(Handler):
 
         logging.debug('RestEndpointAdapter.create_blob before create')
 
-        if (blob := self.blob_storage.create(self._blob_rest_id)) is None:
+        if (blob := self.blob_storage.create(
+                self._blob_rest_id, tx_rest_id=tx_rest_id)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -365,15 +421,24 @@ class RestEndpointAdapter(Handler):
 
         resp = FlaskResponse(status=201)
         resp.status_code = 201
-        resp.headers.set('location', blob_to_uri(self._blob_rest_id))
+        if tx_rest_id:
+            blob_uri = '/transactions/' + tx_rest_id + '/blob/' + self._blob_rest_id
+        else:
+            blob_uri = blob_to_uri(self._blob_rest_id)
+        resp.headers.set('location', blob_uri)
         return resp
 
-    def put_blob(self, request : FlaskRequest):
+    def put_blob(self, request : FlaskRequest,
+                 tx_rest_id : Optional[str] = None,
+                 blob_rest_id : Optional[str] = None) -> FlaskResponse:
+        if blob_rest_id is not None:
+            self._blob_rest_id = blob_rest_id
         range_err, range = self._get_range(request)
         if range_err:
             return range_err
 
-        blob = self.blob_storage.get_for_append(self._blob_rest_id)
+        blob = self.blob_storage.get_for_append(
+            self._blob_rest_id, tx_rest_id=tx_rest_id)
         if blob is None:
             return FlaskResponse(status=404, response=['unknown blob'])
 
@@ -381,15 +446,15 @@ class RestEndpointAdapter(Handler):
 
     def _put_blob(self, request : FlaskRequest, content_range : ContentRange,
                   blob : WritableBlob) -> FlaskResponse:
-        logging.debug('RestEndpointAdapter.put_blob %s content-range: %s',
+        logging.debug('RestEndpointAdapter._put_blob %s content-range: %s',
                       self._blob_rest_id, content_range)
         offset = 0
         last = True
         offset = content_range.start
         appended, result_len, content_length = blob.append_data(
             offset, request.data, content_range.length)
-        logging.debug('RestEndpointAdapter.put_blob %s %d %s',
-                      appended, result_len, content_length)
+        logging.debug('RestEndpointAdapter_.put_blob %s %s %d %s',
+                      self._blob_rest_id, appended, result_len, content_length)
         resp = FlaskResponse()
         if not appended:
             resp.status = 416
@@ -427,18 +492,22 @@ class RestEndpointAdapterFactory(HandlerFactory):
         return RestEndpointAdapter(
             async_filter=endpoint,
             blob_storage=self.blob_storage,
-            http_host=http_host)
+            http_host=http_host,
+            rest_id_factory=self.rest_id_factory)
 
     def get_tx(self, tx_rest_id) -> RestEndpointAdapter:
         return RestEndpointAdapter(
             async_filter=self.endpoint_factory.get(tx_rest_id),
             tx_rest_id=tx_rest_id,
-            blob_storage=self.blob_storage)
+            blob_storage=self.blob_storage,
+            rest_id_factory=self.rest_id_factory)
 
     def create_blob(self) -> RestEndpointAdapter:
         return RestEndpointAdapter(blob_storage=self.blob_storage,
                                    rest_id_factory=self.rest_id_factory)
 
     def get_blob(self, blob_rest_id) -> RestEndpointAdapter:
-        return RestEndpointAdapter(blob_storage=self.blob_storage,
-                                   blob_rest_id=blob_rest_id)
+        return RestEndpointAdapter(
+            blob_storage=self.blob_storage,
+            blob_rest_id=blob_rest_id,
+            rest_id_factory=self.rest_id_factory)

@@ -73,11 +73,20 @@ class InMemoryBlobStorage(BlobStorage):
             del self.blobs[k]
 
     # BlobStorage
-    def create(self, rest_id : str) -> Optional[WritableBlob]:
+    def create(self, rest_id : str,
+               tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
+        if tx_rest_id:
+            raise NotImplementedError()
+
         return self._create(rest_id)
 
     # BlobStorage
-    def get_for_append(self, rest_id) -> Optional[WritableBlob]:
+    def get_for_append(self, rest_id,
+                       tx_rest_id : Optional[str] = None
+                       ) -> Optional[WritableBlob]:
+        if tx_rest_id:
+            raise NotImplementedError()
+
         return self._get(rest_id)
 
     # BlobStorage

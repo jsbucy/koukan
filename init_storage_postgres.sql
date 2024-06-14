@@ -75,12 +75,17 @@ CREATE INDEX TxBodyBlobId on Transactions (body_blob_id);
 CREATE TABLE TransactionBlobRefs (
   transaction_id INTEGER,
   blob_id INTEGER,
+  rest_id TEXT,
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
     ON UPDATE CASCADE
     ON DELETE CASCADE,
 
   FOREIGN KEY(blob_id) REFERENCES Blob(id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
+
+  FOREIGN KEY(rest_id) REFERENCES Blob(rest_id)
     ON UPDATE CASCADE
     ON DELETE SET NULL,
 

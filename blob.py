@@ -51,6 +51,9 @@ class InlineBlob(Blob):
         self.d += dd
         assert self.len() <= self.content_length()
 
+    def __repr__(self):
+        return 'length=%d content_length=%s' % (self.len(), self.content_length())
+
 # already finalized
 class FileLikeBlob(Blob):
     def __init__(self, f):
@@ -157,11 +160,14 @@ class WritableBlob(ABC):
 
 class BlobStorage(ABC):
     @abstractmethod
-    def create(self, rest_id : str) -> Optional[WritableBlob]:
+    def create(self, rest_id : str,
+               tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
         pass
 
     @abstractmethod
-    def get_for_append(self, rest_id) -> Optional[WritableBlob]:
+    def get_for_append(
+            self, rest_id,
+            tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
         pass
 
     @abstractmethod

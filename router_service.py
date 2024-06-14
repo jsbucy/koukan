@@ -185,7 +185,8 @@ class Service:
     def get_storage_writer(
             self, rest_id : str):  # -> Optional[SyncFilterAdapter]:
         return StorageWriterFilter(
-            storage=self.storage, rest_id=rest_id)
+            storage=self.storage, rest_id=rest_id,
+            rest_id_factory=self.config.rest_id_factory())
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,

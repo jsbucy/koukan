@@ -16,11 +16,12 @@ session = requests.Session()
 session.verify = 'localhost.crt'
 
 # -> uri
-def send_part(inline : Optional[str] = None,
+def send_part(tx_url,
+              inline : Optional[str] = None,
               filename : Optional[str] = None) -> Optional[str]:
     assert inline or filename
 
-    resp = session.post(base_url + '/blob?upload=chunked')
+    resp = session.post(tx_url + '/blob?upload=chunked')
     logging.info('POST /blob %s', resp)
 
     if resp.status_code != 201:
@@ -40,7 +41,7 @@ def send_part(inline : Optional[str] = None,
     return uri
 
 
-def send_body(json):
+def send_body(tx_url, json):
     for multi in ['text_body', 'related_attachments', 'file_attachments']:
         if not (multipart := json.get(multi, [])):
             continue
@@ -51,7 +52,8 @@ def send_body(json):
             if not inline and not filename:
                 continue
 
-            if (uri := send_part(inline=inline, filename=filename)) is None:
+            if (uri := send_part(
+                    tx_url, inline=inline, filename=filename)) is None:
                 return False
 
             for part_field in ['put_content', 'file_content']:
@@ -112,14 +114,16 @@ def main(mail_from, rcpt_to):
                          resp_field, rest_resp, rest_resp.json())
             return
 
-    if not send_body(message_builder):
+    if not send_body(tx_url, message_builder):
         return
     logging.info('main message_builder spec %s', message_builder)
+
+    get_tx_resp = session.get(tx_url)
 
     resp = session.patch(
         tx_url,
         json={'message_builder': message_builder},
-        headers = {'if-match': rest_resp.headers['etag']})
+        headers = {'if-match': get_tx_resp.headers['etag']})
     if resp.status_code >= 300:
         logging.info('patch message builder spec resp %s', resp)
         return
