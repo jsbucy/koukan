@@ -18,11 +18,6 @@ class MessageBuilderFilterTest(unittest.TestCase):
         self.storage = Storage.get_sqlite_inmemory_for_test()
 
     def test_basic(self):
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(rest_id='xyz')
-        d = b'hello, world!'
-        blob_writer.append_data(0, d, len(d))
-
         upstream = FakeSyncFilter()
         message_builder = MessageBuilderFilter(self.storage, upstream)
 
@@ -30,16 +25,25 @@ class MessageBuilderFilterTest(unittest.TestCase):
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('tx_rest_id', tx)
+
+        blob_writer = self.storage.create(
+            rest_id='blob_rest_id', tx_rest_id='tx_rest_id')
+        d = b'hello, world!'
+        blob_writer.append_data(0, d, len(d))
+
+        tx_delta = TransactionMetadata()
         tx.message_builder = {
             "text_body": [
                 {
                     "content_type": "text/html",
-                    "blob_rest_id": "xyz"
+                    "blob_rest_id": "blob_rest_id"
                 }
             ]
         }
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_id', tx, reuse_blob_rest_id=['xyz'])
+        tx_cursor.load()
+        tx_cursor.write_envelope(tx_delta)
 
         def exp(tx, delta):
             self.assertNotEqual(

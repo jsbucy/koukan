@@ -35,7 +35,7 @@ class SmtpGateway(EndpointFactory):
 
         rest_output  = config.root_yaml.get('rest_output', None)
 
-        self.blob_storage = InMemoryBlobStorage()
+        self.blob_storage = None  #InMemoryBlobStorage()
         self.smtp_factory = SmtpFactory()
 
         self.inflight = {}
@@ -129,7 +129,8 @@ class SmtpGateway(EndpointFactory):
                 time.sleep(gc_interval - delta)
             last_gc = now
             self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600))
-            self.blob_storage.gc(rest_yaml.get('gc_blob_ttl', 60))
+            if self.blob_storage:
+                self.blob_storage.gc(rest_yaml.get('gc_blob_ttl', 60))
 
     def main(self):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:

@@ -203,8 +203,8 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.join_tx_update done')
 
     def dump_db(self):
-        with self.service.storage.conn() as conn:
-            for l in conn.connection.iterdump():
+        with self.service.storage.begin_transaction() as db_tx:
+            for l in db_tx.connection.iterdump():
                 logging.debug(l)
 
     def assertRcptCodesEqual(self, responses : List[Optional[Response]],
@@ -647,8 +647,9 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t, 10)
 
         blob = InlineBlob("hello, world!")
-        rest_endpoint.blob_url = rest_endpoint.full_blob_url = None
-        blob_resp = rest_endpoint._put_blob(blob)
+        #rest_endpoint.blob_url = rest_endpoint.full_blob_url = None
+        blob_resp = rest_endpoint._put_blob(
+            blob, testonly_non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
 
         updated_tx = tx.copy()
@@ -663,7 +664,7 @@ class RouterServiceTest(unittest.TestCase):
             ],
             "text_body": [{
                 "content_type": "text/plain",
-                "content_uri": rest_endpoint.blob_url
+                "content_uri": rest_endpoint.blob_path
             }]
         }
         tx_delta = tx.delta(updated_tx)

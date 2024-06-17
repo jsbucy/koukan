@@ -632,12 +632,6 @@ class AsyncFilter(ABC):
             ) -> Optional[TransactionMetadata]:
         pass
 
-    @abstractmethod
-    def append_body(self, offset : int, d : bytes,
-                    content_length : Optional[int] = None
-                    ) -> Tuple[bool, int, Optional[int]]:
-        pass
-
     # returns a "cached" value from the last get/update
     @abstractmethod
     def version(self) -> int:

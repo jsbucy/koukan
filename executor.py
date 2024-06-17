@@ -33,11 +33,13 @@ class Executor:
         if debug_futures:
             self.debug_futures = []
 
-    def _check_watchdog_locked(self):
+    def _check_watchdog_locked(self, timeout = None):
+        if timeout is None:
+            timeout = self.watchdog_timeout
         now = time.monotonic()
         for (thread, start) in self.inflight.items():
             runtime = now - start
-            if runtime > self.watchdog_timeout:
+            if runtime > timeout:
                 logging.critical(
                     'Executor thread watchdog timeout '
                     'tid %d %d 0x%x runtime %d',
@@ -81,15 +83,15 @@ class Executor:
         ex = self.executor
         self.executor = None  # stop new work coming in
         with self.lock:
-            for i in range(0, int(self.watchdog_timeout)):
+            for i in range(0, int(timeout)):
                 logging.debug('Executor.shutdown waiting on %d',
                               len(self.inflight))
-                self._check_watchdog_locked()
+                self._check_watchdog_locked(timeout)
                 if self.cv.wait_for(lambda: len(self.inflight) == 0,
                                     timeout=1):
                     break
 
-        ex.shutdown(wait=True, cancel_futures=True)
+        ex.shutdown(wait=False, cancel_futures=True)
         if self.debug_futures:
             for fut in self.debug_futures:
                 fut.result()  # propagate exceptions

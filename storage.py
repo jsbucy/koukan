@@ -51,6 +51,8 @@ class TransactionCursor:
 
     no_final_notification : Optional[bool] = None
 
+    body_blob_id : Optional[int] = None
+
     def __init__(self, storage):
         self.parent = storage
         self.id = None
@@ -327,7 +329,8 @@ class TransactionCursor:
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.body_rest_id,
                      self.parent.tx_table.c.message_builder,
-                     self.parent.tx_table.c.no_final_notification)
+                     self.parent.tx_table.c.no_final_notification,
+                     self.parent.tx_table.c.body_blob_id)
 
 
         if db_id is not None:
@@ -349,7 +352,8 @@ class TransactionCursor:
          self.final_attempt_reason,
          self.body_rest_id,
          self.message_builder,
-         self.no_final_notification) = row
+         self.no_final_notification,
+         self.body_blob_id) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         # TODO this (and the db col) are probably vestigal? The
@@ -915,7 +919,8 @@ class Storage(BlobStorage):
 
     # BlobStorage
     def create(self, rest_id : str,
-               tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
+               tx_rest_id : Optional[str] = None
+               ) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
             writer = self.get_blob_writer()
             writer._create(rest_id, db_tx)
@@ -931,7 +936,8 @@ class Storage(BlobStorage):
 
     # BlobStorage
     def get_for_append(self, rest_id,
-                       tx_rest_id : Optional[str] = None
+                       tx_rest_id : Optional[str] = None,
+                       tx_body : bool = False
                        ) -> Optional[WritableBlob]:
         writer = self.get_blob_writer()
         if writer.load(rest_id, tx_rest_id) is None:

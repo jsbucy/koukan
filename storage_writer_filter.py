@@ -81,8 +81,12 @@ class StorageWriterFilter(AsyncFilter):
         return self._get(Deadline(timeout))
 
     def _body(self, tx):
-        if isinstance(tx.body_blob, BlobReader):
-            tx.body = tx.body_blob.rest_id
+        body_blob = tx.body_blob
+        if isinstance(body_blob, BlobReader):
+            tx.body = body_blob.rest_id
+            return
+        elif isinstance(body_blob, BlobWriter):
+            tx.body = body_blob.rest_id
             return
 
         blob_writer = self.storage.get_blob_writer()
@@ -144,7 +148,10 @@ class StorageWriterFilter(AsyncFilter):
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
         if tx_delta.body_blob is not None and self.blob_writer is None:
-            if tx_delta.body_blob.len() == tx_delta.body_blob.content_length():
+            body_blob = tx_delta.body_blob
+            if ((isinstance(body_blob, BlobWriter) and
+                 body_blob.length == body_blob.content_length) or (
+                     tx_delta.body_blob.len() == tx_delta.body_blob.content_length())):
                 self._body(tx_delta)
                 if tx_delta.data_response is not None:
                     return  # XXX
@@ -186,20 +193,3 @@ class StorageWriterFilter(AsyncFilter):
         return upstream_delta
 
 
-    def append_body(self, offset : int, d : bytes,
-                    content_length : Optional[int] = None
-                    ) -> Tuple[bool, int, Optional[int]]:
-        if self.blob_writer is None:
-            self.blob_writer = self.storage.get_blob_writer()
-            rest_id = self.rest_id_factory()
-            self.blob_writer.create(rest_id)
-        rv = self.blob_writer.append_data(offset, d, content_length)
-        if not rv[0] or content_length is None or offset + len(d) != content_length:
-            return rv
-        tx_delta = TransactionMetadata(body=self.blob_writer.rest_id)
-        if self.tx_cursor is None:
-            self._load()
-        self.tx_cursor.write_envelope(tx_delta,
-                                      reuse_blob_rest_id=[tx_delta.body])
-
-        return rv

@@ -167,7 +167,8 @@ class BlobStorage(ABC):
     @abstractmethod
     def get_for_append(
             self, rest_id,
-            tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
+            tx_rest_id : Optional[str] = None,
+            tx_body : bool = False) -> Optional[WritableBlob]:
         pass
 
     @abstractmethod

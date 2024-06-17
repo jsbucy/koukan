@@ -41,6 +41,7 @@ def constant_resolution(x):
   return lambda ignored: identity_resolution(x)
 
 class RestEndpoint(SyncFilter):
+    transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
     static_base_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -50,8 +51,8 @@ class RestEndpoint(SyncFilter):
     chunk_size : int
     body_len : int = 0
 
+    blob_path : Optional[str] = None
     blob_url : Optional[str] = None
-    full_blob_url : Optional[str] = None
 
     # PATCH sends rcpts to append but it sends back the responses for
     # all rcpts so far, need to remember how many we've sent to know
@@ -136,11 +137,9 @@ class RestEndpoint(SyncFilter):
                 return rest_resp
             logging.info('RestEndpoint._start resp %s %s',
                          rest_resp, rest_resp.http_version)
+            self.transaction_path = rest_resp.headers['location']
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])
-            if self.tx_blob:
-                self.blob_url = rest_resp.headers['location'] + '/body'
-                self.full_blob_url = self.transaction_url + '/body'
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
 
@@ -206,24 +205,6 @@ class RestEndpoint(SyncFilter):
                       self.transaction_url, self.data_last, timeout, tx)
 
         downstream_delta = tx_delta.copy()
-
-        # TODO don't do the blob upload until at least one rcpt has succeeded
-        put_blob_resp = None
-        body_delta = None
-        if self.data_last:
-            put_blob_resp = self._put_blob(tx_delta.body_blob)
-            logging.debug('RestEndpoint.on_update put_blob_resp %s',
-                          put_blob_resp)
-            if put_blob_resp.ok():
-                if not self.tx_blob:
-                    body_delta = TransactionMetadata(body = self.blob_url)
-            else:
-                upstream_delta = TransactionMetadata(
-                    data_response = put_blob_resp)
-                assert tx.merge_from(upstream_delta) is not None
-                # xxx behavior change
-                return upstream_delta
-
         if downstream_delta.body_blob:
             del downstream_delta.body_blob
 
@@ -236,12 +217,9 @@ class RestEndpoint(SyncFilter):
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
 
-        if body_delta:
-            assert self.upstream_tx.merge_from(body_delta) is not None
-            assert downstream_delta.merge_from(body_delta) is not None
-
         logging.debug('RestEndpoint.on_update merged tx %s', self.upstream_tx)
 
+        tx_update = False
         if not self.transaction_url:
             which_js = WhichJson.REST_CREATE
             rest_resp = self._start(self.upstream_tx, deadline)
@@ -250,14 +228,16 @@ class RestEndpoint(SyncFilter):
                 tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint upstream err creating tx'))
                 return
+            tx_update = True
         elif downstream_delta:
             which_js = WhichJson.REST_UPDATE
             rest_resp = self._update(downstream_delta, deadline)
             # TODO handle 412 failed precondition
+            tx_update = True
         elif not self.data_last:
             return TransactionMetadata()
 
-        if not(self.tx_blob and self.data_last):
+        if tx_update:
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
 
@@ -282,8 +262,22 @@ class RestEndpoint(SyncFilter):
                 assert tx.merge_from(errs) is not None
                 return errs
 
-            if not self.upstream_tx.req_inflight():
+            if not self.data_last and not self.upstream_tx.req_inflight():
                 return upstream_delta
+
+
+        # TODO don't do the blob upload until at least one rcpt has succeeded
+        put_blob_resp = None
+        if self.data_last:
+            put_blob_resp = self._put_blob(tx_delta.body_blob)
+            logging.debug('RestEndpoint.on_update() put_blob_resp %s',
+                          put_blob_resp)
+            if not put_blob_resp.ok():
+                upstream_delta = TransactionMetadata(
+                    data_response = put_blob_resp)
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -308,33 +302,38 @@ class RestEndpoint(SyncFilter):
         assert upstream_delta.merge_from(errs) is not None
         return upstream_delta
 
-    def _put_blob(self, blob) -> Response:
+    def _put_blob(self, blob,
+                  testonly_non_body_blob=False) -> Response:
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
             chunk_last = (offset + len(chunk) >= blob.len())
-            logging.debug('_put_blob chunk_offset %d chunk len %d '
+            logging.debug('RestEndpoint._put_blob() '
+                          'chunk_offset %d chunk len %d '
                           'body_len %d chunk_last %s',
                           offset, len(chunk), self.body_len, chunk_last)
 
             resp, result_length = self._put_blob_chunk(
                 offset=self.body_len,
                 d=chunk,
-                last=chunk_last)
+                last=chunk_last,
+                testonly_non_body_blob=testonly_non_body_blob)
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
                 return resp
             # how many bytes from chunk were actually accepted?
             chunk_out = result_length - self.body_len
-            logging.debug('_put_blob result_length %d chunk_out %d',
+            logging.debug('RestEndpoint._put_blob() '
+                          'result_length %d chunk_out %d',
                           result_length, chunk_out)
             offset += chunk_out
             self.body_len += chunk_out
         return Response()
 
     # -> (resp, len)
-    def _put_blob_chunk(self, offset, d : bytes, last : bool
+    def _put_blob_chunk(self, offset, d : bytes, last : bool,
+                        testonly_non_body_blob=False
                         ) -> Tuple[Optional[Response], Optional[int]]:
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
@@ -343,35 +342,46 @@ class RestEndpoint(SyncFilter):
             headers['host'] = self.http_host
         try:
             if self.blob_url is None:
-                if self.tx_blob:
-                    endpoint = self.transaction_url + '/blob'
+                if not testonly_non_body_blob:
+                    self.blob_path = self.transaction_path + '/body'
+                    self.blob_url = self._maybe_qualify_url(self.blob_path)
+                    endpoint = self.blob_url
                 else:
-                    endpoint = '/blob'
+                    endpoint = self.transaction_url + '/blob'
+
                 entity = d
                 if not last:
                     endpoint += '?upload=chunked'
                     entity = None
-                rest_resp = self.client.post(
+                if testonly_non_body_blob:
+                    http_fn,method,exp_status = self.client.post, 'POST', 201
+                else:
+                    http_fn,method,exp_status = self.client.put, 'PUT', 200
+                rest_resp = http_fn(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s %s',
+                logging.info('RestEndpoint._put_blob_chunk %s %s %s %s %s',
+                             method,
                              endpoint,
                              rest_resp, rest_resp.headers,
                              rest_resp.http_version)
-                if rest_resp.status_code != 201:
+                if rest_resp.status_code != exp_status:
                     return None, None
-                self.blob_url = rest_resp.headers.get('location', None)
-                if not self.blob_url:
-                    return None, None
-                self.full_blob_url = self._maybe_qualify_url(self.blob_url)
+                if testonly_non_body_blob:
+                    self.blob_path = rest_resp.headers.get('location', None)
+                    if not self.blob_path:
+                        return None, None
+                    self.blob_url = self._maybe_qualify_url(self.blob_path)
                 if not last:  # i.e. chunked upload
                     return Response(), 0
             else:
                 range = ContentRange('bytes', offset, offset + len(d),
                                      offset + len(d) if last else None)
+                logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
+                             self.blob_url, range)
                 headers['content-range'] = range.to_header()
                 rest_resp = self.client.put(
-                    self.full_blob_url, headers=headers, content=d,
+                    self.blob_url, headers=headers, content=d,
                     timeout=self.timeout_data)
         except RequestError:
             return None, None
@@ -436,7 +446,10 @@ class RestEndpoint(SyncFilter):
                 tx_out = TransactionMetadata.from_json(
                     json, WhichJson.REST_READ)
 
-            if (tx_out is not None) and (not self.upstream_tx.req_inflight(tx_out)):
+            if (tx_out is not None) and (
+                    not self.upstream_tx.req_inflight(tx_out)) and (
+                    # xxx move to req_inflight()?
+                    not self.data_last or tx_out.data_response):
                 logging.debug('RestEndpoint._get() %s done %s',
                               self.transaction_url, tx_out)
                 return tx_out

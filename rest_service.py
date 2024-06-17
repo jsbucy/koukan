@@ -41,7 +41,7 @@ def create_app(handler_factory : HandlerFactory):
     def put_tx_body(tx_rest_id) -> FlaskResponse:
         logging.debug('rest_service.put_tx_body %s', request)
         handler = handler_factory.get_tx(tx_rest_id)
-        return handler.put_tx_body(request)
+        return handler.put_blob(request, tx_body=True)
 
     @app.route('/transactions/<tx_rest_id>/blob', methods=['POST'])
     def create_tx_blob(tx_rest_id) -> FlaskResponse:
