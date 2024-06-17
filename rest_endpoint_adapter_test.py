@@ -13,7 +13,7 @@ from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
 from executor import Executor
 from filter import Mailbox, TransactionMetadata, WhichJson
 from response import Response
-from blobs import InMemoryBlobStorage
+from storage import Storage
 
 
 class SyncFilterAdapterTest(unittest.TestCase):
@@ -66,7 +66,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
         tx = TransactionMetadata()
         tx.rest_id = 'rest_id'
         endpoint.merge(tx)
-        blob_storage = InMemoryBlobStorage()
+        storage = Storage.get_sqlite_inmemory_for_test()
 
         with app.test_request_context():
             handler = RestEndpointAdapter(endpoint, http_host='msa')
@@ -152,31 +152,14 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(
                 endpoint,
                 http_host='msa',
-                blob_storage=blob_storage,
-                rest_id_factory = lambda: 'blob-rest-id')
-            resp = handler.create_blob(FlaskRequest.from_values(
-                data='hello, world!'))
+                rest_id_factory = lambda: 'blob-rest-id',
+                blob_storage=storage)
+            resp = handler.put_blob(
+                FlaskRequest.from_values(data='hello, world!'),
+                tx_body=True)
             logging.debug(resp.response)
-            self.assertEqual(resp.status, '201 CREATED')
-            self.assertEqual(handler.blob_rest_id(), 'blob-rest-id')
-
-            # patch body into tx
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
-                                          http_host='msa',
-                                          blob_storage=blob_storage)
-            resp = handler.patch_tx(FlaskRequest.from_values(
-                json={'body': '/blob/blob-rest-id'},
-                headers={'if-match': tx_etag}))
             self.assertEqual(resp.status, '200 OK')
-            logging.debug('RestEndpointAdapterTest patch body %s', resp.json)
-            self.assertEqual(resp.json, {
-                'mail_from': {},
-                'rcpt_to': [{}, {}],
-                'body': {},
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'},
-                                  {'code': 203, 'message': 'ok'}],
-            })
+            self.assertEqual(handler.blob_rest_id(), 'blob-rest-id')
 
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
@@ -193,8 +176,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
 
 
             handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
-                                          http_host='msa',
-                                          blob_storage=blob_storage)
+                                          http_host='msa')
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.status, '200 OK')
@@ -218,14 +200,14 @@ class RestEndpointAdapterTest(unittest.TestCase):
     def test_blob_chunking(self):
         endpoint = FakeAsyncEndpoint(rest_id='rest-id')
         app = Flask(__name__)
-        blob_storage = InMemoryBlobStorage()
+        storage = Storage.get_sqlite_inmemory_for_test()
 
         with app.test_request_context():
             # content-range header is not accepted in non-chunked blob post
             handler = RestEndpointAdapter(
                 endpoint,
                 http_host='msa',
-                blob_storage=blob_storage,
+                blob_storage=storage,
                 rest_id_factory = lambda: 'blob-rest-id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
@@ -237,7 +219,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(
                 endpoint,
                 http_host='msa',
-                blob_storage=blob_storage,
+                blob_storage=storage,
                 rest_id_factory = lambda: 'blob-rest-id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
@@ -248,7 +230,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(
                 endpoint,
                 http_host='msa',
-                blob_storage=blob_storage,
+                blob_storage=storage,
                 rest_id_factory = lambda: 'blob-rest-id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
@@ -259,7 +241,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
-                blob_storage=blob_storage,
+                blob_storage=storage,
                 rest_id_factory = lambda: 'rest-id')
             b = b'hello, '
             range = ContentRange('bytes', 0, len(b))
@@ -274,7 +256,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             handler = RestEndpointAdapter(
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
-                blob_storage=blob_storage,
+                blob_storage=storage,
                 rest_id_factory = lambda: 'rest-id')
             b2 = b'world!'
             range = ContentRange('bytes', len(b), len(b) + len(b2),

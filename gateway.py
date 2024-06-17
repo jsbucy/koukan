@@ -8,7 +8,6 @@ from threading import Lock
 
 from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
-from blobs import InMemoryBlobStorage
 from smtp_service import service as smtp_service
 import rest_service
 from rest_endpoint_adapter import (
@@ -35,7 +34,6 @@ class SmtpGateway(EndpointFactory):
 
         rest_output  = config.root_yaml.get('rest_output', None)
 
-        self.blob_storage = None  #InMemoryBlobStorage()
         self.smtp_factory = SmtpFactory()
 
         self.inflight = {}
@@ -129,8 +127,6 @@ class SmtpGateway(EndpointFactory):
                 time.sleep(gc_interval - delta)
             last_gc = now
             self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600))
-            if self.blob_storage:
-                self.blob_storage.gc(rest_yaml.get('gc_blob_ttl', 60))
 
     def main(self):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:
@@ -156,7 +152,7 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
         self.adapter_factory = RestEndpointAdapterFactory(
-            self, self.blob_storage, self.rest_id_factory)
+            self, None, self.rest_id_factory)
 
         flask_app=rest_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']

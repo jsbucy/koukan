@@ -21,8 +21,8 @@ import werkzeug.http
 
 from deadline import Deadline
 from response import Response as MailResponse
-from blob import Blob, InlineBlob, WritableBlob
-from blobs import BlobStorage
+from blob import Blob, InlineBlob, BlobStorage, WritableBlob
+
 from rest_service_handler import Handler, HandlerFactory
 from filter import (
     AsyncFilter,

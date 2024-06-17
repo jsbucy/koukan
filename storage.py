@@ -456,12 +456,17 @@ class TransactionCursor:
 class BlobWriter(WritableBlob):
     id = None
     length : int = 0  # max offset+len from BlobContent, next offset to write
-    content_length : Optional[int] = None  # overall length from content-range
+    _content_length : Optional[int] = None  # overall length from content-range
     rest_id = None
     last = False
 
     def __init__(self, storage):
         self.parent = storage
+
+    def len(self):
+        return self.length
+    def content_length(self):
+        return self._content_length
 
     def _create(self, rest_id : str, db_tx):
         ins = insert(self.parent.blob_table).values(
@@ -520,9 +525,9 @@ class BlobWriter(WritableBlob):
 
         if not row:
             return None
-        self.id, self.content_length, self.last_update, self.length = row
+        self.id, self._content_length, self.last_update, self.length = row
         self.rest_id = rest_id
-        self.last = (self.length == self.content_length)
+        self.last = (self.length == self._content_length)
 
         return self.id
 
@@ -535,7 +540,7 @@ class BlobWriter(WritableBlob):
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.id, self.rest_id, self.length, len(d),
-                     self.content_length, content_length)
+                     self._content_length, content_length)
 
         assert content_length is None or (
             content_length >= (offset + len(d)))
@@ -576,12 +581,12 @@ class BlobWriter(WritableBlob):
             assert row[0] == (self.length + len(d))
 
             self.length = row[0]
-            self.content_length = content_length
-            self.last = (self.length == self.content_length)
+            self._content_length = content_length
+            self.last = (self.length == self._content_length)
             logging.debug('append_data %d %s last=%s',
-                          self.length, self.content_length, self.last)
+                          self.length, self._content_length, self.last)
 
-        return True, self.length, self.content_length
+        return True, self.length, self._content_length
 
 
 class BlobReader(Blob):

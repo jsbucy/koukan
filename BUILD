@@ -259,9 +259,6 @@ py_test(name='executor_test',
         srcs=['executor_test.py'],
         deps=[':executor'])
 
-pytype_library(name='blobs',
-               srcs=['blobs.py'])
-
 pytype_library(name='gunicorn_main',
                srcs=['gunicorn_main.py'])
 
@@ -281,7 +278,6 @@ pytype_library(name='router_service',
                      ':config',
                      ':blob',
                      ':rest_endpoint',
-                     ':blobs',
                      ':rest_service',
                      ':gunicorn_main',
                      ':hypercorn_main',
@@ -318,7 +314,6 @@ py_test(name='smtp_service_test',
 pytype_library(name='rest_endpoint_adapter',
                srcs=['rest_endpoint_adapter.py'],
                deps=[':blob',
-                     ':blobs',
                      ':deadline',
                      ':executor',
                      ':filter',
@@ -332,7 +327,8 @@ py_test(name='rest_endpoint_adapter_test',
               ':executor',
               ':fake_endpoints',
               ':filter',
-              ':response'])
+              ':response',
+              ':storage'])
 
 pytype_library(name='smtp_endpoint',
                srcs=['smtp_endpoint.py'],
