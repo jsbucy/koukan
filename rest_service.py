@@ -56,19 +56,4 @@ def create_app(handler_factory : HandlerFactory):
         return handler.put_blob(request,
                                 tx_rest_id=tx_rest_id,
                                 blob_rest_id=blob_rest_id)
-
-    # old blob api
-    @app.route('/blob', methods=['POST'])
-    def create_blob() -> FlaskResponse:
-        handler = handler_factory.create_blob()
-        return handler.create_blob(request)
-
-    @app.route('/blob/<blob_rest_id>', methods=['PUT'])
-    def append_data_chunk(blob_rest_id) -> FlaskResponse:
-        handler = handler_factory.get_blob(blob_rest_id)
-        return handler.put_blob(request)
-
     return app
-
-
-

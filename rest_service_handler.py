@@ -19,7 +19,6 @@ class Handler(ABC):
     def patch_tx(self, request : FlaskRequest) -> FlaskResponse:
         pass
 
-    # old blob api
     @abstractmethod
     def create_blob(self, request : FlaskRequest,
                     tx_rest_id : Optional[str] = None) -> FlaskResponse:
@@ -44,12 +43,4 @@ class HandlerFactory(ABC):
 
     @abstractmethod
     def get_tx(self, tx_rest_id : str) -> Handler:
-        pass
-
-    @abstractmethod
-    def create_blob(self) -> Handler:
-        pass
-
-    @abstractmethod
-    def get_blob(self, blob_rest_id : str) -> Handler:
         pass

@@ -519,12 +519,3 @@ class RestEndpointAdapterFactory(HandlerFactory):
             blob_storage=self.blob_storage,
             rest_id_factory=self.rest_id_factory)
 
-    def create_blob(self) -> RestEndpointAdapter:
-        return RestEndpointAdapter(blob_storage=self.blob_storage,
-                                   rest_id_factory=self.rest_id_factory)
-
-    def get_blob(self, blob_rest_id) -> RestEndpointAdapter:
-        return RestEndpointAdapter(
-            blob_storage=self.blob_storage,
-            blob_rest_id=blob_rest_id,
-            rest_id_factory=self.rest_id_factory)
