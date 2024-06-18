@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
@@ -10,6 +10,7 @@ from filter import (
     Mailbox,
     SyncFilter,
     TransactionMetadata )
+from rest_schema import BlobUri
 
 class FakeAsyncEndpoint(AsyncFilter):
     tx : TransactionMetadata
@@ -58,7 +59,8 @@ class FakeAsyncEndpoint(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
+                        tx_body : Optional[bool] = None,
+                        copy_from_uri : Optional[BlobUri] = None
                         ) -> Optional[WritableBlob]:
         assert not(tx_body and blob_rest_id)
         return self.body_blob

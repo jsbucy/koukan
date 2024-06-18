@@ -31,8 +31,7 @@ from filter import (
     WhichJson )
 from executor import Executor
 
-from rest_service import uri_to_blob
-from rest_schema import make_blob_uri, parse_blob_uri
+from rest_schema import BlobUri, make_blob_uri, parse_blob_uri
 
 # Wrapper for vanilla/sync Filter that provides async interface for REST
 class SyncFilterAdapter(AsyncFilter):
@@ -158,9 +157,12 @@ class SyncFilterAdapter(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
+                        tx_body : Optional[bool] = None,
+                        copy_from_uri : Optional[BlobUri] = None
                         ) -> Optional[WritableBlob]:
-        if blob_rest_id or not tx_body:
+        if (blob_rest_id or
+            not tx_body or
+            copy_from_uri is not None):
             raise NotImplementedError()
         if create and self.body_blob is None:
             self.body_blob = InlineBlob(b'')
@@ -342,6 +344,13 @@ class RestEndpointAdapter(Handler):
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
+        copy_from_uri = None
+        if 'x-copy-from' in request.headers:
+            copy_from_uri = parse_blob_uri(request.headers['x-copy-from'])
+            if copy_from_uri is None or copy_from_uri.tx_body != tx_body:
+                return FlaskResponse(
+                    status=400, response=['invalid x-copy-from'])
+
         if 'upload' not in request.args:
             if 'content-range' in request.headers:
                 return FlaskResponse(
@@ -358,7 +367,8 @@ class RestEndpointAdapter(Handler):
 
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id,
-                tx_body=tx_body)) is None:
+                tx_body=tx_body,
+                copy_from_uri=copy_from_uri)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 

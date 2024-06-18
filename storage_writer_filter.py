@@ -17,7 +17,7 @@ from blob import Blob, WritableBlob
 from deadline import Deadline
 from message_builder import MessageBuilder
 
-from rest_schema import parse_blob_uri
+from rest_schema import BlobUri, parse_blob_uri
 
 
 # this is only going to implement AsyncFilter
@@ -111,13 +111,12 @@ class StorageWriterFilter(AsyncFilter):
         reuse_blob_rest_id=None
 
         def tx_blob_id(tx_rest_id, uri):
-            rv = parse_blob_uri(uri)
-            if rv is None:
+            uri = parse_blob_uri(uri)
+            if uri is None:
                 return None
-            tx,blob = rv
-            if tx != tx_rest_id:
+            if uri.tx_id != tx_rest_id:
                 return None
-            return blob
+            return uri.blob
 
         if tx_delta.message_builder:
             reuse_blob_rest_id = MessageBuilder.get_blobs(
@@ -184,19 +183,25 @@ class StorageWriterFilter(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
+                        tx_body : Optional[bool] = None,
+                        copy_from_uri : Optional[BlobUri] = None
                         ) -> Optional[WritableBlob]:
         assert not (tx_body and blob_rest_id)
         assert tx_body or blob_rest_id
+        assert copy_from_uri is None or not create
+        assert copy_from_uri is None or not copy_from_uri.tx_body or tx_body
+        assert copy_from_uri is None or copy_from_uri.blob is None or (not tx_body)
 
         if create:
             if tx_body:
                 # XXX should ref to tx here?
                 blob_rest_id = self.rest_id_factory()
+                # copy_from_uri.tx_body
                 blob = self.storage.create_blob(
                     rest_id=blob_rest_id  #, tx_rest_id=self.rest_id
                 )
             else:  # blob_rest_id
+                # copy_from_uri.blob
                 blob = self.storage.create_blob(blob_rest_id, self.rest_id)
         else:
             if tx_body:

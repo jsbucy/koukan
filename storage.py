@@ -190,7 +190,7 @@ class TransactionCursor:
                       self.id, input_done, tx.body)
 
         if tx.body:
-            if reuse_blob_rest_id:
+            if len(reuse_blob_rest_id) == 1:
                 logging.debug('TransactionCursor._write_blob %d reuse', self.id)
                 upd = upd.values(
                     body_blob_id = reuse_blob_id[0][0],

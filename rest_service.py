@@ -12,12 +12,6 @@ from rest_service_handler import (
 
 MAX_TIMEOUT=30
 
-def blob_to_uri(s):
-    return '/blob/' + s
-
-def uri_to_blob(s):
-    return s.removeprefix('/blob/')
-
 def create_app(handler_factory : HandlerFactory):
     app = Flask(__name__)
 

@@ -16,7 +16,8 @@ pytype_library(name='response',
 pytype_library(name='filter',
                srcs=['filter.py'],
                deps=[':blob',
-                     ':response'])
+                     ':response',
+                     ':rest_schema'])
 
 py_test(name='filter_test',
         srcs=['filter_test.py'],

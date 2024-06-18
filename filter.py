@@ -7,6 +7,7 @@ import copy
 from response import Response
 
 from blob import Blob, WritableBlob
+from rest_schema import BlobUri
 
 class HostPort:
     host : str
@@ -638,7 +639,8 @@ class AsyncFilter(ABC):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
+                        tx_body : Optional[bool] = None,
+                        copy_from_uri : Optional[BlobUri] = None
                         ) -> Optional[WritableBlob]:
         pass
 
