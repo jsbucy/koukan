@@ -21,7 +21,7 @@ import werkzeug.http
 
 from deadline import Deadline
 from response import Response as MailResponse
-from blob import Blob, InlineBlob, BlobStorage, WritableBlob
+from blob import Blob, InlineBlob, WritableBlob
 
 from rest_service_handler import Handler, HandlerFactory
 from filter import (
@@ -174,37 +174,23 @@ class RestEndpointAdapter(Handler):
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
 
-    blob_storage : Optional[BlobStorage]
     _blob_rest_id : str
     rest_id_factory : Optional[Callable[[], str]]
     http_host : Optional[str] = None
 
     def __init__(self, async_filter : Optional[AsyncFilter] = None,
                  tx_rest_id=None,
-                 blob_storage : Optional[BlobStorage] = None,
                  blob_rest_id=None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None):
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
-        self.blob_storage = blob_storage
         self._blob_rest_id = blob_rest_id
         self.rest_id_factory = rest_id_factory
         self.http_host = http_host
 
     def blob_rest_id(self):
         return self._blob_rest_id
-
-    def _body(self, tx : TransactionMetadata):
-        if tx.body:
-            blob_id = uri_to_blob(tx.body)
-            # TODO this blob is not going to be reused and needs to be
-            # retired ~immediately
-            body_blob = self.blob_storage.get_finalized(blob_id)
-            if body_blob is None:
-                return FlaskResponse(status=404, response=['blob not found'])
-            tx.body_blob = body_blob
-            del tx.body
 
     def _get_timeout(self, req : FlaskRequest
                      ) -> Tuple[Optional[int], FlaskResponse]:
@@ -235,13 +221,7 @@ class RestEndpointAdapter(Handler):
             return FlaskResponse(status=400, response=['invalid request'])
         tx.host = self.http_host
         prev_tx = tx.copy()
-        # TODO needing to manipulate the body fields like this (and below) is
-        # possibly a symptom that that the blob storage integration
-        # should be moved to SyncFilterAdapter and do nothing for
-        # StorageWriterFilter which will pass the blob id all the way
-        # to storage.
         body = tx.body
-        self._body(tx)
         timeout, err = self._get_timeout(request)
         if self.async_filter is None:
             return FlaskResponse(
@@ -295,7 +275,6 @@ class RestEndpointAdapter(Handler):
         if downstream_delta is None:
             return FlaskResponse(status=400, response=['invalid request'])
         body = downstream_delta.body
-        err = self._body(downstream_delta)
         if err is not None:
             return err
         req_etag = request.headers.get('if-match', None)
@@ -377,8 +356,6 @@ class RestEndpointAdapter(Handler):
 
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id)) is None:
-#        if (blob := self.blob_storage.create(
-#                self._blob_rest_id, tx_rest_id=self._tx_rest_id)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -399,41 +376,23 @@ class RestEndpointAdapter(Handler):
                  tx_body : bool = False) -> FlaskResponse:
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
-        range_err, range = self._get_range(request)
-        if range_err:
-            return range_err
+        range = None
+        if request.data:
+            range_err, range = self._get_range(request)
+            if range_err:
+                return range_err
 
-        # maybe we should move the BlobStorage stuff to AsyncFilter
-        # then SyncFilterAdapter would only support body_blob but
-        # StorageWriterFilter would support arbitrary blobs for message builder?
+        create_blob = tx_body and (range is None or range.start == 0)
+        blob = self.async_filter.get_blob_writer(
+            create = create_blob,
+            blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
-        blob = None
-        if True:  #self.blob_storage is None:
-            blob = self.async_filter.get_blob_writer(
-                create = range.start == 0,
-                blob_rest_id=self._blob_rest_id, tx_body=tx_body)
-        elif tx_body:
-            tx = self.async_filter.get(timeout=0)
-            if tx is None:
-                return FlaskResponse(
-                    status=500, response=['internal error get tx failed'])
-
-            logging.debug('RestEndpointAdapter.put_blob tx_body before '
-                          'create %s', tx)
-            if tx.body is None:
-                self._blob_rest_id = self.rest_id_factory()
-                # XXX should ref to tx here?
-                blob = self.blob_storage.create(
-                    rest_id=self._blob_rest_id  #, tx_rest_id=self._tx_rest_id
-                )
-            else:
-                self._blob_rest_id = tx.body
-
-        # if blob is None:
-        #     blob = self.blob_storage.get_for_append(
-        #         self._blob_rest_id, tx_rest_id=self._tx_rest_id)
         if blob is None:
-            return FlaskResponse(status=404, response=['unknown blob'])
+            if create_blob:
+                return FlaskResponse(
+                    status=500, response=['error creating blob'])
+            else:
+                return FlaskResponse(status=404, response=['unknown blob'])
 
         resp = self._put_blob(request, range, blob)
         logging.debug('RestEndpointAdapter.put_blob %s %s', resp, tx_body)
@@ -490,20 +449,17 @@ class EndpointFactory(ABC):
 
 class RestEndpointAdapterFactory(HandlerFactory):
     endpoint_factory : EndpointFactory
-    blob_storage : Optional[BlobStorage]
     rest_id_factory : Callable[[], str]
 
-    def __init__(self, endpoint_factory, blob_storage : Optional[BlobStorage],
+    def __init__(self, endpoint_factory,
                  rest_id_factory : Callable[[], str]):
         self.endpoint_factory = endpoint_factory
-        self.blob_storage = blob_storage
         self.rest_id_factory = rest_id_factory
 
     def create_tx(self, http_host) -> RestEndpointAdapter:
         endpoint = self.endpoint_factory.create(http_host)
         return RestEndpointAdapter(
             async_filter=endpoint,
-            blob_storage=self.blob_storage,
             http_host=http_host,
             rest_id_factory=self.rest_id_factory)
 
@@ -511,6 +467,4 @@ class RestEndpointAdapterFactory(HandlerFactory):
         return RestEndpointAdapter(
             async_filter=self.endpoint_factory.get(tx_rest_id),
             tx_rest_id=tx_rest_id,
-            blob_storage=self.blob_storage,
             rest_id_factory=self.rest_id_factory)
-

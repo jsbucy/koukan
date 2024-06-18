@@ -69,14 +69,14 @@ class InlineBlob(Blob, WritableBlob):
                     ) -> Tuple[bool, int, Optional[int]]:
         req = content_length is not None
         upstream = self._content_length is not None
-        if (offset != len(d) or
+        if (offset != len(self.d) or
             (upstream and not req) or
             (upstream and req and (self._content_length != content_length))):
-            return False, len(d), self._content_length
+            return False, len(self.d), self._content_length
         self.d += d
         if self._content_length is None:
             self._content_length = content_length
-        return True, len(d), content_length
+        return True, len(self.d), content_length
 
 # already finalized
 class FileLikeBlob(Blob):
@@ -174,19 +174,3 @@ class CompositeBlob(Blob):
         return self.len()
 
 
-class BlobStorage(ABC):
-    @abstractmethod
-    def create(self, rest_id : str,
-               tx_rest_id : Optional[str] = None) -> Optional[WritableBlob]:
-        pass
-
-    @abstractmethod
-    def get_for_append(
-            self, rest_id,
-            tx_rest_id : Optional[str] = None,
-            tx_body : bool = False) -> Optional[WritableBlob]:
-        pass
-
-    @abstractmethod
-    def get_finalized(self, rest_id) -> Optional[Blob]:
-        pass

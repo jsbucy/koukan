@@ -21,7 +21,7 @@ from sqlalchemy import (
 
 import psutil
 
-from blob import Blob, InlineBlob, WritableBlob, BlobStorage
+from blob import Blob, InlineBlob, WritableBlob
 from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
@@ -779,7 +779,7 @@ class IdVersionMap:
             return waiter
 
 
-class Storage(BlobStorage):
+class Storage():
     session_id = None
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
@@ -922,10 +922,9 @@ class Storage(BlobStorage):
     def get_blob_reader(self) -> BlobReader:
         return BlobReader(self)
 
-    # BlobStorage
-    def create(self, rest_id : str,
-               tx_rest_id : Optional[str] = None
-               ) -> Optional[WritableBlob]:
+    def create_blob(self, rest_id : str,
+                    tx_rest_id : Optional[str] = None
+                    ) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
             writer = self.get_blob_writer()
             writer._create(rest_id, db_tx)
@@ -939,8 +938,7 @@ class Storage(BlobStorage):
 
             return writer
 
-    # BlobStorage
-    def get_for_append(self, rest_id,
+    def get_blob_for_append(self, rest_id,
                        tx_rest_id : Optional[str] = None,
                        tx_body : bool = False
                        ) -> Optional[WritableBlob]:
@@ -948,14 +946,6 @@ class Storage(BlobStorage):
         if writer.load(rest_id, tx_rest_id) is None:
             return None
         return writer
-
-    # BlobStorage
-    def get_finalized(self, rest_id) -> Optional[Blob]:
-        reader = self.get_blob_reader()
-        if reader.load(rest_id=rest_id, no_tx_id=True) is None:
-            return None
-        return reader
-
 
     def get_transaction_cursor(self) -> TransactionCursor:
         return TransactionCursor(self)

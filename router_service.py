@@ -143,7 +143,6 @@ class Service:
         self.endpoint_factory = StorageWriterFactory(self)
         self.rest_handler_factory = RestEndpointAdapterFactory(
             endpoint_factory = self.endpoint_factory,
-            blob_storage = self.storage,
             rest_id_factory = self.config.rest_id_factory())
 
         with self.lock:

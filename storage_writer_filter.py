@@ -193,17 +193,17 @@ class StorageWriterFilter(AsyncFilter):
             if tx_body:
                 # XXX should ref to tx here?
                 blob_rest_id = self.rest_id_factory()
-                blob = self.storage.create(
+                blob = self.storage.create_blob(
                     rest_id=blob_rest_id  #, tx_rest_id=self.rest_id
                 )
             else:  # blob_rest_id
-                blob = self.storage.create(blob_rest_id, self.rest_id)
+                blob = self.storage.create_blob(blob_rest_id, self.rest_id)
         else:
             if tx_body:
                 tx = self._get(Deadline())
                 blob_rest_id = tx.body
 
-            blob = self.storage.get_for_append(
+            blob = self.storage.get_blob_for_append(
                 blob_rest_id, tx_rest_id=self.rest_id)
 
         return blob

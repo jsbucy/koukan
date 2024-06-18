@@ -152,7 +152,7 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
         self.adapter_factory = RestEndpointAdapterFactory(
-            self, None, self.rest_id_factory)
+            self, self.rest_id_factory)
 
         flask_app=rest_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']

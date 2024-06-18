@@ -17,6 +17,7 @@ class FakeAsyncEndpoint(AsyncFilter):
     cv : Condition
     _version : int = 0
     rest_id : str
+    body_blob : Optional[WritableBlob] = None
 
     def __init__(self, rest_id):
         self.tx = TransactionMetadata()
@@ -54,13 +55,13 @@ class FakeAsyncEndpoint(AsyncFilter):
             return self.tx.copy()
 
 
-    # pass exactly one of blob_rest_id or tx_body=True
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
-        pass
+        assert not(tx_body and blob_rest_id)
+        return self.body_blob
 
     def version(self):
         return self._version
