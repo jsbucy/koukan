@@ -23,7 +23,17 @@ class Blob(ABC):
     def content_length(self) -> Optional[int]:
         pass
 
-class InlineBlob(Blob):
+class WritableBlob(ABC):
+    # write at offset which must be the current end
+    # bool: whether offset was correct/write was applied, resulting range
+    @abstractmethod
+    def append_data(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        pass
+
+
+class InlineBlob(Blob, WritableBlob):
     d : bytes
     _content_length : Optional[int] = None
 
@@ -53,6 +63,20 @@ class InlineBlob(Blob):
 
     def __repr__(self):
         return 'length=%d content_length=%s' % (self.len(), self.content_length())
+
+    def append_data(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        req = content_length is not None
+        upstream = self._content_length is not None
+        if (offset != len(d) or
+            (upstream and not req) or
+            (upstream and req and (self._content_length != content_length))):
+            return False, len(d), self._content_length
+        self.d += d
+        if self._content_length is None:
+            self._content_length = content_length
+        return True, len(d), content_length
 
 # already finalized
 class FileLikeBlob(Blob):
@@ -149,14 +173,6 @@ class CompositeBlob(Blob):
             return None
         return self.len()
 
-class WritableBlob(ABC):
-    # write at offset which must be the current end
-    # bool: whether offset was correct/write was applied, resulting range
-    @abstractmethod
-    def append_data(self, offset : int, d : bytes,
-                    content_length : Optional[int] = None
-                    ) -> Tuple[bool, int, Optional[int]]:
-        pass
 
 class BlobStorage(ABC):
     @abstractmethod

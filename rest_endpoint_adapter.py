@@ -154,6 +154,19 @@ class SyncFilterAdapter(AsyncFilter):
             self._get_locked(tx, timeout)
             return self.tx.copy()
 
+
+    def get_blob_writer(self,
+                        create : bool,
+                        blob_rest_id : Optional[str] = None,
+                        tx_body : Optional[bool] = None
+                        ) -> Optional[WritableBlob]:
+        if blob_rest_id or not tx_body:
+            raise NotImplementedError()
+        if create and self.body_blob is None:
+            self.body_blob = InlineBlob(b'')
+        return self.body_blob
+
+
 MAX_TIMEOUT=30
 
 
@@ -362,8 +375,10 @@ class RestEndpointAdapter(Handler):
 
         logging.debug('RestEndpointAdapter.create_blob before create')
 
-        if (blob := self.blob_storage.create(
-                self._blob_rest_id, tx_rest_id=self._tx_rest_id)) is None:
+        if (blob := self.async_filter.get_blob_writer(
+                create=True, blob_rest_id=self._blob_rest_id)) is None:
+#        if (blob := self.blob_storage.create(
+#                self._blob_rest_id, tx_rest_id=self._tx_rest_id)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -393,50 +408,30 @@ class RestEndpointAdapter(Handler):
         # StorageWriterFilter would support arbitrary blobs for message builder?
 
         blob = None
-        tx = self.async_filter.get(timeout=0)
-        if tx is None:
-            return FlaskResponse(
-                status=500, response=['internal error get tx failed'])
-        if self.blob_storage is None and tx_body:
-            delta = TransactionMetadata()
-            if tx.body_blob is None:
-                upstream_len = 0
-                tx.body_blob = delta.body_blob = InlineBlob(b'')
-            else:
-                upstream_len = tx.body_blob.len()
-            body_blob = tx.body_blob
-            assert isinstance(body_blob, InlineBlob)
-            logging.debug('RestEndpointAdapter.put_blob() '
-                          'upstream %d, %s req %s',
-                          upstream_len, body_blob._content_length, range)
-            req = range.length is not None
-            upstream = body_blob._content_length is not None
-            if (range.start != upstream_len or
-                (upstream and not req) or
-                (upstream and req and (body_blob._content_length != range.length))):
-                return FlaskResponse(status=416, response=['range mismatch'])
-            else:
-                body_blob.d += request.data
-            if range.length is not None:
-                body_blob._content_length = range.length
-            self.async_filter.update(tx, delta, 0)  # xxx timeout?
-            return FlaskResponse()
+        if True:  #self.blob_storage is None:
+            blob = self.async_filter.get_blob_writer(
+                create = range.start == 0,
+                blob_rest_id=self._blob_rest_id, tx_body=tx_body)
         elif tx_body:
+            tx = self.async_filter.get(timeout=0)
+            if tx is None:
+                return FlaskResponse(
+                    status=500, response=['internal error get tx failed'])
+
             logging.debug('RestEndpointAdapter.put_blob tx_body before '
                           'create %s', tx)
-            # XXX only do this if it doesn't exist i.e. if
-            # get_for_append() is None
             if tx.body is None:
                 self._blob_rest_id = self.rest_id_factory()
+                # XXX should ref to tx here?
                 blob = self.blob_storage.create(
                     rest_id=self._blob_rest_id  #, tx_rest_id=self._tx_rest_id
                 )
             else:
                 self._blob_rest_id = tx.body
 
-        if blob is None:
-            blob = self.blob_storage.get_for_append(
-                self._blob_rest_id, tx_rest_id=self._tx_rest_id)
+        # if blob is None:
+        #     blob = self.blob_storage.get_for_append(
+        #         self._blob_rest_id, tx_rest_id=self._tx_rest_id)
         if blob is None:
             return FlaskResponse(status=404, response=['unknown blob'])
 

@@ -3,7 +3,7 @@ from threading import Lock, Condition
 import logging
 import time
 
-from blob import Blob
+from blob import Blob, WritableBlob
 from response import Response, Esmtp
 from filter import (
     AsyncFilter,
@@ -52,6 +52,15 @@ class FakeAsyncEndpoint(AsyncFilter):
         with self.mu:
             self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             return self.tx.copy()
+
+
+    # pass exactly one of blob_rest_id or tx_body=True
+    def get_blob_writer(self,
+                        create : bool,
+                        blob_rest_id : Optional[str] = None,
+                        tx_body : Optional[bool] = None
+                        ) -> Optional[WritableBlob]:
+        pass
 
     def version(self):
         return self._version

@@ -6,7 +6,7 @@ import copy
 
 from response import Response
 
-from blob import Blob
+from blob import Blob, WritableBlob
 
 class HostPort:
     host : str
@@ -616,6 +616,7 @@ class SyncFilter(ABC):
                   ) -> Optional[TransactionMetadata]:
         pass
 
+# interface for injecting new transactions
 class AsyncFilter(ABC):
     # may return None for reqs on timeout/still inflight
     # may continue after this
@@ -631,6 +632,16 @@ class AsyncFilter(ABC):
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         pass
+
+    # pass exactly one of blob_rest_id or tx_body=True
+    @abstractmethod
+    def get_blob_writer(self,
+                        create : bool,
+                        blob_rest_id : Optional[str] = None,
+                        tx_body : Optional[bool] = None
+                        ) -> Optional[WritableBlob]:
+        pass
+
 
     # returns a "cached" value from the last get/update
     @abstractmethod

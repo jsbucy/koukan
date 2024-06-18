@@ -13,7 +13,7 @@ from filter import (
     HostPort,
     Mailbox,
     TransactionMetadata )
-from blob import Blob
+from blob import Blob, WritableBlob
 from deadline import Deadline
 from message_builder import MessageBuilder
 
@@ -142,7 +142,7 @@ class StorageWriterFilter(AsyncFilter):
                 self._body(tx_delta)
                 if tx_delta.data_response is not None:
                     return  # XXX
-                # xxx this was ref'd when it was created
+                # xxx this should be ref'd when it was created?
                 reuse_blob_rest_id=[tx_delta.body]
             del tx_delta.body_blob
         if downstream_tx.body_blob is not None:
@@ -181,3 +181,29 @@ class StorageWriterFilter(AsyncFilter):
         return upstream_delta
 
 
+    def get_blob_writer(self,
+                        create : bool,
+                        blob_rest_id : Optional[str] = None,
+                        tx_body : Optional[bool] = None
+                        ) -> Optional[WritableBlob]:
+        assert not (tx_body and blob_rest_id)
+        assert tx_body or blob_rest_id
+
+        if create:
+            if tx_body:
+                # XXX should ref to tx here?
+                blob_rest_id = self.rest_id_factory()
+                blob = self.storage.create(
+                    rest_id=blob_rest_id  #, tx_rest_id=self.rest_id
+                )
+            else:  # blob_rest_id
+                blob = self.storage.create(blob_rest_id, self.rest_id)
+        else:
+            if tx_body:
+                tx = self._get(Deadline())
+                blob_rest_id = tx.body
+
+            blob = self.storage.get_for_append(
+                blob_rest_id, tx_rest_id=self.rest_id)
+
+        return blob
