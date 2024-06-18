@@ -154,11 +154,11 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='rest_id')
-            resp = handler.put_blob(
+            resp = handler.create_blob(
                 FlaskRequest.from_values(data='hello, world!'),
                 tx_body=True)
             logging.debug(resp.response)
-            self.assertEqual(resp.status, '200 OK')
+            self.assertEqual(resp.status, '201 CREATED')
 
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))

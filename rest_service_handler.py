@@ -20,7 +20,8 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
+    def create_blob(self, request : FlaskRequest,
+                    tx_body : bool = False) -> FlaskResponse:
         pass
 
     @abstractmethod

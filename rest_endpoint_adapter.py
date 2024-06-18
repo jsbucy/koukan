@@ -334,8 +334,10 @@ class RestEndpointAdapter(Handler):
         assert(range.stop - range.start == request.content_length)
         return None, range
 
-    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
-        self._blob_rest_id = self.rest_id_factory()
+    def create_blob(self, request : FlaskRequest,
+                    tx_body : bool = False) -> FlaskResponse:
+        if not tx_body:
+            self._blob_rest_id = self.rest_id_factory()
         logging.debug('RestEndpointAdapter.create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
@@ -355,7 +357,8 @@ class RestEndpointAdapter(Handler):
         logging.debug('RestEndpointAdapter.create_blob before create')
 
         if (blob := self.async_filter.get_blob_writer(
-                create=True, blob_rest_id=self._blob_rest_id)) is None:
+                create=True, blob_rest_id=self._blob_rest_id,
+                tx_body=tx_body)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -365,9 +368,24 @@ class RestEndpointAdapter(Handler):
                 return range_err
             rest_resp = self._put_blob(request, range, blob)
 
+        if tx_body:
+            tx = self.async_filter.get(0)
+            if tx is None:
+                return FlaskResponse(
+                    status=500, response=['internal error get tx failed'])
+            logging.debug('RestEndpointAdapter.put_blob tx_body after '
+                          'append %s', tx)
+            delta = TransactionMetadata()
+            tx.body_blob = delta.body_blob = blob
+            self.async_filter.update(tx, delta, 0)
+            # maybe this should update for !tx_body too to ping
+            # downstream timeouts?
+
+
         resp = FlaskResponse(status=201)
         resp.status_code = 201
-        blob_uri = make_blob_uri(self._tx_rest_id, self._blob_rest_id)
+        blob_uri = make_blob_uri(self._tx_rest_id,
+                                 blob=self._blob_rest_id, tx_body=tx_body)
         resp.headers.set('location', blob_uri)
         return resp
 
@@ -382,17 +400,12 @@ class RestEndpointAdapter(Handler):
             if range_err:
                 return range_err
 
-        create_blob = tx_body and (range is None or range.start == 0)
         blob = self.async_filter.get_blob_writer(
-            create = create_blob,
+            create = False,
             blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
         if blob is None:
-            if create_blob:
-                return FlaskResponse(
-                    status=500, response=['error creating blob'])
-            else:
-                return FlaskResponse(status=404, response=['unknown blob'])
+            return FlaskResponse(status=404, response=['unknown blob'])
 
         resp = self._put_blob(request, range, blob)
         logging.debug('RestEndpointAdapter.put_blob %s %s', resp, tx_body)
@@ -400,8 +413,6 @@ class RestEndpointAdapter(Handler):
             return resp
 
         if tx_body:
-            # TODO this should be able to reuse the previous tx, not
-            # expecting a conflict here?
             tx = self.async_filter.get(0)
             if tx is None:
                 return FlaskResponse(
@@ -409,9 +420,7 @@ class RestEndpointAdapter(Handler):
             logging.debug('RestEndpointAdapter.put_blob tx_body after '
                           'append %s', tx)
             delta = TransactionMetadata()
-            if tx.body_blob is None:
-                tx.body_blob = delta.body_blob = blob
-            self.async_filter.update(tx, delta, 0)
+            self.async_filter.update(tx, TransactionMetadata(), 0)
             # maybe this should update for !tx_body too to ping
             # downstream timeouts?
 

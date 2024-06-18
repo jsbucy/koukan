@@ -346,9 +346,9 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '201 created',
             location='/transactions/123'))
 
-        # PUT /transactions/123/body?upload=chunked
+        # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
-            http_resp = '200 ok'))
+            http_resp = '201 created'))
 
         # PUT /transactions/123/body?upload=chunked
         # range 0-8/*
@@ -413,8 +413,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.content_range.length, 13)
 
 
-    # BEFORE SUBMIT
-    # maybe drop this test, entering _put_blob_chunk() in the middle
+    # TODO maybe drop this test, entering _put_blob_chunk() in the middle
     # is kind of weird, doesn't seem to have any additional coverage
     # beyond testPutBlob (above)
     def testPutBlobChunk(self):
@@ -433,9 +432,8 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions')
 
-
         self.responses.append(Response(
-            http_resp = '200 ok',
+            http_resp = '201 created',
             location='/transactions/123/body'))
 
         resp, len = rest_endpoint._put_blob_chunk(
@@ -446,7 +444,7 @@ class RestEndpointTest(unittest.TestCase):
                          urljoin(self.static_base_url,
                                  '/transactions/123/body'))
         req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.method, 'POST')
         self.assertEqual(req.path, '/transactions/123/body')
         self.assertEqual(req.query, 'upload=chunked')
         self.assertIsNone(req.content_range)
@@ -504,11 +502,11 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202}] }),
             location = '/transactions/124'))
 
-        # PUT /transactions/123/body?upload=chunked
+        # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
-            http_resp = '200 ok',
+            http_resp = '201 created',
             content_type = 'application/json',
-            location = '/blob/123'))
+            location = '/transactions/123/body'))
 
         # PUT /blob/123 -> server returns invalid content-range header
         self.responses.append(Response(
@@ -601,9 +599,9 @@ class RestEndpointTest(unittest.TestCase):
         b = InlineBlob(b'world!')
         tx.body_blob.append(b, 0, b.len(), True)
 
-        # PUT /transactions/123/body?upload=chunked
+        # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
-            http_resp = '200 ok',
+            http_resp = '201 created',
             content_type = 'application/json',
             content_range=ContentRange(
                 'bytes', 0, tx.body_blob.len(), tx.body_blob.len())))
@@ -642,7 +640,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 203)
 
         req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.method, 'POST')
         self.assertEqual(req.path, '/transactions/123/body')
 
         req = self.requests.pop(0)

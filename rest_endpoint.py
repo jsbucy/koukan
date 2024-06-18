@@ -353,19 +353,15 @@ class RestEndpoint(SyncFilter):
                 if not last:
                     endpoint += '?upload=chunked'
                     entity = None
-                if testonly_non_body_blob:
-                    http_fn,method,exp_status = self.client.post, 'POST', 201
-                else:
-                    http_fn,method,exp_status = self.client.put, 'PUT', 200
-                rest_resp = http_fn(
+
+                rest_resp = self.client.post(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob_chunk %s %s %s %s %s',
-                             method,
+                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s %s',
                              endpoint,
                              rest_resp, rest_resp.headers,
                              rest_resp.http_version)
-                if rest_resp.status_code != exp_status:
+                if rest_resp.status_code != 201:
                     return None, None
                 if testonly_non_body_blob:
                     self.blob_path = rest_resp.headers.get('location', None)

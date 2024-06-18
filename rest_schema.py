@@ -1,7 +1,15 @@
 from typing import Optional, Tuple
 
-def make_blob_uri(tx, blob) -> str:
-    return '/transactions/' + tx + '/blob/' + blob
+def make_blob_uri(tx, blob : Optional[str] = None,
+                  tx_body : Optional[bool] = None) -> str:
+    assert not (blob and tx_body)
+    assert blob or tx_body
+    uri = '/transactions/' + tx
+    if blob:
+        uri += ('/blob/' + blob)
+    else:
+        uri += '/body'
+    return uri
 
 def parse_blob_uri(uri) -> Optional[Tuple[str,str]]:
     if not uri.startswith('/transactions/'):
