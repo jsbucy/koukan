@@ -184,7 +184,7 @@ pytype_library(name='storage_writer_filter',
                      ':storage_schema',
                      ':filter',
                      ':response',
-                     ':rest_service'])
+                     ':rest_schema'])
 
 py_test(name='storage_writer_filter_test',
         srcs=['storage_writer_filter_test.py'],
@@ -269,6 +269,12 @@ pytype_library(name='rest_service',
                srcs=['rest_service.py',
                      'rest_service_handler'])
 
+pytype_library(name='rest_schema',
+               srcs=['rest_schema.py'])
+py_test(name='rest_schema_test',
+        srcs=['rest_schema_test.py'],
+        deps=[':rest_schema'])
+
 pytype_library(name='router_service',
                srcs=['router_service.py'],
                deps=[':storage',
@@ -318,7 +324,7 @@ pytype_library(name='rest_endpoint_adapter',
                      ':executor',
                      ':filter',
                      ':response',
-                     ':rest_service',
+                     ':rest_schema',
                      ':rest_service_handler'])
 
 py_test(name='rest_endpoint_adapter_test',

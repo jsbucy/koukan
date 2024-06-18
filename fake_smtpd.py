@@ -7,21 +7,29 @@ import logging
 from sys import argv
 
 class InMemoryHandler:
-    async def handle_EHLO(self, server, session, envelope, hostname, responses) -> list[str]:
+    async def handle_EHLO(self, server, session, envelope, hostname, responses
+                          ) -> list[str]:
         session.host_name = hostname
-        print(responses)
+        logging.debug('InMemoryHandler.handle_EHLO %s', hostname)
         return responses
 
     async def handle_PROXY(self, server, session, envelope, proxy_data) -> bool:
+        logging.debug('InMemoryHandler.handle_PROXY ', proxy_data)
+
         session.proxy_data = proxy_data
         return True
 
-    async def handle_MAIL(self, server, session, envelope, address, options) -> str:
+    async def handle_MAIL(self, server, session, envelope, address, options
+                          ) -> str:
+        logging.debug('InMemoryHandler.handle_MAIL %s %s', address, options)
         envelope.mail_from = address
         envelope.mail_options.extend(options)
         return '250 ok'
 
-    async def handle_RCPT(self, server, session, envelope, address, rcpt_options) -> str:
+    async def handle_RCPT(self, server, session, envelope, address, options
+                          ) -> str:
+        logging.debug('InMemoryHandler.handle_RCPT %s %s',
+                      address, options)
         if address.startswith('rcpttemp'):
             return '450 rcpt temp'
         elif address.startswith('rcptperm'):
@@ -33,6 +41,9 @@ class InMemoryHandler:
         return '250 OK'
 
     async def handle_DATA(self, server, session, envelope) -> str:
+        logging.debug('InMemoryHandler.handle_DATA %d bytes ',
+                      len(envelope.content))
+
         if len(envelope.rcpt_tos) == 1:
             address = envelope.rcpt_tos[0]
             if address.startswith('datatemp'):
@@ -42,12 +53,8 @@ class InMemoryHandler:
             elif address.startswith('datatimeout'):
                 await asyncio.sleep(3600)
 
-        print('proxy data ', session.proxy_data)
-        print('Message from %s' % envelope.mail_from)
-        print('Message for %s' % envelope.rcpt_tos)
-        print('Message data:\n')
         for ln in envelope.content.decode('utf8', errors='replace').splitlines():
-            print(f'> {ln}'.strip())
+            logging.debug(f'> {ln}'.strip())
         print()
         print('End of message')
         return '250 Message accepted for delivery'
