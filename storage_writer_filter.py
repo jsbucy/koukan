@@ -133,6 +133,7 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
+        # XXX self.blob_writer always None, was _body() supposed to save?
         if tx_delta.body_blob is not None and self.blob_writer is None:
             body_blob = tx_delta.body_blob
             if ((isinstance(body_blob, BlobWriter) and
@@ -142,7 +143,7 @@ class StorageWriterFilter(AsyncFilter):
                 if tx_delta.data_response is not None:
                     return  # XXX
                 # xxx this was ref'd when it was created
-                #reuse_blob_rest_id=[tx_delta.body]
+                reuse_blob_rest_id=[tx_delta.body]
             del tx_delta.body_blob
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob

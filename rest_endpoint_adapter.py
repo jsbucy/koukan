@@ -424,10 +424,13 @@ class RestEndpointAdapter(Handler):
         elif tx_body:
             logging.debug('RestEndpointAdapter.put_blob tx_body before '
                           'create %s', tx)
+            # XXX only do this if it doesn't exist i.e. if
+            # get_for_append() is None
             if tx.body is None:
                 self._blob_rest_id = self.rest_id_factory()
                 blob = self.blob_storage.create(
-                    rest_id=self._blob_rest_id, tx_rest_id=self._tx_rest_id)
+                    rest_id=self._blob_rest_id  #, tx_rest_id=self._tx_rest_id
+                )
             else:
                 self._blob_rest_id = tx.body
 
