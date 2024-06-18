@@ -325,6 +325,7 @@ pytype_library(name='rest_endpoint_adapter',
                      ':filter',
                      ':response',
                      ':rest_schema',
+                     ':rest_service',
                      ':rest_service_handler'])
 
 py_test(name='rest_endpoint_adapter_test',

@@ -47,13 +47,11 @@ def create_app(handler_factory : HandlerFactory):
     def create_tx_blob(tx_rest_id) -> FlaskResponse:
         logging.debug('rest_service.create_tx_blob %s', request)
         handler = handler_factory.get_tx(tx_rest_id)
-        return handler.create_blob(request, tx_rest_id=tx_rest_id)
+        return handler.create_blob(request)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_rest_id>',
                methods=['PUT'])
     def put_tx_blob(tx_rest_id, blob_rest_id) -> FlaskResponse:
         handler = handler_factory.get_tx(tx_rest_id)
-        return handler.put_blob(request,
-                                tx_rest_id=tx_rest_id,
-                                blob_rest_id=blob_rest_id)
+        return handler.put_blob(request, blob_rest_id=blob_rest_id)
     return app

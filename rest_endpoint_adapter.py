@@ -31,7 +31,8 @@ from filter import (
     WhichJson )
 from executor import Executor
 
-from rest_service import blob_to_uri, uri_to_blob
+from rest_service import uri_to_blob
+from rest_schema import make_blob_uri, parse_blob_uri
 
 # Wrapper for vanilla/sync Filter that provides async interface for REST
 class SyncFilterAdapter(AsyncFilter):
@@ -341,11 +342,11 @@ class RestEndpointAdapter(Handler):
         assert(range.stop - range.start == request.content_length)
         return None, range
 
-    def create_blob(self, request : FlaskRequest,
-                    tx_rest_id : Optional[str] = None) -> FlaskResponse:
+    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         self._blob_rest_id = self.rest_id_factory()
         logging.debug('RestEndpointAdapter.create_blob %s %s blob %s tx %s',
-                      request, request.headers, self._blob_rest_id, tx_rest_id)
+                      request, request.headers, self._blob_rest_id,
+                      self._tx_rest_id)
 
         if 'upload' not in request.args:
             if 'content-range' in request.headers:
@@ -362,7 +363,7 @@ class RestEndpointAdapter(Handler):
         logging.debug('RestEndpointAdapter.create_blob before create')
 
         if (blob := self.blob_storage.create(
-                self._blob_rest_id, tx_rest_id=tx_rest_id)) is None:
+                self._blob_rest_id, tx_rest_id=self._tx_rest_id)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -374,15 +375,11 @@ class RestEndpointAdapter(Handler):
 
         resp = FlaskResponse(status=201)
         resp.status_code = 201
-        if tx_rest_id:
-            blob_uri = '/transactions/' + tx_rest_id + '/blob/' + self._blob_rest_id
-        else:
-            blob_uri = blob_to_uri(self._blob_rest_id)
+        blob_uri = make_blob_uri(self._tx_rest_id, self._blob_rest_id)
         resp.headers.set('location', blob_uri)
         return resp
 
     def put_blob(self, request : FlaskRequest,
-                 tx_rest_id : Optional[str] = None,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> FlaskResponse:
         if blob_rest_id is not None:
@@ -430,13 +427,13 @@ class RestEndpointAdapter(Handler):
             if tx.body is None:
                 self._blob_rest_id = self.rest_id_factory()
                 blob = self.blob_storage.create(
-                    rest_id=self._blob_rest_id, tx_rest_id=tx_rest_id)
+                    rest_id=self._blob_rest_id, tx_rest_id=self._tx_rest_id)
             else:
                 self._blob_rest_id = tx.body
 
         if blob is None:
             blob = self.blob_storage.get_for_append(
-                self._blob_rest_id, tx_rest_id=tx_rest_id)
+                self._blob_rest_id, tx_rest_id=self._tx_rest_id)
         if blob is None:
             return FlaskResponse(status=404, response=['unknown blob'])
 

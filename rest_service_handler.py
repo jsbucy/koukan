@@ -20,13 +20,11 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def create_blob(self, request : FlaskRequest,
-                    tx_rest_id : Optional[str] = None) -> FlaskResponse:
+    def create_blob(self, request : FlaskRequest) -> FlaskResponse:
         pass
 
     @abstractmethod
     def put_blob(self, request : FlaskRequest,
-                 tx_rest_id : Optional[str] = None,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> FlaskResponse:
         pass

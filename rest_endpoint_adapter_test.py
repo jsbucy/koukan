@@ -202,13 +202,17 @@ class RestEndpointAdapterTest(unittest.TestCase):
         app = Flask(__name__)
         storage = Storage.get_sqlite_inmemory_for_test()
 
+        tx_cursor = storage.get_transaction_cursor()
+        tx_cursor.create('tx_rest_id', TransactionMetadata())
+
         with app.test_request_context():
             # content-range header is not accepted in non-chunked blob post
             handler = RestEndpointAdapter(
                 endpoint,
                 http_host='msa',
                 blob_storage=storage,
-                rest_id_factory = lambda: 'blob-rest-id')
+                rest_id_factory = lambda: 'blob-rest-id',
+                tx_rest_id='tx_rest_id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
                     headers={'content-range': ContentRange('bytes', 0,10,10)}))
@@ -220,7 +224,8 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 endpoint,
                 http_host='msa',
                 blob_storage=storage,
-                rest_id_factory = lambda: 'blob-rest-id')
+                rest_id_factory = lambda: 'blob-rest-id',
+                tx_rest_id='tx_rest_id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
                     query_string={'upload': 'chunked'},
@@ -231,7 +236,8 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 endpoint,
                 http_host='msa',
                 blob_storage=storage,
-                rest_id_factory = lambda: 'blob-rest-id')
+                rest_id_factory = lambda: 'blob-rest-id',
+                tx_rest_id='tx_rest_id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
                     query_string={'upload': 'chunked'}))
@@ -242,7 +248,8 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 blob_storage=storage,
-                rest_id_factory = lambda: 'rest-id')
+                rest_id_factory = lambda: 'rest-id',
+                tx_rest_id='tx_rest_id')
             b = b'hello, '
             range = ContentRange('bytes', 0, len(b))
             resp = handler.put_blob(
@@ -257,7 +264,8 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 blob_storage=storage,
-                rest_id_factory = lambda: 'rest-id')
+                rest_id_factory = lambda: 'rest-id',
+                tx_rest_id='tx_rest_id')
             b2 = b'world!'
             range = ContentRange('bytes', len(b), len(b) + len(b2),
                                  len(b) + len(b2))

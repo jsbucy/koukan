@@ -17,7 +17,7 @@ from blob import Blob
 from deadline import Deadline
 from message_builder import MessageBuilder
 
-from rest_service import blob_to_uri, uri_to_blob
+from rest_schema import parse_blob_uri
 
 
 # this is only going to implement AsyncFilter
@@ -110,35 +110,21 @@ class StorageWriterFilter(AsyncFilter):
                ) -> Optional[TransactionMetadata]:
         reuse_blob_rest_id=None
 
-        def uri_to_blob2(tx_blob, uri):
-            if uri.startswith('/transactions/'):
-                if tx_blob[0] is None:
-                    tx_blob[0] = True
-                else:
-                    assert tx_blob[0]
-                u = uri.removeprefix('/transactions/')
-                slash = u.find('/')
-                out = u[slash+1:]
-                out = out.removeprefix('blob/')
-                logging.debug('uri_to_blob2 %s %s', uri, out)
-                return out
-            else:
-                if tx_blob[0] is None:
-                    tx_blob[0] = False
-                else:
-                    assert not tx_blob
-                return uri_to_blob(uri)
+        def tx_blob_id(tx_rest_id, uri):
+            rv = parse_blob_uri(uri)
+            if rv is None:
+                return None
+            tx,blob = rv
+            if tx != tx_rest_id:
+                return None
+            return blob
 
         if tx_delta.message_builder:
-            # xxx skip the /tx/123/blob ones
-            # since they were ref'd when they were created
-            tx_blob = [None]
             reuse_blob_rest_id = MessageBuilder.get_blobs(
-                tx_delta.message_builder, partial(uri_to_blob2, tx_blob))
+                tx_delta.message_builder, partial(tx_blob_id, self.rest_id))
             logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                           reuse_blob_rest_id)
-            if tx_blob:
-                reuse_blob_rest_id = None
+            reuse_blob_rest_id = None
 
         deadline = Deadline(timeout)
         downstream_tx = tx.copy()
@@ -155,7 +141,8 @@ class StorageWriterFilter(AsyncFilter):
                 self._body(tx_delta)
                 if tx_delta.data_response is not None:
                     return  # XXX
-                reuse_blob_rest_id=[tx_delta.body]
+                # xxx this was ref'd when it was created
+                #reuse_blob_rest_id=[tx_delta.body]
             del tx_delta.body_blob
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
