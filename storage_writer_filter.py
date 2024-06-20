@@ -85,9 +85,6 @@ class StorageWriterFilter(AsyncFilter):
         if isinstance(body_blob, BlobReader):
             tx.body = body_blob.rest_id
             return
-        elif isinstance(body_blob, BlobWriter):
-            tx.body = body_blob.rest_id
-            return
 
         blob_writer = self.storage.get_blob_writer()
         # xxx this should be able to use storage id instead of rest id
@@ -114,7 +111,7 @@ class StorageWriterFilter(AsyncFilter):
             uri = parse_blob_uri(uri)
             if uri is None:
                 return None
-            if uri.tx_id != tx_rest_id:
+            if uri.tx_body:
                 return None
             return uri.blob
 
@@ -123,7 +120,6 @@ class StorageWriterFilter(AsyncFilter):
                 tx_delta.message_builder, partial(tx_blob_id, self.rest_id))
             logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                           reuse_blob_rest_id)
-            reuse_blob_rest_id = None
 
         deadline = Deadline(timeout)
         downstream_tx = tx.copy()
@@ -132,16 +128,14 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
         logging.debug('StorageWriterFilter.update delta %s', tx_delta)
-        # XXX self.blob_writer always None, was _body() supposed to save?
-        if tx_delta.body_blob is not None and self.blob_writer is None:
+
+        # internal paths: Exploder/Notification (rest uses get_blob_writer())
+        if tx_delta.body_blob is not None:
             body_blob = tx_delta.body_blob
-            if ((isinstance(body_blob, BlobWriter) and
-                 body_blob.length == body_blob.content_length) or (
-                     tx_delta.body_blob.len() == tx_delta.body_blob.content_length())):
+            if tx_delta.body_blob.len() == tx_delta.body_blob.content_length():
                 self._body(tx_delta)
                 if tx_delta.data_response is not None:
                     return  # XXX
-                # xxx this should be ref'd when it was created?
                 reuse_blob_rest_id=[tx_delta.body]
             del tx_delta.body_blob
         if downstream_tx.body_blob is not None:
@@ -184,26 +178,27 @@ class StorageWriterFilter(AsyncFilter):
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
-                        copy_from_uri : Optional[BlobUri] = None
+                        copy_from_tx_body : Optional[str] = None
                         ) -> Optional[WritableBlob]:
-        assert not (tx_body and blob_rest_id)
+        #assert not (tx_body and blob_rest_id)
         assert tx_body or blob_rest_id
-        assert copy_from_uri is None or not create
-        assert copy_from_uri is None or not copy_from_uri.tx_body or tx_body
-        assert copy_from_uri is None or copy_from_uri.blob is None or (not tx_body)
+        #assert copy_from_uri is None or not create
+        #assert copy_from_uri is None or not copy_from_uri.tx_body or tx_body
+        #assert copy_from_uri is None or copy_from_uri.blob is None or (not tx_body)
 
         if create:
             if tx_body:
-                # XXX should ref to tx here?
-                blob_rest_id = self.rest_id_factory()
                 # copy_from_uri.tx_body
                 blob = self.storage.create_blob(
-                    rest_id=blob_rest_id  #, tx_rest_id=self.rest_id
-                )
+                    rest_id=blob_rest_id,
+                    tx_rest_id=self.rest_id,
+                    tx_body=tx_body,
+                    copy_from_tx_body=copy_from_tx_body)
             else:  # blob_rest_id
                 # copy_from_uri.blob
                 blob = self.storage.create_blob(blob_rest_id, self.rest_id)
         else:
+            # xxx storage should handle this?
             if tx_body:
                 tx = self._get(Deadline())
                 blob_rest_id = tx.body

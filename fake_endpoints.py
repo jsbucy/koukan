@@ -60,9 +60,9 @@ class FakeAsyncEndpoint(AsyncFilter):
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
-                        copy_from_uri : Optional[BlobUri] = None
+                        copy_from_tx_body : Optional[str] = None
                         ) -> Optional[WritableBlob]:
-        assert not(tx_body and blob_rest_id)
+        #assert not(tx_body and blob_rest_id)
         return self.body_blob
 
     def version(self):

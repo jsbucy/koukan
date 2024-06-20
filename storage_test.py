@@ -63,21 +63,24 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_writer.tx.mail_response.code, 450)
         self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
-        blob_writer = self.s.get_blob_writer()
-        blob_writer.create('blob_rest_id')
+        blob_writer = self.s.create_blob(
+            'blob_rest_id', tx_rest_id='tx_rest_id', tx_body=True)
 
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
         blob_writer.append_data(3, d=b'xyz', content_length=9)
         self.assertFalse(blob_writer.last)
+
+        blob_writer = self.s.get_blob_for_append(
+            'blob_rest_id', tx_rest_id='tx_rest_id', tx_body=True)
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
+        del blob_writer
 
+        tx_writer.load()
         tx_writer.write_envelope(
             TransactionMetadata(
-                body='tx_rest_id',
-                retry={'max_attempts': 100}),
-            reuse_blob_rest_id=['blob_rest_id'])
+                retry={'max_attempts': 100}))
         logging.info('test_basic check tx input done')
         self.assertTrue(tx_writer.input_done)
 
@@ -89,11 +92,6 @@ class StorageTestBase(unittest.TestCase):
         tx_reader.write_envelope(TransactionMetadata(),
                                  finalize_attempt = True)
 
-        expected_content = [
-            b'abc',
-            b'xyz',
-            b'uvw'
-        ]
         blob_reader = self.s.get_blob_reader()
         self.assertEqual(
             blob_reader.load(rest_id='blob_rest_id', tx_id=tx_writer.id), 9)
@@ -104,27 +102,28 @@ class StorageTestBase(unittest.TestCase):
         b = blob_reader.read(4, 3)
         self.assertEqual(b'yzu', b)
 
-        r2 = self.s.load_one()
-        self.assertFalse(r2.no_final_notification)
-        r2.write_envelope(TransactionMetadata(),
-                          finalize_attempt=True)
+        tx_reader = self.s.load_one()
+        self.assertFalse(tx_reader.no_final_notification)
+        tx_reader.write_envelope(TransactionMetadata(), finalize_attempt=True)
 
-        r2 = self.s.load_one()
-        self.assertIsNotNone(r2)
-        self.assertEqual(r2.id, tx_writer.id)
-        self.assertIsNone(r2.tx.mail_response)
-        self.assertEqual(r2.tx.rcpt_response, [])
-        self.assertIsNone(r2.tx.data_response)
+        tx_reader = self.s.load_one()
+        self.assertIsNotNone(tx_reader)
+        self.assertEqual(tx_reader.id, tx_writer.id)
+        self.assertIsNone(tx_reader.tx.mail_response)
+        self.assertEqual(tx_reader.tx.rcpt_response, [])
+        self.assertIsNone(tx_reader.tx.data_response)
 
-        r2.write_envelope(TransactionMetadata(),
-                          final_attempt_reason = 'retry max attempts',
-                          finalize_attempt = True)
+        tx_reader.write_envelope(
+            TransactionMetadata(),
+            final_attempt_reason = 'retry max attempts',
+            finalize_attempt = True)
         self.assertIsNone(self.s.load_one())
-        r2.write_envelope(TransactionMetadata(notification={'yes': True}))
+        tx_reader.write_envelope(
+            TransactionMetadata(notification={'yes': True}))
 
-        r2 = self.s.load_one()
-        self.assertTrue(r2.no_final_notification)
-        r2.write_envelope(TransactionMetadata(), notification_done=True)
+        tx_reader = self.s.load_one()
+        self.assertTrue(tx_reader.no_final_notification)
+        tx_reader.write_envelope(TransactionMetadata(), notification_done=True)
         self.assertIsNone(self.s.load_one())
 
     def test_blob_8bitclean(self):

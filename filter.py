@@ -636,12 +636,15 @@ class AsyncFilter(ABC):
 
     # pass exactly one of blob_rest_id or tx_body=True
     @abstractmethod
-    def get_blob_writer(self,
-                        create : bool,
-                        blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None,
-                        copy_from_uri : Optional[BlobUri] = None
-                        ) -> Optional[WritableBlob]:
+    def get_blob_writer(
+            self,
+            create : bool,
+            blob_rest_id : Optional[str] = None,
+            tx_body : Optional[bool] = None,
+            # rest id of a tx to copy the body from
+            # requires create and tx_body
+            copy_from_tx_body : Optional[str] = None
+    ) -> Optional[WritableBlob]:
         pass
 
 

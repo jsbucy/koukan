@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Dict, List, Tuple
+from typing import Any, Callable, Optional, Dict, List, Tuple
 import sqlite3
 import json
 import time
@@ -163,9 +163,12 @@ class TransactionCursor:
                        next_attempt_time : Optional[int] = None,
                        notification_done : Optional[bool] = None):
         with self.parent.begin_transaction() as db_tx:
-            self._write(db_tx, tx_delta, reuse_blob_rest_id,
-                        final_attempt_reason,
-                        finalize_attempt,
+            self._write(db_tx=db_tx,
+                        tx_delta=tx_delta,
+                        reuse_blob_rest_id=reuse_blob_rest_id,
+                        require_finalized_blobs=True,
+                        final_attempt_reason=final_attempt_reason,
+                        finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
         self.parent.tx_versions.update(self.id, self.version)
@@ -174,20 +177,27 @@ class TransactionCursor:
                     db_tx,
                     tx,
                     upd,  # sa update
-                    reuse_blob_rest_id : List[str] = []):
-        reuse_blob_id = self._reuse_blob(db_tx, reuse_blob_rest_id)
+                    reuse_blob_rest_id : List[str] = [],
+                    require_finalized = True
+                    ) -> Tuple[Any, bool]:  # SA update
+        sel_blobrefs = (
+            select(self.parent.tx_blobref_table.c.rest_id)
+            .where(self.parent.tx_blobref_table.c.transaction_id == self.id))
+        res = db_tx.execute(sel_blobrefs)
+        refd_blobs = set()
+        for row in res:
+            refd_blobs.add(row[0])
+        unrefd_blobs = [b for b in reuse_blob_rest_id if b not in refd_blobs]
 
-        input_done = True
-        if reuse_blob_id:
+        reuse_blob_id = self._reuse_blob(db_tx, unrefd_blobs)
+
+        if reuse_blob_id and require_finalized:
             for blob_id, rest_id, done in reuse_blob_id:
                 if not done:
-                    # TODO this can be precondition now: don't PATCH the
-                    # blob id in until it's finalized
-                    input_done = False
-                    break
+                    raise ValueError()
 
-        logging.debug('TransactionCursor._write_blob %d %s body %s',
-                      self.id, input_done, tx.body)
+        logging.debug('TransactionCursor._write_blob %d body %s',
+                      self.id, tx.body)
 
         if tx.body:
             if len(reuse_blob_rest_id) == 1:
@@ -198,10 +208,11 @@ class TransactionCursor:
             else:
                 raise ValueError()
 
-        upd = upd.values(input_done = input_done)
-
         blobrefs = []
-        for id, rest_id, input_done in reuse_blob_id:
+        blobs_done = True
+        for blob_id, rest_id, input_done in reuse_blob_id:
+            if not input_done:
+                blobs_done = False
             blobrefs.append({ "transaction_id": self.id,
                               "blob_id": blob_id,
                               "rest_id": rest_id })
@@ -211,17 +222,19 @@ class TransactionCursor:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
             res = db_tx.execute(ins)
 
-        self.input_done = input_done
-        return upd
+        return upd, blobs_done
 
     def _write(self,
                db_tx,
                tx_delta : TransactionMetadata,
                reuse_blob_rest_id : List[str] = [],
+               require_finalized_blobs = True,
                final_attempt_reason : Optional[str] = None,
                finalize_attempt : Optional[bool] = None,
                next_attempt_time : Optional[int] = None,
-               notification_done : Optional[bool] = None):
+               notification_done : Optional[bool] = None,
+               # only for upcalls from BlobWriter
+               input_done = False):
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
         # e.g. overwriting an existing field
@@ -258,9 +271,6 @@ class TransactionCursor:
             self.final_attempt_reason == 'oneshot'):
             upd = upd.values(final_attempt_reason = None)
 
-        if tx_delta.message_builder:
-            upd = upd.values(message_builder = tx_delta.message_builder)
-
         upd = upd.values(notification = bool(tx_to_db.notification))
 
         if final_attempt_reason:
@@ -277,13 +287,23 @@ class TransactionCursor:
             upd = upd.values(inflight_session_id = None,
                              next_attempt_time = next_attempt_time)
 
-# XXX update preconditions
-#        if reuse_blob_rest_id and (
-#                not tx_delta.body and not tx_delta.message_builder):
-#            raise ValueError()
+        # XXX update preconditions
+        # if reuse_blob_rest_id and (
+        #         not tx_delta.body and not tx_delta.message_builder):
+        #     raise ValueError()
 
-        if reuse_blob_rest_id or tx_delta.message_builder:
-            upd = self._write_blob(db_tx, tx_delta, upd, reuse_blob_rest_id)
+        blobs_done = True
+        if reuse_blob_rest_id:
+            upd,blobs_done = self._write_blob(
+                db_tx, tx_delta, upd, reuse_blob_rest_id,
+                require_finalized_blobs)
+
+        if tx_delta.message_builder:
+            upd = upd.values(message_builder = tx_delta.message_builder)
+        if input_done or (
+                blobs_done and (tx_delta.body or tx_delta.message_builder)):
+            upd = upd.values(input_done = True)
+            self.input_done = True
 
         res = db_tx.execute(upd)
         row = res.fetchone()
@@ -459,9 +479,15 @@ class BlobWriter(WritableBlob):
     _content_length : Optional[int] = None  # overall length from content-range
     rest_id = None
     last = False
+    update_tx : Optional[int] = None
+    finalize_tx : bool = False
 
-    def __init__(self, storage):
+    def __init__(self, storage,
+                 update_tx : Optional[int] = None,
+                 finalize_tx : Optional[bool] = False):
         self.parent = storage
+        self.update_tx = update_tx
+        self.finalize_tx = finalize_tx
 
     def len(self):
         return self.length
@@ -545,6 +571,7 @@ class BlobWriter(WritableBlob):
         assert content_length is None or (
             content_length >= (offset + len(d)))
 
+        tx_version = None
         with self.parent.begin_transaction() as db_tx:
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
@@ -560,6 +587,7 @@ class BlobWriter(WritableBlob):
                     (content_length != db_content_length)):
                 return False, db_length, db_content_length
 
+            now = int(time.time())
             upd = (update(self.parent.blob_table)
                    .where(self.parent.blob_table.c.id == self.id)
                    .where(func.length(self.parent.blob_table.c.content) ==
@@ -572,7 +600,7 @@ class BlobWriter(WritableBlob):
                            cast(self.parent.blob_table.c.content.concat(d),
                                 LargeBinary),
                            length = content_length,
-                           last_update = int(time.time()))
+                           last_update = now)
                    .returning(func.length(self.parent.blob_table.c.content)))
 
             res = db_tx.execute(upd)
@@ -585,6 +613,19 @@ class BlobWriter(WritableBlob):
             self.last = (self.length == self._content_length)
             logging.debug('append_data %d %s last=%s',
                           self.length, self._content_length, self.last)
+
+            if self.update_tx is not None:
+                cursor = self.parent.get_transaction_cursor()
+                tx = cursor._load_db(db_tx, db_id=self.update_tx)
+                kwargs = {}
+                if self.last and self.finalize_tx:
+                    kwargs['input_done'] = True
+                cursor._write(db_tx, TransactionMetadata(), **kwargs)
+                tx_version = cursor.version
+
+        if self.update_tx is not None and tx_version is not None:
+            self.parent.tx_versions.update(self.update_tx, tx_version)
+
 
         return True, self.length, self._content_length
 
@@ -922,29 +963,52 @@ class Storage():
     def get_blob_reader(self) -> BlobReader:
         return BlobReader(self)
 
+    # xxx tx_rest_id not optional
     def create_blob(self, rest_id : str,
-                    tx_rest_id : Optional[str] = None
+                    tx_rest_id : Optional[str] = None,
+                    tx_body : bool = False,
+                    copy_from_tx_body : Optional[str] = None
                     ) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
-            writer = self.get_blob_writer()
-            writer._create(rest_id, db_tx)
+            writer = None
+            if copy_from_tx_body:
+                raise NotImplementedError()
+            else:
+                writer = BlobWriter(self)
+                writer._create(rest_id, db_tx)
 
             if tx_rest_id:
                 cursor = self.get_transaction_cursor()
                 cursor._load_db(db_tx, rest_id=tx_rest_id)
-                cursor._write(db_tx,
-                              TransactionMetadata(),
-                              reuse_blob_rest_id=[rest_id])
+                tx = TransactionMetadata()
+                if tx_body:
+                    tx.body=rest_id
+                cursor._write(db_tx, tx, reuse_blob_rest_id=[rest_id],
+                              require_finalized_blobs=False)
+                if writer:
+                    writer.update_tx = cursor.id
+                    writer.finalize_tx = tx_body
 
             return writer
 
-    def get_blob_for_append(self, rest_id,
-                       tx_rest_id : Optional[str] = None,
-                       tx_body : bool = False
-                       ) -> Optional[WritableBlob]:
-        writer = self.get_blob_writer()
+    # xxx tx_rest_id not optional
+    # xxx don't require rest_id if tx_body since we're loading the tx anyway
+    def get_blob_for_append(
+            self, rest_id,
+            tx_rest_id : Optional[str] = None,
+            tx_body : bool = False
+    ) -> Optional[WritableBlob]:
+        #  xxx db_tx?
+        writer = BlobWriter(self)  # update_tx, finalize_tx=tx_body
         if writer.load(rest_id, tx_rest_id) is None:
             return None
+
+        if tx_rest_id:
+            cursor = self.get_transaction_cursor()
+            cursor.load(rest_id=tx_rest_id)
+            writer.update_tx = cursor.id
+            writer.finalize_tx = tx_body
+
         return writer
 
     def get_transaction_cursor(self) -> TransactionCursor:

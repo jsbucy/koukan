@@ -148,6 +148,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             })
             tx_etag = resp.headers['etag']
 
+            body = b'hello, world!'
             endpoint.body_blob = InlineBlob(b'')
             handler = RestEndpointAdapter(
                 endpoint,
@@ -155,12 +156,16 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='rest_id')
             resp = handler.create_blob(
-                FlaskRequest.from_values(data='hello, world!'),
+                FlaskRequest.from_values(data=body),
                 tx_body=True)
             logging.debug(resp.response)
             self.assertEqual(resp.status, '201 CREATED')
+            self.assertEqual(endpoint.body_blob.d, body)
+            self.assertEqual(endpoint.body_blob.content_length(), len(body))
 
-            endpoint.merge(TransactionMetadata(data_response=Response(204)))
+            endpoint.merge(TransactionMetadata(
+                body_blob=endpoint.body_blob,  # XXX
+                data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
                 'mail_from': {},

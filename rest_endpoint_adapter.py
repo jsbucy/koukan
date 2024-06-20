@@ -33,8 +33,22 @@ from executor import Executor
 
 from rest_schema import BlobUri, make_blob_uri, parse_blob_uri
 
+
 # Wrapper for vanilla/sync Filter that provides async interface for REST
 class SyncFilterAdapter(AsyncFilter):
+    class BlobWriter(WritableBlob):
+        blob : InlineBlob
+        def __init__(self, parent):
+            self.parent = parent
+            self.blob = InlineBlob(b'')
+
+        def append_data(self, offset : int, d : bytes,
+                        content_length : Optional[int] = None
+                        ) -> Tuple[bool, int, Optional[int]]:
+            rv = self.blob.append_data(offset, d, content_length)
+            self.parent.blob_wakeup()
+            return rv
+
     executor : Executor
     filter : SyncFilter
     prev_tx : TransactionMetadata
@@ -45,7 +59,7 @@ class SyncFilterAdapter(AsyncFilter):
     rest_id : str
     _last_update : float
     _version = 0
-    body_blob : Optional[InlineBlob] = None
+    body_blob : Optional[BlobWriter] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -146,6 +160,7 @@ class SyncFilterAdapter(AsyncFilter):
             assert tx.merge_from(upstream_delta) is not None  # XXX
             return upstream_delta
 
+    # TODO it looks like this effectively returns an empty tx on timeout
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
@@ -158,15 +173,25 @@ class SyncFilterAdapter(AsyncFilter):
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
-                        copy_from_uri : Optional[BlobUri] = None
+                        copy_from_tx_body : Optional[str] = None
                         ) -> Optional[WritableBlob]:
-        if (blob_rest_id or
-            not tx_body or
-            copy_from_uri is not None):
+        if (not tx_body or
+            copy_from_tx_body is not None):
             raise NotImplementedError()
         if create and self.body_blob is None:
-            self.body_blob = InlineBlob(b'')
+            self.body_blob = SyncFilterAdapter.BlobWriter(self)
         return self.body_blob
+
+
+    def blob_wakeup(self):
+        logging.debug('SyncFilterAdapter.blob_wakeup %s', self.body_blob)
+        tx = self.get(0)
+        assert tx is not None
+        tx_delta = TransactionMetadata()
+        if not tx.body_blob:
+            tx_delta.body_blob = self.body_blob.blob
+        tx.merge_from(tx_delta)
+        self.update(tx, tx_delta)
 
 
 MAX_TIMEOUT=30
@@ -338,18 +363,22 @@ class RestEndpointAdapter(Handler):
 
     def create_blob(self, request : FlaskRequest,
                     tx_body : bool = False) -> FlaskResponse:
-        if not tx_body:
-            self._blob_rest_id = self.rest_id_factory()
         logging.debug('RestEndpointAdapter.create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
-        copy_from_uri = None
+        copy_from_tx_body = None
         if 'x-copy-from' in request.headers:
             copy_from_uri = parse_blob_uri(request.headers['x-copy-from'])
-            if copy_from_uri is None or copy_from_uri.tx_body != tx_body:
+            # for the time being, this is only allowed for tx_body,
+            # message_builder blobs are automatically ref'd when the spec
+            # is patched into the tx
+            if copy_from_uri is None or not copy_from_uri.tx_body or not tx_body:
                 return FlaskResponse(
                     status=400, response=['invalid x-copy-from'])
+            copy_from_tx_body = copy_from_uri.tx_id
+        else:
+            self._blob_rest_id = self.rest_id_factory()
 
         if 'upload' not in request.args:
             if 'content-range' in request.headers:
@@ -368,7 +397,7 @@ class RestEndpointAdapter(Handler):
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id,
                 tx_body=tx_body,
-                copy_from_uri=copy_from_uri)) is None:
+                copy_from_tx_body=copy_from_tx_body)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
@@ -378,24 +407,12 @@ class RestEndpointAdapter(Handler):
                 return range_err
             rest_resp = self._put_blob(request, range, blob)
 
-        if tx_body:
-            tx = self.async_filter.get(0)
-            if tx is None:
-                return FlaskResponse(
-                    status=500, response=['internal error get tx failed'])
-            logging.debug('RestEndpointAdapter.put_blob tx_body after '
-                          'append %s', tx)
-            delta = TransactionMetadata()
-            tx.body_blob = delta.body_blob = blob
-            self.async_filter.update(tx, delta, 0)
-            # maybe this should update for !tx_body too to ping
-            # downstream timeouts?
-
-
         resp = FlaskResponse(status=201)
         resp.status_code = 201
-        blob_uri = make_blob_uri(self._tx_rest_id,
-                                 blob=self._blob_rest_id, tx_body=tx_body)
+        blob_uri = make_blob_uri(
+            self._tx_rest_id,
+            blob=self._blob_rest_id if not tx_body else None,
+            tx_body=tx_body)
         resp.headers.set('location', blob_uri)
         return resp
 
@@ -421,18 +438,6 @@ class RestEndpointAdapter(Handler):
         logging.debug('RestEndpointAdapter.put_blob %s %s', resp, tx_body)
         if resp.status_code != 200 or not tx_body:
             return resp
-
-        if tx_body:
-            tx = self.async_filter.get(0)
-            if tx is None:
-                return FlaskResponse(
-                    status=500, response=['internal error get tx failed'])
-            logging.debug('RestEndpointAdapter.put_blob tx_body after '
-                          'append %s', tx)
-            delta = TransactionMetadata()
-            self.async_filter.update(tx, TransactionMetadata(), 0)
-            # maybe this should update for !tx_body too to ping
-            # downstream timeouts?
 
         return resp
 

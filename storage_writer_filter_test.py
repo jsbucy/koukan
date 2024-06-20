@@ -131,8 +131,9 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'test_message_builder')
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
-        blob_writer = self.storage.create_blob(
-            'test_message_builder_blob', tx_rest_id='test_message_builder')
+        blob_writer = filter.get_blob_writer(
+            create=True,
+            blob_rest_id='test_message_builder_blob')
         body = b'hello, world!'
         blob_writer.append_data(0, body, len(body))
 
