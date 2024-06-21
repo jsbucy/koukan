@@ -660,6 +660,53 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.path, '/transactions/123')
 
 
+    def testFilterApiOneshot(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     min_poll=0.1)
+
+        body = b'hello, world!'
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            body = json.dumps({
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]}),
+            location = '/transactions/123'))
+
+        # POST /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            content_range=ContentRange(
+                'bytes', 0, len(body), len(body))))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            body = json.dumps({
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'} })))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(body))
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        logging.debug('tx after update %s', tx)
+        logging.debug('upstream_delta %s', upstream_delta)
+        for t in [tx, upstream_delta]:
+            self.assertEqual(t.mail_response.code, 201)
+            self.assertEqual([r.code for r in t.rcpt_response], [202])
+            self.assertEqual(t.data_response.code, 203)
 
     def testFilterApiMultiRcpt(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,

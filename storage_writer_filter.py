@@ -107,7 +107,7 @@ class StorageWriterFilter(AsyncFilter):
                ) -> Optional[TransactionMetadata]:
         reuse_blob_rest_id=None
 
-        def tx_blob_id(tx_rest_id, uri):
+        def tx_blob_id(uri):
             uri = parse_blob_uri(uri)
             if uri is None:
                 return None
@@ -115,42 +115,76 @@ class StorageWriterFilter(AsyncFilter):
                 return None
             return uri.blob
 
-        if tx_delta.message_builder:
+        downstream_tx = tx.copy()
+        downstream_delta = tx_delta.copy()
+        if getattr(downstream_tx, 'rest_id', None) is not None:
+            del downstream_tx.rest_id
+
+        if downstream_delta.message_builder:
             reuse_blob_rest_id = MessageBuilder.get_blobs(
-                tx_delta.message_builder, partial(tx_blob_id, self.rest_id))
+                downstream_delta.message_builder, tx_blob_id)
             logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                           reuse_blob_rest_id)
 
         deadline = Deadline(timeout)
-        downstream_tx = tx.copy()
-        if getattr(downstream_tx, 'rest_id', None) is not None:
-            del downstream_tx.rest_id
         logging.debug('StorageWriterFilter.update downstream_tx %s',
                       downstream_tx)
-        logging.debug('StorageWriterFilter.update delta %s', tx_delta)
+        logging.debug('StorageWriterFilter.update delta %s', downstream_delta)
 
         # internal paths: Exploder/Notification (rest uses get_blob_writer())
-        if tx_delta.body_blob is not None:
-            body_blob = tx_delta.body_blob
-            if tx_delta.body_blob.len() == tx_delta.body_blob.content_length():
-                self._body(tx_delta)
-                if tx_delta.data_response is not None:
+        if downstream_delta.body_blob is not None:
+            body_blob = downstream_delta.body_blob
+            if body_blob.len() == body_blob.content_length():
+                self._body(downstream_delta)
+                if downstream_delta.data_response is not None:
                     return  # XXX
-                reuse_blob_rest_id=[tx_delta.body]
-            del tx_delta.body_blob
+                reuse_blob_rest_id=[downstream_delta.body]
+            del downstream_delta.body_blob
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
 
+        created = False
         if self.rest_id is None:
-            self._create(tx_delta, reuse_blob_rest_id=reuse_blob_rest_id)
-        else:
+            created = True
+            body_utf8 = None
+            if downstream_delta.inline_body:
+                # TODO need to worry about roundtripping
+                # utf8 -> python str -> utf8 is ever lossy?
+                body_utf8 = tx_delta.inline_body.encode('utf-8')
+                del downstream_tx.inline_body
+                del downstream_delta.inline_body
+
+            self._create(downstream_delta,
+                         reuse_blob_rest_id=reuse_blob_rest_id)
+            reuse_blob_rest_id = None
+            if downstream_delta.body:
+                uri = parse_blob_uri(downstream_delta.body)
+                assert uri and uri.tx_body
+                self.storage.create_blob(
+                    tx_rest_id=self.rest_id,
+                    tx_body=True,
+                    copy_from_tx_body=uri.tx_id)
+                del downstream_tx.body
+                del downstream_delta.body
+            elif body_utf8 is not None:
+                logging.debug('StorageWriterFilter inline body %d',
+                              len(body_utf8))
+                writer = self.storage.create_blob(
+                    rest_id=self.rest_id_factory(),
+                    tx_rest_id=self.rest_id,
+                    tx_body=True)
+                writer.append_data(0, body_utf8, len(body_utf8))
+                reuse_blob_rest_id = [writer.rest_id]
+            downstream_delta = TransactionMetadata()
+
+        if not created or reuse_blob_rest_id:
             if self.tx_cursor is None:
                 self._load()
 
             while True:
                 try:
                     self.tx_cursor.write_envelope(
-                        tx_delta, reuse_blob_rest_id=reuse_blob_rest_id)
+                        downstream_delta, reuse_blob_rest_id=reuse_blob_rest_id)
                     break
                 except VersionConflictException:
                     self.tx_cursor.load()

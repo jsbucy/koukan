@@ -239,6 +239,7 @@ _tx_fields = [
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
     TxField('tx_db_id', validity=None),
+    TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -283,6 +284,7 @@ class TransactionMetadata:
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
     tx_db_id : Optional[int] = None
+    inline_body : Optional[str] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -297,7 +299,9 @@ class TransactionMetadata:
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,
-                 smtp_meta : Optional[dict] = None):
+                 smtp_meta : Optional[dict] = None,
+                 message_builder : Optional[dict] = None,
+                 inline_body : Optional[str] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -311,6 +315,8 @@ class TransactionMetadata:
         self.notification = notification
         self.retry = retry
         self.smtp_meta = smtp_meta
+        self.message_builder = message_builder
+        self.inline_body = inline_body
 
     def __repr__(self):
         out = ''
@@ -320,6 +326,7 @@ class TransactionMetadata:
             self.rcpt_to, self.rcpt_response)
         out += 'body=%s ' % (self.body)
         out += 'body_blob=%s ' % (self.body_blob)
+        out += 'message_builder=%s ' % (self.message_builder)
         out += 'data_response=%s' % self.data_response
         return out
 
@@ -397,8 +404,8 @@ class TransactionMetadata:
                 return True
         body_blob_last = self.body_blob is not None and (
             self.body_blob.len() == self.body_blob.content_length())
-        # xxx BEFORE SUBMIT
-        if (self.body or body_blob_last) and tx.data_response is None:
+        if (self.body or body_blob_last or self.message_builder
+            ) and tx.data_response is None:
             return True
         return False
 

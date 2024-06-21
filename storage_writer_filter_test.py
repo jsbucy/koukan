@@ -21,8 +21,9 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.storage = Storage.get_sqlite_inmemory_for_test()
 
     def dump_db(self):
-        for l in self.storage.db.iterdump():
-            print(l)
+        with self.storage.begin_transaction() as db_tx:
+            for l in db_tx.connection.iterdump():
+                logging.debug('%s', l)
 
     def update(self, filter, tx, tx_delta, timeout):
         upstream_delta = filter.update(tx, tx_delta, timeout)
@@ -233,6 +234,24 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertIsNone(tx.data_response)
+
+    def test_tx_body_inline_reuse(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'inline')
+        tx = TransactionMetadata(
+                host = 'outbound-gw',
+                inline_body = 'hello, world!')
+        filter.update(tx, tx.copy(), 0)
+
+        filter2 = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'reuse')
+        tx2 = TransactionMetadata(
+                host = 'outbound-gw',
+                body = '/transactions/inline/body')
+        filter2.update(tx2, tx2.copy(), 0)
+
 
 
 if __name__ == '__main__':

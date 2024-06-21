@@ -1,10 +1,13 @@
 from typing import Optional, Tuple
 
+def make_tx_uri(tx):
+    return '/transactions/' + tx
+
 def make_blob_uri(tx, blob : Optional[str] = None,
                   tx_body : Optional[bool] = None) -> str:
     assert not (blob and tx_body)
     assert blob or tx_body
-    uri = '/transactions/' + tx
+    uri = make_tx_uri(tx)
     if blob:
         uri += ('/blob/' + blob)
     else:

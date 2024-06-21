@@ -216,6 +216,7 @@ class RestEndpoint(SyncFilter):
             self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
+        upstream_tx = self.upstream_tx.copy()
 
         logging.debug('RestEndpoint.on_update merged tx %s', self.upstream_tx)
 
@@ -237,6 +238,7 @@ class RestEndpoint(SyncFilter):
         elif not self.data_last:
             return TransactionMetadata()
 
+        upstream_delta = None
         if tx_update:
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
@@ -284,10 +286,10 @@ class RestEndpoint(SyncFilter):
                       self.transaction_url, tx_out)
 
         if (tx_out is None or
-            (upstream_delta := self.upstream_tx.delta(
+            (blob_delta := self.upstream_tx.delta(
                 tx_out, WhichJson.REST_READ)) is None or
-            (self.upstream_tx.merge_from(upstream_delta) is None) or
-            (tx.merge_from(upstream_delta) is None)):
+            (self.upstream_tx.merge_from(blob_delta) is None) or
+            (tx.merge_from(blob_delta) is None)):
             errs = TransactionMetadata()
             tx.fill_inflight_responses(
                 Response(450, 'RestEndpoint upstream invalid resp/delta get'),
@@ -299,6 +301,10 @@ class RestEndpoint(SyncFilter):
         tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'), errs)
         assert tx.merge_from(errs) is not None
+        del upstream_tx.remote_host
+        del tx_out.remote_host
+        upstream_delta = upstream_tx.delta(tx_out, WhichJson.REST_READ)
+        assert upstream_delta is not None
         assert upstream_delta.merge_from(errs) is not None
         return upstream_delta
 
@@ -354,13 +360,13 @@ class RestEndpoint(SyncFilter):
                     endpoint += '?upload=chunked'
                     entity = None
 
+                logging.info('RestEndpoint._put_blob_chunk POST %s', endpoint)
                 rest_resp = self.client.post(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s %s',
+                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s',
                              endpoint,
-                             rest_resp, rest_resp.headers,
-                             rest_resp.http_version)
+                             rest_resp, rest_resp.headers)
                 if rest_resp.status_code != 201:
                     return None, None
                 if testonly_non_body_blob:
@@ -376,10 +382,14 @@ class RestEndpoint(SyncFilter):
                 logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
                              self.blob_url, range)
                 headers['content-range'] = range.to_header()
+                logging.info('RestEndpoint._put_blob_chunk PUT %s', self.blob_url)
                 rest_resp = self.client.put(
                     self.blob_url, headers=headers, content=d,
                     timeout=self.timeout_data)
-        except RequestError:
+                logging.info('RestEndpoint._put_blob_chunk PUT %s %s %s',
+                             self.blob_url, rest_resp, rest_resp.headers)
+        except RequestError as e:
+            logging.info('RestEndpoint._put_blob_chunk RequestError %s', e)
             return None, None
         logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
 

@@ -47,6 +47,8 @@ def send_body(tx_url, json):
             continue
         for part in multipart:
             logging.info('send_body %s', part)
+            if 'content_uri' in part:
+                continue
             inline = part.get('put_content', None)
             filename = part.get('file_content', None)
             if not inline and not filename:
@@ -82,28 +84,34 @@ message_builder = {
     ]
 }
 
+blobs_done = False
 def main(mail_from, rcpt_to):
-    message_builder["headers"] += [
-        ["from", [{"display_name": "alice a", "address": mail_from}]],
-        ["to", [{"display_name": "bob b", "address": rcpt_to}]]]
+    global blobs_done
+    logging.debug('main from=%s to=%s', mail_from, rcpt_to)
 
-    create_tx_resp = session.post(
+    json={
+        'mail_from': {'m': mail_from},
+        'rcpt_to': [{'m': rcpt_to}],
+    }
+    if blobs_done:
+        json['message_builder'] = message_builder
+    logging.debug('POST /transactions')
+    start = time.monotonic()
+    rest_resp = session.post(
         base_url + '/transactions',
-        headers={'host': 'msa-output'},
-        json={
-            'mail_from': {'m': mail_from},
-            'rcpt_to': [{'m': rcpt_to}],
-        })
-
-    if create_tx_resp.status_code != 201:
+        headers={'host': 'msa-output',
+                 'request-timeout': '5'},
+        json=json)
+    logging.debug('POST /transactions %s', rest_resp)
+    if rest_resp.status_code != 201:
         return
 
-    tx_json = create_tx_resp.json()
-    tx_url = urljoin(base_url, create_tx_resp.headers['location'])
+    tx_json = rest_resp.json()
+    tx_url = urljoin(base_url, rest_resp.headers['location'])
 
-    rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
+    #rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
     for resp_field in ['mail_response', 'rcpt_response']:
-        if not (resp := rest_resp.json().get(resp_field, None)):
+        if not (resp := tx_json.get(resp_field, None)):
             continue
         if resp_field == 'rcpt_response':
             resp = resp[0]
@@ -114,27 +122,32 @@ def main(mail_from, rcpt_to):
                          resp_field, rest_resp, rest_resp.json())
             return
 
-    if not send_body(tx_url, message_builder):
-        return
-    logging.info('main message_builder spec %s', message_builder)
+    if not blobs_done:
+        if not send_body(tx_url, message_builder):
+            return
+        logging.info('main message_builder spec %s', message_builder)
 
-    get_tx_resp = session.get(tx_url)
+        get_tx_resp = session.get(tx_url)
 
-    resp = session.patch(
-        tx_url,
-        json={'message_builder': message_builder},
-        headers = {'if-match': get_tx_resp.headers['etag']})
-    if resp.status_code >= 300:
-        logging.info('patch message builder spec resp %s', resp)
-        return
+        resp = session.post(
+            tx_url + '/message_builder',
+            json=message_builder,
+            headers = {'if-match': get_tx_resp.headers['etag']})
+        if resp.status_code >= 300:
+            logging.info('patch message builder spec resp %s', resp)
+            return
+        blobs_done = True
+        rest_resp = None
 
     done = False
     while not done:
-        logging.info('GET %s', tx_url)
-        start = time.monotonic()
-        resp = session.get(tx_url, headers={'request-timeout': '5'})
-        logging.info('GET /%s %d %s', tx_url, resp.status_code, resp.text)
-        tx_json = resp.json()
+        if rest_resp is None:
+            start = time.monotonic()
+            logging.info('GET %s', tx_url)
+            rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
+            logging.info('GET /%s %d %s',
+                         tx_url, rest_resp.status_code, rest_resp.text)
+        tx_json = rest_resp.json()
 
         for resp in ['mail_response', 'rcpt_response', 'data_response']:
             if not (resp_json := tx_json.get(resp, None)):
@@ -148,15 +161,25 @@ def main(mail_from, rcpt_to):
                 break
             if (resp == 'data_response') and (code < 300):
                 done = True
+        rest_resp = None
         if done:
             break
         delta = time.monotonic() - start
         if delta < 1:
-            time.sleep(1 - delta)
+            dt = 1 - delta
+            logging.debug('nospin %f', dt)
+            time.sleep(dt)
         tx_json = None
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
-    main(argv[1], argv[2])
+    mail_from = argv[1]
+    rcpt_to = argv[2:]
+    message_builder["headers"] += [
+        ["from", [{"display_name": "alice a", "address": mail_from}]],
+        ["to", [{"display_name": "bob b", "address": r} for r in rcpt_to]]]
+
+    for rcpt in rcpt_to:
+        main(mail_from, rcpt)

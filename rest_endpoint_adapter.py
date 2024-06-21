@@ -31,7 +31,7 @@ from filter import (
     WhichJson )
 from executor import Executor
 
-from rest_schema import BlobUri, make_blob_uri, parse_blob_uri
+from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
 
 
 # Wrapper for vanilla/sync Filter that provides async interface for REST
@@ -198,6 +198,7 @@ MAX_TIMEOUT=30
 
 
 class RestEndpointAdapter(Handler):
+    CHUNK_SIZE = 1048576
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
 
@@ -260,12 +261,12 @@ class RestEndpointAdapter(Handler):
         self._tx_rest_id = tx.rest_id
 
         resp = FlaskResponse(status = 201)
-        # xxx move to separate "rest schema"
-        resp.headers.set('location', '/transactions/' + tx.rest_id)
+        resp.headers.set('location', make_tx_uri(tx.rest_id))
         resp.set_etag(self._etag(self.async_filter.version()))
         resp.content_type = 'application/json'
         tx.body = body
         del tx.body_blob
+        # XXX does POST /tx/123/message_builder return the tx json??
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
         return resp
 
@@ -290,15 +291,20 @@ class RestEndpointAdapter(Handler):
         resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
         return resp
 
-    def patch_tx(self, request : FlaskRequest) -> FlaskResponse:
+    def patch_tx(self, request : FlaskRequest,
+                 message_builder : bool = False) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.patch %s %s',
                       self._tx_rest_id, request.json)
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
         deadline = Deadline(timeout)
-        downstream_delta = TransactionMetadata.from_json(
-            request.json, WhichJson.REST_UPDATE)
+        if message_builder:
+            downstream_delta = TransactionMetadata()
+            downstream_delta.message_builder = request.json
+        else:
+            downstream_delta = TransactionMetadata.from_json(
+                request.json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
             return FlaskResponse(status=400, response=['invalid request'])
         body = downstream_delta.body
@@ -367,19 +373,9 @@ class RestEndpointAdapter(Handler):
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
-        copy_from_tx_body = None
-        if 'x-copy-from' in request.headers:
-            copy_from_uri = parse_blob_uri(request.headers['x-copy-from'])
-            # for the time being, this is only allowed for tx_body,
-            # message_builder blobs are automatically ref'd when the spec
-            # is patched into the tx
-            if copy_from_uri is None or not copy_from_uri.tx_body or not tx_body:
-                return FlaskResponse(
-                    status=400, response=['invalid x-copy-from'])
-            copy_from_tx_body = copy_from_uri.tx_id
-        else:
-            self._blob_rest_id = self.rest_id_factory()
+        self._blob_rest_id = self.rest_id_factory()
 
+        chunked = False
         if 'upload' not in request.args:
             if 'content-range' in request.headers:
                 return FlaskResponse(
@@ -388,20 +384,21 @@ class RestEndpointAdapter(Handler):
         elif request.args.keys() != {'upload'} or (
                 request.args['upload'] != 'chunked'):
             return FlaskResponse(status=400, response=['bad query'])
-        elif request.data:
-            return FlaskResponse(
-                status=400, response=['unimplemented metadata upload'])
+        elif request.args.get('upload', None) == 'chunked':
+            if request.data:
+                return FlaskResponse(
+                    status=400, response=['unimplemented metadata upload'])
+            chunked = True
 
         logging.debug('RestEndpointAdapter.create_blob before create')
 
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id,
-                tx_body=tx_body,
-                copy_from_tx_body=copy_from_tx_body)) is None:
+                tx_body=tx_body)) is None:
             return FlaskResponse(
                 status=500, response=['internal error creating blob'])
 
-        if request.data:
+        if not chunked:
             range_err, range = self._get_range(request)
             if range_err:
                 return range_err
@@ -422,10 +419,10 @@ class RestEndpointAdapter(Handler):
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
-        if request.data:
-            range_err, range = self._get_range(request)
-            if range_err:
-                return range_err
+
+        range_err, range = self._get_range(request)
+        if range_err:
+            return range_err
 
         blob = self.async_filter.get_blob_writer(
             create = False,
@@ -446,14 +443,22 @@ class RestEndpointAdapter(Handler):
                   blob : WritableBlob) -> FlaskResponse:
         logging.debug('RestEndpointAdapter._put_blob %s content-range: %s',
                       self._blob_rest_id, content_range)
-        appended, result_len, content_length = blob.append_data(
-            content_range.start, request.data, content_range.length)
-        logging.debug('RestEndpointAdapter._put_blob %s %s %d %s',
-                      self._blob_rest_id, appended, result_len, content_length)
         resp = FlaskResponse()
-        if not appended:
-            resp.status = 416
-            resp.response = ['invalid range']
+        bytes_read = 0
+        content_length = result_len = None
+
+        while b := request.stream.read(self.CHUNK_SIZE):
+            appended, result_len, content_length = blob.append_data(
+                content_range.start + bytes_read, b, content_range.length)
+            logging.debug(
+                'RestEndpointAdapter._put_blob %s %s %d %s',
+                self._blob_rest_id, appended, result_len, content_length)
+
+            if not appended:
+                resp.status = 416
+                resp.response = ['invalid range']
+                break
+            bytes_read += len(b)
 
         resp = jsonify({})
         # cf RestTransactionHandler.build_resp() regarding content-range

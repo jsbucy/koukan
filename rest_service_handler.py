@@ -16,7 +16,8 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    def patch_tx(self, request : FlaskRequest) -> FlaskResponse:
+    def patch_tx(self, request : FlaskRequest,
+                 message_builder : bool = False) -> FlaskResponse:
         pass
 
     @abstractmethod

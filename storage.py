@@ -52,6 +52,7 @@ class TransactionCursor:
     no_final_notification : Optional[bool] = None
 
     body_blob_id : Optional[int] = None
+    body_rest_id : Optional[str] = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -964,15 +965,20 @@ class Storage():
         return BlobReader(self)
 
     # xxx tx_rest_id not optional
-    def create_blob(self, rest_id : str,
+    def create_blob(self,
+                    rest_id : Optional[str] = None,
                     tx_rest_id : Optional[str] = None,
                     tx_body : bool = False,
+                    # rest id of tx to copy body from
                     copy_from_tx_body : Optional[str] = None
                     ) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
             writer = None
             if copy_from_tx_body:
-                raise NotImplementedError()
+                cursor = self.get_transaction_cursor()
+                cursor._load_db(db_tx, rest_id=copy_from_tx_body)
+                rest_id = cursor.body_rest_id
+                logging.debug('copy_from_tx_body %s -> %s', copy_from_tx_body, rest_id)
             else:
                 writer = BlobWriter(self)
                 writer._create(rest_id, db_tx)

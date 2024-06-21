@@ -351,7 +351,59 @@ class RouterServiceTest(unittest.TestCase):
             'data_response': {'code': 203, 'message': 'ok'},
         })
 
-    # XXX add test for first-class rest with blob reuse
+
+    def test_reuse_body(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = 'hello, world!'
+        body_utf8 = body.encode('utf-8')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            inline_body=body)
+        rest_endpoint.on_update(tx, tx.copy())
+        tx_json = rest_endpoint.get_json()
+        logging.debug('RouterServiceTest.test_retry create %s',
+                      tx_json)
+        tx_url = rest_endpoint.transaction_path
+
+        upstream_endpoint = FakeSyncFilter()
+        self.add_endpoint(upstream_endpoint)
+        def exp(tx, tx_delta):
+            self.assertEqual(tx.body_blob.read(0), body_utf8)
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
+        self.assertTrue(self.service._dequeue())
+
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='submission',
+            timeout_start=5, timeout_data=5)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body=tx_url + '/body')
+        rest_endpoint.on_update(tx, tx.copy())
+        tx_json = rest_endpoint.get_json()
+
+        upstream_endpoint = FakeSyncFilter()
+        self.add_endpoint(upstream_endpoint)
+        def exp(tx, tx_delta):
+            self.assertEqual(tx.body_blob.read(0), body_utf8)
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
+        self.assertTrue(self.service._dequeue())
+
 
 
     # xxx need non-exploder test w/filter api, problems in
@@ -652,8 +704,7 @@ class RouterServiceTest(unittest.TestCase):
             blob, testonly_non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
 
-        updated_tx = tx.copy()
-        updated_tx.message_builder = {
+        message_builder_spec = {
             "headers": [
                 ["from", [{"display_name": "alice a",
                            "address": "alice@example.com"}]],
@@ -667,10 +718,6 @@ class RouterServiceTest(unittest.TestCase):
                 "content_uri": rest_endpoint.blob_path
             }]
         }
-        tx_delta = tx.delta(updated_tx)
-        tx = updated_tx
-
-        del rest_endpoint.blob_url
 
         def exp_body(tx, tx_delta):
             body = tx.body_blob.read(0)
@@ -687,7 +734,11 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_message_builder tx before '
                       'patch message_builder spec %s',
                       rest_endpoint.get_json(timeout=1))
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        rest_resp = rest_endpoint.client.post(
+            rest_endpoint.transaction_url + '/message_builder',
+            json=message_builder_spec,
+            headers={'if-match': rest_endpoint.etag})
+        self.assertEqual(rest_resp.status_code, 200)
 
         for i in range(0,3):
             json = rest_endpoint.get_json()
@@ -698,7 +749,43 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('data response')
 
-        self.assertFalse(upstream_endpoint.expectation)
+        # send another tx with the same spec to exercise blob reuse
+        logging.info('test_notification start tx #2')
+        tx2 = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob2')],
+            remote_host=HostPort('1.2.3.4', 12345),
+            message_builder=message_builder_spec)
+
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url,
+            http_host='submission',
+            tx_blob=True)
+
+        upstream_endpoint = FakeSyncFilter()
+        self.add_endpoint(upstream_endpoint)
+
+        def exp2(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, 'alice')
+            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob2'])
+            body = tx.body_blob.read(0)
+            logging.debug(body)
+            self.assertIn(b'subject: hello\r\n', body)
+
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(204)
+            updated_tx.rcpt_response.append(Response(205))
+            updated_tx.data_response = Response(206)
+
+            upstream_delta = tx.delta(updated_tx)
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp2)
+
+        t = self.start_tx_update(rest_endpoint, tx2, tx2.copy(), 10)
+        self.assertTrue(self.service._dequeue())
+        self.join_tx_update(t, 10)
+
 
 
 if __name__ == '__main__':
