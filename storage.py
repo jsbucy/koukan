@@ -226,8 +226,9 @@ class TransactionCursor:
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
         logging.debug(
-            'TransactionCursor._write %d %s final_attempt_reason=%s %s %s',
-            self.id, self.rest_id, final_attempt_reason,
+            'TransactionCursor._write %d %s version=%d '
+            'final_attempt_reason=%s %s %s',
+            self.id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
         # TODO all updates '... WHERE inflight_session_id =
@@ -326,7 +327,6 @@ class TransactionCursor:
                      self.parent.tx_table.c.message_builder,
                      self.parent.tx_table.c.no_final_notification)
 
-
         if db_id is not None:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
         elif rest_id is not None:
@@ -374,8 +374,9 @@ class TransactionCursor:
                 assert self.tx is not None  # set above
                 assert self.tx.merge_from(responses)
 
-        logging.debug('TransactionCursor._load_db %s %s %s %s',
-                      self.rest_id, row, trans_json, resp_json)
+        logging.debug('TransactionCursor._load_db %d %s version=%d %s %s %s',
+                      self.id, self.rest_id, self.version,
+                      row, trans_json, resp_json)
 
 
         return self.tx
