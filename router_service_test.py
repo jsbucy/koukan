@@ -268,19 +268,12 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_retry get after rcpt_to %s',
                       tx_json)
 
-        body_blob = CompositeBlob()
-        b = InlineBlob(b'hello')
-        body_blob.append(b, 0, b.len())
-        tx_delta = TransactionMetadata(body_blob=body_blob)
-        assert tx.merge_from(tx_delta) is not None
-        rest_endpoint.on_update(tx, tx_delta)
-        self.assertIsNone(tx.data_response)
-
-        b = InlineBlob(b'world')
-        body_blob.append(b, 0, b.len(), True)
-        # same tx/delta
-        rest_endpoint.on_update(tx, tx_delta)
-        self.assertTrue(tx.data_response.temp())
+        # This test is abusing RestEndpoint as a submission client
+        # which is not normally how it's used. on_update()
+        # early-returns on tx.req_inflight() before sending the body
+        # so do it manually here.
+        body_blob = InlineBlob(b'hello, world!')
+        rest_endpoint._put_blob(body_blob)
 
         logging.debug('RouterServiceTest.test_retry get after set body')
         tx_json = rest_endpoint.get_json(5)
@@ -515,7 +508,6 @@ class RouterServiceTest(unittest.TestCase):
         logging.info('test_notification')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
-
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(

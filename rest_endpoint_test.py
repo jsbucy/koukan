@@ -48,12 +48,16 @@ class Response:
                  content_type = None,
                  body = None,
                  content_range = None,
-                 location = None):
+                 location = None,
+                 resp_json = None):
         self.http_resp = http_resp
         self.content_type = content_type
         self.body = body
         self.content_range = content_range
         self.location = location
+        if resp_json is not None:
+            self.body = json.dumps(resp_json)
+            self.content_type = 'application/json'
 
 def eq_range(lhs, rhs):
     return (lhs.units == rhs.units and
@@ -145,8 +149,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata()
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({}),
+            resp_json={},
             location='/transactions/123'))
         rest_resp = rest_endpoint._start(tx, Deadline())
         self.assertEqual(rest_resp.status_code, 201)
@@ -162,8 +165,7 @@ class RestEndpointTest(unittest.TestCase):
         js = {'hello': 'world'}
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps(js)))
+            resp_json=js))
         resp_json = rest_endpoint.get_json(timeout=None)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
@@ -171,8 +173,7 @@ class RestEndpointTest(unittest.TestCase):
 
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps(js)))
+            resp_json=js))
         resp_json = rest_endpoint.get_json(timeout=2)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
@@ -193,8 +194,7 @@ class RestEndpointTest(unittest.TestCase):
                                      timeout_start=1)
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({'mail_response': {}}),
+            resp_json={'mail_response': {}},
             location='/transactions/124'))
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
@@ -213,35 +213,32 @@ class RestEndpointTest(unittest.TestCase):
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({ 'mail_from': {} }),
+            resp_json={ 'mail_from': {} },
             location = '/transactions/123'))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({ 'mail_from': {} })))
+            resp_json={ 'mail_from': {} }))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 234 }
-            })))
+            }))
 
         upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug(tx)
         self.assertEqual(tx.mail_response.code, 234)
 
+    # maybe drop this test, unclear what it's doing?
     def testUpdate(self):
         rest_endpoint = RestEndpoint(
             transaction_url=self.static_base_url + '/transactions/124')
 
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({'mail_response': {}}),
+            resp_json={'mail_response': {}},
             location = '/transactions/124'))
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
@@ -261,10 +258,9 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
-                'mail_response': {'code': 200}}),
+                'mail_response': {'code': 200}},
             location = '/transactions/124'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 200)
@@ -284,20 +280,19 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
-                'mail_response': {'code': 200}}),
+                'mail_response': {'code': 200}},
             location = '/transactions/124'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 200)
 
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200},
-                'rcpt_to': [{}]})))
+                'rcpt_to': [{}]}))
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
@@ -313,8 +308,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({'mail_response': {'code': 200}}),
+            resp_json={'mail_response': {'code': 200}},
             location = '/transactions/124'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 200)
@@ -330,8 +324,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({'mail_response': {}}),
+            resp_json={'mail_response': {}},
             location = '/transactions/124'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 450)
@@ -344,7 +337,13 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            location='/transactions/123'))
+            location='/transactions/123',
+            resp_json={
+                'mail_from': {},
+                'mail_response': {'code': 201},
+                'rcpt_to': [{}],
+                'rcpt_response': [{'code': 202}],
+            }))
 
         # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
@@ -424,7 +423,13 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            location='/transactions/123'))
+            location='/transactions/123',
+            resp_json={
+                'mail_from': {},
+                'mail_response': {'code': 201},
+                'rcpt_to': [{}],
+                'rcpt_response': [{'code': 202}],
+            }))
 
         rest_endpoint.on_update(tx, tx.copy())
 
@@ -494,24 +499,23 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
-                'rcpt_response': [{'code': 202}] }),
+                'rcpt_response': [{'code': 202}] },
             location = '/transactions/124'))
 
         # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
+            resp_json={},
             location = '/transactions/123/body'))
 
         # PUT /blob/123 -> server returns invalid content-range header
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
+            resp_json={},
             content_range = 'bad range'))
 
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
@@ -530,23 +534,24 @@ class RestEndpointTest(unittest.TestCase):
 
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
+                'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]}),
+                'rcpt_to': [{}],
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
             location = '/transactions/123'))
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
-
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
         tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         assert tx.merge_from(tx_delta) is not None
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({'body': '/blob/123'}),
+            resp_json={'body': '/blob/123'},
             location = '/transactions/124'))
 
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
@@ -561,12 +566,11 @@ class RestEndpointTest(unittest.TestCase):
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]}),
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
             location = '/transactions/123'))
 
         logging.debug('testFilterApi envelope')
@@ -602,7 +606,7 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions/123/body?upload=chunked
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
+            resp_json={},
             content_range=ContentRange(
                 'bytes', 0, tx.body_blob.len(), tx.body_blob.len())))
 
@@ -610,7 +614,7 @@ class RestEndpointTest(unittest.TestCase):
         # range: 0-8/*
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
+            resp_json={},
             content_range=ContentRange(
                 'bytes', 0, 8, None)))
 
@@ -618,21 +622,20 @@ class RestEndpointTest(unittest.TestCase):
         # range: 9-12/12
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
+            resp_json={},
             content_range=ContentRange(
                 'bytes', 0, tx.body_blob.len(), tx.body_blob.len())))
 
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}})))
+                'data_response': {'code': 203, 'message': 'ok'}}))
 
         # same tx/delta
         upstream_delta = rest_endpoint.on_update(tx, tx_delta, timeout=5)
@@ -669,32 +672,30 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]}),
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
             location = '/transactions/123'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
+            resp_json={},
             content_range=ContentRange(
                 'bytes', 0, len(body), len(body))))
 
         # GET /transactions/123
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'} })))
+                'data_response': {'code': 203, 'message': 'ok'} }))
 
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -718,12 +719,11 @@ class RestEndpointTest(unittest.TestCase):
         rcpt1_resp = MailResponse(203)
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]}),
+                'rcpt_response': [rcpt0_resp.to_json()]},
             location = '/transactions/123'))
 
         tx = TransactionMetadata(
@@ -736,22 +736,20 @@ class RestEndpointTest(unittest.TestCase):
         # PATCH
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]})))
+                'rcpt_response': [rcpt0_resp.to_json()]}))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json(),
-                                  rcpt1_resp.to_json()]})))
+                                  rcpt1_resp.to_json()]}))
 
         updated_tx = tx.copy()
         updated_tx.rcpt_to.append(Mailbox('bob2'))
@@ -779,23 +777,21 @@ class RestEndpointTest(unittest.TestCase):
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
-                'rcpt_to': [{}] }),
+                'rcpt_to': [{}] },
             location = '/transactions/123'))
 
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            content_type = 'application/json',
-            body = json.dumps({
+            resp_json={
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}] }),
+                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
             location = '/transactions/123'))
 
         tx = TransactionMetadata(
@@ -815,9 +811,8 @@ class RestEndpointTest(unittest.TestCase):
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
-            content_type = 'application/json',
-            body = json.dumps({
-                'mail_from': {'m': 'alice'}}),
+            resp_json={
+                'mail_from': {'m': 'alice'}},
             location = '/transactions/123'))
 
         logging.debug('test_bad_delta envelope')

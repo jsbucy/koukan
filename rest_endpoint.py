@@ -59,10 +59,6 @@ class RestEndpoint(SyncFilter):
     # if we have all the responses.
     rcpts = 0
 
-    # true if we've sent all of the data upstream and should wait for
-    # the data_response
-    data_last = False
-
     client : Client
 
     upstream_tx : Optional[TransactionMetadata] = None
@@ -173,17 +169,6 @@ class RestEndpoint(SyncFilter):
             # xxx err?
         return rest_resp
 
-    # NOTE/TODO: RestEndpoint is used as a rest submission client in
-    # some tests (at least router_service_test). Rest submission has
-    # weaker preconditions i.e. can send data as long as any rcpt
-    # hasn't permfailed. Contrast with:
-    # SmtpService: relays through Exploder which masks upstream temp errors
-    # OutputHandler: is structured to not send the data until at least
-    # one upstream rcpt has succeeded.
-    # It might be good for this code to enforce more of these
-    # preconditions to detect bugs in calling code but it seesm like
-    # it would have to have multiple modes (at least submission vs
-    # relay) which may be more trouble than it's worth...
     def on_update(self,
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata,
@@ -193,12 +178,12 @@ class RestEndpoint(SyncFilter):
         if timeout is None:
             timeout = self.timeout_start
         deadline = Deadline(timeout)
-        self.data_last = tx_delta.body_blob is not None and (
+        data_last = tx_delta.body_blob is not None and (
             tx_delta.body_blob.finalized())
 
         logging.debug('RestEndpoint.on_update start %s '
-                      ' self.data_last=%s timeout=%s downstream tx %s',
-                      self.transaction_url, self.data_last, timeout, tx)
+                      ' data_last=%s timeout=%s downstream tx %s',
+                      self.transaction_url, data_last, timeout, tx)
 
         downstream_delta = tx_delta.copy()
         if downstream_delta.body_blob:
@@ -231,7 +216,7 @@ class RestEndpoint(SyncFilter):
             rest_resp = self._update(downstream_delta, deadline)
             # TODO handle 412 failed precondition
             tx_update = True
-        elif not self.data_last:
+        elif not data_last:
             return TransactionMetadata()
 
         upstream_delta = None
@@ -239,15 +224,31 @@ class RestEndpoint(SyncFilter):
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
 
-            tx_out = TransactionMetadata.from_json(resp_json, WhichJson.REST_READ)
+            logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
+                          self.transaction_url, resp_json)
+
+            tx_out = TransactionMetadata.from_json(
+                resp_json, WhichJson.REST_READ)
+
             if tx_out is None:
-                logging.debug('RestEndpoint.on_update bad resp_json %s', resp_json)
+                logging.debug('RestEndpoint.on_update bad resp_json %s',
+                              resp_json)
                 tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint bad resp_json'))
                 return
 
-            logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
-                          self.transaction_url, resp_json)
+            if self.upstream_tx.req_inflight(tx_out):
+                tx_out = self._get(deadline)
+            err = None
+            if tx_out is None:
+                err = 'bad resp GET after POST/PUT'
+            elif self.upstream_tx.req_inflight(tx_out):
+                err = 'upstream timeout'
+            if err:
+                tx.fill_inflight_responses(
+                    Response(450, 'RestEndpoint bad resp_json'))
+                return
+
             upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or
                 (self.upstream_tx.merge_from(upstream_delta) is None) or
@@ -260,13 +261,26 @@ class RestEndpoint(SyncFilter):
                 assert tx.merge_from(errs) is not None
                 return errs
 
-            if not self.data_last and not self.upstream_tx.req_inflight():
-                return upstream_delta
+        if tx.body_blob is None:
+            return upstream_delta
 
+        err = None
+        if not any([r.ok() for r in tx.rcpt_response]):
+            err = "all rcpts failed"
 
-        # TODO don't do the blob upload until at least one rcpt has succeeded
+        if err is not None:
+            # TODO cancel upstream
+            # POST /tx/123/cancel etc.
+            data_err = TransactionMetadata(
+                data_response=Response(
+                    400, "data failed precondition: " + err +
+                    " (RestEndpoint)"))
+            assert upstream_delta.merge_from(data_err) is not None
+            assert tx.merge_from(data_err) is not None
+            return upstream_delta
+
         put_blob_resp = None
-        if self.data_last:
+        if data_last:
             put_blob_resp = self._put_blob(tx_delta.body_blob)
             logging.debug('RestEndpoint.on_update() put_blob_resp %s',
                           put_blob_resp)
@@ -275,7 +289,6 @@ class RestEndpoint(SyncFilter):
                     data_response = put_blob_resp)
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
-
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -292,6 +305,7 @@ class RestEndpoint(SyncFilter):
                 errs)
             assert tx.merge_from(errs) is not None
             return errs
+
 
         errs = TransactionMetadata()
         tx.fill_inflight_responses(
@@ -449,9 +463,7 @@ class RestEndpoint(SyncFilter):
                     json, WhichJson.REST_READ)
 
             if (tx_out is not None) and (
-                    not self.upstream_tx.req_inflight(tx_out)) and (
-                    # xxx move to req_inflight()?
-                    not self.data_last or tx_out.data_response):
+                    not self.upstream_tx.req_inflight(tx_out)):
                 logging.debug('RestEndpoint._get() %s done %s',
                               self.transaction_url, tx_out)
                 return tx_out

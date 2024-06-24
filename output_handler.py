@@ -197,20 +197,20 @@ class OutputHandler:
 
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
-        logging.debug('OutputHandler.cursor_to_endpoint() %s', self.rest_id)
+        logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
 
 
         resp = self._output()
         # TODO need another attempt column for internal errors?
         if resp is None:
-            logging.warning('OutputHandler.cursor_to_endpoint() %s abort',
+            logging.warning('OutputHandler._cursor_to_endpoint() %s abort',
                             self.rest_id)
             resp = Response(400, 'output handler abort')
-        logging.info('OutputHandler.cursor_to_endpoint() %s done %s',
+        logging.info('OutputHandler._cursor_to_endpoint() %s done %s',
                      self.rest_id, resp)
 
         logging.debug(
-            'OutputHandler.cursor_to_endpoint() %s attempt %d retry %s',
+            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s',
             self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry)
 
         next_attempt_time = None

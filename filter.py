@@ -551,8 +551,10 @@ class TransactionMetadata:
 
             if json_field.emit_rest_placeholder(which_json):
                 if any([x != None for x in new_v]):
+                    logging.debug('non-None placeholder')
                     return None
                 if len(new_v) < len(old_v):
+                    logging.debug('list shrink placeholder')
                     return None
                 # XXX need this??
                 # setattr(out, json_field.list_offset(), len(old_v))
