@@ -170,8 +170,8 @@ class StorageWriterFilter(AsyncFilter):
                 logging.debug('StorageWriterFilter inline body %d',
                               len(body_utf8))
                 writer = self.storage.create_blob(
-                    rest_id=self.rest_id_factory(),
                     tx_rest_id=self.rest_id,
+                    blob_rest_id=self.rest_id_factory(),
                     tx_body=True)
                 writer.append_data(0, body_utf8, len(body_utf8))
                 reuse_blob_rest_id = [writer.rest_id]
@@ -214,30 +214,22 @@ class StorageWriterFilter(AsyncFilter):
                         tx_body : Optional[bool] = None,
                         copy_from_tx_body : Optional[str] = None
                         ) -> Optional[WritableBlob]:
-        #assert not (tx_body and blob_rest_id)
         assert tx_body or blob_rest_id
-        #assert copy_from_uri is None or not create
-        #assert copy_from_uri is None or not copy_from_uri.tx_body or tx_body
-        #assert copy_from_uri is None or copy_from_uri.blob is None or (not tx_body)
 
         if create:
             if tx_body:
                 # copy_from_uri.tx_body
                 blob = self.storage.create_blob(
-                    rest_id=blob_rest_id,
                     tx_rest_id=self.rest_id,
+                    blob_rest_id=blob_rest_id,
                     tx_body=tx_body,
                     copy_from_tx_body=copy_from_tx_body)
             else:  # blob_rest_id
                 # copy_from_uri.blob
-                blob = self.storage.create_blob(blob_rest_id, self.rest_id)
+                blob = self.storage.create_blob(tx_rest_id=self.rest_id,
+                                                blob_rest_id=blob_rest_id)
         else:
-            # xxx storage should handle this?
-            if tx_body:
-                tx = self._get(Deadline())
-                blob_rest_id = tx.body
-
             blob = self.storage.get_blob_for_append(
-                blob_rest_id, tx_rest_id=self.rest_id)
+                tx_rest_id=self.rest_id, blob_rest_id=blob_rest_id)
 
         return blob

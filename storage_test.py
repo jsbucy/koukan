@@ -64,7 +64,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
         blob_writer = self.s.create_blob(
-            'blob_rest_id', tx_rest_id='tx_rest_id', tx_body=True)
+            tx_rest_id='tx_rest_id', blob_rest_id='blob_rest_id', tx_body=True)
 
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
@@ -72,7 +72,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertFalse(blob_writer.last)
 
         blob_writer = self.s.get_blob_for_append(
-            'blob_rest_id', tx_rest_id='tx_rest_id', tx_body=True)
+            tx_rest_id='tx_rest_id', tx_body=True)
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
         del blob_writer

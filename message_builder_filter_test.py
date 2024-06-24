@@ -29,7 +29,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         tx_cursor.create('tx_rest_id', tx)
 
         blob_writer = self.storage.create_blob(
-            rest_id='blob_rest_id', tx_rest_id='tx_rest_id')
+            tx_rest_id='tx_rest_id', blob_rest_id='blob_rest_id')
         d = b'hello, world!'
         blob_writer.append_data(0, d, len(d))
 

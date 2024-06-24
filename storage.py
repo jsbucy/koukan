@@ -965,10 +965,9 @@ class Storage():
     def get_blob_reader(self) -> BlobReader:
         return BlobReader(self)
 
-    # xxx tx_rest_id not optional
     def create_blob(self,
-                    rest_id : Optional[str] = None,
-                    tx_rest_id : Optional[str] = None,
+                    tx_rest_id : str,
+                    blob_rest_id : Optional[str] = None,
                     tx_body : bool = False,
                     # rest id of tx to copy body from
                     copy_from_tx_body : Optional[str] = None
@@ -978,45 +977,44 @@ class Storage():
             if copy_from_tx_body:
                 cursor = self.get_transaction_cursor()
                 cursor._load_db(db_tx, rest_id=copy_from_tx_body)
-                rest_id = cursor.body_rest_id
-                logging.debug('copy_from_tx_body %s -> %s', copy_from_tx_body, rest_id)
+                blob_rest_id = cursor.body_rest_id
+                logging.debug('copy_from_tx_body %s -> %s',
+                              copy_from_tx_body, blob_rest_id)
             else:
                 writer = BlobWriter(self)
-                writer._create(rest_id, db_tx)
+                writer._create(blob_rest_id, db_tx)
 
-            if tx_rest_id:
-                cursor = self.get_transaction_cursor()
-                cursor._load_db(db_tx, rest_id=tx_rest_id)
-                tx = TransactionMetadata()
-                if tx_body:
-                    tx.body=rest_id
-                cursor._write(db_tx, tx, reuse_blob_rest_id=[rest_id],
-                              require_finalized_blobs=False)
-                if writer:
-                    writer.update_tx = cursor.id
-                    writer.finalize_tx = tx_body
+            cursor = self.get_transaction_cursor()
+            cursor._load_db(db_tx, rest_id=tx_rest_id)
+            tx = TransactionMetadata()
+            if tx_body:
+                tx.body=blob_rest_id
+            cursor._write(db_tx, tx, reuse_blob_rest_id=[blob_rest_id],
+                          require_finalized_blobs=False)
+            if writer:
+                writer.update_tx = cursor.id
+                writer.finalize_tx = tx_body
 
             return writer
 
-    # xxx tx_rest_id not optional
-    # xxx don't require rest_id if tx_body since we're loading the tx anyway
     def get_blob_for_append(
-            self, rest_id,
-            tx_rest_id : Optional[str] = None,
+            self,
+            tx_rest_id : str,
+            blob_rest_id : Optional[str] = None,
             tx_body : bool = False
     ) -> Optional[WritableBlob]:
-        #  xxx db_tx?
-        writer = BlobWriter(self)  # update_tx, finalize_tx=tx_body
-        if writer.load(rest_id, tx_rest_id) is None:
+        tx_cursor = self.get_transaction_cursor()
+        tx_cursor.load(rest_id=tx_rest_id)
+        if tx_body:
+            blob_rest_id = tx_cursor.body_rest_id
+
+        blob_writer = BlobWriter(self)
+        if blob_writer.load(blob_rest_id, tx_rest_id) is None:
             return None
+        blob_writer.update_tx = tx_cursor.id
+        blob_writer.finalize_tx = tx_body
 
-        if tx_rest_id:
-            cursor = self.get_transaction_cursor()
-            cursor.load(rest_id=tx_rest_id)
-            writer.update_tx = cursor.id
-            writer.finalize_tx = tx_body
-
-        return writer
+        return blob_writer
 
     def get_transaction_cursor(self) -> TransactionCursor:
         return TransactionCursor(self)
