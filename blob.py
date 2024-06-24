@@ -23,6 +23,10 @@ class Blob(ABC):
     def content_length(self) -> Optional[int]:
         pass
 
+    def finalized(self):
+        cl = self.content_length()
+        return cl is not None and cl == self.len()
+
 class WritableBlob(ABC):
     # write at offset which must be the current end
     # bool: whether offset was correct/write was applied, resulting range

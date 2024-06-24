@@ -120,7 +120,7 @@ class OutputHandler:
                 assert blob_reader.load(
                     rest_id = self.cursor.tx.body,
                     tx_id = self.cursor.id) is not None
-                assert blob_reader.length == blob_reader.content_length()
+                assert blob_reader.finalized()
                 upstream_tx.body_blob = delta.body_blob = blob_reader
 
             if upstream_tx.body:

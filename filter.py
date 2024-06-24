@@ -403,7 +403,7 @@ class TransactionMetadata:
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
         body_blob_last = self.body_blob is not None and (
-            self.body_blob.len() == self.body_blob.content_length())
+            self.body_blob.finalized())
         if (self.body or body_blob_last or self.message_builder
             ) and tx.data_response is None:
             return True
@@ -422,7 +422,7 @@ class TransactionMetadata:
         dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
         body_blob_last = self.body_blob is not None and (
-            self.body_blob.len() == self.body_blob.content_length())
+            self.body_blob.finalized())
         if body_blob_last and self.data_response is None:
             dest.data_response = resp
 

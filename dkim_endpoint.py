@@ -34,8 +34,7 @@ class DkimEndpoint(SyncFilter):
         downstream_delta = tx_delta.copy()
 
         body_blob = tx_delta.body_blob
-        if body_blob is not None and (
-                body_blob.len() == body_blob.content_length()):
+        if body_blob is not None and body_blob.finalized():
             upstream_body = CompositeBlob()
             sig = InlineBlob(self.sign(body_blob))
             upstream_body.append(sig, 0, sig.len())

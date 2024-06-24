@@ -670,9 +670,7 @@ class RouterServiceTest(unittest.TestCase):
     # never uses the exploder
     def test_message_builder(self):
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url,
-            http_host='submission',
-            tx_blob=True)
+            static_base_url=self.router_url, http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
@@ -758,9 +756,7 @@ class RouterServiceTest(unittest.TestCase):
             message_builder=message_builder_spec)
 
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url,
-            http_host='submission',
-            tx_blob=True)
+            static_base_url=self.router_url, http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)

@@ -134,7 +134,7 @@ class StorageWriterFilter(AsyncFilter):
         # internal paths: Exploder/Notification (rest uses get_blob_writer())
         if downstream_delta.body_blob is not None:
             body_blob = downstream_delta.body_blob
-            if body_blob.len() == body_blob.content_length():
+            if body_blob.finalized():
                 self._body(downstream_delta)
                 if downstream_delta.data_response is not None:
                     return  # XXX

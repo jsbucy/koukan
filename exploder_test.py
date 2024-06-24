@@ -613,7 +613,7 @@ class ExploderRecipientTest(unittest.TestCase):
                 data_response=upstream_data_resp))
 
         d = 'hello, world!'
-        rcpt._append_upstream(InlineBlob(d[0:7], len(d)), False)
+        rcpt._append_upstream(InlineBlob(d[0:7], len(d)))
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_data)
         self.assertEqualStatus(rcpt.status, exp_status_after_data)
 
@@ -623,7 +623,7 @@ class ExploderRecipientTest(unittest.TestCase):
         if upstream_data_resp_last:
             endpoint.merge(TransactionMetadata(
                 data_response=upstream_data_resp_last))
-        rcpt._append_upstream(InlineBlob(d, len(d)), True)
+        rcpt._append_upstream(InlineBlob(d, len(d)))
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_data_last)
         self.assertEqualStatus(rcpt.status, exp_status_after_data_last)
 

@@ -67,8 +67,6 @@ class RestEndpoint(SyncFilter):
 
     upstream_tx : Optional[TransactionMetadata] = None
 
-    tx_blob : bool
-
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -85,8 +83,7 @@ class RestEndpoint(SyncFilter):
                  min_poll=1,
                  max_inline=1024,
                  chunk_size=1048576,
-                 verify=True,
-                 tx_blob=True):
+                 verify=True):
         self.base_url = self.static_base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
@@ -100,7 +97,6 @@ class RestEndpoint(SyncFilter):
         self.chunk_size = chunk_size
 
         self.client = Client(http2=True, verify=verify)
-        self.tx_blob = tx_blob
 
     def _maybe_qualify_url(self, url):
         parsed = urlparse(url)
@@ -198,7 +194,7 @@ class RestEndpoint(SyncFilter):
             timeout = self.timeout_start
         deadline = Deadline(timeout)
         self.data_last = tx_delta.body_blob is not None and (
-            tx_delta.body_blob.len() == tx_delta.body_blob.content_length())
+            tx_delta.body_blob.finalized())
 
         logging.debug('RestEndpoint.on_update start %s '
                       ' self.data_last=%s timeout=%s downstream tx %s',

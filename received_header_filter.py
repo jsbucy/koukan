@@ -129,9 +129,7 @@ class ReceivedHeaderFilter(SyncFilter):
 
         data_err : Optional[Response] = None
         body_blob = tx_delta.body_blob
-        if body_blob is not None and (
-                body_blob.len() == body_blob.content_length()):
-
+        if body_blob is not None and body_blob.finalized():
             data_err = self._check_max_received_headers(body_blob)
 
             upstream_body = None

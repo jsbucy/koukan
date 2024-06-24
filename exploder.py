@@ -159,7 +159,8 @@ class Recipient:
                       self.mail_response, self.rcpt_response)
 
 
-    def _append_upstream(self, blob, last):
+    def _append_upstream(self, blob):
+        last = blob.finalized()
         assert self.status is None or self.store_and_forward
 
         # don't wait for a status if it's already failed
@@ -368,7 +369,6 @@ class Exploder(SyncFilter):
         return None
 
     def _append_data(self, blob : Blob) -> Optional[Response]:
-        last = blob.len() == blob.content_length()
         logging.info('Exploder._append_data %d %s',
                      blob.len(), blob.content_length())
 
@@ -377,13 +377,13 @@ class Exploder(SyncFilter):
             if recipient.status is not None and not recipient.status.ok():
                 continue
             fns.append(
-                partial(lambda r: r._append_upstream(blob, last), recipient))
+                partial(lambda r: r._append_upstream(blob), recipient))
         self._run(fns)
 
         if (data_resp := self._cutthrough_data()) is not None:
             return data_resp
 
-        if not last:
+        if not blob.finalized():
             return None
 
         for i,recipient in enumerate(self.recipients):

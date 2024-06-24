@@ -93,8 +93,7 @@ class GatewayTest(unittest.TestCase):
     def test_rest_to_smtp_basic(self):
         rest_endpoint = RestEndpoint(
             static_base_url=self.gw_rest_url,
-            http_host='outbound',
-            tx_blob=True)
+            http_host='outbound')
         tx=TransactionMetadata(
             remote_host=HostPort('localhost', self.fake_smtpd_port))
         tx.mail_from = Mailbox('alice')
