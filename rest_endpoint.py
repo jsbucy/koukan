@@ -275,7 +275,10 @@ class RestEndpoint(SyncFilter):
                 data_response=Response(
                     400, "data failed precondition: " + err +
                     " (RestEndpoint)"))
-            assert upstream_delta.merge_from(data_err) is not None
+            if upstream_delta is None:
+                upstream_delta = data_err
+            else:
+                assert upstream_delta.merge_from(data_err) is not None
             assert tx.merge_from(data_err) is not None
             return upstream_delta
 
