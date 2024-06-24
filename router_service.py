@@ -16,7 +16,7 @@ from blob import InlineBlob
 from storage import Storage, TransactionCursor
 from rest_endpoint_adapter import (
     EndpointFactory,
-    RestEndpointAdapterFactory )
+    RestHandlerFactory )
 from output_handler import OutputHandler
 from response import Response
 from executor import Executor
@@ -41,7 +41,7 @@ class Service:
     storage : Optional[Storage] = None
     last_gc = 0
 
-    rest_handler_factory : Optional[RestEndpointAdapterFactory] = None
+    rest_handler_factory : Optional[RestHandlerFactory] = None
     endpoint_factory : Optional[EndpointFactory] = None
 
     # dequeue watermark
@@ -141,7 +141,7 @@ class Service:
         # top-level: http host -> endpoint
 
         self.endpoint_factory = StorageWriterFactory(self)
-        self.rest_handler_factory = RestEndpointAdapterFactory(
+        self.rest_handler_factory = RestHandlerFactory(
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.config.rest_id_factory())
 

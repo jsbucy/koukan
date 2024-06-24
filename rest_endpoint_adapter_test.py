@@ -9,7 +9,7 @@ from flask import (
 from werkzeug.datastructures import ContentRange
 
 from blob import InlineBlob
-from rest_endpoint_adapter import RestEndpointAdapter, SyncFilterAdapter
+from rest_endpoint_adapter import RestHandler, SyncFilterAdapter
 from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
 from executor import Executor
 from filter import Mailbox, TransactionMetadata, WhichJson
@@ -58,7 +58,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
 
-class RestEndpointAdapterTest(unittest.TestCase):
+class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):
         app = Flask(__name__)
         endpoint = FakeAsyncEndpoint(rest_id='rest_id')
@@ -67,13 +67,13 @@ class RestEndpointAdapterTest(unittest.TestCase):
         endpoint.merge(tx)
 
         with app.test_request_context():
-            handler = RestEndpointAdapter(endpoint, http_host='msa')
+            handler = RestHandler(endpoint, http_host='msa')
             resp = handler.create_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.status, '201 CREATED')
             self.assertEqual(resp.json, {})
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
 
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
             resp = handler.patch_tx(FlaskRequest.from_values(
                 json={"mail_from": {"m": "alice"}},
@@ -83,7 +83,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
 
             endpoint.merge(
                 TransactionMetadata(mail_response=Response(201)))
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.json, {
@@ -91,7 +91,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
 
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
 
             resp = handler.patch_tx(FlaskRequest.from_values(
@@ -116,7 +116,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             })
 
 
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
             resp = handler.patch_tx(FlaskRequest.from_values(
                 json={"rcpt_to": [{"m": "bob2"}],
@@ -150,7 +150,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
 
             body = b'hello, world!'
             endpoint.body_blob = InlineBlob(b'')
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
@@ -179,12 +179,12 @@ class RestEndpointAdapterTest(unittest.TestCase):
             tx_etag = resp.headers['etag']
 
 
-            handler = RestEndpointAdapter(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values(json={}))
             self.assertEqual(resp.status, '200 OK')
-            logging.debug('RestEndpointAdapterTest get %s', resp.json)
+            logging.debug('RestHandlerTest get %s', resp.json)
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
@@ -207,7 +207,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
 
         with app.test_request_context():
             # content-range header is not accepted in non-chunked blob post
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
@@ -219,7 +219,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
 
             # POST ...blob...?upload=chunked may eventually take
             # json metadata as the entity but for now that's unimplemented
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
@@ -231,7 +231,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '400 BAD REQUEST')
 
             endpoint.body_blob = InlineBlob(b'')
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
@@ -242,7 +242,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assertEqual(resp.status, '201 CREATED')
             self.assertNotIn('content-range', resp.headers)
 
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 rest_id_factory = lambda: 'rest-id',
@@ -257,7 +257,7 @@ class RestEndpointAdapterTest(unittest.TestCase):
             self.assert_eq_content_range(resp.content_range,
                                          ContentRange('bytes', 0, 7, None))
 
-            handler = RestEndpointAdapter(
+            handler = RestHandler(
                 endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 rest_id_factory = lambda: 'rest-id',

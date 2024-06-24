@@ -13,7 +13,7 @@ import rest_service
 from rest_endpoint_adapter import (
     SyncFilterAdapter,
     EndpointFactory,
-    RestEndpointAdapterFactory )
+    RestHandlerFactory )
 import gunicorn_main
 import hypercorn_main
 from config import Config
@@ -151,7 +151,7 @@ class SmtpGateway(EndpointFactory):
                 rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
-        self.adapter_factory = RestEndpointAdapterFactory(
+        self.adapter_factory = RestHandlerFactory(
             self, self.rest_id_factory)
 
         flask_app=rest_service.create_app(self.adapter_factory)

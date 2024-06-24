@@ -34,7 +34,8 @@ from executor import Executor
 from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
 
 
-# Wrapper for vanilla/sync Filter that provides async interface for REST
+# runs SyncFilter on Executor with AsyncFilter interface for
+# RestHandler -> SyncFilterAdapter -> SmtpEndpoint
 class SyncFilterAdapter(AsyncFilter):
     class BlobWriter(WritableBlob):
         blob : InlineBlob
@@ -197,7 +198,7 @@ class SyncFilterAdapter(AsyncFilter):
 MAX_TIMEOUT=30
 
 
-class RestEndpointAdapter(Handler):
+class RestHandler(Handler):
     CHUNK_SIZE = 1048576
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
@@ -476,7 +477,7 @@ class EndpointFactory(ABC):
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         pass
 
-class RestEndpointAdapterFactory(HandlerFactory):
+class RestHandlerFactory(HandlerFactory):
     endpoint_factory : EndpointFactory
     rest_id_factory : Callable[[], str]
 
@@ -485,15 +486,15 @@ class RestEndpointAdapterFactory(HandlerFactory):
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
 
-    def create_tx(self, http_host) -> RestEndpointAdapter:
+    def create_tx(self, http_host) -> RestHandler:
         endpoint = self.endpoint_factory.create(http_host)
-        return RestEndpointAdapter(
+        return RestHandler(
             async_filter=endpoint,
             http_host=http_host,
             rest_id_factory=self.rest_id_factory)
 
-    def get_tx(self, tx_rest_id) -> RestEndpointAdapter:
-        return RestEndpointAdapter(
+    def get_tx(self, tx_rest_id) -> RestHandler:
+        return RestHandler(
             async_filter=self.endpoint_factory.get(tx_rest_id),
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory)
