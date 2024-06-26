@@ -7,7 +7,6 @@ import copy
 from response import Response
 
 from blob import Blob, WritableBlob
-from rest_schema import BlobUri
 
 class HostPort:
     host : str

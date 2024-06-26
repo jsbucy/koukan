@@ -225,16 +225,10 @@ class StorageWriterFilter(AsyncFilter):
         assert tx_body or blob_rest_id
 
         if create:
-            if tx_body:
-                # copy_from_uri.tx_body
-                blob = self.storage.create_blob(
-                    tx_rest_id=self.rest_id,
-                    blob_rest_id=blob_rest_id,
-                    tx_body=tx_body)
-            else:  # blob_rest_id
-                # copy_from_uri.blob
-                blob = self.storage.create_blob(tx_rest_id=self.rest_id,
-                                                blob_rest_id=blob_rest_id)
+            blob = self.storage.create_blob(
+                tx_rest_id=self.rest_id,
+                blob_rest_id=blob_rest_id,
+                tx_body=tx_body)
         else:
             blob = self.storage.get_blob_for_append(
                 tx_rest_id=self.rest_id, blob_rest_id=blob_rest_id)

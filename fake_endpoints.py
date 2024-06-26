@@ -10,7 +10,6 @@ from filter import (
     Mailbox,
     SyncFilter,
     TransactionMetadata )
-from rest_schema import BlobUri
 
 class FakeAsyncEndpoint(AsyncFilter):
     tx : TransactionMetadata
@@ -59,8 +58,7 @@ class FakeAsyncEndpoint(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None,
-                        copy_from_tx_body : Optional[str] = None
+                        tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
         #assert not(tx_body and blob_rest_id)
         return self.body_blob
