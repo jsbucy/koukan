@@ -151,6 +151,9 @@ class OutputHandler:
                     assert last_tx.merge_from(upstream_delta) is not None
                     break
                 except VersionConflictException:
+                    logging.info(
+                        'OutputHandler._output() VersionConflictException %s ',
+                        self.rest_id)
                     self.cursor.load()
             if (upstream_delta.mail_response is not None and
                 upstream_delta.mail_response.err()):
@@ -174,7 +177,9 @@ class OutputHandler:
             # xxx why is this here?
             delta.attempt_count = self.cursor.attempt_id
         else:
-            final_attempt_reason = self.cursor.final_attempt_reason
+            # post facto notification
+            # leave the existing value
+            final_attempt_reason = None
 
         if self.cursor.tx.notification:
             self._maybe_send_notification(final_attempt_reason)
@@ -209,10 +214,6 @@ class OutputHandler:
         logging.info('OutputHandler._cursor_to_endpoint() %s done %s',
                      self.rest_id, resp)
 
-        logging.debug(
-            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s',
-            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry)
-
         next_attempt_time = None
         final_attempt_reason = None
         if resp.ok():
@@ -224,12 +225,21 @@ class OutputHandler:
         else:
             final_attempt_reason, next_attempt_time = (
                 self._next_attempt_time(time.time()))
+
+        logging.debug(
+            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s final_attempt_reason %s',
+            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry, final_attempt_reason)
+
         return final_attempt_reason, next_attempt_time
 
 
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
         if self.cursor.tx.retry is None:
-            return 'oneshot', None
+            # leave the existing value for final_attempt_reason
+            final_attempt_reason = None
+            next_attempt_time = None
+            return final_attempt_reason, next_attempt_time
+
         max_attempts = self.cursor.tx.retry.get('max_attempts', None)
         # TODO separate function to merge tx.retry, self.retry_params, defaults
         if max_attempts is None:

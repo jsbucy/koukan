@@ -191,6 +191,7 @@ class TransactionCursor:
         unrefd_blobs = [b for b in reuse_blob_rest_id if b not in refd_blobs]
 
         reuse_blob_id = self._reuse_blob(db_tx, unrefd_blobs)
+        logging.debug('_write_blob reuse_blob_id %s', reuse_blob_id)
 
         if reuse_blob_id and require_finalized:
             for blob_id, rest_id, done in reuse_blob_id:
@@ -201,13 +202,13 @@ class TransactionCursor:
                       self.id, tx.body)
 
         if tx.body:
-            if len(reuse_blob_rest_id) == 1:
-                logging.debug('TransactionCursor._write_blob %d reuse', self.id)
-                upd = upd.values(
-                    body_blob_id = reuse_blob_id[0][0],
-                    body_rest_id = reuse_blob_rest_id[0])
-            else:
-                raise ValueError()
+            assert reuse_blob_rest_id == [tx.body]
+            assert len(reuse_blob_id) == 1
+            assert reuse_blob_id[0][1] == tx.body
+            logging.debug('TransactionCursor._write_blob %d reuse', self.id)
+            upd = upd.values(
+                body_blob_id = reuse_blob_id[0][0],
+                body_rest_id = reuse_blob_rest_id[0])
 
         blobrefs = []
         blobs_done = True
@@ -236,6 +237,10 @@ class TransactionCursor:
                notification_done : Optional[bool] = None,
                # only for upcalls from BlobWriter
                input_done = False):
+        assert final_attempt_reason != 'oneshot'  # internal-only
+
+        assert self.final_attempt_reason == 'oneshot' or self.final_attempt_reason is None or final_attempt_reason is None
+
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
         # e.g. overwriting an existing field
@@ -269,21 +274,21 @@ class TransactionCursor:
                        .values(responses = attempt_json))
             res = db_tx.execute(upd_att)
 
-        if ((tx_delta.retry is not None) and
-            self.final_attempt_reason == 'oneshot'):
-            upd = upd.values(final_attempt_reason = None)
-
         upd = upd.values(notification = bool(tx_to_db.notification))
 
-        if final_attempt_reason:
-            upd = upd.values(no_final_notification =
-                             not bool(tx_to_db.notification))
+        # TODO possibly assert here, the first case is
+        # downstream/Exploder, #2/3 are upstream/OutputHandler
+        if ((tx_to_db.retry is not None or tx_to_db.notification is not None
+             ) and self.final_attempt_reason == 'oneshot'):
+            self.final_attempt_reason = None
+            upd = upd.values(final_attempt_reason = None)
+        elif final_attempt_reason:
+            upd = upd.values(
+                no_final_notification = not bool(tx_to_db.notification),
+                final_attempt_reason = final_attempt_reason)
         elif notification_done:
             assert tx_to_db.notification
             upd = upd.values(no_final_notification = False)
-
-        if final_attempt_reason:
-            upd = upd.values(final_attempt_reason = final_attempt_reason)
 
         if finalize_attempt:
             upd = upd.values(inflight_session_id = None,
@@ -311,6 +316,8 @@ class TransactionCursor:
         row = res.fetchone()
 
         if row is None or row[0] != new_version:
+            logging.info('Storage._write version conflict '
+                         'expected %d db %s', new_version, row)
             raise VersionConflictException()
         self.version = row[0]
 
@@ -319,8 +326,8 @@ class TransactionCursor:
         # handle that?
         self.tx = self.tx.merge(tx_delta)
 
-        logging.info('write_envelope id=%d version=%d',
-                     self.id, self.version)
+        logging.info('_write id=%d %s version=%d',
+                     self.id, self.rest_id, self.version)
 
         return True
 
@@ -427,7 +434,9 @@ class TransactionCursor:
             upd = upd.values(final_attempt_reason = self.final_attempt_reason)
 
         res = db_tx.execute(upd)
-        assert res.fetchone()[0] == new_version
+        row = res.fetchone()
+        if row is None or row[0] != new_version:
+            raise VersionConflictException
 
         # This is a sort of pseudo-attempt for re-entering the
         # notification logic if it was enabled after the transaction
@@ -519,6 +528,7 @@ class BlobWriter(WritableBlob):
         with self.parent.begin_transaction() as db_tx:
             blob_id = None
             if tx_rest_id:
+                # TODO put tx_rest_id in blobrefs to save this read?
                 sel_tx = select(
                     self.parent.tx_table.c.id
                 ).where(
@@ -978,8 +988,8 @@ class Storage():
                 cursor = self.get_transaction_cursor()
                 cursor._load_db(db_tx, rest_id=copy_from_tx_body)
                 blob_rest_id = cursor.body_rest_id
-                logging.debug('copy_from_tx_body %s -> %s',
-                              copy_from_tx_body, blob_rest_id)
+                logging.debug('copy_from_tx_body tx/%s -> tx/%s',
+                              copy_from_tx_body, tx_rest_id)
             else:
                 writer = BlobWriter(self)
                 writer._create(blob_rest_id, db_tx)
@@ -989,8 +999,10 @@ class Storage():
             tx = TransactionMetadata()
             if tx_body:
                 tx.body=blob_rest_id
-            cursor._write(db_tx, tx, reuse_blob_rest_id=[blob_rest_id],
-                          require_finalized_blobs=False)
+            cursor._write(
+                db_tx, tx,
+                reuse_blob_rest_id=[blob_rest_id],
+                require_finalized_blobs=False)
             if writer:
                 writer.update_tx = cursor.id
                 writer.finalize_tx = tx_body

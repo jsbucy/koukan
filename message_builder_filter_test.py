@@ -43,7 +43,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             ]
         }
         tx_cursor.load()
-        tx_cursor.write_envelope(tx_delta)
+        tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=['blob_rest_id'])
 
         def exp(tx, delta):
             self.assertNotEqual(

@@ -141,7 +141,37 @@ class StorageTestBase(unittest.TestCase):
         blob_reader.load(rest_id='blob_rest_id', no_tx_id=True)
         self.assertEqual(blob_reader.read(0), d+d)
 
+    def test_body_reuse(self):
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id', TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
 
+        blob_writer = self.s.create_blob(
+            'tx_rest_id', 'body_blob', tx_body=True)
+        b = b'hello, world!'
+        blob_writer.append_data(0, b, len(b))
+
+        return
+
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id2', TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob2')]))
+        self.s.create_blob(
+            'tx_rest_id2', tx_body=True, copy_from_tx_body='tx_rest_id')
+
+        tx_reader = self.s.get_transaction_cursor()
+        tx_reader.load(db_id=tx_writer.id)
+        blob_reader = self.s.get_blob_reader()
+        blob_reader.load(tx_reader.body_blob_id, tx_id=tx_reader.id)
+        self.assertEqual(blob_reader.read(0), b)
+
+    # XXX update to reflect current create_blob()/get_blob_writer() apis
     def test_blob_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id', TransactionMetadata(

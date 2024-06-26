@@ -24,6 +24,7 @@ from config import Config
 from filter import AsyncFilter, SyncFilter
 
 from storage_writer_filter import StorageWriterFilter
+from storage_schema import VersionConflictException
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
@@ -207,8 +208,11 @@ class Service:
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
         self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
-        storage_tx = self.storage.load_one()
-        logging.info("dequeued %s", storage_tx.id if storage_tx else None)
+        try:
+            storage_tx = self.storage.load_one()
+        except VersionConflictException:
+            return False
+        logging.info("dequeued id=%s", storage_tx.id if storage_tx else None)
         if storage_tx is None:
             return False
 

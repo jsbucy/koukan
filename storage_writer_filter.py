@@ -132,6 +132,7 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update delta %s', downstream_delta)
 
         # internal paths: Exploder/Notification (rest uses get_blob_writer())
+        body_blob = None
         if downstream_delta.body_blob is not None:
             body_blob = downstream_delta.body_blob
             if body_blob.finalized():
@@ -157,24 +158,32 @@ class StorageWriterFilter(AsyncFilter):
             self._create(downstream_delta,
                          reuse_blob_rest_id=reuse_blob_rest_id)
             reuse_blob_rest_id = None
-            if downstream_delta.body:
-                uri = parse_blob_uri(downstream_delta.body)
-                assert uri and uri.tx_body
-                self.storage.create_blob(
-                    tx_rest_id=self.rest_id,
-                    tx_body=True,
-                    copy_from_tx_body=uri.tx_id)
-                del downstream_tx.body
-                del downstream_delta.body
-            elif body_utf8 is not None:
-                logging.debug('StorageWriterFilter inline body %d',
-                              len(body_utf8))
-                writer = self.storage.create_blob(
-                    tx_rest_id=self.rest_id,
-                    blob_rest_id=self.rest_id_factory(),
-                    tx_body=True)
-                writer.append_data(0, body_utf8, len(body_utf8))
-                reuse_blob_rest_id = [writer.rest_id]
+            for i in range(0,3):
+                try:
+                    if body_blob is not None:
+                        pass
+                    elif downstream_delta.body:
+                        uri = parse_blob_uri(downstream_delta.body)
+                        assert uri and uri.tx_body
+                        self.storage.create_blob(
+                            tx_rest_id=self.rest_id,
+                            tx_body=True,
+                            copy_from_tx_body=uri.tx_id)
+                        del downstream_tx.body
+                        del downstream_delta.body
+                    elif body_utf8 is not None:
+                        logging.debug('StorageWriterFilter inline body %d',
+                                      len(body_utf8))
+                        writer = self.storage.create_blob(
+                            tx_rest_id=self.rest_id,
+                            blob_rest_id=self.rest_id_factory(),
+                            tx_body=True)
+                        writer.append_data(0, body_utf8, len(body_utf8))
+                        # create_blob() refs into tx for tx_body
+                    break
+                except VersionConflictException:
+                    pass
+
             downstream_delta = TransactionMetadata()
 
         if not created or reuse_blob_rest_id:
