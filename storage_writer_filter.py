@@ -141,8 +141,17 @@ class StorageWriterFilter(AsyncFilter):
                     return  # XXX
                 reuse_blob_rest_id=[downstream_delta.body]
             del downstream_delta.body_blob
+        elif downstream_delta.body:
+            uri = parse_blob_uri(downstream_delta.body)
+            assert uri and uri.tx_body
+            source_cursor = self.storage.get_transaction_cursor()
+            source_cursor.load(rest_id=uri.tx_id)
+            downstream_tx.body = downstream_delta.body = source_cursor.body_rest_id
+            reuse_blob_rest_id = [source_cursor.body_rest_id]
+
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
+
 
         created = False
         if self.rest_id is None:
@@ -158,19 +167,10 @@ class StorageWriterFilter(AsyncFilter):
             self._create(downstream_delta,
                          reuse_blob_rest_id=reuse_blob_rest_id)
             reuse_blob_rest_id = None
-            for i in range(0,3):
+            while True:
                 try:
                     if body_blob is not None:
                         pass
-                    elif downstream_delta.body:
-                        uri = parse_blob_uri(downstream_delta.body)
-                        assert uri and uri.tx_body
-                        self.storage.create_blob(
-                            tx_rest_id=self.rest_id,
-                            tx_body=True,
-                            copy_from_tx_body=uri.tx_id)
-                        del downstream_tx.body
-                        del downstream_delta.body
                     elif body_utf8 is not None:
                         logging.debug('StorageWriterFilter inline body %d',
                                       len(body_utf8))
@@ -220,8 +220,7 @@ class StorageWriterFilter(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None,
-                        copy_from_tx_body : Optional[str] = None
+                        tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
         assert tx_body or blob_rest_id
 
@@ -231,8 +230,7 @@ class StorageWriterFilter(AsyncFilter):
                 blob = self.storage.create_blob(
                     tx_rest_id=self.rest_id,
                     blob_rest_id=blob_rest_id,
-                    tx_body=tx_body,
-                    copy_from_tx_body=copy_from_tx_body)
+                    tx_body=tx_body)
             else:  # blob_rest_id
                 # copy_from_uri.blob
                 blob = self.storage.create_blob(tx_rest_id=self.rest_id,

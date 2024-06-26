@@ -239,9 +239,10 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'inline')
+        b = 'hello, world!'
         tx = TransactionMetadata(
                 host = 'outbound-gw',
-                inline_body = 'hello, world!')
+                inline_body = b)
         filter.update(tx, tx.copy(), 0)
 
         filter2 = StorageWriterFilter(
@@ -252,6 +253,12 @@ class StorageWriterFilterTest(unittest.TestCase):
                 body = '/transactions/inline/body')
         filter2.update(tx2, tx2.copy(), 0)
 
+        cursor = self.storage.get_transaction_cursor()
+        cursor.load(rest_id='reuse')
+        blob_reader = self.storage.get_blob_reader()
+        self.assertIsNotNone(
+            blob_reader.load(rest_id=cursor.body_rest_id, tx_id=cursor.id))
+        self.assertEqual(blob_reader.read(0), b.encode('utf-8'))
 
 
 if __name__ == '__main__':

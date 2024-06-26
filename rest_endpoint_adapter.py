@@ -174,10 +174,8 @@ class SyncFilterAdapter(AsyncFilter):
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
-                        copy_from_tx_body : Optional[str] = None
                         ) -> Optional[WritableBlob]:
-        if (not tx_body or
-            copy_from_tx_body is not None):
+        if not tx_body:
             raise NotImplementedError()
         if create and self.body_blob is None:
             self.body_blob = SyncFilterAdapter.BlobWriter(self)

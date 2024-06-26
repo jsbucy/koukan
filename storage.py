@@ -675,7 +675,7 @@ class BlobReader(Blob):
             self.parent.tx_blobref_table.c.blob_id == blob_id)
         ref_res = db_tx.execute(sel_ref)
         ref_row = ref_res.fetchone()
-        logging.debug('BlobReader.load blobref %s', ref_row)
+        logging.debug('BlobReader._check_ref blobref %s', ref_row)
         return ref_row and ref_row[0]
 
     # tx_id should be passed in most situations to verify that the
@@ -684,7 +684,8 @@ class BlobReader(Blob):
     # reference to a transaction
     def load(self, db_id = None, rest_id = None,
              tx_id : Optional[int] = None,
-             no_tx_id : Optional[bool] = None):
+             no_tx_id : Optional[bool] = None
+             ) -> Optional[int]:
         assert tx_id is not None or no_tx_id
         if self.blob_id:
             db_id = self.blob_id
@@ -979,20 +980,11 @@ class Storage():
                     tx_rest_id : str,
                     blob_rest_id : Optional[str] = None,
                     tx_body : bool = False,
-                    # rest id of tx to copy body from
-                    copy_from_tx_body : Optional[str] = None
                     ) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
             writer = None
-            if copy_from_tx_body:
-                cursor = self.get_transaction_cursor()
-                cursor._load_db(db_tx, rest_id=copy_from_tx_body)
-                blob_rest_id = cursor.body_rest_id
-                logging.debug('copy_from_tx_body tx/%s -> tx/%s',
-                              copy_from_tx_body, tx_rest_id)
-            else:
-                writer = BlobWriter(self)
-                writer._create(blob_rest_id, db_tx)
+            writer = BlobWriter(self)
+            writer._create(blob_rest_id, db_tx)
 
             cursor = self.get_transaction_cursor()
             cursor._load_db(db_tx, rest_id=tx_rest_id)

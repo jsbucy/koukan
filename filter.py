@@ -649,10 +649,7 @@ class AsyncFilter(ABC):
             self,
             create : bool,
             blob_rest_id : Optional[str] = None,
-            tx_body : Optional[bool] = None,
-            # rest id of a tx to copy the body from
-            # requires create and tx_body
-            copy_from_tx_body : Optional[str] = None
+            tx_body : Optional[bool] = None
     ) -> Optional[WritableBlob]:
         pass
 

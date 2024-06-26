@@ -148,56 +148,34 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-
-        blob_writer = self.s.create_blob(
-            'tx_rest_id', 'body_blob', tx_body=True)
-        b = b'hello, world!'
-        blob_writer.append_data(0, b, len(b))
-
-        return
-
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id2', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
-        tx_writer.write_envelope(TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob2')]))
-        self.s.create_blob(
-            'tx_rest_id2', tx_body=True, copy_from_tx_body='tx_rest_id')
-
-        tx_reader = self.s.get_transaction_cursor()
-        tx_reader.load(db_id=tx_writer.id)
-        blob_reader = self.s.get_blob_reader()
-        blob_reader.load(tx_reader.body_blob_id, tx_id=tx_reader.id)
-        self.assertEqual(blob_reader.read(0), b)
-
-    # XXX update to reflect current create_blob()/get_blob_writer() apis
-    def test_blob_reuse(self):
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
-        tx_writer.write_envelope(TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]))
         tx_writer.write_envelope(TransactionMetadata())
         blob_writer = self.s.get_blob_writer()
         blob_writer.create('body_rest_id')
+        # incomplete blob
         d = b'hello, world!'
-        blob_writer.append_data(0, d, len(d))
+        blob_writer.append_data(0, d[0:7], None)
 
         # write a tx attempting to reuse a non-existent blob rest id,
         # this should fail
         tx_writer = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host',
-            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        tx.body = 'q'
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
+            body = 'q')
 
         with self.assertRaises(ValueError):
             tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
 
         reader = self.s.get_transaction_cursor()
         self.assertIsNone(reader.load(rest_id='tx_rest_id2'))
+
+        # non-finalized blobs cannot be reused
+        with self.assertRaises(ValueError):
+            tx.body = 'body_rest_id'
+            tx_writer = self.s.get_transaction_cursor()
+            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
+
+        blob_writer.append_data(7, d[7:], len(d))
 
         tx.body = 'body_rest_id'
         tx_writer = self.s.get_transaction_cursor()
@@ -207,6 +185,39 @@ class StorageTestBase(unittest.TestCase):
         blob_reader = self.s.get_blob_reader()
         blob_reader.load(rest_id='body_rest_id', tx_id=tx_writer.id)
 
+
+    def test_blob_reuse(self):
+        tx_writer = self.s.get_transaction_cursor()
+        tx_writer.create('tx_rest_id1', TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
+        blob_writer1 = self.s.create_blob(
+            tx_rest_id='tx_rest_id1', blob_rest_id='blob_rest_id1')
+        b1 = b'hello, world!'
+        blob_writer1.append_data(0, b1, len(b1))
+
+        tx_writer2 = self.s.get_transaction_cursor()
+        tx_writer2.create('tx_rest_id2', TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525), host='host'))
+        tx_writer2.write_envelope(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
+        blob_writer2 = self.s.create_blob(
+            tx_rest_id='tx_rest_id2', blob_rest_id='blob_rest_id2')
+        b2 = b'another blob'
+        blob_writer2.append_data(0, b2, len(b2))
+        tx_writer2.load()
+        reuse_blob_rest_id=['blob_rest_id1', 'blob_rest_id2']
+        tx_writer2.write_envelope(
+            TransactionMetadata(message_builder={}),
+            reuse_blob_rest_id=reuse_blob_rest_id)
+
+        for blob in reuse_blob_rest_id:
+            blob_reader = self.s.get_blob_reader()
+            self.assertIsNotNone(blob_reader.load(
+                rest_id=blob, tx_id=tx_writer2.id))
 
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()
