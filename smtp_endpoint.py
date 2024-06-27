@@ -116,12 +116,14 @@ class SmtpEndpoint(SyncFilter):
                         'by peer: %s' % e.keyword)
                     break
             else:
+                mailbox = tx_delta.mail_from.mailbox
+                esmtp = [e.to_str() for e in tx_delta.mail_from.esmtp]
+                logging.debug('SmtpEndpoint %s MAIL FROM %s %s',
+                              tx.rest_id, mailbox, esmtp)
                 upstream_delta.mail_response = Response.from_smtp(
-                    self.smtp.mail(
-                        tx_delta.mail_from.mailbox,
-                        [e.to_str() for e in tx_delta.mail_from.esmtp]))
-            logging.debug('SmtpClient mail_resp %s',
-                          upstream_delta.mail_response)
+                    self.smtp.mail(mailbox, esmtp))
+                logging.debug('SmtpEndpoint %s mail resp %s',
+                              tx.rest_id, upstream_delta.mail_response)
             if upstream_delta.mail_response.err():
                 self._shutdown()
                 return upstream_delta
@@ -139,9 +141,12 @@ class SmtpEndpoint(SyncFilter):
                     'by peer: %s' % bad_ext.keyword))
                 continue
 
-            resp = Response.from_smtp(
-                self.smtp.rcpt(rcpt.mailbox,
-                               [e.to_str() for e in rcpt.esmtp]))
+            esmtp = [e.to_str() for e in rcpt.esmtp]
+            logging.debug('SmtpEndpoint %s RCPT TO %s %s',
+                          tx.rest_id, rcpt.mailbox, esmtp)
+            resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox, esmtp))
+            logging.debug('SmtpEndpoint %s rcpt resp %s',
+                          tx.rest_id, resp)
             if resp.ok():
                 self.good_rcpt = True
             upstream_delta.rcpt_response.append(resp)
@@ -149,16 +154,16 @@ class SmtpEndpoint(SyncFilter):
         if tx_delta.body_blob is not None and (
                 tx_delta.body_blob.len() ==
                 tx_delta.body_blob.content_length()):
-            logging.info('SmtpEndpoint.append_data len=%d',
-                         tx_delta.body_blob.len())
+            logging.info('SmtpEndpoint %s append_data len=%d',
+                         tx.rest_id, tx_delta.body_blob.len())
             if not self.good_rcpt:
                 upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
                 upstream_delta.data_response = Response.from_smtp(
                     self.smtp.data(tx_delta.body_blob.read(0)))
-            logging.info('SmtpEndpoint data_resp %s',
-                         upstream_delta.data_response)
+            logging.info('SmtpEndpoint %s data_resp %s',
+                         tx.rest_id, upstream_delta.data_response)
 
             self._shutdown()
 

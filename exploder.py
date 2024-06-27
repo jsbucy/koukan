@@ -199,6 +199,12 @@ class Recipient:
         assert last or data_resp is None or not data_resp.ok()
         assert not (last and data_resp is None)
 
+    def cancel(self):
+        logging.info('exploder.Recipient.cancel')
+        delta = TransactionMetadata(cancelled=True)
+        assert self.tx.merge_from(delta) is not None
+        upstream_delta = self.upstream.update(self.tx, delta, timeout=0)
+
 
 class Exploder(SyncFilter):
     output_chain : str
@@ -326,6 +332,11 @@ class Exploder(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         logging.info('Exploder.on_update %s', tx_delta)
 
+        if tx_delta.cancelled:
+            logging.info('Exploder.on_update: cancel')
+            self._run([r.cancel for r in self.recipients])
+            return
+
         updated_tx = tx.copy()
         if tx_delta.mail_from is not None:
             self._on_mail(tx_delta, updated_tx)
@@ -407,6 +418,3 @@ class Exploder(SyncFilter):
 
         return Response(250, 'accepted (exploder store&forward DATA)')
 
-
-    def abort(self):
-        pass

@@ -105,12 +105,14 @@ class RestEndpoint(SyncFilter):
         logging.debug('RestEndpoint._start %s', tx)
 
         for remote_host in self.remote_host_resolution(tx.remote_host):
-            logging.debug('RestEndpoint._start remote_host %s %s',
-                          self.base_url, remote_host)
             # none if no remote_host/disco (above)
             if remote_host is not None:
                 tx.remote_host = remote_host
                 self.remote_host = remote_host
+
+            json=tx.to_json(WhichJson.REST_CREATE)
+            logging.debug('RestEndpoint._start remote_host %s %s %s',
+                          self.base_url, remote_host, json)
 
             req_headers = {}
             if self.http_host:
@@ -120,7 +122,7 @@ class RestEndpoint(SyncFilter):
             try:
                 rest_resp = self.client.post(
                     urljoin(self.base_url, '/transactions'),
-                    json=tx.to_json(WhichJson.REST_CREATE),
+                    json=json,
                     headers=req_headers,
                     timeout=deadline_left)
             except RequestError:
@@ -176,6 +178,7 @@ class RestEndpoint(SyncFilter):
         rest_resp = self.client.post(self.transaction_url + '/cancel')
         logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
                       rest_resp)
+        return TransactionMetadata(cancelled=True)
 
     def on_update(self,
                   tx : TransactionMetadata,

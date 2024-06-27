@@ -50,7 +50,7 @@ def create_app(handler_factory : HandlerFactory):
 
     @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
     def cancel_tx(tx_rest_id) -> FlaskResponse:
-        logging.debug('rest_service.set_message_builder %s', request)
+        logging.debug('rest_service.cancel_tx %s', request)
         handler = handler_factory.get_tx(tx_rest_id)
         return handler.cancel_tx(request)
 

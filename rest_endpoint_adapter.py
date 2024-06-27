@@ -109,7 +109,7 @@ class SyncFilterAdapter(AsyncFilter):
             logging.debug('SyncFilterAdapter._update_once() '
                           'downstream_delta %s', delta)
             self.prev_tx = self.tx.copy()
-            if not delta.req_inflight() and (
+            if not delta.req_inflight() and not delta.cancelled and (
                     self.tx.body_blob is None or
                     self.tx.body_blob.len() != self.tx.body_blob.content_length() or
                     self.tx.data_response is not None):
@@ -466,9 +466,11 @@ class RestHandler(Handler):
         return resp
 
     def cancel_tx(self, request : FlaskRequest) -> FlaskResponse:
+        logging.debug('RestEndpointAdapter.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get(0)
         delta = TransactionMetadata(cancelled=True)
-        tx.merge_from(delta)
+        assert tx.merge_from(delta) is not None
+        assert tx.cancelled
         self.async_filter.update(tx, delta)
         return FlaskResponse()
 

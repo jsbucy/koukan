@@ -105,14 +105,17 @@ class StorageWriterFilter(AsyncFilter):
                tx_delta : TransactionMetadata,
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
+        logging.debug('StorageWriterFilter.update tx %s %s',
+                      self.rest_id, tx)
+        logging.debug('StorageWriterFilter.update tx_delta %s %s',
+                      self.rest_id, tx_delta)
+
         reuse_blob_rest_id=None
 
         if tx_delta.cancelled:
-            #self._load()
             self.tx_cursor.write_envelope(
-                TransactionMetadata(),
-                final_attempt_reason='downstream cancelled')
-            return TransactionMetadata()
+                tx_delta, final_attempt_reason='downstream cancelled')
+            return tx_delta
 
         def tx_blob_id(uri):
             uri = parse_blob_uri(uri)
@@ -134,9 +137,6 @@ class StorageWriterFilter(AsyncFilter):
                           reuse_blob_rest_id)
 
         deadline = Deadline(timeout)
-        logging.debug('StorageWriterFilter.update downstream_tx %s',
-                      downstream_tx)
-        logging.debug('StorageWriterFilter.update delta %s', downstream_delta)
 
         # internal paths: Exploder/Notification (rest uses get_blob_writer())
         body_blob = None

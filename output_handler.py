@@ -97,7 +97,8 @@ class OutputHandler:
             have_body = ((self.cursor.input_done) and
                          ((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
-            if (not delta.rcpt_to) and (not ok_rcpt) and have_body:
+            if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
+                    delta.cancelled):
                 delta = TransactionMetadata(cancelled=True)
                 assert upstream_tx.merge_from(delta) is not None
                 self.endpoint.on_update(upstream_tx, delta)
@@ -210,7 +211,6 @@ class OutputHandler:
 
 
         resp = self._output()
-        # TODO need another attempt column for internal errors?
         if resp is None:
             logging.warning('OutputHandler._cursor_to_endpoint() %s abort',
                             self.rest_id)
@@ -220,7 +220,9 @@ class OutputHandler:
 
         next_attempt_time = None
         final_attempt_reason = None
-        if resp.ok():
+        if self.cursor.tx.cancelled:
+            pass  # leave existing value
+        elif resp.ok():
             final_attempt_reason = 'upstream response success'
         elif resp.perm():
             final_attempt_reason = 'upstream response permfail'
