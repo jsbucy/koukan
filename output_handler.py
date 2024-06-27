@@ -98,6 +98,10 @@ class OutputHandler:
                          ((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
             if (not delta.rcpt_to) and (not ok_rcpt) and have_body:
+                delta = TransactionMetadata(cancelled=True)
+                assert upstream_tx.merge_from(delta) is not None
+                self.endpoint.on_update(upstream_tx, delta)
+
                 # all recipients so far have failed and we aren't
                 # waiting for any more (have_body) -> we're done
                 if len(self.cursor.tx.rcpt_to) == 1:

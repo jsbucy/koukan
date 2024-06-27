@@ -465,6 +465,13 @@ class RestHandler(Handler):
                          ContentRange('bytes', 0, result_len, content_length))
         return resp
 
+    def cancel_tx(self, request : FlaskRequest) -> FlaskResponse:
+        tx = self.async_filter.get(0)
+        delta = TransactionMetadata(cancelled=True)
+        tx.merge_from(delta)
+        self.async_filter.update(tx, delta)
+        return FlaskResponse()
+
 
 class EndpointFactory(ABC):
     @abstractmethod

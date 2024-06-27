@@ -73,6 +73,7 @@ class SmtpHandler:
     def __del__(self):
         if self.ehlo and not self.quit:
             logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
+        self._cancel()
 
     def _ehlo(self, hostname, esmtp):
         self.local_socket = self.smtp.transport.get_extra_info('sockname')
@@ -94,23 +95,32 @@ class SmtpHandler:
         self._ehlo(hostname, esmtp=False)
         return '250 {}'.format(server.hostname)
 
+    def _cancel(self):
+        if self.endpoint is None or self.tx is None:
+            return
+        fut = self.executor.submit(
+            partial(self._update_tx,
+                    self.cx_id, self.endpoint, self.tx,
+                    TransactionMetadata(cancelled=True)), timeout=0)
+        #await asyncio.wait([asyncio.wrap_future(fut)],
+        #                   timeout=self.timeout_rcpt)
+        self.endpoint = self.tx = None
+
     async def handle_QUIT(self, server, session, envelope):
         logging.info('SmtpHandler.handle_QUIT %s', self.cx_id)
-        self.endpoint = None
-        self.tx = None
+        self._cancel()
         self.quit = True
         return b'250 ok'
 
     async def handle_RSET(self, server, session, envelope):
         logging.info('SmtpHandler.handle_RSET %s', self.cx_id)
-        self.endpoint = None
-        self.tx = None
+        self._cancel()
         return b'250 ok'
 
-    def _update_tx(self, endpoint, tx_delta):
-        logging.debug('SmtpHandler._update_tx %s', self.cx_id)
-        upstream_delta = endpoint.on_update(self.tx, tx_delta)
-        logging.debug('SmtpHandler._update_tx %s done', self.cx_id)
+    def _update_tx(self, cx_id, endpoint, tx, tx_delta):
+        logging.debug('SmtpHandler._update_tx %s', cx_id)
+        upstream_delta = endpoint.on_update(tx, tx_delta)
+        logging.debug('SmtpHandler._update_tx %s done', cx_id)
 
     async def handle_MAIL(
             self, server, session, envelope, mail_from : str,
@@ -138,7 +148,8 @@ class SmtpHandler:
         tx_delta = self.tx.delta(updated_tx)
         self.tx = updated_tx
         fut = self.executor.submit(
-            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
+            lambda: self._update_tx(
+                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -166,7 +177,8 @@ class SmtpHandler:
         tx_delta = self.tx.delta(updated_tx)
         self.tx = updated_tx
         fut = self.executor.submit(
-            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
+            lambda: self._update_tx(
+                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -199,7 +211,8 @@ class SmtpHandler:
         tx_delta = self.tx.delta(updated_tx)
         self.tx = updated_tx
         fut = self.executor.submit(
-            lambda: self._update_tx(self.endpoint, tx_delta), timeout=0)
+            lambda: self._update_tx(
+                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
             return b'450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],

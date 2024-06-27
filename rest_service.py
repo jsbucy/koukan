@@ -48,6 +48,12 @@ def create_app(handler_factory : HandlerFactory):
         handler = handler_factory.get_tx(tx_rest_id)
         return handler.patch_tx(request, message_builder=True)
 
+    @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
+    def cancel_tx(tx_rest_id) -> FlaskResponse:
+        logging.debug('rest_service.set_message_builder %s', request)
+        handler = handler_factory.get_tx(tx_rest_id)
+        return handler.cancel_tx(request)
+
     @app.route('/transactions/<tx_rest_id>/blob', methods=['POST'])
     def create_tx_blob(tx_rest_id) -> FlaskResponse:
         logging.debug('rest_service.create_tx_blob %s', request)

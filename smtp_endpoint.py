@@ -88,6 +88,10 @@ class SmtpEndpoint(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         logging.info('SmtpEndpoint.on_update %s', tx.remote_host)
 
+        if tx_delta.cancelled:
+            self._shutdown()
+            return
+
         upstream_delta = self._update(tx, tx_delta)
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta

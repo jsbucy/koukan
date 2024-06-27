@@ -238,7 +238,7 @@ _tx_fields = [
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
     TxField('tx_db_id', validity=None),
-    TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
+    TxField('inline_body', validity=set([WhichJson.REST_CREATE]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -284,6 +284,7 @@ class TransactionMetadata:
     rest_id : Optional[str] = None
     tx_db_id : Optional[int] = None
     inline_body : Optional[str] = None
+    cancelled : bool = False
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -300,7 +301,8 @@ class TransactionMetadata:
                  retry : Optional[dict] = None,
                  smtp_meta : Optional[dict] = None,
                  message_builder : Optional[dict] = None,
-                 inline_body : Optional[str] = None):
+                 inline_body : Optional[str] = None,
+                 cancelled : bool = False):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -316,6 +318,7 @@ class TransactionMetadata:
         self.smtp_meta = smtp_meta
         self.message_builder = message_builder
         self.inline_body = inline_body
+        self.cancelled = cancelled
 
     def __repr__(self):
         out = ''

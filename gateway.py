@@ -104,6 +104,9 @@ class SmtpGateway(EndpointFactory):
         with self.lock:
             dele = []
             for (rest_id, tx) in self.inflight.items():
+                # TODO this needs to be a little smarter about whether
+                # it's inflight upstream vs cancelled vs failed vs
+                # succeeded?
                 tx_idle = time.monotonic() - tx.last_update()
                 if tx_idle > ttl:
                     logging.info('SmtpGateway.gc_inflight shutdown idle %s',

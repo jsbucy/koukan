@@ -107,6 +107,13 @@ class StorageWriterFilter(AsyncFilter):
                ) -> Optional[TransactionMetadata]:
         reuse_blob_rest_id=None
 
+        if tx_delta.cancelled:
+            #self._load()
+            self.tx_cursor.write_envelope(
+                TransactionMetadata(),
+                final_attempt_reason='downstream cancelled')
+            return TransactionMetadata()
+
         def tx_blob_id(uri):
             uri = parse_blob_uri(uri)
             if uri is None:

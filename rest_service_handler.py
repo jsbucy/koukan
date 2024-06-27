@@ -32,6 +32,10 @@ class Handler(ABC):
                  tx_body : bool = False) -> FlaskResponse:
         pass
 
+    @abstractmethod
+    def cancel_tx(self, request : FlaskRequest) -> FlaskResponse:
+        pass
+
 # These are called early in the request lifecycle i.e. at the
 # beginning of the wsgi/asgi entry point and therefore should not do
 # db reads etc, just create the objects. As such, this should not fail

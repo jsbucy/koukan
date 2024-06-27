@@ -169,11 +169,22 @@ class RestEndpoint(SyncFilter):
             # xxx err?
         return rest_resp
 
+    def _cancel(self):
+        logging.debug('RestEndpoint._cancel %s ', self.transaction_url)
+        if not self.transaction_url:
+            return
+        rest_resp = self.client.post(self.transaction_url + '/cancel')
+        logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
+                      rest_resp)
+
     def on_update(self,
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata,
                   timeout : Optional[float] = None
                   ) -> Optional[TransactionMetadata]:
+        if tx_delta.cancelled:
+            return self._cancel()
+
         # xxx envelope vs data timeout
         if timeout is None:
             timeout = self.timeout_start
