@@ -253,6 +253,11 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
 
+        def exp_cancel(tx, tx_delta):
+            self.assertTrue(tx_delta.cancelled)
+            return TransactionMetadata()
+        endpoint.add_expectation(exp_cancel)
+
         updated_tx = tx.copy()
         updated_tx.rcpt_to.append(Mailbox('bob2'))
 
