@@ -100,7 +100,7 @@ class SmtpGateway(EndpointFactory):
     def get(self, rest_id):
         return self.inflight.get(rest_id, None)
 
-    def _gc_inflight(self, now : float, ttl : int):
+    def _gc_inflight(self, now : float, ttl : int, done_ttl : int):
         with self.lock:
             dele = []
             for (rest_id, tx) in self.inflight.items():
@@ -108,13 +108,14 @@ class SmtpGateway(EndpointFactory):
                 # not inflight upstream and (idle or done)
                 # grace period/lower but nonzero idle timeout for done
                 # to GET again, cost is ~responses in memory?
-                tx_idle = time.monotonic() - tx.last_update()
-                if tx_idle > ttl:
-                    logging.info('SmtpGateway.gc_inflight shutdown idle %s',
-                                 tx.rest_id)
-                    assert isinstance(tx.filter, SmtpEndpoint)
-                    tx.filter._shutdown()
-                    dele.append(rest_id)
+                if not tx.idle(time.monotonic(), ttl, done_ttl):
+                    continue
+
+                logging.info('SmtpGateway.gc_inflight shutdown idle %s',
+                             tx.rest_id)
+                assert isinstance(tx.filter, SmtpEndpoint)
+                tx.filter._shutdown()
+                dele.append(rest_id)
 
         for d in dele:
             del self.inflight[d]
@@ -130,7 +131,8 @@ class SmtpGateway(EndpointFactory):
             if delta < gc_interval:
                 time.sleep(gc_interval - delta)
             last_gc = now
-            self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600))
+            self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600),
+                              rest_yaml.get('gc_done_ttl', 10))
 
     def main(self):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:

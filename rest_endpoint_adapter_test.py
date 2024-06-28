@@ -56,7 +56,22 @@ class SyncFilterAdapterTest(unittest.TestCase):
         tx = sync_filter_adapter.get(1)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertFalse(sync_filter_adapter.done)
 
+        body = b'hello, world!'
+
+        def exp_body(tx, tx_delta):
+            self.assertEqual(tx.body_blob.read(0), body)
+            upstream_delta=TransactionMetadata(
+                data_response = [Response(203)])
+            self.assertIsNotNone(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream.add_expectation(exp_body)
+
+        delta = TransactionMetadata(body_blob=InlineBlob(body))
+        tx.merge_from(delta)
+        sync_filter_adapter.update(tx, delta, 1)
+        self.assertTrue(sync_filter_adapter.done)
 
 class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):

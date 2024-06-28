@@ -61,6 +61,8 @@ class SyncFilterAdapter(AsyncFilter):
     _last_update : float
     _version = 0
     body_blob : Optional[BlobWriter] = None
+    # transaction has reached a final status: data response or cancelled
+    done : bool = False
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -72,6 +74,13 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
+
+    def idle(self, now : float, ttl : float, done_ttl : float):
+        with self.mu:
+            if self.inflight:
+                return False
+            t = done_ttl if self.done else ttl
+            return (now - self._last_update) > t
 
     def version(self):
         return self._version
@@ -121,6 +130,7 @@ class SyncFilterAdapter(AsyncFilter):
         logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
                       self.tx)
         with self.mu:
+            self.done = self.tx.cancelled or self.tx.data_response is not None
             self._version += 1
             self.cv.notify_all()
             self._last_update = time.monotonic()
@@ -468,6 +478,8 @@ class RestHandler(Handler):
     def cancel_tx(self, request : FlaskRequest) -> FlaskResponse:
         logging.debug('RestEndpointAdapter.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get(0)
+        if tx is None:
+            return FlaskResponse()
         delta = TransactionMetadata(cancelled=True)
         assert tx.merge_from(delta) is not None
         assert tx.cancelled

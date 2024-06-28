@@ -33,7 +33,8 @@ class SmtpEndpoint(SyncFilter):
         # successful
 
         logging.info('SmtpEndpoint._shutdown')
-        if self.smtp is None: return
+        if self.smtp is None:
+            return
 
         try:
             self.smtp.quit()

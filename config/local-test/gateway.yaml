@@ -8,9 +8,6 @@ rest_listener:
 
   gc_interval: 5
   gc_tx_ttl: 5
-  # blobs only need to live from blob upload to PATCH the blob into
-  # the tx which should be timely
-  gc_blob_ttl: 60
 
 smtp_output:
   ehlo_host: frylock
