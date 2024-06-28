@@ -361,7 +361,7 @@ class RouterServiceTest(unittest.TestCase):
         self.join_tx_update(t)
 
         tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_retry create %s',
+        logging.debug('RouterServiceTest.test_reuse_body create %s',
                       tx_json)
         tx_url = rest_endpoint.transaction_path
 
@@ -521,6 +521,11 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
 
+        def exp_cancel(tx, tx_delta):
+            self.assertTrue(tx_delta.cancelled)
+            return TransactionMetadata()
+        upstream_endpoint.add_expectation(exp_cancel)
+
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -556,6 +561,7 @@ class RouterServiceTest(unittest.TestCase):
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
             upstream_endpoint.add_expectation(exp)
+            upstream_endpoint.add_expectation(exp_cancel)
 
             self.add_endpoint(upstream_endpoint)
 
