@@ -183,8 +183,8 @@ class RouterServiceTest(unittest.TestCase):
 
         self.setupPostgres()
 
-        self.executor = Executor(inflight_limit=10, watchdog_timeout=300)
-
+        self.executor = Executor(inflight_limit=10, watchdog_timeout=300,
+                                 debug_futures=True)
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -376,20 +376,15 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
-        def exp_env2(tx, tx_delta):
+        def exp2(tx, tx_delta):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
-                rcpt_response = [Response(202)])
-            assert tx.merge_from(upstream_delta) is not None
-            return upstream_delta
-        def exp_body2(tx, tx_delta):
+                rcpt_response = [Response(202)],
+            data_response = Response(203))
             self.assertEqual(tx.body_blob.read(0), body_utf8)
-            upstream_delta = TransactionMetadata(
-                data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
-        upstream_endpoint.add_expectation(exp_env2)
-        upstream_endpoint.add_expectation(exp_body2)
+        upstream_endpoint.add_expectation(exp2)
 
         t = self.start_tx_update(rest_endpoint, tx, tx.copy())
 
@@ -769,12 +764,11 @@ class RouterServiceTest(unittest.TestCase):
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
 
-            updated_tx = tx.copy()
-            updated_tx.mail_response = Response(204)
-            updated_tx.rcpt_response.append(Response(205))
-            updated_tx.data_response = Response(206)
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(204),
+                rcpt_response = [Response(205)],
+                data_response = Response(206))
 
-            upstream_delta = tx.delta(updated_tx)
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream_endpoint.add_expectation(exp2)
