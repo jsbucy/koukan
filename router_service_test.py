@@ -221,7 +221,7 @@ class RouterServiceTest(unittest.TestCase):
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
             t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-            self.service._dequeue()
+            #self.service._dequeue()
             self.join_tx_update(t)
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
@@ -290,7 +290,7 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
-            retry={},
+            #retry={},
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             inline_body=body)
@@ -307,7 +307,7 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-        self._dequeue()
+#        self._dequeue()
         self.join_tx_update(t)
 
         tx_json = rest_endpoint.get_json()
@@ -317,7 +317,7 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['attempt_count']
         self.assertEqual(tx_json, {
             #'attempt_count': 1,
-            'retry': {},
+            #'retry': {},
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {},
@@ -412,7 +412,7 @@ class RouterServiceTest(unittest.TestCase):
         t = self.start_tx_update(rest_endpoint, tx, tx.copy())
 
         # exploder tx
-        self._dequeue()
+        #self._dequeue()
 
         self.join_tx_update(t)
 
@@ -441,7 +441,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = updated_tx
         t = self.start_tx_update(rest_endpoint, tx, tx_delta)
 
-        self._dequeue()
+        #self._dequeue()
 
         self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [202])
@@ -468,7 +468,7 @@ class RouterServiceTest(unittest.TestCase):
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
         t = self.start_tx_update(rest_endpoint, tx, tx_delta)
-        self._dequeue()
+        #self._dequeue()
 
         self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [202, 204])

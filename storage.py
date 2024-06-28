@@ -316,8 +316,8 @@ class TransactionCursor:
         row = res.fetchone()
 
         if row is None or row[0] != new_version:
-            logging.info('Storage._write version conflict '
-                         'expected %d db %s', new_version, row)
+            logging.info('Storage._write version conflict id=%d '
+                         'expected %d db %s', self.id, new_version, row)
             raise VersionConflictException()
         self.version = row[0]
 
@@ -332,14 +332,21 @@ class TransactionCursor:
         return True
 
     def load(self, db_id : Optional[int] = None,
-             rest_id : Optional[str] = None) -> Optional[TransactionMetadata]:
+             rest_id : Optional[str] = None,
+             start_attempt : bool = False) -> Optional[TransactionMetadata]:
         if self.id is not None:
             assert(db_id is None and rest_id is None)
             db_id = self.id
         assert(db_id is not None or rest_id is not None)
+        started = False
         with self.parent.begin_transaction() as db_tx:
             res = self._load_db(db_tx, db_id, rest_id)
-            return res
+            if start_attempt:
+                self._start_attempt_db(db_tx, self.id, self.version)
+                started = True
+        if started:
+            self.parent.tx_versions.update(self.id, self.version)
+        return res
 
     def _load_db(self, db_tx,
                  db_id : Optional[int] = None,
@@ -1039,6 +1046,8 @@ class Storage():
             # to make this work. Possibly we need a more explicit
             # "handoff" from the input side to the output side,
             # otherwise another process/instance might steal it?
+
+            # TODO this should not recover newly-inserted/cutthrough
             now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)

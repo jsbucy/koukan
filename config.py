@@ -26,11 +26,18 @@ class FilterSpec:
         self.builder = builder
         self.t = t
 
+StorageWriterFactory = Callable[[],Optional[StorageWriterFilter]]
+
 class Config:
     storage : Optional[Storage] = None
     endpoint_yaml : Optional[dict] = None
+    storage_writer_factory : Optional[StorageWriterFactory] = None
 
-    def __init__(self):
+    def __init__(
+            self,
+            storage_writer_factory : Optional[StorageWriterFactory] = None
+    ):
+        self.storage_writer_factory = storage_writer_factory
         self.router_policies = {
             'dest_domain': self.router_policy_dest_domain,
             'local_domain': self.router_policy_local_domain}
@@ -71,8 +78,9 @@ class Config:
             data_timeout = 30
         return Exploder(
             yaml['output_chain'],
-            lambda: StorageWriterFilter(
-                self.storage, rest_id_factory=self.rest_id_factory()),
+            self.storage_writer_factory,
+            #lambda: StorageWriterFilter(
+            #    self.storage, rest_id_factory=self.rest_id_factory()),
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),

@@ -4,6 +4,7 @@ import logging
 from threading import Lock, Condition, Thread
 import json
 import os
+from functools import partial
 
 from wsgiref.simple_server import make_server
 
@@ -67,6 +68,10 @@ class Service:
         self.config = config
         self.executor = executor
 
+        if self.config:
+            self.config.storage_writer_factory = partial(
+                self.create_storage_writer, None)
+
     def shutdown(self):
         logging.info("router_service shutdown()")
         self._shutdown = True
@@ -87,7 +92,9 @@ class Service:
 
     def main(self, config_filename=None):
         if config_filename:
-            config = Config()
+            config = Config(
+                storage_writer_factory=partial(
+                    self.create_storage_writer, None))
             config.load_yaml(config_filename)
             self.config = config
 
@@ -178,15 +185,34 @@ class Service:
 
     def create_storage_writer(
             self, http_host : str):  # -> Optional[SyncFilterAdapter]:
-        return StorageWriterFilter(
+        writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.config.rest_id_factory())
+        fut = self.executor.submit(
+            lambda: self._handle_new_tx(writer))
+        if fut is None:
+            return None
+        return writer
 
     def get_storage_writer(
             self, rest_id : str):  # -> Optional[SyncFilterAdapter]:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.config.rest_id_factory())
+
+    def _handle_new_tx(self, writer : StorageWriterFilter):
+        tx_rest_id = writer.get_rest_id()
+        logging.debug('RouterService._handle_new_tx %s', tx_rest_id)
+        while True:
+            try:
+                tx_cursor = self.storage.get_transaction_cursor()
+                tx_cursor.load(rest_id=tx_rest_id, start_attempt=True)
+                break
+            except VersionConflictException:
+                if tx_cursor.attempt_id is not None:
+                    return None
+        endpoint, endpoint_yaml = self.config.get_endpoint(tx_cursor.tx.host)
+        self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,
@@ -207,7 +233,7 @@ class Service:
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
-        self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
+        #self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         try:
             storage_tx = self.storage.load_one()
         except VersionConflictException:
@@ -221,8 +247,8 @@ class Service:
             self.created_id = storage_tx.id
 
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
-        msa = endpoint_yaml['msa']
         logging.info('_dequeue %s %s', endpoint, endpoint_yaml)
+        # xxx this could fail, finalize attempt (below)
         self.executor.submit(
             lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
 
@@ -234,6 +260,8 @@ class Service:
         while not self._shutdown:
             logging.info("RouterService.dequeue")
             prev = self._dequeue(wait=(not prev))
+            if not prev:
+                time.sleep(1)
 
     def gc(self):
         storage_yaml = self.config.root_yaml['storage']

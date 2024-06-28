@@ -4,6 +4,7 @@ import json
 import secrets
 import time
 from functools import partial
+from threading import Lock, Condition
 
 from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
@@ -28,12 +29,22 @@ class StorageWriterFilter(AsyncFilter):
     rest_id : Optional[str] = None
     blob_writer : Optional[BlobWriter] = None
 
+    mu : Lock
+    cv : Condition
+
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+
+    def get_rest_id(self):
+        with self.mu:
+            self.cv.wait_for(lambda: self.rest_id is not None)
+            return self.rest_id
 
     def version(self):
         # XXX
@@ -45,9 +56,12 @@ class StorageWriterFilter(AsyncFilter):
                 reuse_blob_rest_id : Optional[List[str]] = None):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
-        self.rest_id = self.rest_id_factory()
+        rest_id = self.rest_id_factory()
         self.tx_cursor.create(
-            self.rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id)
+            rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id)
+        with self.mu:
+            self.rest_id = rest_id
+            self.cv.notify_all()
 
     def _load(self):
         self.tx_cursor = self.storage.get_transaction_cursor()
@@ -232,10 +246,15 @@ class StorageWriterFilter(AsyncFilter):
         assert tx_body or blob_rest_id
 
         if create:
-            blob = self.storage.create_blob(
-                tx_rest_id=self.rest_id,
-                blob_rest_id=blob_rest_id,
-                tx_body=tx_body)
+            while True:
+                try:
+                    blob = self.storage.create_blob(
+                        tx_rest_id=self.rest_id,
+                        blob_rest_id=blob_rest_id,
+                        tx_body=tx_body)
+                    break
+                except VersionConflictException:
+                    pass
         else:
             blob = self.storage.get_blob_for_append(
                 tx_rest_id=self.rest_id, blob_rest_id=blob_rest_id)
