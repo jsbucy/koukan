@@ -203,26 +203,26 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service.wait_started(1))
 
         # probe for startup
-        upstream = FakeSyncFilter()
         def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
                 mail_response = Response())
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
-        upstream.add_expectation(exp)
-        self.add_endpoint(upstream)
 
-        for i in range(1,3):
+        for i in range(0,3):
             logging.info('RouterServiceTest.setUp probe %d', i)
+
+            upstream = FakeSyncFilter()
+            upstream.add_expectation(exp)
+            self.add_endpoint(upstream)
+
             rest_endpoint = RestEndpoint(
                 static_base_url=self.router_url,
                 http_host='submission',
                 timeout_start=1, timeout_data=1)
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
-            t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-            #self.service._dequeue()
-            self.join_tx_update(t)
+            rest_endpoint.on_update(tx, tx.copy(), 5)
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
@@ -240,22 +240,6 @@ class RouterServiceTest(unittest.TestCase):
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
         self.executor.shutdown(timeout=5)
-
-    def _update_tx(self, endpoint, tx, tx_delta, timeout=None):
-        logging.debug('RouterServiceTest._update_tx')
-        endpoint.on_update(tx, tx_delta, timeout)
-
-    def start_tx_update(self, rest_endpoint, tx, tx_delta, timeout=5):
-        return self.executor.submit(
-            lambda: self._update_tx(rest_endpoint, tx, tx_delta, timeout))
-
-    def join_tx_update(self, t, timeout=5):
-        logging.debug('RouterServiceTest.join_tx_update')
-        try:
-            t.result(timeout)
-        except Exception:
-            logging.exception('RouterServiceTest.join_tx_update exception')
-        logging.debug('RouterServiceTest.join_tx_update done')
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:
@@ -280,6 +264,7 @@ class RouterServiceTest(unittest.TestCase):
                 logging.debug('RouterServiceTest._dequeue %d', deq)
             if deq == n:
                 return
+            time.sleep(0.01)
         else:
             self.fail('failed to dequeue')
 
@@ -306,9 +291,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
 
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-#        self._dequeue()
-        self.join_tx_update(t)
+        rest_endpoint.on_update(tx, tx.copy())
 
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_rest_smoke create %s',
@@ -339,7 +322,6 @@ class RouterServiceTest(unittest.TestCase):
             inline_body=body)
 
         upstream_endpoint = FakeSyncFilter()
-        self.add_endpoint(upstream_endpoint)
         def exp_env(tx, tx_delta):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
@@ -354,28 +336,25 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
         upstream_endpoint.add_expectation(exp_env)
         upstream_endpoint.add_expectation(exp_body)
+        self.add_endpoint(upstream_endpoint)
 
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-
-        self._dequeue()
-        self.join_tx_update(t)
+        rest_endpoint.on_update(tx, tx.copy())
 
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_reuse_body create %s',
                       tx_json)
-        tx_url = rest_endpoint.transaction_path
 
+        tx_url = rest_endpoint.transaction_path
 
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            rcpt_to=[Mailbox('bob2')],
             body=tx_url + '/body')
 
         upstream_endpoint = FakeSyncFilter()
-        self.add_endpoint(upstream_endpoint)
         def exp2(tx, tx_delta):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
@@ -385,11 +364,9 @@ class RouterServiceTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         upstream_endpoint.add_expectation(exp2)
+        self.add_endpoint(upstream_endpoint)
 
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-
-        self._dequeue()
-        self.join_tx_update(t)
+        rest_endpoint.on_update(tx, tx.copy())
         tx_json = rest_endpoint.get_json()
 
 
@@ -409,12 +386,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy())
-
-        # exploder tx
-        #self._dequeue()
-
-        self.join_tx_update(t)
+        rest_endpoint.on_update(tx, tx.copy())
 
         # no rcpt -> buffered
         self.assertEqual(tx.mail_response.code, 250)
@@ -439,11 +411,7 @@ class RouterServiceTest(unittest.TestCase):
         updated_tx.rcpt_to.append(Mailbox('bob'))
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
-        t = self.start_tx_update(rest_endpoint, tx, tx_delta)
-
-        #self._dequeue()
-
-        self.join_tx_update(t)
+        rest_endpoint.on_update(tx, tx_delta)
         self.assertRcptCodesEqual(tx.rcpt_response, [202])
         self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
 
@@ -467,10 +435,8 @@ class RouterServiceTest(unittest.TestCase):
         updated_tx.rcpt_to.append(Mailbox('bob2'))
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
-        t = self.start_tx_update(rest_endpoint, tx, tx_delta)
-        #self._dequeue()
+        rest_endpoint.on_update(tx, tx_delta)
 
-        self.join_tx_update(t)
         self.assertRcptCodesEqual(tx.rcpt_response, [202, 204])
         self.assertEqual(tx.rcpt_response[1].message, 'upstream rcpt 2')
 
@@ -527,12 +493,7 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
-
-        # exploder tx and upstream tx
-        self._dequeue(2)
-
-        self.join_tx_update(t, 10)
+        rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
 
@@ -560,8 +521,6 @@ class RouterServiceTest(unittest.TestCase):
 
             self.add_endpoint(upstream_endpoint)
 
-            exp_deq = 1
-
             if i == 1:
                 dsn_endpoint = FakeSyncFilter()
                 def exp_dsn(tx, tx_delta):
@@ -580,9 +539,7 @@ class RouterServiceTest(unittest.TestCase):
                 dsn_endpoint.add_expectation(exp_dsn)
 
                 self.add_endpoint(dsn_endpoint)
-                exp_deq += 1
-
-            self._dequeue(exp_deq)
+                self._dequeue()
 
 
     def test_notification_fast_perm(self):
@@ -615,13 +572,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream.add_expectation(exp_rcpt)
             self.add_endpoint(upstream)
 
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
-        # exploder tx and 2 upstream tx
-        logging.info('test_notification_fast_perm dequeue exp+2 upstream')
-        self._dequeue(3)
-        logging.info('test_notification_fast_perm dequeue exp+2 upstream done')
-
-        self.join_tx_update(t, 10)
+        rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
         # we get the upstream MAIL response since exploder got the
@@ -656,7 +607,7 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
         dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
-        # dsn output
+        # no_final_notification x2 + dsn output
         self._dequeue(3)
 
         # xxx kludge, fix SyncEndpoint to wait on this
@@ -682,8 +633,6 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob1')],
             remote_host=HostPort('1.2.3.4', 12345))
-        t = self.start_tx_update(rest_endpoint, tx, tx.copy(), 10)
-
         def exp_env(tx, tx_delta):
             updated_tx = tx.copy()
             updated_tx.mail_response = Response(201)
@@ -694,12 +643,9 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_env)
 
-        self._dequeue()
-
-        self.join_tx_update(t, 10)
+        rest_endpoint.on_update(tx, tx.copy(), 10)
 
         blob = InlineBlob("hello, world!")
-        #rest_endpoint.blob_url = rest_endpoint.full_blob_url = None
         blob_resp = rest_endpoint._put_blob(
             blob, testonly_non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
@@ -779,9 +725,7 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
         upstream_endpoint.add_expectation(exp2)
 
-        t = self.start_tx_update(rest_endpoint, tx2, tx2.copy(), 10)
-        self.service._dequeue()
-        self.join_tx_update(t, 10)
+        rest_endpoint.on_update(tx2, tx2.copy(), 10)
 
 
 

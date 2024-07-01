@@ -366,31 +366,6 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(rv[0])
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
 
-    @staticmethod
-    def wait_created(s, rv, db_id):
-        logging.info('StorageTestBase.wait_created %s', db_id)
-        rv[0] = s.wait_created(db_id, 1)
-
-    def test_wait_created(self):
-        created_id = None
-        for i in range(1,3):
-            logging.info('StorageTestBase.test_wait_created i=%d', i)
-            rv = [None]
-            t = Thread(target = lambda: StorageTestBase.wait_created(
-                self.s, rv, created_id))
-            t.start()
-            time.sleep(0.1)
-
-            writer = self.s.get_transaction_cursor()
-            writer.create('xyz%d' % i, TransactionMetadata(host='host'))
-
-            logging.info('StorageTestBase.test_wait_created join')
-            t.join(timeout=2)
-            logging.info('StorageTestBase.test_wait_created join done')
-            self.assertFalse(t.is_alive())
-
-            self.assertTrue(rv[0])
-            created_id = self.s.created_id
 
     @staticmethod
     def wait_blob(reader, rv):

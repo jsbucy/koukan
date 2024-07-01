@@ -79,8 +79,6 @@ class Config:
         return Exploder(
             yaml['output_chain'],
             self.storage_writer_factory,
-            #lambda: StorageWriterFilter(
-            #    self.storage, rest_id_factory=self.rest_id_factory()),
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
@@ -91,8 +89,10 @@ class Config:
         return lambda: secrets.token_urlsafe(entropy)
 
     def notification_endpoint(self):
-        return StorageWriterFilter(self.storage,
-                                   rest_id_factory=self.rest_id_factory())
+        return StorageWriterFilter(
+            self.storage,
+            rest_id_factory=self.rest_id_factory(),
+            create_leased=False)
 
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)

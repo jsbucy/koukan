@@ -68,7 +68,8 @@ class TransactionCursor:
     def create(self,
                rest_id : str,
                tx : TransactionMetadata,
-               reuse_blob_rest_id : List[str] = []):
+               reuse_blob_rest_id : List[str] = [],
+               create_leased : bool = False):
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.begin_transaction() as db_tx:
@@ -88,19 +89,16 @@ class TransactionCursor:
                 creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id)
 
+            if create_leased:
+                ins = ins.values(
+                    inflight_session_id = self.parent.session_id)
+
             res = db_tx.execute(ins)
             row = res.fetchone()
             self.id = row[0]
             self.tx = TransactionMetadata()  # tx
 
             self._write(db_tx, tx, reuse_blob_rest_id)
-
-
-        with parent.created_lock:
-            logging.debug('TransactionCursor.create id %d', self.id)
-            if parent.created_id is None or self.id > parent.created_id:
-                parent.created_id = self.id
-                parent.created_cv.notify_all()
 
     def _reuse_blob(self, db_tx, blob_rest_ids : List[str]
                     ) -> List[Tuple[int, str, bool]]:
@@ -428,9 +426,16 @@ class TransactionCursor:
         self._load_db(db_tx, db_id=db_id)
         assert self.tx is not None
         new_version = version + 1
+        # TODO the session_id == our session id case is the common
+        # case for cutthrough where it's created in the downstream
+        # flow with create_leased=True but then ~synchronously loaded in
+        # the output flow with start_attempt=True
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
-                      self.parent.tx_table.c.version == version)
+                      self.parent.tx_table.c.version == version,
+                      or_(self.parent.tx_table.c.inflight_session_id ==
+                            self.parent.session_id,
+                          self.parent.tx_table.c.inflight_session_id.is_(None)))
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id)
                .returning(self.parent.tx_table.c.version))
@@ -845,11 +850,6 @@ class Storage():
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
 
-    # TODO IdVersionMap w/single object id 0?
-    created_id = None
-    created_lock = None
-    created_cv = None
-
     session_table : Optional[Table] = None
     blob_table : Optional[Table] = None
     tx_table : Optional[Table] = None
@@ -859,9 +859,6 @@ class Storage():
     def __init__(self, engine : Optional[Engine] = None):
         self.engine = engine
         self.tx_versions = IdVersionMap()
-
-        self.created_lock = Lock()
-        self.created_cv = Condition(self.created_lock)
 
     @staticmethod
     def get_sqlite_inmemory_for_test():
@@ -1122,9 +1119,3 @@ class Storage():
             deleted = self._gc(db_tx, ttl)
             return deleted
 
-    def wait_created(self, db_id, timeout=None):
-        with self.created_lock:
-            logging.debug('Storage.wait_created %s %s', self.created_id, db_id)
-            fn = lambda: self.created_id is not None and (
-                db_id is None or self.created_id > db_id)
-            return self.created_cv.wait_for(fn, timeout)
