@@ -55,8 +55,8 @@ root_yaml = {
             'name': 'smtp-msa',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1,
+                'downstream_env_timeout': 2,
+                'downstream_data_timeout': 2,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -380,7 +380,8 @@ class RouterServiceTest(unittest.TestCase):
     def test_exploder_multi_rcpt(self):
         logging.info('testExploderMultiRcpt')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='smtp-msa')
+            static_base_url=self.router_url, http_host='smtp-msa',
+            timeout_start=5, timeout_data=5)
 
         logging.info('testExploderMultiRcpt start tx')
         tx = TransactionMetadata(

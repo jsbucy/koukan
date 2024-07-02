@@ -191,23 +191,17 @@ class StorageWriterFilter(AsyncFilter):
             self._create(downstream_delta,
                          reuse_blob_rest_id=reuse_blob_rest_id)
             reuse_blob_rest_id = None
-
-            while True:
-                try:
-                    if body_blob is not None:
-                        pass
-                    elif body_utf8 is not None:
-                        logging.debug('StorageWriterFilter inline body %d',
-                                      len(body_utf8))
-                        writer = self.storage.create_blob(
-                            tx_rest_id=self.rest_id,
-                            blob_rest_id=self.rest_id_factory(),
-                            tx_body=True)
-                        writer.append_data(0, body_utf8, len(body_utf8))
-                        # create_blob() refs into tx for tx_body
-                    break
-                except VersionConflictException:
-                    pass
+            if body_blob is not None:
+                pass
+            elif body_utf8 is not None:
+                logging.debug('StorageWriterFilter inline body %d',
+                              len(body_utf8))
+                writer = self.storage.create_blob(
+                    tx_rest_id=self.rest_id,
+                    blob_rest_id=self.rest_id_factory(),
+                    tx_body=True)
+                writer.append_data(0, body_utf8, len(body_utf8))
+                # create_blob() refs into tx for tx_body
 
             downstream_delta = TransactionMetadata()
 
