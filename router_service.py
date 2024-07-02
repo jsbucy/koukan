@@ -106,6 +106,8 @@ class Service:
                 executor_yaml.get('max_inflight', 10),
                 executor_yaml.get('watchdog_timeout', 30))
             self.executor = self.owned_executor
+        # ick dependency cycle
+        self.config.executor = self.executor
 
         # TODO move most/all of this to storage i.e. just pass the yaml
         storage_yaml = self.config.root_yaml['storage']
@@ -183,19 +185,20 @@ class Service:
                 flask_app)
             self.wsgi_server.serve_forever()
 
-    def create_storage_writer(
-            self, http_host : str):  # -> Optional[SyncFilterAdapter]:
+    def create_storage_writer(self, http_host : str
+                              ) -> Optional[StorageWriterFilter]:
         writer = StorageWriterFilter(
             storage=self.storage,
-            rest_id_factory=self.config.rest_id_factory())
+            rest_id_factory=self.config.rest_id_factory(),
+            create_leased=True)
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer))
         if fut is None:
             return None
         return writer
 
-    def get_storage_writer(
-            self, rest_id : str):  # -> Optional[SyncFilterAdapter]:
+    def get_storage_writer(self, rest_id : str
+                           ) -> Optional[StorageWriterFilter]:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.config.rest_id_factory())
@@ -209,8 +212,7 @@ class Service:
                 tx_cursor.load(rest_id=tx_rest_id, start_attempt=True)
                 break
             except VersionConflictException:
-                if tx_cursor.attempt_id is not None:
-                    return None
+                pass
         endpoint, endpoint_yaml = self.config.get_endpoint(tx_cursor.tx.host)
         self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
 

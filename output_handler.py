@@ -78,8 +78,8 @@ class OutputHandler:
         upstream_tx = None
 
         while True:
-            logging.debug('OutputHandler._output() %s db tx %s',
-                         self.rest_id, self.cursor.tx)
+            logging.debug('OutputHandler._output() %s db tx %s input done %s',
+                         self.rest_id, self.cursor.tx, self.cursor.input_done)
 
             if last_tx is None:
                 last_tx = self.cursor.tx.copy()
@@ -120,10 +120,10 @@ class OutputHandler:
                 continue
 
             body_blob = None
-            if self.cursor.input_done and delta.body:
+            if self.cursor.input_done and upstream_tx.body:
                 blob_reader = self.cursor.parent.get_blob_reader()
                 assert blob_reader.load(
-                    rest_id = self.cursor.tx.body,
+                    rest_id = upstream_tx.body,
                     tx_id = self.cursor.id) is not None
                 assert blob_reader.finalized()
                 upstream_tx.body_blob = delta.body_blob = blob_reader
@@ -138,9 +138,13 @@ class OutputHandler:
             if not self.cursor.input_done and delta.message_builder:
                 del delta.message_builder
 
-            assert delta.mail_from or delta.rcpt_to or (
-                self.cursor.input_done and (
-                    delta.body_blob or delta.message_builder))
+            # no new reqs in delta can happen e.g. if blob upload
+            # ping'd last_update
+            if delta.mail_from is None and not delta.rcpt_to and (
+                    not self.cursor.input_done or (
+                        not delta.body_blob and delta.message_builder is None)):
+                logging.info('OutputHandler._output() %s no reqs', self.rest_id)
+                continue
 
             upstream_delta = self.endpoint.on_update(upstream_tx, delta)
             logging.info('OutputHandler._output() %s '

@@ -28,13 +28,15 @@ class StorageWriterFilter(AsyncFilter):
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
     blob_writer : Optional[BlobWriter] = None
+    create_leased : bool = False
 
     mu : Lock
     cv : Condition
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 create_leased : bool = False):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -58,7 +60,8 @@ class StorageWriterFilter(AsyncFilter):
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
         self.tx_cursor.create(
-            rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id)
+            rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id,
+            create_leased=self.create_leased)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -188,22 +191,17 @@ class StorageWriterFilter(AsyncFilter):
             self._create(downstream_delta,
                          reuse_blob_rest_id=reuse_blob_rest_id)
             reuse_blob_rest_id = None
-            while True:
-                try:
-                    if body_blob is not None:
-                        pass
-                    elif body_utf8 is not None:
-                        logging.debug('StorageWriterFilter inline body %d',
-                                      len(body_utf8))
-                        writer = self.storage.create_blob(
-                            tx_rest_id=self.rest_id,
-                            blob_rest_id=self.rest_id_factory(),
-                            tx_body=True)
-                        writer.append_data(0, body_utf8, len(body_utf8))
-                        # create_blob() refs into tx for tx_body
-                    break
-                except VersionConflictException:
-                    pass
+            if body_blob is not None:
+                pass
+            elif body_utf8 is not None:
+                logging.debug('StorageWriterFilter inline body %d',
+                              len(body_utf8))
+                writer = self.storage.create_blob(
+                    tx_rest_id=self.rest_id,
+                    blob_rest_id=self.rest_id_factory(),
+                    tx_body=True)
+                writer.append_data(0, body_utf8, len(body_utf8))
+                # create_blob() refs into tx for tx_body
 
             downstream_delta = TransactionMetadata()
 

@@ -68,7 +68,8 @@ class TransactionCursor:
     def create(self,
                rest_id : str,
                tx : TransactionMetadata,
-               reuse_blob_rest_id : List[str] = []):
+               reuse_blob_rest_id : List[str] = [],
+               create_leased : bool = False):
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.begin_transaction() as db_tx:
@@ -88,19 +89,16 @@ class TransactionCursor:
                 creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id)
 
+            if create_leased:
+                ins = ins.values(
+                    inflight_session_id = self.parent.session_id)
+
             res = db_tx.execute(ins)
             row = res.fetchone()
             self.id = row[0]
             self.tx = TransactionMetadata()  # tx
 
             self._write(db_tx, tx, reuse_blob_rest_id)
-
-
-        with parent.created_lock:
-            logging.debug('TransactionCursor.create id %d', self.id)
-            if parent.created_id is None or self.id > parent.created_id:
-                parent.created_id = self.id
-                parent.created_cv.notify_all()
 
     def _reuse_blob(self, db_tx, blob_rest_ids : List[str]
                     ) -> List[Tuple[int, str, bool]]:
@@ -127,7 +125,8 @@ class TransactionCursor:
             # OTOH chaining up UNION ALL works fine and we don't expect it
             # to be so much worse as to make a difference anywhere you
             # would actually use sqlite!
-            literals = [select(literal(x).label('rest_id')) for x in blob_rest_ids]
+            literals = [ select(literal(x).label('rest_id'))
+                         for x in blob_rest_ids ]
             val = reduce(lambda x,y: x.union_all(y),
                          literals[1:], literals[0].cte())
 
@@ -428,9 +427,16 @@ class TransactionCursor:
         self._load_db(db_tx, db_id=db_id)
         assert self.tx is not None
         new_version = version + 1
+        # TODO the session_id == our session id case is the common
+        # case for cutthrough where it's created in the downstream
+        # flow with create_leased=True but then ~synchronously loaded in
+        # the output flow with start_attempt=True
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
-                      self.parent.tx_table.c.version == version)
+                      self.parent.tx_table.c.version == version,
+                      or_(self.parent.tx_table.c.inflight_session_id ==
+                            self.parent.session_id,
+                          self.parent.tx_table.c.inflight_session_id.is_(None)))
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id)
                .returning(self.parent.tx_table.c.version))
@@ -497,11 +503,11 @@ class BlobWriter(WritableBlob):
     _content_length : Optional[int] = None  # overall length from content-range
     rest_id = None
     last = False
-    update_tx : Optional[int] = None
+    update_tx : Optional[str] = None
     finalize_tx : bool = False
 
     def __init__(self, storage,
-                 update_tx : Optional[int] = None,
+                 update_tx : Optional[str] = None,
                  finalize_tx : Optional[bool] = False):
         self.parent = storage
         self.update_tx = update_tx
@@ -550,7 +556,10 @@ class BlobWriter(WritableBlob):
                     self.parent.tx_blobref_table.c.transaction_id == tx_id,
                     self.parent.tx_blobref_table.c.rest_id == rest_id)
                 res = db_tx.execute(sel_blobref)
-                blob_id = res.fetchone()[0]
+                row = res.fetchone()
+                if row is None:
+                    return None
+                blob_id = row[0]
 
             sel_blob = select(
                 self.parent.blob_table.c.id,
@@ -633,19 +642,22 @@ class BlobWriter(WritableBlob):
             logging.debug('append_data %d %s last=%s',
                           self.length, self._content_length, self.last)
 
-            if self.update_tx is not None:
-                cursor = self.parent.get_transaction_cursor()
-                tx = cursor._load_db(db_tx, db_id=self.update_tx)
-                kwargs = {}
-                if self.last and self.finalize_tx:
-                    kwargs['input_done'] = True
-                cursor._write(db_tx, TransactionMetadata(), **kwargs)
-                tx_version = cursor.version
 
-        if self.update_tx is not None and tx_version is not None:
-            self.parent.tx_versions.update(self.update_tx, tx_version)
-
-
+        if self.update_tx is not None:
+            cursor = self.parent.get_transaction_cursor()
+            while True:
+                try:
+                    with self.parent.begin_transaction() as db_tx:
+                        cursor._load_db(db_tx, rest_id=self.update_tx)
+                        kwargs = {}
+                        if self.last and self.finalize_tx:
+                            kwargs['input_done'] = True
+                        # else empty write to ping last_update
+                        cursor._write(db_tx, TransactionMetadata(), **kwargs)
+                        break
+                except VersionConflictException:
+                    pass
+            self.parent.tx_versions.update(cursor.id, cursor.version)
         return True, self.length, self._content_length
 
 
@@ -845,11 +857,6 @@ class Storage():
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
 
-    # TODO IdVersionMap w/single object id 0?
-    created_id = None
-    created_lock = None
-    created_cv = None
-
     session_table : Optional[Table] = None
     blob_table : Optional[Table] = None
     tx_table : Optional[Table] = None
@@ -859,9 +866,6 @@ class Storage():
     def __init__(self, engine : Optional[Engine] = None):
         self.engine = engine
         self.tx_versions = IdVersionMap()
-
-        self.created_lock = Lock()
-        self.created_cv = Condition(self.created_lock)
 
     @staticmethod
     def get_sqlite_inmemory_for_test():
@@ -992,21 +996,32 @@ class Storage():
             writer = None
             writer = BlobWriter(self)
             writer._create(blob_rest_id, db_tx)
+            if writer is None:
+                return None
 
-            cursor = self.get_transaction_cursor()
-            cursor._load_db(db_tx, rest_id=tx_rest_id)
-            tx = TransactionMetadata()
-            if tx_body:
-                tx.body=blob_rest_id
-            cursor._write(
-                db_tx, tx,
-                reuse_blob_rest_id=[blob_rest_id],
-                require_finalized_blobs=False)
-            if writer:
-                writer.update_tx = cursor.id
-                writer.finalize_tx = tx_body
+        cursor = None
+        while True:
+            try:
+                with self.begin_transaction() as db_tx:
+                    cursor = self.get_transaction_cursor()
+                    cursor._load_db(db_tx=db_tx, rest_id=tx_rest_id)
+                    tx = TransactionMetadata()
+                    if tx_body:
+                        tx.body = blob_rest_id
+                    cursor._write(
+                        db_tx=db_tx,
+                        tx_delta=tx,
+                        reuse_blob_rest_id=[blob_rest_id],
+                        require_finalized_blobs=False)
+                    break
+            except VersionConflictException:
+                pass
+        self.tx_versions.update(cursor.id, cursor.version)
 
-            return writer
+        writer.update_tx = tx_rest_id
+        writer.finalize_tx = tx_body
+
+        return writer
 
     def get_blob_for_append(
             self,
@@ -1022,7 +1037,7 @@ class Storage():
         blob_writer = BlobWriter(self)
         if blob_writer.load(blob_rest_id, tx_rest_id) is None:
             return None
-        blob_writer.update_tx = tx_cursor.id
+        blob_writer.update_tx = tx_rest_id
         blob_writer.finalize_tx = tx_body
 
         return blob_writer
@@ -1122,9 +1137,3 @@ class Storage():
             deleted = self._gc(db_tx, ttl)
             return deleted
 
-    def wait_created(self, db_id, timeout=None):
-        with self.created_lock:
-            logging.debug('Storage.wait_created %s %s', self.created_id, db_id)
-            fn = lambda: self.created_id is not None and (
-                db_id is None or self.created_id > db_id)
-            return self.created_cv.wait_for(fn, timeout)

@@ -4,6 +4,8 @@ from threading import Thread
 import time
 from functools import partial
 
+from deadline import Deadline
+from executor import Executor
 from filter import (
     AsyncFilter,
     Mailbox,
@@ -69,19 +71,16 @@ class Recipient:
                  output_chain: str,
                  upstream : AsyncFilter,
                  msa : bool,
-                 rcpt : Mailbox,
-                 rcpt_timeout : Optional[float] = None,
-                 data_timeout : Optional[float] = None):
+                 rcpt : Mailbox):
         self.output_chain = output_chain
         self.upstream = upstream
-        self.rcpt_timeout = rcpt_timeout
-        self.data_timeout = data_timeout
         self.msa = msa
         self.rcpt = rcpt
 
     def _on_rcpt(self,
                  tx : TransactionMetadata,
-                 delta : TransactionMetadata):
+                 delta : TransactionMetadata,
+                 deadline : Deadline):
         logging.info('exploder.Recipient._on_rcpt %s', self.rcpt)
 
         # just send the envelope, we'll deal with any data below
@@ -105,7 +104,7 @@ class Recipient:
 
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
         upstream_delta = self.upstream.update(
-            self.tx, self.tx.copy(), self.rcpt_timeout)
+            self.tx, self.tx.copy(), deadline.deadline_left())
 
         logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
 
@@ -159,14 +158,14 @@ class Recipient:
                       self.mail_response, self.rcpt_response)
 
 
-    def _append_upstream(self, blob):
+    def _append_upstream(self, blob, deadline):
         last = blob.finalized()
         assert self.status is None or self.store_and_forward
 
         # don't wait for a status if it's already failed
         # TODO maybe storage writer filter, etc, should know that and
         # not wait?
-        timeout = 0 if self.store_and_forward else self.data_timeout
+        timeout = 0 if self.store_and_forward else deadline.deadline_left()
         logging.debug('exploder Recipient._append_upstream %d/%s timeout=%s',
                       blob.len(), blob.content_length(), timeout)
         body_delta = TransactionMetadata()
@@ -214,6 +213,7 @@ class Exploder(SyncFilter):
     msa : Optional[bool] = None
     max_attempts : Optional[int] = None
     default_notification : Optional[dict] = None
+    executor : Executor
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -222,6 +222,7 @@ class Exploder(SyncFilter):
 
     def __init__(self, output_chain : str,
                  factory : Callable[[], AsyncFilter],
+                 executor : Executor,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  msa : Optional[bool] = None,
@@ -233,6 +234,7 @@ class Exploder(SyncFilter):
         self.msa = msa
         self.recipients = []
         self.default_notification = default_notification
+        self.executor = executor
 
     def _on_mail(self,
                  delta : TransactionMetadata,
@@ -248,23 +250,38 @@ class Exploder(SyncFilter):
             upstream_delta.mail_response = Response(
                 250, 'MAIL ok; exploder noop')
 
-    def _run(self, fns):
+    # run fns possibly in parallel
+    # sets elements of fns that could not be completed within deadline to None
+    def _run(self, fns : List[Optional[Callable]], deadline : Deadline) -> bool:
+        assert not any([f for f in fns if f is None])
         if len(fns) == 1:
             fns[0]()
-            return
+            return True
 
-        threads = []
-        for fn in fns:
-            # TODO executor
-            t = Thread(target=fn)
-            t.start()
-            threads.append(t)
-        for t in threads:
-            logging.debug('_on_rcpts_parallel join')
-            # NOTE: we don't set a timeout on this join() because
-            # we expect the next hop is something internal
-            # (i.e. storage writer filter) that respects the timeout
-            t.join()
+        futures = [None] * len(fns)
+        logging.debug('Exploder._run start %d', len(fns))
+        for i,fn in enumerate(fns):
+            logging.debug('Exploder._run deadline_left %s',
+                          deadline.deadline_left())
+            fut = self.executor.submit(fn, deadline.deadline_left())
+            if fut is None:
+                fns[i] = None
+                continue
+            futures[i] = fut
+        logging.debug('Exploder._run join %s', len(futures))
+        for i,fut in enumerate(futures):
+            if fut is None:
+                continue
+            logging.debug('Exploder._run join deadline_left %s',
+                          deadline.deadline_left())
+            # the next hop is something internal (i.e. storage writer
+            # filter) that should respect the timeout so timing out
+            # here should be rare
+            try:
+                fut.result(deadline.deadline_left())
+            except TimeoutError:
+                fns[i] = None
+        return not any([f for f in futures if f is None])
 
     def _on_rcpts(self,
                   downstream_tx : TransactionMetadata,
@@ -275,21 +292,27 @@ class Exploder(SyncFilter):
         rcpts = []
         fns = []
         rcpt_response = [None] * len(downstream_delta.rcpt_to)
+        deadline = Deadline(self.rcpt_timeout)
         for i,rcpt in enumerate(downstream_delta.rcpt_to):
             recipient = Recipient(self.output_chain,
                                   self.factory(),
                                   self.msa,
-                                  rcpt,
-                                  self.rcpt_timeout,
-                                  self.data_timeout)
+                                  rcpt)
             self.recipients.append(recipient)
             rcpts.append(recipient)
             fns.append(
-                partial(lambda r: r._on_rcpt(downstream_tx, downstream_delta),
+                partial(lambda r: r._on_rcpt(downstream_tx, downstream_delta,
+                                             deadline),
                         recipient))
-        self._run(fns)
+
+        self._run(fns, deadline)
 
         for i, recipient in enumerate(rcpts):
+            if fns[i] is None:
+                recipient.mail_response = recipient.rcpt_response = Response(
+                    450, 'server busy '
+                    '(Exploder failed to schedule rcpt upstream)')
+
             mail_resp = recipient.mail_response
             rcpt_resp = recipient.rcpt_response
 
@@ -334,7 +357,8 @@ class Exploder(SyncFilter):
 
         if tx_delta.cancelled:
             logging.info('Exploder.on_update: cancel')
-            self._run([r.cancel for r in self.recipients])
+            self._run([r.cancel for r in self.recipients],
+                      Deadline(self.rcpt_timeout))
             return
 
         updated_tx = tx.copy()
@@ -383,13 +407,21 @@ class Exploder(SyncFilter):
         logging.info('Exploder._append_data %d %s',
                      blob.len(), blob.content_length())
 
+        deadline = Deadline(self.data_timeout)
         fns = []
         for recipient in self.recipients:
             if recipient.status is not None and not recipient.status.ok():
                 continue
             fns.append(
-                partial(lambda r: r._append_upstream(blob), recipient))
-        self._run(fns)
+                partial(lambda r: r._append_upstream(blob, deadline),
+                        recipient))
+
+        if not self._run(fns, deadline):
+            # hopefully this is rare
+            # we may need to bring back separate
+            # queues/priorities/limits in the Executor to ensure that
+            return Response(450, 'server busy '
+                            '(Exploder failed to schedule data upstream)')
 
         if (data_resp := self._cutthrough_data()) is not None:
             return data_resp
