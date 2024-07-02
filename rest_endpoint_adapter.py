@@ -23,6 +23,7 @@ import werkzeug.http
 from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
+from fastapi.responses import JSONResponse as FastApiJsonResponse
 
 HttpRequest = Union[FlaskRequest, FastApiRequest]
 HttpResponse = Union[FlaskResponse, FastApiResponse]
@@ -237,6 +238,40 @@ class RestHandler(Handler):
     def blob_rest_id(self):
         return self._blob_rest_id
 
+    def response(self, req : HttpRequest,
+                 code : int = 200,
+                 msg : Optional[str] = None,
+                 resp_json : Optional[dict] = None,
+                 headers : Optional[List[Tuple[str,str]]] = None,
+                 etag : Optional[str] = None
+                 ) -> HttpResponse:
+        if isinstance(req, FlaskRequest):
+            #if json is not None:
+            #    return jsonify(json)
+            resp = FlaskResponse(status=code)
+            if etag:
+                resp.set_etag(etag)
+            if headers:
+                for k,v in headers:
+                    resp.headers.set(k,v)
+            if json is not None:
+                resp.content_type = 'application/json'
+                resp.set_data(json.dumps(resp_json))
+            if msg is not None:
+                resp.content_type = 'text/plain'
+                resp.content = msg
+            return resp
+
+        headers_dict=None
+        if headers:
+            headers_dict={k:v for k,v in headers}
+        if json is not None:
+            return FastApiJsonResponse(
+                status_code=code,
+                content=resp_json,
+                headers=headers_dict)
+        return FastApiResponse(status=code, content=msg, headers=headers_dict)
+
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], HttpResponse]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
@@ -247,71 +282,75 @@ class RestHandler(Handler):
         try:
             timeout = min(int(timeout_header), MAX_TIMEOUT)
         except ValueError:
-            return None, HttpResponse(status=400, response=[
-                'invalid request-timeout header'])
+            return None, self.response(
+                req, 400, msg='invalid request-timeout header')
         return timeout, None
 
     def _etag(self, version : int) -> str:
         return '%d' % version
 
-    def create_tx(self, request : HttpRequest) -> Optional[HttpResponse]:
+    def create_tx(self, request : HttpRequest, req_json : dict
+                  ) -> Optional[HttpResponse]:
         # TODO if request doesn't have remote_addr or is not from a
         # well-known/trusted peer (i.e. smtp gateway), set remote_addr to wsgi
         # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
         # TODO only accept smtp_meta from trusted peer i.e. the
         # well-known address of the gateway
 
-        tx = TransactionMetadata.from_json(request.json, WhichJson.REST_CREATE)
+        tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         if tx is None:
-            return HttpResponse(status=400, response=['invalid request'])
+            return self.response(request, code=400, msg='invalid request')
         tx.host = self.http_host
         prev_tx = tx.copy()
         body = tx.body
         timeout, err = self._get_timeout(request)
         if self.async_filter is None:
-            return HttpResponse(
-                status=500, respose=['internal error creating transaction'])
+            return self.response(
+                request, code=500, msg='internal error creating transaction')
         upstream = self.async_filter.update(tx, tx.copy(), timeout)
         if upstream is None:
-            return HttpResponse(status=400, respose=['bad request'])
+            return self.response(request, code=400, msg='bad request')
         assert tx.rest_id is not None
         self._tx_rest_id = tx.rest_id
 
-        resp = HttpResponse(status = 201)
-        resp.headers.set('location', make_tx_uri(tx.rest_id))
-        resp.set_etag(self._etag(self.async_filter.version()))
-        resp.content_type = 'application/json'
         tx.body = body
         del tx.body_blob
-        # XXX does POST /tx/123/message_builder return the tx json??
-        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
-        return resp
+        return self.response(
+            request, code=201,
+            resp_json=tx.to_json(WhichJson.REST_READ),
+            headers=[('location', make_tx_uri(tx.rest_id))],
+            etag=self._etag(self.async_filter.version()))
 
     def get_tx(self, request : HttpRequest) -> HttpResponse:
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
         if self.async_filter is None:
-            return HttpResponse(
-                status=404, response=['transaction not found'])
+            return self.response(
+                request, code=404, msg='transaction not found')
         tx = self.async_filter.get(timeout)
         if tx is None:
-            return HttpResponse(status=500, response=['get tx'])
+            return self.response(request, code=500, msg='get tx')
 
-        resp = HttpResponse(status = 200)
-        # xxx move to separate "rest schema"
-        resp.set_etag(self._etag(self.async_filter.version()))
-        resp.content_type = 'application/json'
+
         if tx.body_blob is not None:
             tx.body = ''
             del tx.body_blob
-        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
-        return resp
+
+        if tx.body_blob is not None:
+            tx.body = ''
+            del tx.body_blob
+        return self.response(
+            request,
+            etag=self._etag(self.async_filter.version()),
+            resp_json=tx.to_json(WhichJson.REST_READ))
 
     def patch_tx(self, request : HttpRequest,
-                 message_builder : bool = False) -> HttpResponse:
-        logging.debug('RestEndpointAdapter.patch %s %s',
-                      self._tx_rest_id, request.json)
+                 req_json : dict,
+                 message_builder : bool = False
+                 ) -> HttpResponse:
+        logging.debug('RestHandler.patch %s %s',
+                      self._tx_rest_id, req_json)
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
@@ -323,51 +362,46 @@ class RestHandler(Handler):
             downstream_delta = TransactionMetadata.from_json(
                 request.json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
-            return HttpResponse(status=400, response=['invalid request'])
+            return self.response(request, code=400, msg='invalid request')
         body = downstream_delta.body
         if err is not None:
             return err
         req_etag = request.headers.get('if-match', None)
         if req_etag is None:
-            return HttpResponse(
-                status=400, response=['etags required for update'])
+            return self.response(
+                request, code=400, msg='etags required for update')
         req_etag = req_etag.strip('"')
 
         # TODO optimization in the case of StorageWriterFilter, this
         # should be able to return the tx that was just loaded in the cursor
         tx = self.async_filter.get(deadline.deadline_left())
         if tx is None:
-            return HttpResponse(
-                status=500,
-                response=['RestEndpointAdapter.patch_tx timeout reading tx'])
+            return self.response(
+                request,
+                code=500,
+                msg='RestHandler.patch_tx timeout reading tx')
 
         if tx.merge_from(downstream_delta) is None:
-            return HttpResponse(
-                status=400,
-                response=['RestEndpointAdapter.patch_tx merge failed'])
+            return self.response(
+                request, code=400,
+                msg='RestHandler.patch_tx merge failed')
 
         if req_etag != self._etag(self.async_filter.version()):
-            logging.debug('RestEndpointAdapter.patch_tx conflict %s %s',
+            logging.debug('RestHandler.patch_tx conflict %s %s',
                           req_etag, self._etag(self.async_filter.version()))
-            return HttpResponse(
-                status=412, response=['update conflict'])
+            return self.response(request, code=412, msg='update conflict')
         upstream = self.async_filter.update(
             tx, downstream_delta, deadline.deadline_left())
         if upstream is None:
-            return HttpResponse(
-                status=400,
-                response=['RestEndpointAdapter.patch_tx bad request'])
+            return self.response(
+                request, code=400,
+                msg='RestHandler.patch_tx bad request')
 
-        resp = HttpResponse(status=200)
-        # xxx move to separate "rest schema"
-        resp.set_etag(self._etag(self.async_filter.version()))
-        resp.content_type = 'application/json'
-        logging.debug('RestEndpointAdapter.patch_tx %s %s',
-                      self._tx_rest_id, downstream_delta)
         tx.body = body
         del tx.body_blob
-        resp.set_data(json.dumps(tx.to_json(WhichJson.REST_READ)))
-        return resp
+        return self.response(
+            request, etag=self._etag(self.async_filter.version()),
+            resp_json=tx.to_json(WhichJson.REST_READ))
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
@@ -379,14 +413,14 @@ class RestHandler(Handler):
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
         if not range or range.units != 'bytes':
-            return HttpResponse(400, 'bad range'), None
+            return self.response(request, 400, 'bad range'), None
         # no idea if underlying stack enforces this
         assert(range.stop - range.start == request.content_length)
         return None, range
 
     def create_blob(self, request : HttpRequest,
                     tx_body : bool = False) -> HttpResponse:
-        logging.debug('RestEndpointAdapter.create_blob %s %s blob %s tx %s',
+        logging.debug('RestHandler.create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
@@ -395,25 +429,25 @@ class RestHandler(Handler):
         chunked = False
         if 'upload' not in request.args:
             if 'content-range' in request.headers:
-                return HttpResponse(
-                    status=400,
-                    response=['content-range only with chunked uploads'])
+                return self.response(
+                    request, code=400,
+                    msg='content-range only with chunked uploads')
         elif request.args.keys() != {'upload'} or (
                 request.args['upload'] != 'chunked'):
-            return HttpResponse(status=400, response=['bad query'])
+            return self.response(request, code=400, msg='bad param: upload=')
         elif request.args.get('upload', None) == 'chunked':
             if request.data:
-                return HttpResponse(
-                    status=400, response=['unimplemented metadata upload'])
+                return self.response(
+                    request, code=400, msg='unimplemented metadata upload')
             chunked = True
 
-        logging.debug('RestEndpointAdapter.create_blob before create')
+        logging.debug('RestHandler.create_blob before create')
 
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id,
                 tx_body=tx_body)) is None:
-            return HttpResponse(
-                status=500, response=['internal error creating blob'])
+            return self.response(
+                request, code=500, msg='internal error creating blob')
 
         if not chunked:
             range_err, range = self._get_range(request)
@@ -421,13 +455,12 @@ class RestHandler(Handler):
                 return range_err
             rest_resp = self._put_blob(request, range, blob)
 
-        resp = HttpResponse(status=201)
-        resp.status_code = 201
         blob_uri = make_blob_uri(
             self._tx_rest_id,
             blob=self._blob_rest_id if not tx_body else None,
             tx_body=tx_body)
-        resp.headers.set('location', blob_uri)
+        resp = self.response(request, code=201,
+                             headers=[('location', blob_uri)])
         return resp
 
     def put_blob(self, request : HttpRequest,
@@ -446,10 +479,10 @@ class RestHandler(Handler):
             blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
         if blob is None:
-            return HttpResponse(status=404, response=['unknown blob'])
+            return self.response(request, code=404, msg='unknown blob')
 
         resp = self._put_blob(request, range, blob)
-        logging.debug('RestEndpointAdapter.put_blob %s %s', resp, tx_body)
+        logging.debug('RestHandler.put_blob %s %s', resp, tx_body)
         if resp.status_code != 200 or not tx_body:
             return resp
 
@@ -458,18 +491,17 @@ class RestHandler(Handler):
 
     def _put_blob(self, request : HttpRequest, content_range : ContentRange,
                   blob : WritableBlob) -> HttpResponse:
-        logging.debug('RestEndpointAdapter._put_blob %s content-range: %s',
+        logging.debug('RestHandler._put_blob %s content-range: %s',
                       self._blob_rest_id, content_range)
-        resp = HttpResponse()
+        resp = FlaskResponse()
         bytes_read = 0
         content_length = result_len = None
 
-        # async for
         while b := request.stream.read(self.CHUNK_SIZE):
             appended, result_len, content_length = blob.append_data(
                 content_range.start + bytes_read, b, content_range.length)
             logging.debug(
-                'RestEndpointAdapter._put_blob %s %s %d %s',
+                'RestHandler._put_blob %s %s %d %s',
                 self._blob_rest_id, appended, result_len, content_length)
 
             if not appended:
@@ -478,22 +510,22 @@ class RestHandler(Handler):
                 break
             bytes_read += len(b)
 
-        resp = jsonify({})
-        # cf RestTransactionHandler.build_resp() regarding content-range
-        resp.headers.set('content-range',
-                         ContentRange('bytes', 0, result_len, content_length))
-        return resp
+        return self.response(
+            request,
+            resp_json={},
+            headers=[('content-range',
+                      ContentRange('bytes', 0, result_len, content_length))])
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
-        logging.debug('RestEndpointAdapter.cancel_tx %s', self._tx_rest_id)
+        logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get(0)
         if tx is None:
-            return HttpResponse()
+            return self.response(request)
         delta = TransactionMetadata(cancelled=True)
         assert tx.merge_from(delta) is not None
         assert tx.cancelled
         self.async_filter.update(tx, delta)
-        return HttpResponse()
+        return self.response(request)
 
 
 class EndpointFactory(ABC):

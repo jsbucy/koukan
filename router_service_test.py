@@ -40,8 +40,6 @@ def tearDownModule():
 
 root_yaml = {
     'global': {
-        'use_gunicorn': False,
-        'use_hypercorn': False,
         'tx_idle_timeout': 5,
         'gc_interval': None,
         'dequeue': False,
@@ -49,6 +47,8 @@ root_yaml = {
         'rest_id_entropy': 2
     },
     'rest_listener': {
+        'use_gunicorn': False,
+        'use_hypercorn': True,
     },
     'endpoint': [
         {

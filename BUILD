@@ -276,6 +276,10 @@ pytype_library(name='rest_service',
                srcs=['rest_service.py',
                      'rest_service_handler'])
 
+pytype_library(name='fastapi_service',
+               srcs=['fastapi_service.py',
+                     'rest_service_handler'])
+
 pytype_library(name='rest_schema',
                srcs=['rest_schema.py'])
 py_test(name='rest_schema_test',
@@ -293,6 +297,7 @@ pytype_library(name='router_service',
                      ':blob',
                      ':rest_endpoint',
                      ':rest_service',
+                     ':fastapi_service',
                      ':gunicorn_main',
                      ':hypercorn_main',
                      ':rest_endpoint_adapter'])

@@ -1,14 +1,16 @@
-from typing import Dict, Tuple, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import time
 import logging
 from threading import Lock, Condition, Thread
 import json
 import os
 from functools import partial
+import asyncio
 
 from wsgiref.simple_server import make_server
 
 import rest_service
+import fastapi_service
 import gunicorn_main
 import hypercorn_main
 
@@ -60,6 +62,9 @@ class Service:
     executor : Optional[Executor] = None
     owned_executor : Optional[Executor] = None
 
+    wsgi_server : Optional[object] = None
+    hypercorn_shutdown : Optional[List[asyncio.Future]] = None
+
     def __init__(self, config=None,
                  executor : Optional[Executor] = None):
         self.lock = Lock()
@@ -85,6 +90,9 @@ class Service:
 
         if self.wsgi_server:
             self.wsgi_server.shutdown()
+        if self.hypercorn_shutdown:
+            logging.debug('router service hypercorn shutdown')
+            self.hypercorn_shutdown[0].set_result(True)
 
     def wait_started(self, timeout=None):
         with self.lock:
@@ -159,16 +167,22 @@ class Service:
             self.started = True
             self.cv.notify_all()
 
-        flask_app = rest_service.create_app(self.rest_handler_factory)
-            #handler_factory)
+        #app = rest_service.create_app(self.rest_handler_factory)
+        #handler_factory)
+        app = fastapi_service.create_app(self.rest_handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_hypercorn', False):
+            self.hypercorn_shutdown = [None]
             hypercorn_main.run(
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),
                 listener_yaml.get('key', None),
-                flask_app)
+                app,
+                self.hypercorn_shutdown)
+            logging.debug('router service main hypercorn %s',
+                          self.hypercorn_shutdown)
         elif listener_yaml.get('use_gunicorn', False):
+            raise NotImplementedError()
             # XXX gunicorn always forks, need to get all our startup
             # code into the worker e.g. post_worker_init() hook. May
             # be possible to run gunicorn.workers.ThreadWorker
@@ -177,12 +191,13 @@ class Service:
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),
                 listener_yaml.get('key', None),
-                flask_app)
+                app)
         else:
+            raise NotImplementedError()
             self.wsgi_server = make_server(
                 listener_yaml['addr'][0],
                 listener_yaml['addr'][1],
-                flask_app)
+                app)
             self.wsgi_server.serve_forever()
 
     def create_storage_writer(self, http_host : str
