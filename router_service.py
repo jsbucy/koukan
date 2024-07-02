@@ -106,6 +106,8 @@ class Service:
                 executor_yaml.get('max_inflight', 10),
                 executor_yaml.get('watchdog_timeout', 30))
             self.executor = self.owned_executor
+        # ick dependency cycle
+        self.config.executor = self.executor
 
         # TODO move most/all of this to storage i.e. just pass the yaml
         storage_yaml = self.config.root_yaml['storage']

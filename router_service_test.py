@@ -192,7 +192,7 @@ class RouterServiceTest(unittest.TestCase):
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         self.router_url = 'http://localhost:%d' % self.port
         self.endpoints = []
-        self.config = Config()
+        self.config = Config(executor=self.executor)
         self.config.inject_yaml(root_yaml)
         self.config.inject_filter(
             'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)

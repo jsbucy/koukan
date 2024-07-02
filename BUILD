@@ -196,7 +196,14 @@ py_test(name='storage_writer_filter_test',
               'storage'])
 
 pytype_library(name='exploder',
-               srcs=['exploder.py'])
+               srcs=['exploder.py'],
+               deps=[
+                   ':blob',
+                   ':deadline',
+                   ':executor',
+                   ':filter',
+                   ':response',
+               ])
 
 py_test(name='exploder_test',
         srcs=['exploder_test.py'],

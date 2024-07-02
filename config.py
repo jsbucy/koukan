@@ -20,6 +20,7 @@ from storage import Storage
 from remote_host_filter import RemoteHostFilter
 from received_header_filter import ReceivedHeaderFilter
 from relay_auth_filter import RelayAuthFilter
+from executor import Executor
 
 class FilterSpec:
     def __init__(self, builder, t):
@@ -32,11 +33,14 @@ class Config:
     storage : Optional[Storage] = None
     endpoint_yaml : Optional[dict] = None
     storage_writer_factory : Optional[StorageWriterFactory] = None
+    executor : Optional[Executor] = None
 
     def __init__(
             self,
-            storage_writer_factory : Optional[StorageWriterFactory] = None
+            executor : Optional[Executor] = None,
+            storage_writer_factory : Optional[StorageWriterFactory] = None,
     ):
+        self.executor = executor
         self.storage_writer_factory = storage_writer_factory
         self.router_policies = {
             'dest_domain': self.router_policy_dest_domain,
@@ -79,6 +83,7 @@ class Config:
         return Exploder(
             yaml['output_chain'],
             self.storage_writer_factory,
+            self.executor,
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),

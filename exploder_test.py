@@ -5,10 +5,12 @@ import logging
 from threading import Condition, Lock, Thread
 import time
 
+from deadline import Deadline
 from storage import Storage, TransactionCursor
 from response import Response
 from fake_endpoints import FakeAsyncEndpoint
 from filter import Mailbox, TransactionMetadata
+from executor import Executor
 
 from blob import CompositeBlob, InlineBlob
 
@@ -345,12 +347,22 @@ vec_msa = [
 ]
 
 class ExploderTest(unittest.TestCase):
+    mu : Lock
+    cv : Condition
+    executor : Executor
+
     def setUp(self):
+        self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
+                                 debug_futures=True)
+
         self.mu = Lock()
         self.cv = Condition(self.mu)
 
         self.storage = Storage.get_sqlite_inmemory_for_test()
         self.upstream_endpoints = []
+
+    def tearDown(self):
+        self.executor.shutdown(timeout=5)
 
     def dump_db(self):
         for l in self.storage.db.iterdump():
@@ -384,7 +396,8 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, t : Test):
         exploder = Exploder('output-chain', lambda: self.factory(),
-                            rcpt_timeout=1,
+                            executor=self.executor,
+                            rcpt_timeout=2,
                             msa=msa,
                             default_notification={})
 
@@ -393,7 +406,7 @@ class ExploderTest(unittest.TestCase):
             r.set_endpoint(endpoint)
 
         tx = TransactionMetadata(mail_from=Mailbox(t.mail_from))
-        exploder.on_update(tx, tx)
+        exploder.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, t.expected_mail_resp.code)
         for i,r in enumerate(t.rcpt):
             updated = tx.copy()
@@ -457,11 +470,12 @@ class ExploderTest(unittest.TestCase):
     # in Exploder._on_rcpts() that is otherwise dead code until the gateway
     # implements SMTP PIPELINING
     def testSuccess(self):
-        exploder = Exploder('output-chain', lambda: self.factory())
+        exploder = Exploder('output-chain', lambda: self.factory(),
+                            executor=self.executor)
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
-        exploder.on_update(tx, tx)
+        exploder.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 250)
 
         up0 = self.add_endpoint()
@@ -512,7 +526,8 @@ class ExploderTest(unittest.TestCase):
 
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', lambda: self.factory(),
-                            rcpt_timeout=1, msa=False,
+                            executor=self.executor,
+                            rcpt_timeout=2, msa=False,
                             default_notification={'host': 'smtp-out'})
 
         # The vector tests cover the non-pipelined updates we expect
@@ -588,9 +603,7 @@ class ExploderRecipientTest(unittest.TestCase):
         rcpt = Recipient('smtp-out',
                          endpoint,
                          msa=msa,
-                         rcpt=downstream_tx.rcpt_to[0],
-                         rcpt_timeout=1,
-                         data_timeout=1)
+                         rcpt=downstream_tx.rcpt_to[0])
 
         upstream_delta = TransactionMetadata()
         if upstream_mail_resp:
@@ -599,7 +612,7 @@ class ExploderRecipientTest(unittest.TestCase):
             upstream_delta.rcpt_response = [upstream_rcpt_resp]
         endpoint.merge(upstream_delta)
 
-        rcpt._on_rcpt(downstream_tx, downstream_delta)
+        rcpt._on_rcpt(downstream_tx, downstream_delta, Deadline(2))
         self.assertEqual(rcpt.mail_response.code, exp_mail_resp.code)
         self.assertEqual(rcpt.rcpt_response.code, exp_rcpt_resp.code)
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_env)
@@ -613,7 +626,7 @@ class ExploderRecipientTest(unittest.TestCase):
                 data_response=upstream_data_resp))
 
         d = 'hello, world!'
-        rcpt._append_upstream(InlineBlob(d[0:7], len(d)))
+        rcpt._append_upstream(InlineBlob(d[0:7], len(d)), Deadline(2))
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_data)
         self.assertEqualStatus(rcpt.status, exp_status_after_data)
 
@@ -623,7 +636,7 @@ class ExploderRecipientTest(unittest.TestCase):
         if upstream_data_resp_last:
             endpoint.merge(TransactionMetadata(
                 data_response=upstream_data_resp_last))
-        rcpt._append_upstream(InlineBlob(d, len(d)))
+        rcpt._append_upstream(InlineBlob(d, len(d)), Deadline(2))
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_data_last)
         self.assertEqualStatus(rcpt.status, exp_status_after_data_last)
 
