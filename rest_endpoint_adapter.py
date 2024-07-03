@@ -12,6 +12,7 @@ import logging
 import time
 from threading import Condition, Lock
 import json
+import asyncio
 
 from flask import (
     Request as FlaskRequest,
@@ -217,6 +218,7 @@ MAX_TIMEOUT=30
 
 class RestHandler(Handler):
     CHUNK_SIZE = 1048576
+    executor : Executor
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
 
@@ -224,11 +226,19 @@ class RestHandler(Handler):
     rest_id_factory : Optional[Callable[[], str]]
     http_host : Optional[str] = None
 
-    def __init__(self, async_filter : Optional[AsyncFilter] = None,
+    # _put_blob
+    range : Optional[ContentRange] = None
+    blob : Optional[WritableBlob] = None
+    bytes_read : Optional[int] = None
+
+    def __init__(self,
+                 executor : Executor,
+                 async_filter : Optional[AsyncFilter] = None,
                  tx_rest_id=None,
                  blob_rest_id=None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None):
+        self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
         self._blob_rest_id = blob_rest_id
@@ -262,9 +272,11 @@ class RestHandler(Handler):
                 resp.content = msg
             return resp
 
-        headers_dict=None
+        headers_dict={}
         if headers:
-            headers_dict={k:v for k,v in headers}
+            headers_dict.update({k:str(v) for k,v in headers})
+        if etag is not None:
+            headers_dict['etag'] = etag
         if json is not None:
             return FastApiJsonResponse(
                 status_code=code,
@@ -357,10 +369,10 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
         if message_builder:
             downstream_delta = TransactionMetadata()
-            downstream_delta.message_builder = request.json
+            downstream_delta.message_builder = req_json
         else:
             downstream_delta = TransactionMetadata.from_json(
-                request.json, WhichJson.REST_UPDATE)
+                req_json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
             return self.response(request, code=400, msg='invalid request')
         body = downstream_delta.body
@@ -405,9 +417,11 @@ class RestHandler(Handler):
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
+        content_length = int(request.headers.get('content-length'))
         if (range_header := request.headers.get('content-range', None)) is None:
             return None, ContentRange(
-                'bytes', 0, request.content_length, request.content_length)
+                'bytes', 0, content_length, content_length)
+                #request.content_length, request.content_length)
 
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
@@ -415,31 +429,45 @@ class RestHandler(Handler):
         if not range or range.units != 'bytes':
             return self.response(request, 400, 'bad range'), None
         # no idea if underlying stack enforces this
-        assert(range.stop - range.start == request.content_length)
+        assert(range.stop - range.start == content_length) #request.content_length)
         return None, range
 
     def create_blob(self, request : HttpRequest,
-                    tx_body : bool = False) -> HttpResponse:
-        logging.debug('RestHandler.create_blob %s %s blob %s tx %s',
+                    tx_body : bool = False,
+                    req_upload : Optional[str] = None) -> HttpResponse:
+        logging.debug('RestHandler.create_blob')
+        resp = self._create_blob(request, tx_body, req_upload)
+        logging.debug('RestHandler.create_blob %s', resp.status)
+        if resp.status_code != 201:
+            return resp
+
+        if req_upload is None:
+            self.bytes_read = 0
+            while b := request.stream.read(self.CHUNK_SIZE):
+                logging.debug('RestHandler.create_blob chunk %d', len(b))
+                self._put_blob_chunk(request, b)
+
+        return resp
+
+    def _create_blob(self, request : HttpRequest,
+                    tx_body : bool = False,
+                    req_upload : Optional[str] = None) -> HttpResponse:
+        logging.debug('RestHandler._create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
         self._blob_rest_id = self.rest_id_factory()
 
-        chunked = False
-        if 'upload' not in request.args:
-            if 'content-range' in request.headers:
-                return self.response(
-                    request, code=400,
-                    msg='content-range only with chunked uploads')
-        elif request.args.keys() != {'upload'} or (
-                request.args['upload'] != 'chunked'):
+        if req_upload is not None and req_upload != 'chunked':
             return self.response(request, code=400, msg='bad param: upload=')
-        elif request.args.get('upload', None) == 'chunked':
-            if request.data:
-                return self.response(
-                    request, code=400, msg='unimplemented metadata upload')
-            chunked = True
+        chunked = req_upload is not None and req_upload == 'chunked'
+        if not chunked and 'content-range' in request.headers:
+            return self.response(
+                request, code=400,
+                msg='content-range only with chunked uploads')
+        if chunked and int(request.headers.get('content-length', '0')) > 0:
+            return self.response(
+                request, code=400, msg='unimplemented metadata upload')
 
         logging.debug('RestHandler.create_blob before create')
 
@@ -448,22 +476,61 @@ class RestHandler(Handler):
                 tx_body=tx_body)) is None:
             return self.response(
                 request, code=500, msg='internal error creating blob')
-
+        self.blob = blob
         if not chunked:
             range_err, range = self._get_range(request)
             if range_err:
                 return range_err
-            rest_resp = self._put_blob(request, range, blob)
+            self.range = range
+            #rest_resp = self._put_blob(request, range, blob)
 
         blob_uri = make_blob_uri(
             self._tx_rest_id,
             blob=self._blob_rest_id if not tx_body else None,
             tx_body=tx_body)
-        resp = self.response(request, code=201,
+        return self.response(request, code=201,
                              headers=[('location', blob_uri)])
-        return resp
+
+    async def create_blob_async(
+            self, request : HttpRequest,
+            tx_body : bool,
+            req_upload : Optional[str] = None
+            ) -> HttpResponse:
+        logging.debug('RestHandler.create_blob_async')
+        cfut = self.executor.submit(
+            lambda: self._create_blob(
+                request, tx_body, req_upload=req_upload), 0)
+        if cfut is None:
+            return self.response(request, code=500, msg='failed to schedule')
+        fut = asyncio.wrap_future(cfut)
+        await fut
+        if fut.result() is not None:
+           return fut.result()
+        resp = await self._put_blob_async(request)
+        if resp is not None and resp.status_code != 200:
+            return resp
+
+        blob_uri = make_blob_uri(
+            self._tx_rest_id,
+            blob=self._blob_rest_id if not tx_body else None,
+            tx_body=tx_body)
+        return self.response(request, code=201,
+                             headers=[('location', blob_uri)])
 
     def put_blob(self, request : HttpRequest,
+                 blob_rest_id : Optional[str] = None,
+                 tx_body : bool = False) -> HttpResponse:
+        logging.debug('RestHandler.put_blob')
+        err = self._put_blob(request, blob_rest_id, tx_body)
+        if err:
+            return err
+        self.bytes_read = 0
+        while b := request.stream.read(self.CHUNK_SIZE):
+            logging.debug('RestHandler.put_blob chunk %d', len(b))
+            self._put_blob_chunk(request, b)
+        return self.response(request)
+
+    def _put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> HttpResponse:
         if blob_rest_id is not None:
@@ -473,6 +540,7 @@ class RestHandler(Handler):
         range_err, range = self._get_range(request)
         if range_err:
             return range_err
+        self.range = range
 
         blob = self.async_filter.get_blob_writer(
             create = False,
@@ -481,40 +549,81 @@ class RestHandler(Handler):
         if blob is None:
             return self.response(request, code=404, msg='unknown blob')
 
-        resp = self._put_blob(request, range, blob)
-        logging.debug('RestHandler.put_blob %s %s', resp, tx_body)
-        if resp.status_code != 200 or not tx_body:
-            return resp
+        self.blob = blob
 
-        return resp
+        return None
 
+    async def put_blob_async(
+            self, request : HttpRequest,
+            tx_body : bool = False,
+            blob_rest_id : Optional[str] = None) -> HttpResponse:
+        cfut = self.executor.submit(
+            lambda: self._put_blob(request, blob_rest_id, tx_body), 0)
+        if cfut is None:
+            return self.response(request, code=500, msg='failed to schedule')
+        fut = asyncio.wrap_future(cfut)
+        await fut
+        if fut.result() is not None:
+           return fut.result()
+        return await self._put_blob_async(request)
 
-    def _put_blob(self, request : HttpRequest, content_range : ContentRange,
-                  blob : WritableBlob) -> HttpResponse:
-        logging.debug('RestHandler._put_blob %s content-range: %s',
-                      self._blob_rest_id, content_range)
-        resp = FlaskResponse()
-        bytes_read = 0
+    async def _put_blob_async(
+            self, request : HttpRequest) -> HttpResponse:
+        logging.debug('RestHandler._put_blob_async')
+        b = bytes()
+        self.bytes_read = 0
+        async for chunk in request.stream():
+            while chunk:
+                to_go = self.CHUNK_SIZE - len(b)
+                count = min(to_go, len(chunk))
+                b += chunk[0:count]
+                if len(b) < self.CHUNK_SIZE:
+                    assert count == len(chunk)
+                    break
+                resp = await self._put_blob_chunk_async(request, b)
+                if resp is not None:
+                    return resp
+                b = bytes()
+                chunk = chunk[count:]
+        if b:
+            return await self._put_blob_chunk_async(request, b)
+
+    async def _put_blob_chunk_async(
+            self, request : HttpRequest, b : bytes
+    ) -> Optional[HttpResponse]:
+        cfut = self.executor.submit(
+            lambda: self._put_blob_chunk(request, b), 0)
+        if cfut is None:
+            return self.response(request, code=500, msg='failed to schedule')
+        fut = asyncio.wrap_future(cfut)
+        await fut
+        return fut.result()
+
+    def _put_blob_chunk(self, request : HttpRequest, b : bytes) -> HttpResponse:
+        logging.debug('RestHandler._put_blob_chunk %s content-range: %s %d',
+                      self._blob_rest_id, self.range, len(b))
+
         content_length = result_len = None
 
-        while b := request.stream.read(self.CHUNK_SIZE):
-            appended, result_len, content_length = blob.append_data(
-                content_range.start + bytes_read, b, content_range.length)
-            logging.debug(
-                'RestHandler._put_blob %s %s %d %s',
-                self._blob_rest_id, appended, result_len, content_length)
+        appended, result_len, content_length = self.blob.append_data(
+            self.range.start + self.bytes_read, b, self.range.length)
+        logging.debug(
+            'RestHandler._put_blob %s %s %d %s',
+            self._blob_rest_id, appended, result_len, content_length)
 
-            if not appended:
-                resp.status = 416
-                resp.response = ['invalid range']
-                break
-            bytes_read += len(b)
+        headers=[('content-range',
+                  ContentRange('bytes', 0, result_len, content_length))]
 
-        return self.response(
-            request,
-            resp_json={},
-            headers=[('content-range',
-                      ContentRange('bytes', 0, result_len, content_length))])
+        if not appended:
+            return self.response(
+                request,
+                code = 416,
+                msg = ['invalid range'],
+                headers=headers)
+
+        self.bytes_read += len(b)
+
+        return self.response(request, resp_json={}, headers=headers)
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
@@ -538,23 +647,28 @@ class EndpointFactory(ABC):
         pass
 
 class RestHandlerFactory(HandlerFactory):
+    executor : Executor
     endpoint_factory : EndpointFactory
     rest_id_factory : Callable[[], str]
 
-    def __init__(self, endpoint_factory,
+    def __init__(self, executor,
+                 endpoint_factory,
                  rest_id_factory : Callable[[], str]):
+        self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
 
     def create_tx(self, http_host) -> RestHandler:
         endpoint = self.endpoint_factory.create(http_host)
         return RestHandler(
+            self.executor,
             async_filter=endpoint,
             http_host=http_host,
             rest_id_factory=self.rest_id_factory)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
         return RestHandler(
+            self.executor,
             async_filter=self.endpoint_factory.get(tx_rest_id),
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory)

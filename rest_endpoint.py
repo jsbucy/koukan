@@ -175,9 +175,13 @@ class RestEndpoint(SyncFilter):
         logging.debug('RestEndpoint._cancel %s ', self.transaction_url)
         if not self.transaction_url:
             return
-        rest_resp = self.client.post(self.transaction_url + '/cancel')
-        logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
-                      rest_resp)
+        try:
+            rest_resp = self.client.post(self.transaction_url + '/cancel')
+        except RequestError as e:
+            logging.exception('RestEndpoint._cancel POST exception')
+        else:
+            logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
+                          rest_resp)
         return TransactionMetadata(cancelled=True)
 
     def on_update(self,

@@ -160,6 +160,7 @@ class Service:
 
         self.endpoint_factory = StorageWriterFactory(self)
         self.rest_handler_factory = RestHandlerFactory(
+            self.executor,
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.config.rest_id_factory())
 
@@ -168,7 +169,6 @@ class Service:
             self.cv.notify_all()
 
         #app = rest_service.create_app(self.rest_handler_factory)
-        #handler_factory)
         app = fastapi_service.create_app(self.rest_handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_hypercorn', False):

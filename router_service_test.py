@@ -270,6 +270,7 @@ class RouterServiceTest(unittest.TestCase):
 
     # simplest possible case: native rest/inline body -> upstream success
     def test_rest_smoke(self):
+        logging.debug('RouterServiceTest.test_rest_smoke')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='submission',
             timeout_start=5, timeout_data=5)
@@ -309,8 +310,50 @@ class RouterServiceTest(unittest.TestCase):
             'data_response': {'code': 203, 'message': 'ok'},
         })
 
+    def test_rest_body(self):
+        logging.debug('RouterServiceTest.test_rest_body')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = 'hello, world!'
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(body))
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+
+        tx_json = rest_endpoint.get_json()
+        logging.debug('RouterServiceTest.test_rest_smoke create %s',
+                      tx_json)
+        if 'attempt_count' in tx_json:
+            del tx_json['attempt_count']
+        self.assertEqual(tx_json, {
+            #'attempt_count': 1,
+            #'retry': {},
+            'mail_from': {},
+            'rcpt_to': [{}],
+            'body': {},
+            'mail_response': {'code': 201, 'message': 'ok'},
+            'rcpt_response': [{'code': 202, 'message': 'ok'}],
+            'data_response': {'code': 203, 'message': 'ok'},
+        })
+
 
     def test_reuse_body(self):
+        logging.debug('RouterServiceTest.test_reuse_body')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='submission',
             timeout_start=5, timeout_data=5)
@@ -378,7 +421,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_exploder_multi_rcpt(self):
-        logging.info('testExploderMultiRcpt')
+        logging.info('RouterServiceTest.test_exploder_multi_rcpt')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa',
             timeout_start=5, timeout_data=5)
@@ -465,7 +508,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_notification_retry_timeout(self):
-        logging.info('test_notification')
+        logging.info('RouterServiceTest.test_notification_retry_timeout')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
@@ -544,7 +587,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_notification_fast_perm(self):
-        logging.info('test_notification_fast_perm')
+        logging.info('RouterServiceTest.test_notification_fast_perm')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-msa')
 
@@ -623,6 +666,7 @@ class RouterServiceTest(unittest.TestCase):
     # message builder is a rest submission feature; first-class rest
     # never uses the exploder
     def test_message_builder(self):
+        logging.info('RouterServiceTest.test_message_builder')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='submission')
 
@@ -646,7 +690,8 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(tx, tx.copy(), 10)
 
-        blob = InlineBlob("hello, world!")
+        b = b"hello, world!"
+        blob = InlineBlob(b)
         blob_resp = rest_endpoint._put_blob(
             blob, testonly_non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
@@ -668,8 +713,10 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body(tx, tx_delta):
             body = tx.body_blob.read(0)
+            logging.debug('test_message_builder.exp_body')
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
+            #self.assertIn(b, body)  # base64
             updated_tx = tx.copy()
             updated_tx.data_response = Response(203)
             upstream_delta = tx.delta(updated_tx)
@@ -695,6 +742,9 @@ class RouterServiceTest(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail('data response')
+
+        return
+
 
         # send another tx with the same spec to exercise blob reuse
         logging.info('test_notification start tx #2')

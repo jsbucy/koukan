@@ -10,6 +10,7 @@ from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from smtp_service import service as smtp_service
 import rest_service
+import fastapi_service
 from rest_endpoint_adapter import (
     SyncFilterAdapter,
     EndpointFactory,
@@ -158,28 +159,32 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=service_yaml.get('data_timeout', data_timeout))
 
         self.adapter_factory = RestHandlerFactory(
-            self, self.rest_id_factory)
+            self.executor, endpoint_factory=self,
+            rest_id_factory=self.rest_id_factory)
 
-        flask_app=rest_service.create_app(self.adapter_factory)
+        #flask_app=rest_service.create_app(self.adapter_factory)
+        app = fastapi_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)
 
         if rest_listener_yaml.get('use_hypercorn', False):
+            self.hypercorn_shutdown = [None]
             hypercorn_main.run(
                 [rest_listener_yaml['addr']],
                 cert=cert, key=key,
-                app=flask_app)
+                app=app,
+                shutdown=self.hypercorn_shutdown)
         elif rest_listener_yaml.get('use_gunicorn', False):
             gunicorn_main.run(
                 [self.config.root_yaml['rest_listener']['addr']],
                 cert=cert, key=key,
-                app=flask_app)
+                app=app)
         else:
             listener_yaml = self.config.root_yaml['rest_listener']
             self.wsgi_server = make_server(
                 listener_yaml['addr'][0], listener_yaml['addr'][1],
-                flask_app)
+                app)
             self.wsgi_server.serve_forever()
 
 
