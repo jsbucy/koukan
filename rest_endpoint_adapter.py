@@ -284,6 +284,17 @@ class RestHandler(Handler):
                 headers=headers_dict)
         return FastApiResponse(status=code, content=msg, headers=headers_dict)
 
+    async def handle_async(self, request, fn) -> HttpResponse:
+        logging.debug('RestHandler.handle_async %s', request)
+        cfut = self.executor.submit(fn, 0)
+        if cfut is None:
+            return self.response(request, code=500, msg='failed to schedule')
+        fut = asyncio.wrap_future(cfut)
+        await fut
+        resp = fut.result()
+        logging.debug('RestHandler.handle_async %s', resp)
+        return resp
+
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], HttpResponse]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
@@ -308,7 +319,7 @@ class RestHandler(Handler):
         # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
         # TODO only accept smtp_meta from trusted peer i.e. the
         # well-known address of the gateway
-
+        logging.debug('RestHandler.create_tx %s %s', request, req_json)
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(request, code=400, msg='invalid request')
@@ -327,11 +338,13 @@ class RestHandler(Handler):
 
         tx.body = body
         del tx.body_blob
-        return self.response(
+        resp = self.response(
             request, code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', make_tx_uri(tx.rest_id))],
             etag=self._etag(self.async_filter.version()))
+        logging.debug('RestHandler.create_tx %s', resp)
+        return resp
 
     def get_tx(self, request : HttpRequest) -> HttpResponse:
         timeout, err = self._get_timeout(request)
@@ -504,7 +517,8 @@ class RestHandler(Handler):
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
-        if fut.result() is not None:
+        resp = fut.result()
+        if resp is None or resp.status_code != 201:
            return fut.result()
         resp = await self._put_blob_async(request)
         if resp is not None and resp.status_code != 200:

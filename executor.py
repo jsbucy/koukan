@@ -69,7 +69,7 @@ class Executor:
         this_thread = current_thread()
         self.inflight[this_thread] = int(time.monotonic())
         try:
-            fn()
+            return fn()
         except Exception:
             logging.exception('Executor._run() exception')
             raise

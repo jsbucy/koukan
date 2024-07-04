@@ -14,6 +14,11 @@ class ExecutorTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
+    def testReturn(self):
+        ex = Executor(1, 1)
+        fut = ex.submit(lambda: 3)
+        self.assertEqual(fut.result(), 3)
+
     def testDebugFutures(self):
         ex = Executor(1, 10, debug_futures=True)
         self.assertIsNotNone(ex.submit(raise_exception))

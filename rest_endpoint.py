@@ -126,11 +126,11 @@ class RestEndpoint(SyncFilter):
                     headers=req_headers,
                     timeout=deadline_left)
             except RequestError:
+                logging.exception('RestEndpoint._start')
                 return None
+            logging.info('RestEndpoint._start resp %s', rest_resp)
             if rest_resp.status_code != 201:
                 return rest_resp
-            logging.info('RestEndpoint._start resp %s %s',
-                         rest_resp, rest_resp.http_version)
             self.transaction_path = rest_resp.headers['location']
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])

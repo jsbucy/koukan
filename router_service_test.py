@@ -239,7 +239,7 @@ class RouterServiceTest(unittest.TestCase):
         # TODO this should verify that there are no open tx attempts in storage
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
-        self.executor.shutdown(timeout=5)
+        self.executor.shutdown(timeout=10)
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:
@@ -743,11 +743,8 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('data response')
 
-        return
-
-
         # send another tx with the same spec to exercise blob reuse
-        logging.info('test_notification start tx #2')
+        logging.info('RouterServiceTest.test_message_builder start tx #2')
         tx2 = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob2')],
