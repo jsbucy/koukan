@@ -266,9 +266,6 @@ py_test(name='executor_test',
         srcs=['executor_test.py'],
         deps=[':executor'])
 
-pytype_library(name='gunicorn_main',
-               srcs=['gunicorn_main.py'])
-
 pytype_library(name='hypercorn_main',
                srcs=['hypercorn_main.py'])
 
@@ -298,7 +295,6 @@ pytype_library(name='router_service',
                      ':rest_endpoint',
                      ':rest_service',
                      ':fastapi_service',
-                     ':gunicorn_main',
                      ':hypercorn_main',
                      ':rest_endpoint_adapter'])
 
@@ -377,7 +373,6 @@ pytype_library(name='gateway',
                      ':smtp_service',
                      ':rest_service',
                      ':fastapi_service',
-                     ':gunicorn_main',
                      ':hypercorn_main',
                      ':config'])
 

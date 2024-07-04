@@ -46,8 +46,6 @@ root_yaml = {
         'rest_id_entropy': 2
     },
     'rest_listener': {
-        'use_gunicorn': False,
-        'use_hypercorn': True,
     },
     'endpoint': [
         {

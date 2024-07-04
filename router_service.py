@@ -7,11 +7,8 @@ import os
 from functools import partial
 import asyncio
 
-from wsgiref.simple_server import make_server, WSGIServer
-
 import rest_service
 import fastapi_service
-import gunicorn_main
 import hypercorn_main
 
 from blob import InlineBlob
@@ -62,7 +59,6 @@ class Service:
     executor : Optional[Executor] = None
     owned_executor : Optional[Executor] = None
 
-    wsgi_server : Optional[WSGIServer] = None
     hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
     def __init__(self, config=None,
@@ -88,8 +84,6 @@ class Service:
         if self.owned_executor is not None:
             assert(self.owned_executor.shutdown(timeout=5))
 
-        if self.wsgi_server:
-            self.wsgi_server.shutdown()
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
             self.hypercorn_shutdown[0].set_result(True)
@@ -173,34 +167,13 @@ class Service:
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)
-        if listener_yaml.get('use_hypercorn', False):
-            self.hypercorn_shutdown = []
-            hypercorn_main.run(
-                [listener_yaml['addr']],
-                listener_yaml.get('cert', None),
-                listener_yaml.get('key', None),
-                app,
-                self.hypercorn_shutdown)
-            logging.debug('router service main hypercorn %s',
-                          self.hypercorn_shutdown)
-        elif listener_yaml.get('use_gunicorn', False):
-            raise NotImplementedError()
-            # XXX gunicorn always forks, need to get all our startup
-            # code into the worker e.g. post_worker_init() hook. May
-            # be possible to run gunicorn.workers.ThreadWorker
-            # directly?
-            gunicorn_main.run(
-                [listener_yaml['addr']],
-                listener_yaml.get('cert', None),
-                listener_yaml.get('key', None),
-                app)
-        else:
-            raise NotImplementedError()
-            self.wsgi_server = make_server(
-                listener_yaml['addr'][0],
-                listener_yaml['addr'][1],
-                app)
-            self.wsgi_server.serve_forever()
+        self.hypercorn_shutdown = []
+        hypercorn_main.run(
+            [listener_yaml['addr']],
+            listener_yaml.get('cert', None),
+            listener_yaml.get('key', None),
+            app,
+            self.hypercorn_shutdown)
 
     def create_storage_writer(self, http_host : str
                               ) -> Optional[StorageWriterFilter]:

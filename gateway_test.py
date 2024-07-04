@@ -18,7 +18,6 @@ root_yaml = {
     'global': {
     },
     'rest_listener': {
-        'use_hypercorn': True,
         'gc_interval': 1,
         'gc_tx_ttl': 1,
         'gc_blob_ttl': 1,

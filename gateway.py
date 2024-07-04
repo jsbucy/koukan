@@ -16,12 +16,10 @@ from rest_endpoint_adapter import (
     SyncFilterAdapter,
     EndpointFactory,
     RestHandlerFactory )
-import gunicorn_main
 import hypercorn_main
 from config import Config
 from executor import Executor
 
-from wsgiref.simple_server import make_server, WSGIServer
 
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SyncFilterAdapter]
@@ -30,7 +28,6 @@ class SmtpGateway(EndpointFactory):
     executor : Executor
     lock : Lock
     rest_id_factory : Optional[Callable[[], str]]
-    wsgi_server : Optional[WSGIServer] = None
     hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
     def __init__(self, config):
@@ -178,24 +175,12 @@ class SmtpGateway(EndpointFactory):
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)
 
-        if rest_listener_yaml.get('use_hypercorn', False):
-            self.hypercorn_shutdown = []
-            hypercorn_main.run(
-                [rest_listener_yaml['addr']],
-                cert=cert, key=key,
-                app=app,
-                shutdown=self.hypercorn_shutdown)
-        elif rest_listener_yaml.get('use_gunicorn', False):
-            gunicorn_main.run(
-                [self.config.root_yaml['rest_listener']['addr']],
-                cert=cert, key=key,
-                app=app)
-        else:
-            listener_yaml = self.config.root_yaml['rest_listener']
-            self.wsgi_server = make_server(
-                listener_yaml['addr'][0], listener_yaml['addr'][1],
-                app)
-            self.wsgi_server.serve_forever()
+        self.hypercorn_shutdown = []
+        hypercorn_main.run(
+            [rest_listener_yaml['addr']],
+            cert=cert, key=key,
+            app=app,
+            shutdown=self.hypercorn_shutdown)
 
 
 if __name__ == '__main__':
