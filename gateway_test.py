@@ -3,6 +3,7 @@ import logging
 import socketserver
 from threading import Thread
 import time
+from parameterized import parameterized_class
 
 from config import Config
 from gateway import SmtpGateway
@@ -17,7 +18,7 @@ root_yaml = {
     'global': {
     },
     'rest_listener': {
-        'use_gunicorn': False,
+        'use_hypercorn': True,
         'gc_interval': 1,
         'gc_tx_ttl': 1,
         'gc_blob_ttl': 1,
@@ -30,15 +31,14 @@ root_yaml = {
     }
 }
 
+@parameterized_class(('use_fastapi',), [(True,), (False,)])
 class GatewayTest(unittest.TestCase):
     def setUp(self):
         logging.info('GatewayTest.setUp')
 
-        #for p in ["rest_port", "router_port", "mx_port", "msa_port"]:
-        #    config_json[p] = self.find_unused_port()
-
         rest_port = self.find_unused_port()
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
+        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
 
         self.config = Config()
         self.config.inject_yaml(root_yaml)
@@ -82,7 +82,6 @@ class GatewayTest(unittest.TestCase):
     def tearDown(self):
         logging.info('GatewayTest.tearDown')
         self.gw.shutdown()
-        self.gw.wsgi_server.shutdown()
         self.service_thread.join()
         self.fake_smtpd.stop()
 
@@ -127,6 +126,7 @@ class GatewayTest(unittest.TestCase):
             time.sleep(1)
         else:
             self.fail('expected tx 404 after idle')
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

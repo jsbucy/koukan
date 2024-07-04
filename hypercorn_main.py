@@ -16,6 +16,6 @@ def run(bind : List[Tuple[str,int]], cert, key, app, shutdown):
         config.keyfile = key
     async def _run():
         fut = asyncio.get_running_loop().create_future()
-        shutdown[0] = fut
+        shutdown.append(fut)
         await serve(app, config, shutdown_trigger=lambda: fut)
     asyncio.run(_run())

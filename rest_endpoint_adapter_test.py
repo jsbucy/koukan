@@ -82,36 +82,39 @@ class RestHandlerTest(unittest.TestCase):
         endpoint.merge(tx)
 
         with app.test_request_context():
-            handler = RestHandler(endpoint, http_host='msa')
-            resp = handler.create_tx(FlaskRequest.from_values(json={}))
+            handler = RestHandler(async_filter=endpoint, http_host='msa')
+            resp = handler.create_tx(FlaskRequest.from_values(),
+                                     req_json={})
             self.assertEqual(resp.status, '201 CREATED')
             self.assertEqual(resp.json, {})
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
 
-            handler = RestHandler(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
-            resp = handler.patch_tx(FlaskRequest.from_values(
-                json={"mail_from": {"m": "alice"}},
-                headers={'if-match': resp.headers['etag'],
-                         'request-timeout': '1'}))
+            resp = handler.patch_tx(
+                FlaskRequest.from_values(
+                    headers={'if-match': resp.headers['etag'],
+                             'request-timeout': '1'}),
+                req_json={"mail_from": {"m": "alice"}})
             self.assertEqual(resp.status, '200 OK')
 
             endpoint.merge(
                 TransactionMetadata(mail_response=Response(201)))
-            handler = RestHandler(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
-            resp = handler.get_tx(FlaskRequest.from_values(json={}))
+            resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
 
-            handler = RestHandler(endpoint, tx_rest_id='rest_id',
+            handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
 
-            resp = handler.patch_tx(FlaskRequest.from_values(
-                json={"rcpt_to": [{"m": "bob"}]},
-                headers={'if-match': resp.headers['etag']}))
+            resp = handler.patch_tx(
+                FlaskRequest.from_values(
+                    headers={'if-match': resp.headers['etag']}),
+                req_json={"rcpt_to": [{"m": "bob"}]})
             self.assertEqual(resp.status, '200 OK')
             logging.debug('%s', resp.json)
             self.assertEqual(resp.json, {
@@ -122,7 +125,7 @@ class RestHandlerTest(unittest.TestCase):
 
             endpoint.merge(TransactionMetadata(rcpt_response=[Response(202)]))
 
-            resp = handler.get_tx(FlaskRequest.from_values(json={}))
+            resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'rcpt_to': [{}],
@@ -131,12 +134,13 @@ class RestHandlerTest(unittest.TestCase):
             })
 
 
-            handler = RestHandler(endpoint, tx_rest_id='rest_id',
-                                          http_host='msa')
-            resp = handler.patch_tx(FlaskRequest.from_values(
-                json={"rcpt_to": [{"m": "bob2"}],
-                      "rcpt_to_list_offset": 1},
-                headers={'if-match': resp.headers['etag']}))
+            handler = RestHandler(
+                async_filter=endpoint, tx_rest_id='rest_id', http_host='msa')
+            resp = handler.patch_tx(
+                FlaskRequest.from_values(
+                    headers={'if-match': resp.headers['etag']}),
+                req_json={"rcpt_to": [{"m": "bob2"}],
+                          "rcpt_to_list_offset": 1})
             self.assertEqual(resp.status, '200 OK')
             logging.debug('%s', resp.json)
             self.assertEqual(resp.json, {
@@ -153,7 +157,7 @@ class RestHandlerTest(unittest.TestCase):
             tx = updated
 
             endpoint.merge(delta)
-            resp = handler.get_tx(FlaskRequest.from_values(json={}))
+            resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
@@ -166,7 +170,7 @@ class RestHandlerTest(unittest.TestCase):
             body = b'hello, world!'
             endpoint.body_blob = InlineBlob(b'')
             handler = RestHandler(
-                endpoint,
+                async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='rest_id')
@@ -181,7 +185,7 @@ class RestHandlerTest(unittest.TestCase):
             endpoint.merge(TransactionMetadata(
                 body_blob=endpoint.body_blob,  # XXX
                 data_response=Response(204)))
-            resp = handler.get_tx(FlaskRequest.from_values(json={}))
+            resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
@@ -194,10 +198,10 @@ class RestHandlerTest(unittest.TestCase):
             tx_etag = resp.headers['etag']
 
 
-            handler = RestHandler(endpoint, tx_rest_id='rest_id',
-                                          http_host='msa')
+            handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
+                                  http_host='msa')
             endpoint.merge(TransactionMetadata(data_response=Response(204)))
-            resp = handler.get_tx(FlaskRequest.from_values(json={}))
+            resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.status, '200 OK')
             logging.debug('RestHandlerTest get %s', resp.json)
             self.assertEqual(resp.json, {
@@ -223,7 +227,7 @@ class RestHandlerTest(unittest.TestCase):
         with app.test_request_context():
             # content-range header is not accepted in non-chunked blob post
             handler = RestHandler(
-                endpoint,
+                async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='tx_rest_id')
@@ -235,30 +239,32 @@ class RestHandlerTest(unittest.TestCase):
             # POST ...blob...?upload=chunked may eventually take
             # json metadata as the entity but for now that's unimplemented
             handler = RestHandler(
-                endpoint,
+                async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='tx_rest_id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
                     query_string={'upload': 'chunked'},
-                    data='unimplemented params'))
+                    data='unimplemented params'),
+                req_upload='chunked')
             self.assertEqual(resp.status, '400 BAD REQUEST')
 
             endpoint.body_blob = InlineBlob(b'')
             handler = RestHandler(
-                endpoint,
+                async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
                 tx_rest_id='tx_rest_id')
             resp = handler.create_blob(
                 FlaskRequest.from_values(
-                    query_string={'upload': 'chunked'}))
+                    query_string={'upload': 'chunked'}),
+                req_upload='chunked')
             self.assertEqual(resp.status, '201 CREATED')
             self.assertNotIn('content-range', resp.headers)
 
             handler = RestHandler(
-                endpoint, blob_rest_id='blob-rest-id',
+                async_filter=endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 rest_id_factory = lambda: 'rest-id',
                 tx_rest_id='tx_rest_id')
@@ -266,14 +272,16 @@ class RestHandlerTest(unittest.TestCase):
             range = ContentRange('bytes', 0, len(b))
             resp = handler.put_blob(
                 FlaskRequest.from_values(
-                    data=b,
-                    headers={'content-range': range}))
+                    data=b,  # for content-length
+                    headers={'content-range': range}),
+                b)  # actually read from here
             self.assertEqual(resp.status, '200 OK')
-            self.assert_eq_content_range(resp.content_range,
-                                         ContentRange('bytes', 0, 7, None))
+            self.assert_eq_content_range(
+                resp.content_range,
+                ContentRange('bytes', 0, 7, None))
 
             handler = RestHandler(
-                endpoint, blob_rest_id='blob-rest-id',
+                async_filter=endpoint, blob_rest_id='blob-rest-id',
                 http_host='msa',
                 rest_id_factory = lambda: 'rest-id',
                 tx_rest_id='tx_rest_id')
@@ -282,8 +290,9 @@ class RestHandlerTest(unittest.TestCase):
                                  len(b) + len(b2))
             resp = handler.put_blob(
                 FlaskRequest.from_values(
-                    data=b2,
-                    headers={'content-range': range}))
+                    data=b2,  # for content-length
+                    headers={'content-range': range}),
+                b2)  # actually read from here
             self.assertEqual(resp.status, '200 OK')
             self.assert_eq_content_range(resp.content_range,
                                          ContentRange('bytes', 0, 13, 13))

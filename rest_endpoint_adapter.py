@@ -218,7 +218,7 @@ MAX_TIMEOUT=30
 
 class RestHandler(Handler):
     CHUNK_SIZE = 1048576
-    executor : Executor
+    executor : Optional[Executor] = None
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
 
@@ -232,7 +232,7 @@ class RestHandler(Handler):
     bytes_read : Optional[int] = None
 
     def __init__(self,
-                 executor : Executor,
+                 executor : Optional[Executor] = None,
                  async_filter : Optional[AsyncFilter] = None,
                  tx_rest_id=None,
                  blob_rest_id=None,
@@ -256,8 +256,6 @@ class RestHandler(Handler):
                  etag : Optional[str] = None
                  ) -> HttpResponse:
         if isinstance(req, FlaskRequest):
-            #if json is not None:
-            #    return jsonify(json)
             resp = FlaskResponse(status=code)
             if etag:
                 resp.set_etag(etag)
@@ -534,15 +532,17 @@ class RestHandler(Handler):
     def put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> HttpResponse:
-        logging.debug('RestHandler.put_blob')
+        logging.debug('RestHandler.put_blob %s', request.headers)
         err = self._put_blob(request, blob_rest_id, tx_body)
         if err:
             return err
         self.bytes_read = 0
         while b := request.stream.read(self.CHUNK_SIZE):
             logging.debug('RestHandler.put_blob chunk %d', len(b))
-            self._put_blob_chunk(request, b)
-        return self.response(request)
+            resp = self._put_blob_chunk(request, b)
+            if resp.status_code != 200:
+                return resp
+        return resp
 
     def _put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
@@ -622,7 +622,7 @@ class RestHandler(Handler):
         appended, result_len, content_length = self.blob.append_data(
             self.range.start + self.bytes_read, b, self.range.length)
         logging.debug(
-            'RestHandler._put_blob %s %s %d %s',
+            'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
 
         headers=[('content-range',
@@ -632,7 +632,7 @@ class RestHandler(Handler):
             return self.response(
                 request,
                 code = 416,
-                msg = ['invalid range'],
+                msg = 'invalid range',
                 headers=headers)
 
         self.bytes_read += len(b)

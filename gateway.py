@@ -1,10 +1,11 @@
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 import sys
 import logging
 from threading import Thread
 import time
 import secrets
 from threading import Lock
+import asyncio
 
 from rest_endpoint import RestEndpoint
 from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
@@ -20,7 +21,7 @@ import hypercorn_main
 from config import Config
 from executor import Executor
 
-from wsgiref.simple_server import make_server
+from wsgiref.simple_server import make_server, WSGIServer
 
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SyncFilterAdapter]
@@ -29,6 +30,8 @@ class SmtpGateway(EndpointFactory):
     executor : Executor
     lock : Lock
     rest_id_factory : Optional[Callable[[], str]]
+    wsgi_server : Optional[WSGIServer] = None
+    hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
     def __init__(self, config):
         self.config = config
@@ -57,6 +60,10 @@ class SmtpGateway(EndpointFactory):
             rest_yaml.get('rest_id_entropy', 16))
 
     def shutdown(self):
+        if self.hypercorn_shutdown:
+            logging.debug('SmtpGateway hypercorn shutdown')
+            self.hypercorn_shutdown[0].set_result(True)
+
         if self.gc_thread:
             self.shutdown_gc = True
             self.gc_thread.join()
@@ -162,14 +169,17 @@ class SmtpGateway(EndpointFactory):
             self.executor, endpoint_factory=self,
             rest_id_factory=self.rest_id_factory)
 
-        #flask_app=rest_service.create_app(self.adapter_factory)
-        app = fastapi_service.create_app(self.adapter_factory)
         rest_listener_yaml = self.config.root_yaml['rest_listener']
+        if rest_listener_yaml['use_fastapi']:
+            app = fastapi_service.create_app(self.adapter_factory)
+        else:
+            app=rest_service.create_app(self.adapter_factory)
+
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)
 
         if rest_listener_yaml.get('use_hypercorn', False):
-            self.hypercorn_shutdown = [None]
+            self.hypercorn_shutdown = []
             hypercorn_main.run(
                 [rest_listener_yaml['addr']],
                 cert=cert, key=key,

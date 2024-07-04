@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from abc import ABC, abstractmethod
 
@@ -15,7 +15,8 @@ HttpResponse = Union[FlaskResponse, FastApiResponse]
 
 class Handler(ABC):
     @abstractmethod
-    def create_tx(self, request : HttpRequest) -> HttpResponse:
+    def create_tx(self, request : HttpRequest, req_json: dict
+                  ) -> HttpResponse:
         pass
 
     @abstractmethod
@@ -24,12 +25,14 @@ class Handler(ABC):
 
     @abstractmethod
     def patch_tx(self, request : HttpRequest,
+                 req_json : dict,
                  message_builder : bool = False) -> HttpResponse:
         pass
 
     @abstractmethod
     def create_blob(self, request : HttpRequest,
-                    tx_body : bool = False
+                    tx_body : bool = False,
+                    req_upload : Optional[str] = None
                     ) -> HttpResponse:
         pass
 
@@ -37,6 +40,14 @@ class Handler(ABC):
     def put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> HttpResponse:
+        pass
+
+    @abstractmethod
+    async def create_blob_async(
+            self, request : HttpRequest,
+            tx_body : bool = False,
+            req_upload : Optional[str] = None
+    ) -> HttpResponse:
         pass
 
     @abstractmethod
@@ -48,6 +59,11 @@ class Handler(ABC):
 
     @abstractmethod
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
+        pass
+
+    @abstractmethod
+    async def handle_async(self, request : HttpRequest, fn : Callable
+                           ) -> HttpResponse:
         pass
 
 # These are called early in the request lifecycle i.e. at the

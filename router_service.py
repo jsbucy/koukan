@@ -7,7 +7,7 @@ import os
 from functools import partial
 import asyncio
 
-from wsgiref.simple_server import make_server
+from wsgiref.simple_server import make_server, WSGIServer
 
 import rest_service
 import fastapi_service
@@ -62,7 +62,7 @@ class Service:
     executor : Optional[Executor] = None
     owned_executor : Optional[Executor] = None
 
-    wsgi_server : Optional[object] = None
+    wsgi_server : Optional[WSGIServer] = None
     hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
     def __init__(self, config=None,
@@ -168,11 +168,13 @@ class Service:
             self.started = True
             self.cv.notify_all()
 
-        #app = rest_service.create_app(self.rest_handler_factory)
-        app = fastapi_service.create_app(self.rest_handler_factory)
         listener_yaml = self.config.root_yaml['rest_listener']
+        if listener_yaml['use_fastapi']:
+            app = fastapi_service.create_app(self.rest_handler_factory)
+        else:
+            app = rest_service.create_app(self.rest_handler_factory)
         if listener_yaml.get('use_hypercorn', False):
-            self.hypercorn_shutdown = [None]
+            self.hypercorn_shutdown = []
             hypercorn_main.run(
                 [listener_yaml['addr']],
                 listener_yaml.get('cert', None),

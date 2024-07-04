@@ -27,7 +27,6 @@ from filter import (
 from executor import Executor
 
 
-
 def setUpModule():
     global pg_factory
     pg_factory = testing.postgresql.PostgresqlFactory(cache_initialized_db=True)
@@ -190,6 +189,7 @@ class RouterServiceTest(unittest.TestCase):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             self.port = s.server_address[1]
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
+        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
         self.router_url = 'http://localhost:%d' % self.port
         self.endpoints = []
         self.config = Config(executor=self.executor)
@@ -775,6 +775,13 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(tx2, tx2.copy(), 10)
 
+
+class RouterServiceTestFlask(RouterServiceTest):
+    use_fastapi = False
+
+
+class RouterServiceTestFastApi(RouterServiceTest):
+    use_fastapi = True
 
 
 if __name__ == '__main__':
