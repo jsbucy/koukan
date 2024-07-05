@@ -98,10 +98,11 @@ class SmtpHandler:
     def _cancel(self):
         if self.endpoint is None or self.tx is None:
             return
-        fut = self.executor.submit(
-            partial(self._update_tx,
-                    self.cx_id, self.endpoint, self.tx,
-                    TransactionMetadata(cancelled=True)), timeout=0)
+        if self.tx is not None:
+            fut = self.executor.submit(
+                partial(self._update_tx,
+                        self.cx_id, self.endpoint, self.tx,
+                        TransactionMetadata(cancelled=True)), timeout=0)
         #await asyncio.wait([asyncio.wrap_future(fut)],
         #                   timeout=self.timeout_rcpt)
         self.endpoint = self.tx = None
@@ -220,8 +221,9 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_DATA %s resp %s',
                      self.cx_id, self.tx.data_response)
 
-        return self.tx.data_response.to_smtp_resp()
-
+        data_resp = self.tx.data_response.to_smtp_resp()
+        self.tx = None
+        return data_resp
 
 class ControllerTls(Controller):
     def __init__(self, host, port, ssl_context, auth,
