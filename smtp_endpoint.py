@@ -7,6 +7,7 @@ import time
 from blob import Blob
 from response import Response, Esmtp
 from filter import (
+    EsmtpParam,
     HostPort,
     SyncFilter,
     TransactionMetadata )
@@ -19,6 +20,7 @@ class Factory:
         return SmtpEndpoint(ehlo_hostname)
 
 class SmtpEndpoint(SyncFilter):
+    MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
 
@@ -97,6 +99,29 @@ class SmtpEndpoint(SyncFilter):
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
+    def _check_esmtp(self, params : List[EsmtpParam]) -> Optional[Response]:
+        for i,e in enumerate(params):
+            if e.keyword.lower() == 'body':
+                if not self.smtp.has_extn(e.value):
+                    return Response(504, 'body=%s and not advertised', e.value)
+            elif e.keyword.lower() == 'size':
+                req_size = int(e.value)
+                if not self.smtp.has_extn('size'):
+                    if req_size > MAX_WITHOUT_SIZE:
+                        return Response(
+                            504, 'size=%d, not advertised upstream ' % req_size)
+                    del params[i]
+                    continue
+                server_size = int(self.smtp.esmtp_features['size'])
+                if req_size > server_size:
+                    return Response(
+                        504, 'size=%d > upstream %d ' % (req_size, server_size))
+            elif not self.smtp.has_extn(e.keyword):
+                return Response(
+                    504, 'smtp_endpoint: MAIL esmtp param not advertised '
+                    'by peer: %s' % e.keyword)
+        return None
+
     def _update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
@@ -110,12 +135,8 @@ class SmtpEndpoint(SyncFilter):
                 self._shutdown()
                 return
             assert self.smtp is not None
-            for e in tx_delta.mail_from.esmtp:
-                if not self.smtp.has_extn(e.keyword):
-                    upstream_delta.mail_response = Response(
-                        504, 'smtp_endpoint: MAIL esmtp param not advertised '
-                        'by peer: %s' % e.keyword)
-                    break
+            if err := self._check_esmtp(tx_delta.mail_from.esmtp):
+                upstream_delta.mail_response = err
             else:
                 mailbox = tx_delta.mail_from.mailbox
                 esmtp = [e.to_str() for e in tx_delta.mail_from.esmtp]
@@ -132,22 +153,16 @@ class SmtpEndpoint(SyncFilter):
 
         for rcpt in tx_delta.rcpt_to:
             bad_ext = None
-            for e in rcpt.esmtp:
-                if not self.smtp.has_extn(e.keyword):
-                    bad_ext = e
-                    break
-            if bad_ext is not None:
-                upstream_delta.rcpt_response.append(Response(
-                    504, 'smtp_endpoint: RCPT esmtp param not advertised '
-                    'by peer: %s' % bad_ext.keyword))
-                continue
 
-            esmtp = [e.to_str() for e in rcpt.esmtp]
-            logging.debug('SmtpEndpoint %s RCPT TO %s %s',
-                          tx.rest_id, rcpt.mailbox, esmtp)
-            resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox, esmtp))
-            logging.debug('SmtpEndpoint %s rcpt resp %s',
-                          tx.rest_id, resp)
+            if err := self._check_esmtp(rcpt.esmtp):
+                upstream_delta.rcpt_response.append(err)
+                continue
+            else:
+                esmtp = [e.to_str() for e in rcpt.esmtp]
+                logging.debug('SmtpEndpoint %s RCPT TO %s %s',
+                              tx.rest_id, rcpt.mailbox, esmtp)
+                resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox, esmtp))
+            logging.debug('SmtpEndpoint %s rcpt resp %s', tx.rest_id, resp)
             if resp.ok():
                 self.good_rcpt = True
             upstream_delta.rcpt_response.append(resp)
