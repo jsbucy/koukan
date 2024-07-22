@@ -24,7 +24,9 @@ import werkzeug.http
 from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
-from fastapi.responses import JSONResponse as FastApiJsonResponse
+from fastapi.responses import (
+    JSONResponse as FastApiJsonResponse,
+    PlainTextResponse )
 
 HttpRequest = Union[FlaskRequest, FastApiRequest]
 HttpResponse = Union[FlaskResponse, FastApiResponse]
@@ -262,7 +264,7 @@ class RestHandler(Handler):
             if headers:
                 for k,v in headers:
                     resp.headers.set(k,v)
-            if json is not None:
+            if resp_json is not None:
                 resp.content_type = 'application/json'
                 resp.set_data(json.dumps(resp_json))
             if msg is not None:
@@ -275,22 +277,24 @@ class RestHandler(Handler):
             headers_dict.update({k:str(v) for k,v in headers})
         if etag is not None:
             headers_dict['etag'] = etag
-        if json is not None:
+        if resp_json is not None:
             return FastApiJsonResponse(
                 status_code=code,
                 content=resp_json,
                 headers=headers_dict)
-        return FastApiResponse(status=code, content=msg, headers=headers_dict)
+        return PlainTextResponse(
+            status_code=code, content=msg, headers=headers_dict)
 
-    async def handle_async(self, request, fn) -> HttpResponse:
-        logging.debug('RestHandler.handle_async %s', request)
+    async def handle_async(self, request : FastApiRequest, fn
+                           ) -> FastApiResponse:
+        logging.debug('RestHandler.handle_async req %s', request)
         cfut = self.executor.submit(fn, 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         resp = fut.result()
-        logging.debug('RestHandler.handle_async %s', resp)
+        logging.debug('RestHandler.handle_async resp %s', resp)
         return resp
 
     def _get_timeout(self, req : HttpRequest
@@ -372,7 +376,7 @@ class RestHandler(Handler):
                  req_json : dict,
                  message_builder : bool = False
                  ) -> HttpResponse:
-        logging.debug('RestHandler.patch %s %s',
+        logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
         timeout, err = self._get_timeout(request)
         if err is not None:
@@ -387,8 +391,6 @@ class RestHandler(Handler):
         if downstream_delta is None:
             return self.response(request, code=400, msg='invalid request')
         body = downstream_delta.body
-        if err is not None:
-            return err
         req_etag = request.headers.get('if-match', None)
         if req_etag is None:
             return self.response(
@@ -503,10 +505,10 @@ class RestHandler(Handler):
                              headers=[('location', blob_uri)])
 
     async def create_blob_async(
-            self, request : HttpRequest,
-            tx_body : bool,
+            self, request : FastApiRequest,
+            tx_body : bool = False,
             req_upload : Optional[str] = None
-            ) -> HttpResponse:
+            ) -> FastApiResponse:
         logging.debug('RestHandler.create_blob_async')
         cfut = self.executor.submit(
             lambda: self._create_blob(
@@ -518,9 +520,10 @@ class RestHandler(Handler):
         resp = fut.result()
         if resp is None or resp.status_code != 201:
            return fut.result()
-        resp = await self._put_blob_async(request)
-        if resp is not None and resp.status_code != 200:
-            return resp
+        if req_upload is None:
+            resp = await self._put_blob_async(request)
+            if resp is not None and resp.status_code != 200:
+                return resp
 
         blob_uri = make_blob_uri(
             self._tx_rest_id,
@@ -568,9 +571,9 @@ class RestHandler(Handler):
         return None
 
     async def put_blob_async(
-            self, request : HttpRequest,
+            self, request : FastApiRequest,
             tx_body : bool = False,
-            blob_rest_id : Optional[str] = None) -> HttpResponse:
+            blob_rest_id : Optional[str] = None) -> FastApiResponse:
         cfut = self.executor.submit(
             lambda: self._put_blob(request, blob_rest_id, tx_body), 0)
         if cfut is None:
@@ -582,7 +585,7 @@ class RestHandler(Handler):
         return await self._put_blob_async(request)
 
     async def _put_blob_async(
-            self, request : HttpRequest) -> HttpResponse:
+            self, request : FastApiRequest) -> FastApiResponse:
         logging.debug('RestHandler._put_blob_async')
         b = bytes()
         self.bytes_read = 0
@@ -603,8 +606,8 @@ class RestHandler(Handler):
             return await self._put_blob_chunk_async(request, b)
 
     async def _put_blob_chunk_async(
-            self, request : HttpRequest, b : bytes
-    ) -> Optional[HttpResponse]:
+            self, request : FastApiRequest, b : bytes
+    ) -> Optional[FastApiResponse]:
         cfut = self.executor.submit(
             lambda: self._put_blob_chunk(request, b), 0)
         if cfut is None:

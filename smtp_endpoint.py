@@ -103,11 +103,11 @@ class SmtpEndpoint(SyncFilter):
         for i,e in enumerate(params):
             if e.keyword.lower() == 'body':
                 if not self.smtp.has_extn(e.value):
-                    return Response(504, 'body=%s and not advertised', e.value)
+                    return Response(504, 'body=%s and not advertised' % e.value)
             elif e.keyword.lower() == 'size':
                 req_size = int(e.value)
                 if not self.smtp.has_extn('size'):
-                    if req_size > MAX_WITHOUT_SIZE:
+                    if req_size > SmtpEndpoint.MAX_WITHOUT_SIZE:
                         return Response(
                             504, 'size=%d, not advertised upstream ' % req_size)
                     del params[i]

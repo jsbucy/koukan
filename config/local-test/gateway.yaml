@@ -1,7 +1,5 @@
 # rest -> smtp
 rest_listener:
-  #use_gunicorn: true
-  use_hypercorn: true
   use_fastapi: true
   addr: ["[::0]", 8001]
   cert: localhost.crt

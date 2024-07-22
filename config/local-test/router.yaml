@@ -8,8 +8,6 @@ global:
   rest_id_entropy: 4
 
 rest_listener:
-  # use_gunicorn: false
-  use_hypercorn: true
   use_fastapi: true
   addr: ["127.0.0.1", 8000]
   cert: localhost.crt
