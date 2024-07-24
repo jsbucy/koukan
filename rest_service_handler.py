@@ -20,13 +20,30 @@ class Handler(ABC):
         pass
 
     @abstractmethod
+    async def create_tx_async(self, request : HttpRequest, req_json : dict
+                              ) -> Optional[HttpResponse]:
+        pass
+
+    @abstractmethod
     def get_tx(self, request : HttpRequest) -> HttpResponse:
+        pass
+
+    @abstractmethod
+    async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
         pass
 
     @abstractmethod
     def patch_tx(self, request : HttpRequest,
                  req_json : dict,
                  message_builder : bool = False) -> HttpResponse:
+        pass
+
+    @abstractmethod
+    async def patch_tx_async(
+            self, request : HttpRequest,
+            req_json : dict,
+            message_builder : bool = False
+    ) -> HttpResponse:
         pass
 
     @abstractmethod

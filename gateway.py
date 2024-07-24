@@ -167,7 +167,7 @@ class SmtpGateway(EndpointFactory):
             rest_id_factory=self.rest_id_factory)
 
         rest_listener_yaml = self.config.root_yaml['rest_listener']
-        if rest_listener_yaml['use_fastapi']:
+        if rest_listener_yaml.get('use_fastapi', False):
             app = fastapi_service.create_app(self.adapter_factory)
         else:
             app=rest_service.create_app(self.adapter_factory)

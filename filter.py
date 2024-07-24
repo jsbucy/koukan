@@ -659,8 +659,12 @@ class AsyncFilter(ABC):
     ) -> Optional[WritableBlob]:
         pass
 
-
     # returns a "cached" value from the last get/update
     @abstractmethod
     def version(self) -> int:
+        pass
+
+    # wait until the version changed from the last get()
+    @abstractmethod
+    async def wait_async(self, timeout) -> bool:
         pass

@@ -50,11 +50,15 @@ pytype_library(name='rest_service_handler',
 pytype_library(name='storage_schema',
                srcs=['storage_schema.py'])
 
+pytype_library(name='version_cache',
+                srcs=['version_cache.py'])
+        
 pytype_library(name='storage',
                srcs=['storage.py'],
                data=['init_storage.sql',
                      'init_storage_postgres.sql'],
                deps=[':storage_schema',
+                     ':version_cache',
                      ':blob',
                      ':response',
                      ':filter'])
@@ -64,21 +68,24 @@ py_test(name='storage_test_sqlite',
         main='storage_test.py',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
-        deps=[':storage'])
+        deps=[':storage',
+              ':version_cache'])
 
 py_test(name='storage_test_sqlite_inmemory',
         args=['StorageTestSqliteInMemory'],
         main='storage_test.py',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
-        deps=[':storage'])
+        deps=[':storage',
+              ':version_cache'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
         main='storage_test.py',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
-        deps=[':storage'])
+        deps=[':storage',
+              ':version_cache'])
 
 pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
@@ -96,19 +103,24 @@ py_test(name='dsn_test',
 
 pytype_library(name='output_handler',
                srcs=['output_handler.py'],
-               deps=['rest_service_handler',
-                     'filter',
-                     'response',
-                     'storage',
-                     'storage_schema',
-                     'message_builder',
+               deps=[':rest_service_handler',
+                     ':filter',
+                     ':response',
+                     ':storage',
+                     ':version_cache',
+                     ':storage_schema',
+                     ':message_builder',
                      ':dsn'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
         deps=[':output_handler',
               ':executor',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              ':response',
+              ':storage',
+              ':storage_schema',
+              ':version_cache'])
 
 pytype_library(name='message_builder',
                srcs=['message_builder.py'],
@@ -133,7 +145,8 @@ py_test(name='message_builder_filter_test',
               ':filter',
               ':message_builder_filter',
               ':response',
-              ':storage'])
+              ':storage',
+              ':version_cache'])
 
 
 pytype_library(name='address',
@@ -181,6 +194,7 @@ pytype_library(name='storage_writer_filter',
                      ':deadline',
                      ':message_builder',
                      ':storage',
+                     ':version_cache',
                      ':storage_schema',
                      ':filter',
                      ':response',
@@ -189,11 +203,12 @@ pytype_library(name='storage_writer_filter',
 py_test(name='storage_writer_filter_test',
         srcs=['storage_writer_filter_test.py'],
         deps=[':storage_writer_filter',
-              'blob',
-              'filter',
-              'fake_endpoints',
-              'response',
-              'storage'])
+              ':blob',
+              ':filter',
+              ':fake_endpoints',
+              ':response',
+              ':storage',
+              ':version_cache'])
 
 pytype_library(name='exploder',
                srcs=['exploder.py'],
@@ -212,7 +227,8 @@ py_test(name='exploder_test',
               ':blob',
               ':filter',
               ':response',
-              ':storage'])
+              ':storage',
+              ':version_cache'])
 
 pytype_library(name='remote_host_filter',
                srcs=['remote_host_filter.py'],
@@ -245,6 +261,7 @@ py_test(name='relay_auth_filter_test',
 pytype_library(name='config',
                srcs=['config.py'],
                deps=[':storage',
+                     ':version_cache',
                      ':filter',
                      ':filter_adapters',
                      ':rest_endpoint',
@@ -286,6 +303,7 @@ py_test(name='rest_schema_test',
 pytype_library(name='router_service',
                srcs=['router_service.py'],
                deps=[':storage',
+                     ':version_cache',
                      ':storage_schema',
                      ':output_handler',
                      ':response',
@@ -349,7 +367,8 @@ pytype_library(name='rest_endpoint_adapter',
                      ':response',
                      ':rest_schema',
                      ':rest_service',
-                     ':rest_service_handler'])
+                     ':rest_service_handler',
+                     ':version_cache'])
 
 py_test(name='rest_endpoint_adapter_test',
         srcs=['rest_endpoint_adapter_test.py'],

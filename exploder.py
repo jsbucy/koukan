@@ -390,9 +390,9 @@ class Exploder(SyncFilter):
             if not ri.mail_response.ok() or not ri.rcpt_response.ok():
                 continue
             si = ri.status
-            if si is None != s0 is None:
+            if (si is None) != (s0 is None):
                 return None
-            if s0 is not None and s0.major_code() != si.major_code():
+            if (s0 is not None) and (s0.major_code() != si.major_code()):
                 return None
         else:
             if s0 is not None:

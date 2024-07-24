@@ -7,6 +7,7 @@ from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
 
 from storage import Storage, TransactionCursor
+from version_cache import IdVersionMap
 from storage_schema import VersionConflictException
 from response import Response
 from output_handler import OutputHandler
@@ -18,8 +19,8 @@ class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.version_cache = IdVersionMap()
+        self.storage = Storage.get_sqlite_inmemory_for_test(self.version_cache)
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
 
     def tearDown(self):
@@ -34,6 +35,7 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertEqual(tx_cursor.rest_id, rest_id)
         handler = OutputHandler(tx_cursor, endpoint,
+                                self.version_cache,
                                 downstream_env_timeout=1,
                                 downstream_data_timeout=1)
         handler.handle()
@@ -78,6 +80,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(tx_cursor, endpoint,
+                                self.version_cache,
                                 downstream_env_timeout=1,
                                 downstream_data_timeout=1)
         handler.handle()
@@ -129,6 +132,7 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertIsNotNone(tx_cursor)
             self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
             handler = OutputHandler(tx_cursor, endpoint,
+                                    self.version_cache,
                                     downstream_env_timeout=1,
                                     downstream_data_timeout=1)
             handler.handle()
@@ -311,6 +315,7 @@ class OutputHandlerTest(unittest.TestCase):
                         'min_attempt_time': 0}
         handler = OutputHandler(
             reader, endpoint,
+            self.version_cache,
             downstream_env_timeout=1,
             downstream_data_timeout=1,
             retry_params=retry_params)
@@ -331,6 +336,7 @@ class OutputHandlerTest(unittest.TestCase):
         retry_params = {}
         handler = OutputHandler(
             tx_cursor, endpoint=None,
+            version_cache=self.version_cache,
             notification_factory=None,
             retry_params=retry_params)
 
@@ -417,6 +423,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
+            self.version_cache,
             notification_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
@@ -472,6 +479,7 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         handler = OutputHandler(
             tx_cursor, endpoint,
+            self.version_cache,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
             downstream_data_timeout=1)
@@ -497,6 +505,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         handler = OutputHandler(
             tx_cursor, endpoint,
+            self.version_cache,
             notification_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,

@@ -4,7 +4,12 @@ import time
 import faulthandler
 import sys
 
-from threading import Lock, Condition, Thread, current_thread, BoundedSemaphore
+from threading import (
+    Lock,
+    Condition,
+    Thread,
+    current_thread,
+    BoundedSemaphore )
 from concurrent.futures import Future, ThreadPoolExecutor
 
 # wrapper for ThreadPoolExecutor

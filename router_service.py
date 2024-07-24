@@ -25,6 +25,7 @@ from filter import AsyncFilter, SyncFilter
 
 from storage_writer_filter import StorageWriterFilter
 from storage_schema import VersionConflictException
+from version_cache import IdVersionMap
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
@@ -40,6 +41,7 @@ class Service:
     lock : Lock
     cv : Condition
     storage : Optional[Storage] = None
+    version_cache : IdVersionMap
     last_gc = 0
 
     rest_handler_factory : Optional[RestHandlerFactory] = None
@@ -72,6 +74,7 @@ class Service:
         if self.config:
             self.config.storage_writer_factory = partial(
                 self.create_storage_writer, None)
+        self.version_cache = IdVersionMap()
 
     def shutdown(self):
         logging.info("router_service shutdown()")
@@ -116,9 +119,11 @@ class Service:
         engine = storage_yaml.get('engine', None)
         if engine == 'sqlite_memory':
             logging.warning("*** using in-memory/non-durable storage")
-            self.storage = Storage.get_sqlite_inmemory_for_test()
+            self.storage = Storage.get_sqlite_inmemory_for_test(
+                self.version_cache)
         elif engine == 'sqlite':
             self.storage = Storage.connect_sqlite(
+                self.version_cache,
                 storage_yaml['sqlite_db_filename'])
         elif engine == 'postgres':
             args = {}
@@ -131,10 +136,11 @@ class Service:
                     args[v] = storage_yaml[k]
             if 'db_user' not in args:
                 args['db_user'] = os.getlogin()
-            self.storage = Storage.connect_postgres(**args)
+            self.storage = Storage.connect_postgres(self.version_cache, **args)
 
         self.storage.recover()
 
+        self.config.set_version_cache(self.version_cache)
         self.config.set_storage(self.storage)
 
         # TODO storage should manage this internally?
@@ -163,7 +169,7 @@ class Service:
             self.cv.notify_all()
 
         listener_yaml = self.config.root_yaml['rest_listener']
-        if listener_yaml['use_fastapi']:
+        if listener_yaml.get('use_fastapi', False):
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)
@@ -180,7 +186,8 @@ class Service:
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.config.rest_id_factory(),
-            create_leased=True)
+            create_leased=True,
+            version_cache=self.version_cache)
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer))
         if fut is None:
@@ -191,7 +198,8 @@ class Service:
                            ) -> Optional[StorageWriterFilter]:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.config.rest_id_factory())
+            rest_id_factory=self.config.rest_id_factory(),
+            version_cache=self.version_cache)
 
     def _handle_new_tx(self, writer : StorageWriterFilter):
         tx_rest_id = writer.get_rest_id()
@@ -219,13 +227,13 @@ class Service:
             notification_factory=lambda: self.config.notification_endpoint(),
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
-            retry_params = output_yaml.get('retry_params', {}))
+            retry_params = output_yaml.get('retry_params', {}),
+            version_cache=self.version_cache)
         handler.handle()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
-        #self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         try:
             storage_tx = self.storage.load_one()
         except VersionConflictException:

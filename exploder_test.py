@@ -7,6 +7,7 @@ import time
 
 from deadline import Deadline
 from storage import Storage, TransactionCursor
+from version_cache import IdVersionMap
 from response import Response
 from fake_endpoints import FakeAsyncEndpoint
 from filter import Mailbox, TransactionMetadata
@@ -357,8 +358,8 @@ class ExploderTest(unittest.TestCase):
 
         self.mu = Lock()
         self.cv = Condition(self.mu)
-
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.version_cache = IdVersionMap
+        self.storage = Storage.get_sqlite_inmemory_for_test(self.version_cache)
         self.upstream_endpoints = []
 
     def tearDown(self):

@@ -66,6 +66,9 @@ class FakeAsyncEndpoint(AsyncFilter):
     def version(self):
         return self._version
 
+    async def wait_async(self, timeout) -> bool:
+        raise NotImplementedError()
+
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],
                        Optional[TransactionMetadata]]

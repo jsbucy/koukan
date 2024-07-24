@@ -6,6 +6,7 @@ from threading import Thread
 import time
 
 from storage import Storage, TransactionCursor
+from version_cache import IdVersionMap
 from response import Response
 from filter import Mailbox, TransactionMetadata
 
@@ -18,7 +19,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
 
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.version_cache = IdVersionMap()
+        self.storage = Storage.get_sqlite_inmemory_for_test(self.version_cache)
 
     def dump_db(self):
         with self.storage.begin_transaction() as db_tx:
@@ -45,6 +47,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testBlob(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
@@ -75,7 +78,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         for i in range(0,5):
             if len(tx_cursor.tx.rcpt_to) == 1:
                 break
-            tx_cursor.wait(1)
+            self.version_cache.wait(tx_cursor.id, tx_cursor.version, 1)
+            tx_cursor.load()
         else:
             self.fail('no rcpt')
         tx_cursor.write_envelope(
@@ -116,7 +120,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         for i in range(0,5):
             if tx_cursor.tx.body is not None:
                 break
-            tx_cursor.wait(1)
+            self.version_cache.wait(tx_cursor.id, tx_cursor.version, 1)
+            tx_cursor.load()
         else:
             self.fail('no body')
         tx_cursor.write_envelope(
@@ -129,6 +134,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def test_message_builder(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: 'test_message_builder')
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
@@ -170,6 +176,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutMail(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
@@ -181,6 +188,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutRcpt(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
@@ -203,6 +211,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def testTimeoutData(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
@@ -238,6 +247,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     def test_tx_body_inline_reuse(self):
         filter = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: 'inline')
         b = 'hello, world!'
         tx = TransactionMetadata(
@@ -247,6 +257,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         filter2 = StorageWriterFilter(
             self.storage,
+            self.version_cache,
             rest_id_factory = lambda: 'reuse')
         tx2 = TransactionMetadata(
                 host = 'outbound-gw',

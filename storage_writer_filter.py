@@ -20,8 +20,8 @@ from message_builder import MessageBuilder
 
 from rest_schema import BlobUri, parse_blob_uri
 
+from version_cache import IdVersionMap, Waiter
 
-# this is only going to implement AsyncFilter
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
@@ -33,7 +33,10 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
 
+    version_cache : IdVersionMap
+
     def __init__(self, storage,
+                 version_cache : IdVersionMap,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False):
@@ -42,6 +45,11 @@ class StorageWriterFilter(AsyncFilter):
         self.rest_id = rest_id
         self.mu = Lock()
         self.cv = Condition(self.mu)
+        self.version_cache = version_cache
+
+    async def wait_async(self, timeout):
+        return await self.version_cache.wait_async(
+            self.tx_cursor.id, self.tx_cursor.version, timeout)
 
     def get_rest_id(self):
         with self.mu:
@@ -86,7 +94,10 @@ class StorageWriterFilter(AsyncFilter):
             logging.debug('StorageWriterFilter._get %s deadline_left %s '
                           'tx %s',
                           self.rest_id, deadline_left, self.tx_cursor.tx)
-            self.tx_cursor.wait(deadline.deadline_left())
+            self.version_cache.wait(
+                self.tx_cursor.id, self.tx_cursor.version,
+                deadline.deadline_left())
+            self.tx_cursor.load()
 
         logging.debug('StorageWriterFilter._get %s %s', self.rest_id,
                       self.tx_cursor.tx)
@@ -95,6 +106,12 @@ class StorageWriterFilter(AsyncFilter):
 
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
+        # XXX _get() doesn't just do a point read with timeout==0
+        if timeout == 0:
+            if self.tx_cursor is None:
+                self._load()
+            self.tx_cursor.load()
+            return self.tx_cursor.tx.copy()
         return self._get(Deadline(timeout))
 
     def _body(self, tx):
@@ -170,7 +187,8 @@ class StorageWriterFilter(AsyncFilter):
             assert uri and uri.tx_body
             source_cursor = self.storage.get_transaction_cursor()
             source_cursor.load(rest_id=uri.tx_id)
-            downstream_tx.body = downstream_delta.body = source_cursor.body_rest_id
+            downstream_tx.body = downstream_delta.body = (
+                source_cursor.body_rest_id)
             reuse_blob_rest_id = [source_cursor.body_rest_id]
 
         if downstream_tx.body_blob is not None:

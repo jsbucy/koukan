@@ -447,6 +447,9 @@ class RestEndpoint(SyncFilter):
 
         return Response(), dlen
 
+    # this doesn't actually pass the current etag in if-none-match
+    # handler (i.e. storage writer filter) actually waits on
+    # tx.req_inflight(), not the version
     def get_json(self, timeout : Optional[float] = None):
         try:
             req_headers = {}

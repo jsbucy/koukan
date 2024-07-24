@@ -26,6 +26,8 @@ from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
 
+from version_cache import IdVersionMap
+
 # the implementation of CursorResult.rowcount apparently involves too
 # much metaprogramming for pytype to infer correctly
 def rowcount(res : CursorResult) -> int:
@@ -477,25 +479,6 @@ class TransactionCursor:
         self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
 
-    def wait(self, timeout=None) -> bool:
-        with Waiter(self.parent.tx_versions, self.id, self.version, self
-                    ) as id_version:
-            old = self.version
-            self.load()
-            if self.version > old:
-                return True
-            old = self.version
-
-            if not id_version.wait(old, timeout):
-                logging.debug('TransactionCursor.wait timed out')
-                return False
-            self.load()
-            if self.version <= old:
-                logging.critical(
-                    'TransactionCursor.wait() BUG id=%d old=%d new=%d',
-                    self.id, old, self.version)
-            return self.version > old  # xxx assert?
-
 
 class BlobWriter(WritableBlob):
     id = None
@@ -753,103 +736,13 @@ class BlobReader(Blob):
                 return bytes()
             return row[0]
 
-    # wait for self.length to increase or timeout
-    def wait(self, timeout=None):
-        # version is len(content) in BlobContent
-        with Waiter(self.parent.blob_versions, self.blob_id, self.length, self
-                    ) as id_version:
-            old_len = self.length
-            self.load()
-            if self.length > old_len:
-                return True
-            if self.last:
-                return False
-            old_len = self.length
-            if not id_version.wait(old_len, timeout):
-                return False
-            self.load()
-            return self.length > old_len
-
-class IdVersion:
-    id : int
-    lock : Lock
-    cv : Condition
-
-    version : int
-    waiters : set[object]
-    def __init__(self, db_id, version):
-        self.id = db_id
-        self.lock = Lock()
-        self.cv = Condition(self.lock)
-
-        self.waiters = set()
-        self.version = version
-
-    def wait(self, version, timeout):
-        with self.lock:
-            logging.debug('IdVersion.wait %d %d %d %d',
-                          id(self), self.id, self.version, version)
-            rv = self.cv.wait_for(lambda: self.version > version, timeout)
-            logging.debug('IdVersion.wait done %d %d %d %d',
-                          self.id, self.version, version, rv)
-            return rv
-
-    def update(self, version):
-        with self.lock:
-            logging.debug('IdVersion.update %d id=%d version=%d new %d',
-                          id(self), self.id, self.version, version)
-            # There is an expected edge case case where a waiter reads
-            # the db and updates this in between a write commiting to
-            # the db and updating this so == is expected
-            if version < self.version:
-                logging.critical('IdVersion.update precondition failure '
-                                 ' id=%d cur=%d new=%d',
-                                 self.id, self.version, version)
-                assert not 'IdVersion.update precondition failure '
-            self.version = version
-            self.cv.notify_all()
-
-class Waiter:
-    def __init__(self, parent, db_id, version, obj):
-        self.parent = parent
-        self.db_id = db_id
-        self.obj = obj
-        self.id_version = self.parent.get_id_version(db_id, version, obj)
-    def __enter__(self):
-        return self.id_version
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.parent.del_waiter(self.db_id, self.id_version, self.obj)
-
-class IdVersionMap:
-    lock : Lock
-    id_version_map : dict[int,IdVersion]  # db-id
-
-    def __init__(self):
-        self.id_version_map = {}
-        self.lock = Lock()
-
-    def del_waiter(self, id, id_version, obj):
-        with self.lock:
-            id_version.waiters.remove(obj)
-            if not id_version.waiters:
-                del self.id_version_map[id]
-
-    def update(self, db_id, version):
-        with self.lock:
-            if db_id not in self.id_version_map:
-                logging.debug('IdVersionMap.update id=%d version %d no waiters',
-                              db_id, version)
-                return
-            waiter = self.id_version_map[db_id]
-            waiter.update(version)
-
-    def get_id_version(self, db_id, version, obj):
-        with self.lock:
-            if db_id not in self.id_version_map:
-                self.id_version_map[db_id] = IdVersion(db_id, version)
-            waiter = self.id_version_map[db_id]
-            waiter.waiters.add(obj)
-            return waiter
+    # def get_id_version(self, db_id, version, obj):
+    #     with self.lock:
+    #         if db_id not in self.id_version_map:
+    #             self.id_version_map[db_id] = IdVersion(db_id, version)
+    #         waiter = self.id_version_map[db_id]
+    #         waiter.waiters.add(obj)
+    #         return waiter
 
 
 class Storage():
@@ -863,12 +756,13 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    def __init__(self, engine : Optional[Engine] = None):
+    def __init__(self, version_cache : IdVersionMap,
+                 engine : Optional[Engine] = None):
+        self.tx_versions = version_cache
         self.engine = engine
-        self.tx_versions = IdVersionMap()
 
     @staticmethod
-    def get_sqlite_inmemory_for_test():
+    def get_sqlite_inmemory_for_test(version_cache : IdVersionMap):
         engine = create_engine("sqlite+pysqlite://",
                                connect_args={'check_same_thread':False},
                                poolclass=QueuePool,
@@ -883,12 +777,12 @@ class Storage():
                 # pytype: disable=attribute-error
                 cursor.executescript(f.read())
                 # pytype: enable=attribute-error
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 
     @staticmethod
-    def connect_sqlite(filename):
+    def connect_sqlite(version_cache : IdVersionMap, filename):
         engine = create_engine("sqlite+pysqlite:///" + filename,
                                pool_size=1, max_overflow=0)
         with engine.begin() as db_tx:
@@ -902,12 +796,13 @@ class Storage():
             cursor.execute("PRAGMA synchronous=2")
             cursor.execute("PRAGMA auto_vacuum=2")
 
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 
     @staticmethod
     def connect_postgres(
+            version_cache : IdVersionMap,
             db_user=None, db_name=None, host=None, port=None,
             unix_socket_dir=None):
         db_url = 'postgresql+psycopg://' + db_user + '@'
@@ -920,7 +815,7 @@ class Storage():
                 db_url += ('&port=%d' % port)
         logging.info('Storage.connect_postgres %s', db_url)
         engine = create_engine(db_url)
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 

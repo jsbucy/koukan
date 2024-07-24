@@ -16,6 +16,8 @@ from filter import (
 from dsn import read_headers, generate_dsn
 from blob import InlineBlob
 
+from version_cache import IdVersionMap
+
 def default_notification_factory():
     raise NotImplementedError()
 
@@ -25,10 +27,12 @@ class OutputHandler:
     rest_id : str
     notification_factory : Callable[[], SyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
+    version_cache : IdVersionMap
 
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
+                 version_cache : IdVersionMap,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
@@ -42,6 +46,7 @@ class OutputHandler:
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
+        self.version_cache = version_cache
 
     def _wait_downstream(self, delta : TransactionMetadata,
                          have_body : bool, ok_rcpt : bool
@@ -61,13 +66,15 @@ class OutputHandler:
             timeout = self.data_timeout
             msg = 'body'
 
-        if not self.cursor.wait(self.env_timeout):
+        if not self.version_cache.wait(
+                self.cursor.id, self.cursor.version, self.env_timeout):
             logging.debug(
                 'OutputHandler._output() %s timeout %s=%d',
                 self.rest_id, msg, timeout)
             return None, Response(
                 400,
                 'OutputHandler downstream timeout (%s=%d)' % (msg, timeout))
+        self.cursor.load()
         return True, None
 
     def _output(self) -> Optional[Response]:
@@ -90,6 +97,10 @@ class OutputHandler:
                 last_tx = self.cursor.tx.copy()
                 assert delta is not None
                 assert upstream_tx.merge_from(delta) is not None
+                logging.debug('OutputHandler._output() %s '
+                              'merged upstream tx %s',
+                              self.rest_id, upstream_tx)
+
 
             assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
             assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
@@ -120,7 +131,8 @@ class OutputHandler:
                 continue
 
             body_blob = None
-            if self.cursor.input_done and upstream_tx.body:
+            if self.cursor.input_done and self.cursor.tx.body:  #upstream_tx.body:
+                logging.info('OutputHandler._output() %s load body blob', self.rest_id)
                 blob_reader = self.cursor.parent.get_blob_reader()
                 assert blob_reader.load(
                     rest_id = upstream_tx.body,
@@ -140,9 +152,9 @@ class OutputHandler:
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
-            if delta.mail_from is None and not delta.rcpt_to and (
-                    not self.cursor.input_done or (
-                        not delta.body_blob and delta.message_builder is None)):
+            if delta.mail_from is None and not delta.rcpt_to and not have_body:
+                    #not self.cursor.input_done or (
+                    #    not delta.body_blob and delta.message_builder is None)):
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
 
@@ -213,7 +225,6 @@ class OutputHandler:
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
 
-
         resp = self._output()
         if resp is None:
             logging.warning('OutputHandler._cursor_to_endpoint() %s abort',
@@ -237,8 +248,10 @@ class OutputHandler:
                 self._next_attempt_time(time.time()))
 
         logging.debug(
-            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s final_attempt_reason %s',
-            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry, final_attempt_reason)
+            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s '
+            'final_attempt_reason %s',
+            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry,
+            final_attempt_reason)
 
         return final_attempt_reason, next_attempt_time
 
