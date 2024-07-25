@@ -109,7 +109,6 @@ def main(mail_from, rcpt_to):
     tx_json = rest_resp.json()
     tx_url = urljoin(base_url, rest_resp.headers['location'])
 
-    #rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
     for resp_field in ['mail_response', 'rcpt_response']:
         if not (resp := tx_json.get(resp_field, None)):
             continue
@@ -140,13 +139,22 @@ def main(mail_from, rcpt_to):
         rest_resp = None
 
     done = False
+    etag = None
     while not done:
         if rest_resp is None:
             start = time.monotonic()
             logging.info('GET %s', tx_url)
-            rest_resp = session.get(tx_url, headers={'request-timeout': '5'})
+            headers = {'request-timeout': '5'}
+            if etag:
+                headers['if-none-match'] = etag
+            rest_resp = session.get(tx_url, headers=headers)
             logging.info('GET /%s %d %s',
                          tx_url, rest_resp.status_code, rest_resp.text)
+            if rest_resp.status_code in [200, 304] and 'etag' in rest_resp.headers:
+                etag = rest_resp.headers['etag']
+                logging.debug('etag %s', etag)
+            else:
+                etag = None
         tx_json = rest_resp.json()
 
         for resp in ['mail_response', 'rcpt_response', 'data_response']:
@@ -164,11 +172,12 @@ def main(mail_from, rcpt_to):
         rest_resp = None
         if done:
             break
-        delta = time.monotonic() - start
-        if delta < 1:
-            dt = 1 - delta
-            logging.debug('nospin %f', dt)
-            time.sleep(dt)
+        # etag didn't change and delta < 1?
+        # delta = time.monotonic() - start
+        # if delta < 1:
+        #     dt = 1 - delta
+        #     logging.debug('nospin %f', dt)
+        #     time.sleep(dt)
         tx_json = None
 
 

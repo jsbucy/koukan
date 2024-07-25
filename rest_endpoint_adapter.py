@@ -88,7 +88,10 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
+        # xxx refactor to use IdVersion directly
         self.version_cache = IdVersionMap()
+        self.version_cache.insert_or_update(
+            db_id=1, rest_id='1', version=self._version)
 
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
@@ -100,10 +103,9 @@ class SyncFilterAdapter(AsyncFilter):
     def version(self):
         return self._version
 
-    async def wait_async(self, timeout) -> bool:
-        with self.mu:
-            version = self._version
-        return await self.version_cache.wait_async(1, version, timeout)
+    async def wait_async(self, version, timeout) -> bool:
+        return await self.version_cache.wait_async(
+            db_id=1, version=version, timeout=timeout)
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -153,7 +155,8 @@ class SyncFilterAdapter(AsyncFilter):
             self.done = self.tx.cancelled or self.tx.data_response is not None
             self._version += 1
             self.cv.notify_all()
-            self.version_cache.update(1, self._version)
+            self.version_cache.insert_or_update(
+                db_id=1, rest_id='1', version=self._version)
             self._last_update = time.monotonic()
         return True
 
@@ -196,8 +199,8 @@ class SyncFilterAdapter(AsyncFilter):
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
-            tx = self.tx.copy()
-            self._get_locked(tx, timeout)
+            if timeout:
+                self._get_locked(self.tx.copy(), timeout)
             return self.tx.copy()
 
 
@@ -334,7 +337,8 @@ class RestHandler(Handler):
         timeout, err = self._get_timeout(request)
         return self._create(request, req_json, timeout)
 
-    def _create(self, request, req_json, timeout) -> Optional[HttpResponse]:
+    def _create(self, request, req_json, timeout
+                ) -> Optional[HttpResponse]:
         if self.async_filter is None:
             return self.response(
                 request, code=500, msg='internal error creating transaction')
@@ -362,18 +366,25 @@ class RestHandler(Handler):
 
     async def create_tx_async(self, request : HttpRequest, req_json : dict
                               ) -> Optional[HttpResponse]:
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        deadline = Deadline(timeout)
+
         cfut = self.executor.submit(lambda: self._create(request, req_json, 0))
         afut = asyncio.wrap_future(cfut)
         # xxx timeout?
         await afut
-        resp = afut.result()
-        if resp.status_code != 201:
-            return resp
-        location = resp.headers['location']
-        resp = await self.get_tx_async(request)
-        resp.status_code = 201
-        resp.headers['location'] = location
-        return resp
+        create_resp = afut.result()
+        if create_resp.status_code != 201:
+            return create_resp
+        get_resp = await self._get_tx_async(
+            request, self.async_filter.version(), deadline)
+        if get_resp.status_code == 304:
+            return create_resp
+        get_resp.status_code = 201
+        get_resp.headers['location'] = create_resp.headers['location']
+        return get_resp
 
     def get_tx(self, request : HttpRequest) -> HttpResponse:
         timeout, err = self._get_timeout(request)
@@ -408,37 +419,62 @@ class RestHandler(Handler):
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 
+    # when invoked from post/patch, passed a handle/reference on
+    # IdVersionMap for the version as of that write
+    # when invoked from GET, if no etag -> no waiting, point read?
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
+        logging.debug('RestHandler.get_tx_async %s', self._tx_rest_id)
+        if self.async_filter is None:
+            return self.response(
+                request, code=404, msg='transaction not found')
+
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
-        deadline = Deadline(timeout)
-        first = True
-        while first or deadline.remaining():
-            first = False
-            cfut = self.executor.submit(lambda: self._get_tx(0))
-            if cfut is None:
-                return self.response(
-                    request, code=500, msg='get tx async schedule read')
-            afut = asyncio.wrap_future(cfut)
-            try:
-                # wait ~forever here, this is a point read
-                # xxx fixed timeout? ignore deadline?
-                await asyncio.wait_for(afut, None)
-            except TimeoutError:
-                # unexpected
-                return self.response(request, code=500, msg='get tx async read')
-            if not afut.done():
-                return self.response(request, code=500,
-                                     msg='get tx async read fut done')
-            tx = afut.result()
-            if not tx.req_inflight():
-                return self._get_tx_resp(request, tx)
+
+        version = None
+        deadline = Deadline(0)
+        etag = request.headers.get('if-none-match', None)
+        if etag is not None:
+            cached_version = self.async_filter.version()
+            logging.debug('RestHandler.get_tx_async %s etag %s cached_version %s', self._tx_rest_id, etag, cached_version)
+
+            if cached_version is not None and (
+                    self._etag(cached_version) == etag):
+                version = cached_version
+                deadline = Deadline(timeout)
+        # else: no waiting/point read
+
+        return await self._get_tx_async(request, version, deadline)
+
+
+
+    async def _get_tx_async(self, request : HttpRequest,
+                            version : Optional[int], deadline) -> HttpResponse:
+        if version is not None:
             wait_result = await self.async_filter.wait_async(
-                deadline.deadline_left())
+                version, deadline.deadline_left())
             if not wait_result:
-                # timed out
-                return self._get_tx_resp(request, tx)
+                return self.response(request, code=304, msg='unchanged',
+                                     headers=[('etag', self._etag(version))])
+
+        cfut = self.executor.submit(lambda: self._get_tx(0))
+        if cfut is None:
+            return self.response(
+                request, code=500, msg='get tx async schedule read')
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(request, code=500, msg='get tx async read')
+        if not afut.done():
+            return self.response(request, code=500,
+                                 msg='get tx async read fut done')
+        tx = afut.result()
+        return self._get_tx_resp(request, tx)
 
 
     def patch_tx(self, request : HttpRequest,
@@ -511,14 +547,23 @@ class RestHandler(Handler):
             req_json : dict,
             message_builder : bool = False
     ) -> HttpResponse:
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        deadline = Deadline(timeout)
+
         cfut = self.executor.submit(
             lambda: self._patch(request, req_json, message_builder))
         afut = asyncio.wrap_future(cfut)
         await afut  # xxx timeout?
-        resp = afut.result()
-        if resp.status_code != 200:
-            return resp
-        return await self.get_tx_async(request)
+        patch_resp = afut.result()
+        if patch_resp.status_code != 200:
+            return patch_resp
+        get_resp = await self._get_tx_async(
+            request, self.async_filter.version(), deadline)
+        if get_resp.status_code == 304:
+            return patch_resp
+        return get_resp
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:

@@ -97,10 +97,6 @@ class OutputHandler:
                 last_tx = self.cursor.tx.copy()
                 assert delta is not None
                 assert upstream_tx.merge_from(delta) is not None
-                logging.debug('OutputHandler._output() %s '
-                              'merged upstream tx %s',
-                              self.rest_id, upstream_tx)
-
 
             assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
             assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)

@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from threading import (
     Condition,
     Lock )
@@ -9,19 +9,20 @@ from functools import partial
 
 class IdVersion:
     id : int
+    rest_id : str
     lock : Lock
     cv : Condition
 
     async_waiters : List[Tuple[object,asyncio.Future]]
 
     version : int
-    waiters : set[object]
-    def __init__(self, db_id, version):
+
+    def __init__(self, db_id, rest_id, version):
         self.id = db_id
+        self.rest_id = rest_id
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        self.waiters = set()
         self.version = version
 
         self.async_waiters = []
@@ -66,60 +67,81 @@ class IdVersion:
             self.async_waiters = []
 
 
-class Waiter:
-    def __init__(self, parent, db_id, version):
-        self.parent = parent
-        self.db_id = db_id
-        self.id_version = self.parent.get_id_version(db_id, version, self)
-    def __enter__(self):
-        return self.id_version
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.parent.del_waiter(self.db_id, self.id_version, self)
+# class Waiter:
+#     def __init__(self, parent, db_id, rest_id, version):
+#         self.parent = parent
+#         self.db_id = db_id
+#         self.id_version = self.parent.get_id_version(
+#             db_id, rest_id, version, self)
+#     def __enter__(self):
+#         return self.id_version
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         self.parent.del_waiter(self.db_id, self.id_version, self)
 
 class IdVersionMap:
     lock : Lock
     id_version_map : dict[int,IdVersion]  # db-id
+    rest_id_map : dict[str,int]  # db-id
 
     def __init__(self):
         self.id_version_map = {}
+        self.rest_id_map = {}
         self.lock = Lock()
 
-    def del_waiter(self, id, id_version, obj):
+    def insert_or_update(self, db_id : int, rest_id : str, version : int
+                         ) -> IdVersion:
+        logging.debug('IdVersionMap.insert_or_update %d %s %d',
+                      db_id, rest_id, version)
         with self.lock:
-            id_version.waiters.remove(obj)
-            if not id_version.waiters:
-                del self.id_version_map[id]
-
-    def update(self, db_id, version):
-        with self.lock:
-            if db_id not in self.id_version_map:
-                logging.debug('IdVersionMap.update id=%d version %d no waiters',
-                              db_id, version)
-                return
-            waiter = self.id_version_map[db_id]
-            waiter.update(version)
-
-    def get_id_version(self, db_id, version, obj) -> IdVersion:
-        with self.lock:
-            if db_id not in self.id_version_map:
-                self.id_version_map[db_id] = IdVersion(db_id, version)
-            id_version = self.id_version_map[db_id]
-            id_version.waiters.add(obj)
+            id_version = self.id_version_map.get(db_id, None)
+            if id_version is None:
+                id_version = IdVersion(db_id, rest_id, version)
+                self.id_version_map[db_id] = id_version
+                self.rest_id_map[rest_id] = db_id
+            else:
+                id_version.update(version)
             return id_version
 
-    def wait(self, id, version, timeout=None) -> bool:
-        with Waiter(self, id, version) as id_version:
-            return id_version.wait(version, timeout)
+    def update_and_unref(self, db_id : int, rest_id : str, version : int):
+        return
+        with self.lock:
+            id_version = self.id_version_map.get(db_id)
+            id_version.update(version)
+            del self.id_version_map[db_id]
+            del self.rest_id_map[id_version.rest_id]
 
-    async def wait_async(self, id, version, timeout):
+
+    def wait(self, db_id : int, version : int, timeout : Optional[float] = None
+             ) -> bool:
+        # precondition: get_id/rest_id() returned non-none
+        # (or previous call to insert_or_update())
+        id_version = self.id_version_map.get(db_id)
+        assert id_version is not None
+        return id_version.wait(version, timeout)
+
+    def get(self, db_id : Optional[int] = None, rest_id : Optional[str] = None
+            ) -> Optional[IdVersion]:
+        with self.lock:
+            if db_id is None:
+                if rest_id is not None:
+                    db_id = self.rest_id_map.get(rest_id, None)
+                else:
+                    raise ValueError
+            return self.id_version_map.get(db_id, None)
+
+    async def wait_async(self,
+                         version : int,
+                         timeout : float,
+                         db_id : Optional[int] = None,
+                         rest_id : Optional[str] = None):
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 
-        with Waiter(self, id, version) as id_version:
-            id_version.add_async_waiter(loop, afut)
-
-            try:
-                await asyncio.wait_for(afut, timeout)
-                return True
-            except TimeoutError:
-                return False
+        id_version = self.get(db_id, rest_id)
+        assert id_version is not None  # precondition
+        id_version.add_async_waiter(loop, afut)
+        try:
+            await asyncio.wait_for(afut, timeout)
+            return True
+        except TimeoutError:
+            return False

@@ -100,7 +100,12 @@ class TransactionCursor:
             self.id = row[0]
             self.tx = TransactionMetadata()  # tx
 
+            # XXX rest_id?
+
             self._write(db_tx, tx, reuse_blob_rest_id)
+
+        self.parent.tx_versions.insert_or_update(
+            self.id, rest_id, self.version)
 
     def _reuse_blob(self, db_tx, blob_rest_ids : List[str]
                     ) -> List[Tuple[int, str, bool]]:
@@ -173,7 +178,12 @@ class TransactionCursor:
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
-        self.parent.tx_versions.update(self.id, self.version)
+        if not finalize_attempt:
+            self.parent.tx_versions.insert_or_update(
+                self.id, self.rest_id, self.version)
+        else:
+            self.parent.tx_versions.update_and_unref(
+                self.id, self.rest_id, self.version)
 
     def _write_blob(self,
                     db_tx,
@@ -346,7 +356,8 @@ class TransactionCursor:
                 self._start_attempt_db(db_tx, self.id, self.version)
                 started = True
         if started:
-            self.parent.tx_versions.update(self.id, self.version)
+            self.parent.tx_versions.insert_or_update(
+                self.id, self.rest_id, self.version)
         return res
 
     def _load_db(self, db_tx,
@@ -518,7 +529,7 @@ class BlobWriter(WritableBlob):
     def create(self, rest_id : str):
         with self.parent.begin_transaction() as db_tx:
             self._create(rest_id, db_tx)
-            return self.id
+        return self.id
 
     def load(self, rest_id : str, tx_rest_id : Optional[str] = None):
         with self.parent.begin_transaction() as db_tx:
@@ -640,7 +651,8 @@ class BlobWriter(WritableBlob):
                         break
                 except VersionConflictException:
                     pass
-            self.parent.tx_versions.update(cursor.id, cursor.version)
+            self.parent.tx_versions.insert_or_update(
+                cursor.id, cursor.rest_id, cursor.version)
         return True, self.length, self._content_length
 
 
@@ -735,14 +747,6 @@ class BlobReader(Blob):
             if row[0] is None:
                 return bytes()
             return row[0]
-
-    # def get_id_version(self, db_id, version, obj):
-    #     with self.lock:
-    #         if db_id not in self.id_version_map:
-    #             self.id_version_map[db_id] = IdVersion(db_id, version)
-    #         waiter = self.id_version_map[db_id]
-    #         waiter.waiters.add(obj)
-    #         return waiter
 
 
 class Storage():
@@ -911,7 +915,8 @@ class Storage():
                     break
             except VersionConflictException:
                 pass
-        self.tx_versions.update(cursor.id, cursor.version)
+        self.tx_versions.insert_or_update(
+            cursor.id, cursor.rest_id, cursor.version)
 
         writer.update_tx = tx_rest_id
         writer.finalize_tx = tx_body
@@ -988,7 +993,8 @@ class Storage():
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(db_tx, db_id, version)
-            self.tx_versions.update(tx.id, tx.version)
+            self.tx_versions.insert_or_update(
+                tx.id, tx.rest_id, tx.version)
 
             # TODO: if the last n consecutive attempts weren't
             # finalized, this transaction may be crashing the system

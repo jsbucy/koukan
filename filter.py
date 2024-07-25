@@ -355,7 +355,7 @@ class TransactionMetadata:
     def from_json(json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
         for f in json.keys():
-            if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX FIX BEFORE SUBMIT
+            if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX
                 continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
@@ -389,6 +389,15 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
+    @staticmethod
+    def req_inflight_json(json : dict) -> bool:
+        if 'mail_from' in json and 'mail_response' not in json:
+            return True
+        if 'rcpt_to' in json and len(json['rcpt_to']) != len(json.get('rcpt_response', [])):
+            return True
+        if 'body' in json and 'data_response' not in json:
+            return True
+        return False
 
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
@@ -659,12 +668,14 @@ class AsyncFilter(ABC):
     ) -> Optional[WritableBlob]:
         pass
 
-    # returns a "cached" value from the last get/update
+    # returns a "cached" value from the last get/update if any
+    # if none, returns the version from IdVersionMap
+    # else None
     @abstractmethod
-    def version(self) -> int:
+    def version(self) -> Optional[int]:
         pass
 
-    # wait until the version changed from the last get()
+    # wait until version != <version>
     @abstractmethod
-    async def wait_async(self, timeout) -> bool:
+    async def wait_async(self, version, timeout) -> bool:
         pass

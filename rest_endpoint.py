@@ -62,6 +62,7 @@ class RestEndpoint(SyncFilter):
     client : Client
 
     upstream_tx : Optional[TransactionMetadata] = None
+    upstream_json : Optional[dict] = None
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
@@ -241,6 +242,8 @@ class RestEndpoint(SyncFilter):
         if tx_update:
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
+            if resp_json:
+                self.upstream_json = resp_json
 
             logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
                           self.transaction_url, resp_json)
@@ -447,14 +450,14 @@ class RestEndpoint(SyncFilter):
 
         return Response(), dlen
 
-    # this doesn't actually pass the current etag in if-none-match
-    # handler (i.e. storage writer filter) actually waits on
-    # tx.req_inflight(), not the version
-    def get_json(self, timeout : Optional[float] = None):
+    def get_json(self, timeout : Optional[float] = None
+                 ) -> Optional[dict]:
         try:
             req_headers = {}
             if self.http_host:
                 req_headers['host'] = self.http_host
+            if self.etag:
+                req_headers['if-none-match'] = self.etag
             self._set_request_timeout(req_headers, timeout)
             rest_resp = self.client.get(self.transaction_url,
                                         headers=req_headers,
@@ -464,11 +467,17 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint.get_json() timeout %s',
                           self.transaction_url)
             return None
-        if rest_resp.status_code < 300:
+        if rest_resp.status_code in [200, 304]:
             self.etag = rest_resp.headers.get('etag', None)
         else:
             self.etag = None
-        return get_resp_json(rest_resp)
+        if rest_resp.status_code == 200:
+            self.upstream_json = get_resp_json(rest_resp)
+            return self.upstream_json
+        elif rest_resp.status_code == 304:
+            # i.e. no change, XXX kludge, correct?
+            return self.upstream_json
+        return None
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
@@ -486,8 +495,11 @@ class RestEndpoint(SyncFilter):
                 tx_out = TransactionMetadata.from_json(
                     json, WhichJson.REST_READ)
 
+            # XXX req_inflight() doesn't work on tx constructed from
+            # REST_READ json with placeholders?!
             if (tx_out is not None) and (
-                    not self.upstream_tx.req_inflight(tx_out)):
+                    not TransactionMetadata.req_inflight_json(json)):
+                    #not self.upstream_tx.req_inflight(tx_out)):
                 logging.debug('RestEndpoint._get() %s done %s',
                               self.transaction_url, tx_out)
                 return tx_out

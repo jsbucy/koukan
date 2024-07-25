@@ -318,7 +318,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNone(blob_reader.load(
             db_id=blob_writer.id, tx_id=writer.id))
 
-    def DISABLED_test_waiting_slowpath(self):
+    def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz', TransactionMetadata(
             local_host=HostPort('local_host', 25),
@@ -330,7 +330,6 @@ class StorageTestBase(unittest.TestCase):
         self.assertFalse(bool(reader.tx.rcpt_to))
         self.assertFalse(self.version_cache.wait(reader.id, reader.version, 1))
 
-        # XXX the way this currently works, an update will only wake up waiters
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
