@@ -419,6 +419,9 @@ class RestEndpoint(SyncFilter):
                     timeout=self.timeout_data)
                 logging.info('RestEndpoint._put_blob_chunk PUT %s %s %s',
                              self.blob_url, rest_resp, rest_resp.headers)
+                if rest_resp.status_code not in [200, 416]:
+                    return Response(
+                        450, 'RestEndpoint._put_blob_chunk PUT err'), None
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_chunk RequestError %s', e)
             return None, None
@@ -427,10 +430,6 @@ class RestEndpoint(SyncFilter):
         # Most(all?) errors on blob put here means temp
         # transaction final status
         # IOW blob upload is not the place to reject the content, etc.
-
-        if rest_resp.status_code > 299 and rest_resp.status_code != 416:
-            return Response(
-                450, 'RestEndpoint._put_blob_chunk PUT err'), None
 
         # cf RestTransactionHandler.build_resp() re content-range
         dlen = len(d)
