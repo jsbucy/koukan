@@ -52,7 +52,7 @@ endpoint:
     domain: d
     selector: sel
   - filter: rest_output
-    static_endpoint: https://localhost:8001
+    static_endpoint: http://localhost:8002
     verify: localhost.crt
     http_host: outbound
     # remote_host_discovery: mx
@@ -95,7 +95,7 @@ endpoint:
       domains:
       - name: d
   - filter: rest_output
-    static_endpoint: https://localhost:8001
+    static_endpoint: http://localhost:8002
     verify: localhost.crt
     http_host: outbound
     static_remote_host:
