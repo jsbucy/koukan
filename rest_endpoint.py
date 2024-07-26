@@ -62,7 +62,6 @@ class RestEndpoint(SyncFilter):
     client : Client
 
     upstream_tx : Optional[TransactionMetadata] = None
-    upstream_json : Optional[dict] = None
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
@@ -242,8 +241,6 @@ class RestEndpoint(SyncFilter):
         if tx_update:
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
-            if resp_json:
-                self.upstream_json = resp_json
 
             logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
                           self.transaction_url, resp_json)
@@ -449,13 +446,14 @@ class RestEndpoint(SyncFilter):
 
         return Response(), dlen
 
-    def get_json(self, timeout : Optional[float] = None
+    def _get_json(self, timeout : Optional[float] = None,
+                  testonly_point_read = False
                  ) -> Optional[dict]:
         try:
             req_headers = {}
             if self.http_host:
                 req_headers['host'] = self.http_host
-            if self.etag:
+            if self.etag and not testonly_point_read:
                 req_headers['if-none-match'] = self.etag
             self._set_request_timeout(req_headers, timeout)
             rest_resp = self.client.get(self.transaction_url,
@@ -470,13 +468,14 @@ class RestEndpoint(SyncFilter):
             self.etag = rest_resp.headers.get('etag', None)
         else:
             self.etag = None
-        if rest_resp.status_code == 200:
-            self.upstream_json = get_resp_json(rest_resp)
-            return self.upstream_json
-        elif rest_resp.status_code == 304:
-            # i.e. no change, XXX kludge, correct?
-            return self.upstream_json
-        return None
+        if rest_resp.status_code != 200:
+            return None
+        return get_resp_json(rest_resp)
+
+    # test only
+    def get_json(self, timeout : Optional[float] = None
+                 ) -> Optional[dict]:
+        return self._get_json(timeout, testonly_point_read=True)
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
@@ -485,8 +484,9 @@ class RestEndpoint(SyncFilter):
         while deadline.remaining():
             logging.debug('RestEndpoint._get() %s %s',
                           self.transaction_url, deadline.deadline_left())
-
-            json = self.get_json(timeout=deadline.deadline_left())
+            start = time.monotonic()
+            json = self._get_json(timeout=deadline.deadline_left())
+            delta = time.monotonic() - start
             logging.debug('RestEndpoint._get() %s done %s',
                           self.transaction_url, json)
 
@@ -498,7 +498,6 @@ class RestEndpoint(SyncFilter):
             # REST_READ json with placeholders?!
             if (tx_out is not None) and (
                     not TransactionMetadata.req_inflight_json(json)):
-                    #not self.upstream_tx.req_inflight(tx_out)):
                 logging.debug('RestEndpoint._get() %s done %s',
                               self.transaction_url, tx_out)
                 return tx_out
@@ -510,5 +509,6 @@ class RestEndpoint(SyncFilter):
             # XXX backoff?
             if not deadline.remaining(1):
                 break
-            time.sleep(1)
+            if delta < 1:
+                time.sleep(1 - delta)
         return tx_out
