@@ -44,7 +44,7 @@ from filter import (
 from executor import Executor
 
 from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
-from version_cache import IdVersionMap
+from version_cache import IdVersion
 
 
 # runs SyncFilter on Executor with AsyncFilter interface for
@@ -76,7 +76,7 @@ class SyncFilterAdapter(AsyncFilter):
     body_blob : Optional[BlobWriter] = None
     # transaction has reached a final status: data response or cancelled
     done : bool = False
-    version_cache : IdVersionMap
+    id_version : IdVersion
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -88,10 +88,7 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
-        # xxx refactor to use IdVersion directly
-        self.version_cache = IdVersionMap()
-        self.version_cache.insert_or_update(
-            db_id=1, rest_id='1', version=self._version)
+        self.id_version = IdVersion(1, '1', self._version)
 
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
@@ -104,8 +101,8 @@ class SyncFilterAdapter(AsyncFilter):
         return self._version
 
     async def wait_async(self, version, timeout) -> bool:
-        return await self.version_cache.wait_async(
-            db_id=1, version=version, timeout=timeout)
+        return await self.id_version.wait_async(
+            version=version, timeout=timeout)
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -155,8 +152,7 @@ class SyncFilterAdapter(AsyncFilter):
             self.done = self.tx.cancelled or self.tx.data_response is not None
             self._version += 1
             self.cv.notify_all()
-            self.version_cache.insert_or_update(
-                db_id=1, rest_id='1', version=self._version)
+            self.id_version.update(version=self._version)
             self._last_update = time.monotonic()
         return True
 

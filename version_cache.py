@@ -36,10 +36,6 @@ class IdVersion:
                           self.id, self.version, version, rv)
             return rv
 
-    def add_async_waiter(self, loop, future):
-        with self.lock:
-            self.async_waiters.append((loop,future))
-
     def update(self, version):
         with self.lock:
             logging.debug('IdVersion.update %d id=%d version=%d new %d',
@@ -65,6 +61,24 @@ class IdVersion:
                 logging.debug('sched update done')
                 loop.call_soon_threadsafe(partial(done, future, version))
             self.async_waiters = []
+
+
+    async def wait_async(self,
+                         version : int,
+                         timeout : float,
+                         db_id : Optional[int] = None,
+                         rest_id : Optional[str] = None) -> bool:
+        loop = asyncio.get_running_loop()
+        afut = loop.create_future()
+
+        with self.lock:
+            self.async_waiters.append((loop, afut))
+
+        try:
+            await asyncio.wait_for(afut, timeout)
+            return True
+        except TimeoutError:
+            return False
 
 
 # class Waiter:
@@ -134,14 +148,6 @@ class IdVersionMap:
                          timeout : float,
                          db_id : Optional[int] = None,
                          rest_id : Optional[str] = None):
-        loop = asyncio.get_running_loop()
-        afut = loop.create_future()
-
         id_version = self.get(db_id, rest_id)
         assert id_version is not None  # precondition
-        id_version.add_async_waiter(loop, afut)
-        try:
-            await asyncio.wait_for(afut, timeout)
-            return True
-        except TimeoutError:
-            return False
+        return await id_version.wait_async(version, timeout)
