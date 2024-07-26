@@ -415,9 +415,6 @@ class RestHandler(Handler):
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 
-    # when invoked from post/patch, passed a handle/reference on
-    # IdVersionMap for the version as of that write
-    # when invoked from GET, if no etag -> no waiting, point read?
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
         logging.debug('RestHandler.get_tx_async %s', self._tx_rest_id)
         if self.async_filter is None:
@@ -433,7 +430,9 @@ class RestHandler(Handler):
         etag = request.headers.get('if-none-match', None)
         if etag is not None:
             cached_version = self.async_filter.version()
-            logging.debug('RestHandler.get_tx_async %s etag %s cached_version %s', self._tx_rest_id, etag, cached_version)
+            logging.debug(
+                'RestHandler.get_tx_async %s etag %s cached_version %s',
+                self._tx_rest_id, etag, cached_version)
 
             if cached_version is not None and (
                     self._etag(cached_version) == etag):
@@ -442,8 +441,6 @@ class RestHandler(Handler):
         # else: no waiting/point read
 
         return await self._get_tx_async(request, version, deadline)
-
-
 
     async def _get_tx_async(self, request : HttpRequest,
                             version : Optional[int], deadline) -> HttpResponse:

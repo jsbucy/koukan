@@ -20,7 +20,7 @@ from message_builder import MessageBuilder
 
 from rest_schema import BlobUri, parse_blob_uri
 
-from version_cache import IdVersionMap
+from version_cache import IdVersion, IdVersionMap
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
@@ -34,6 +34,7 @@ class StorageWriterFilter(AsyncFilter):
     cv : Condition
 
     version_cache : IdVersionMap
+    id_version : Optional[IdVersion] = None
 
     def __init__(self, storage,
                  version_cache : IdVersionMap,
@@ -61,8 +62,10 @@ class StorageWriterFilter(AsyncFilter):
     def version(self) -> Optional[int]:
         if self.tx_cursor is not None:
             return self.tx_cursor.version
-        id_version = self.version_cache.get(rest_id=self.rest_id)
-        return id_version.version if id_version else None
+        self.id_version = self.version_cache.get(rest_id=self.rest_id)
+        logging.debug('StorageWriterFilter.version %s %s',
+                      self.rest_id, self.id_version)
+        return self.id_version.version if self.id_version is not None else None
 
     def _create(self, tx : TransactionMetadata,
                 reuse_blob_rest_id : Optional[List[str]] = None):

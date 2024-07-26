@@ -4,6 +4,8 @@ from threading import (
     Lock )
 import logging
 
+from weakref import WeakValueDictionary
+
 import asyncio
 from functools import partial
 
@@ -81,25 +83,16 @@ class IdVersion:
             return False
 
 
-# class Waiter:
-#     def __init__(self, parent, db_id, rest_id, version):
-#         self.parent = parent
-#         self.db_id = db_id
-#         self.id_version = self.parent.get_id_version(
-#             db_id, rest_id, version, self)
-#     def __enter__(self):
-#         return self.id_version
-#     def __exit__(self, exc_type, exc_val, exc_tb):
-#         self.parent.del_waiter(self.db_id, self.id_version, self)
-
 class IdVersionMap:
     lock : Lock
-    id_version_map : dict[int,IdVersion]  # db-id
-    rest_id_map : dict[str,int]  # db-id
+    # db_id -> IdVersion
+    id_version_map : WeakValueDictionary[int, IdVersion]
+    # rest_id -> IdVersion
+    rest_id_map : WeakValueDictionary[str, IdVersion]
 
     def __init__(self):
-        self.id_version_map = {}
-        self.rest_id_map = {}
+        self.id_version_map = WeakValueDictionary()
+        self.rest_id_map = WeakValueDictionary()
         self.lock = Lock()
 
     def insert_or_update(self, db_id : int, rest_id : str, version : int
@@ -111,19 +104,10 @@ class IdVersionMap:
             if id_version is None:
                 id_version = IdVersion(db_id, rest_id, version)
                 self.id_version_map[db_id] = id_version
-                self.rest_id_map[rest_id] = db_id
+                self.rest_id_map[rest_id] = id_version
             else:
                 id_version.update(version)
             return id_version
-
-    def update_and_unref(self, db_id : int, rest_id : str, version : int):
-        return
-        with self.lock:
-            id_version = self.id_version_map.get(db_id)
-            id_version.update(version)
-            del self.id_version_map[db_id]
-            del self.rest_id_map[id_version.rest_id]
-
 
     def wait(self, db_id : int, version : int, timeout : Optional[float] = None
              ) -> bool:
@@ -136,12 +120,12 @@ class IdVersionMap:
     def get(self, db_id : Optional[int] = None, rest_id : Optional[str] = None
             ) -> Optional[IdVersion]:
         with self.lock:
-            if db_id is None:
-                if rest_id is not None:
-                    db_id = self.rest_id_map.get(rest_id, None)
-                else:
-                    raise ValueError
-            return self.id_version_map.get(db_id, None)
+            if db_id is not None:
+                return self.id_version_map.get(db_id, None)
+            elif rest_id is not None:
+                return self.rest_id_map.get(rest_id, None)
+            else:
+                raise ValueError
 
     async def wait_async(self,
                          version : int,

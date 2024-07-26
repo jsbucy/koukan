@@ -26,7 +26,7 @@ from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
 
-from version_cache import IdVersionMap
+from version_cache import IdVersion, IdVersionMap
 
 # the implementation of CursorResult.rowcount apparently involves too
 # much metaprogramming for pytype to infer correctly
@@ -55,6 +55,7 @@ class TransactionCursor:
 
     body_blob_id : Optional[int] = None
     body_rest_id : Optional[str] = None
+    id_version : Optional[IdVersion] = None
 
     def __init__(self, storage):
         self.parent = storage
@@ -104,7 +105,7 @@ class TransactionCursor:
 
             self._write(db_tx, tx, reuse_blob_rest_id)
 
-        self.parent.tx_versions.insert_or_update(
+        self.id_version = self.parent.tx_versions.insert_or_update(
             self.id, rest_id, self.version)
 
     def _reuse_blob(self, db_tx, blob_rest_ids : List[str]
@@ -178,12 +179,8 @@ class TransactionCursor:
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
-        if not finalize_attempt:
-            self.parent.tx_versions.insert_or_update(
-                self.id, self.rest_id, self.version)
-        else:
-            self.parent.tx_versions.update_and_unref(
-                self.id, self.rest_id, self.version)
+        self.id_version = self.parent.tx_versions.insert_or_update(
+            self.id, self.rest_id, self.version)
 
     def _write_blob(self,
                     db_tx,
@@ -356,7 +353,7 @@ class TransactionCursor:
                 self._start_attempt_db(db_tx, self.id, self.version)
                 started = True
         if started:
-            self.parent.tx_versions.insert_or_update(
+            self.id_version = self.parent.tx_versions.insert_or_update(
                 self.id, self.rest_id, self.version)
         return res
 
@@ -651,7 +648,7 @@ class BlobWriter(WritableBlob):
                         break
                 except VersionConflictException:
                     pass
-            self.parent.tx_versions.insert_or_update(
+            self.id_version = self.parent.tx_versions.insert_or_update(
                 cursor.id, cursor.rest_id, cursor.version)
         return True, self.length, self._content_length
 
@@ -915,7 +912,7 @@ class Storage():
                     break
             except VersionConflictException:
                 pass
-        self.tx_versions.insert_or_update(
+        self.id_version = self.tx_versions.insert_or_update(
             cursor.id, cursor.rest_id, cursor.version)
 
         writer.update_tx = tx_rest_id
@@ -993,7 +990,7 @@ class Storage():
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(db_tx, db_id, version)
-            self.tx_versions.insert_or_update(
+            self.id_version = self.tx_versions.insert_or_update(
                 tx.id, tx.rest_id, tx.version)
 
             # TODO: if the last n consecutive attempts weren't
