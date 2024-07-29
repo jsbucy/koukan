@@ -74,12 +74,19 @@ class IdVersion:
         afut = loop.create_future()
 
         with self.lock:
+            if self.version > version:
+                return True
             self.async_waiters.append((loop, afut))
 
         try:
             await asyncio.wait_for(afut, timeout)
             return True
         except TimeoutError:
+            with self.lock:
+                for i,(loop,fut) in enumerate(self.async_waiters):
+                    if fut == afut:
+                        del self.async_waiters[i]
+                        break
             return False
 
 
@@ -131,7 +138,7 @@ class IdVersionMap:
                          version : int,
                          timeout : float,
                          db_id : Optional[int] = None,
-                         rest_id : Optional[str] = None):
+                         rest_id : Optional[str] = None) -> bool:
         id_version = self.get(db_id, rest_id)
         assert id_version is not None  # precondition
         return await id_version.wait_async(version, timeout)

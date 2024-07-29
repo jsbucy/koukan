@@ -52,6 +52,11 @@ pytype_library(name='storage_schema',
 
 pytype_library(name='version_cache',
                 srcs=['version_cache.py'])
+
+py_test(name='version_cache_test',
+        srcs=['version_cache_test.py'],
+        deps=[':version_cache',
+              ':executor'])
         
 pytype_library(name='storage',
                srcs=['storage.py'],
