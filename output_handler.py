@@ -8,6 +8,7 @@ from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import (
+    AsyncFilter,
     HostPort,
     Mailbox,
     SyncFilter,
@@ -23,7 +24,7 @@ class OutputHandler:
     cursor : TransactionCursor
     endpoint : SyncFilter
     rest_id : str
-    notification_factory : Callable[[], SyncFilter]
+    notification_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
 
     def __init__(self,
