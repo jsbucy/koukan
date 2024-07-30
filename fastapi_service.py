@@ -19,14 +19,17 @@ def create_app(handler_factory : HandlerFactory):
     async def create_transaction(request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
         handler = handler_factory.create_tx(request.headers['host'])
-        return await handler.create_tx_async(request, req_json)
+        return await handler.handle_async(
+            request, lambda: handler.create_tx(request, req_json=req_json))
+
 
     @app.patch('/transactions/{tx_rest_id}')
     async def update_transaction(tx_rest_id : str,
                                  request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
         handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.patch_tx_async(request, req_json)
+        return await handler.handle_async(
+            request, lambda: handler.patch_tx(request, req_json=req_json))
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
@@ -64,8 +67,9 @@ def create_app(handler_factory : HandlerFactory):
         req_json = await request.json()
         logging.debug('rest_service.set_message_builder %s', request)
         handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.patch_tx_async(
-            request, req_json, message_builder=True)
+        return await handler.handle_async(
+            request, lambda: handler.patch_tx(request, req_json=req_json,
+                                              message_builder=True))
 
     @app.post('/transactions/{tx_rest_id}/cancel')
     async def cancel_tx(tx_rest_id : str, request : FastApiRequest

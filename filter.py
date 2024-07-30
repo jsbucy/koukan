@@ -352,15 +352,15 @@ class TransactionMetadata:
 
 
     @staticmethod
-    def from_json(json, which_js=WhichJson.ALL):
+    def from_json(tx_json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
-        for f in json.keys():
+        for f in tx_json.keys():
             if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX
                 continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
                 return None  # invalid
-            js_v = json[f]
+            js_v = tx_json[f]
             if js_v is None:
                 # TODO for now setting a non-null field back to null
                 # is not a valid operation so reject json with that
@@ -374,8 +374,9 @@ class TransactionMetadata:
                     v = [None for v in js_v]
                 else:
                     v = [field.from_json(v) for v in js_v]
-                if field.list_offset() in json and which_js == WhichJson.REST_UPDATE:
-                    offset = json.get(field.list_offset())
+                if field.list_offset() in tx_json and (
+                        which_js == WhichJson.REST_UPDATE):
+                    offset = tx_json.get(field.list_offset())
                     setattr(tx, field.list_offset(), offset)
             else:
                 if field.emit_rest_placeholder(which_js):
@@ -669,14 +670,12 @@ class AsyncFilter(ABC):
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,
-               tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None
-               ) -> Optional[TransactionMetadata]:
+               tx_delta : TransactionMetadata
+               ) -> TransactionMetadata:
         pass
 
     @abstractmethod
-    def get(self, timeout : Optional[float] = None
-            ) -> Optional[TransactionMetadata]:
+    def get(self) -> TransactionMetadata:
         pass
 
     # pass exactly one of blob_rest_id or tx_body=True
@@ -694,6 +693,10 @@ class AsyncFilter(ABC):
     # else None
     @abstractmethod
     def version(self) -> Optional[int]:
+        pass
+
+    @abstractmethod
+    def wait(self, timeout) -> bool:
         pass
 
     # wait until version() would return a different value from the

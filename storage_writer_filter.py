@@ -13,6 +13,7 @@ from filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
+    SyncFilter,
     TransactionMetadata )
 from blob import Blob, WritableBlob
 from deadline import Deadline
@@ -41,6 +42,11 @@ class StorageWriterFilter(AsyncFilter):
         self.mu = Lock()
         self.cv = Condition(self.mu)
 
+    # AsyncFilter
+    def wait(self, timeout) -> bool:
+        return self.tx_cursor.wait(timeout)
+
+    # AsyncFilter
     async def wait_async(self, timeout):
         return await self.tx_cursor.wait_async(timeout)
 
@@ -76,39 +82,15 @@ class StorageWriterFilter(AsyncFilter):
                 pass
 
     def _load(self):
-        self.tx_cursor = self.storage.get_transaction_cursor(
-            rest_id=self.rest_id)
+        if self.tx_cursor is None:
+            self.tx_cursor = self.storage.get_transaction_cursor(
+                rest_id=self.rest_id)
         self._load_tx()
 
-    def _get(self, deadline : Deadline, point_read : Optional[bool] = False
-             ) -> Optional[TransactionMetadata]:
-        if self.tx_cursor is None:
-            self._load()
-
-        logging.debug('StorageWriterFilter._get %s %s %s', self.rest_id,
-                      deadline.deadline_left(), self.tx_cursor.tx)
-
-        while point_read or (
-                deadline.remaining(1) and self.tx_cursor.tx.req_inflight()):
-            point_read = False
-            deadline_left = deadline.deadline_left()
-            logging.debug('StorageWriterFilter._get %s deadline_left %s '
-                          'tx %s',
-                          self.rest_id, deadline_left, self.tx_cursor.tx)
-            if deadline.remaining():
-                self.tx_cursor.wait(deadline_left)
-            self._load_tx()
-
-        logging.debug('StorageWriterFilter._get %s %s', self.rest_id,
-                      self.tx_cursor.tx)
-
-        return self.tx_cursor.tx.copy()
-
     # AsyncFilter
-    def get(self, timeout : Optional[float] = None
-            ) -> Optional[TransactionMetadata]:
-        point_read = (timeout is None) or timeout == 0
-        return self._get(Deadline(timeout), point_read)
+    def get(self) -> Optional[TransactionMetadata]:
+        self._load()
+        return self.tx_cursor.tx.copy()
 
     def _body(self, tx):
         body_blob = tx.body_blob
@@ -132,8 +114,7 @@ class StorageWriterFilter(AsyncFilter):
     # AsyncFilter
     def update(self,
                tx : TransactionMetadata,
-               tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None
+               tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         logging.debug('StorageWriterFilter.update tx %s %s',
                       self.rest_id, tx)
@@ -165,8 +146,6 @@ class StorageWriterFilter(AsyncFilter):
                 downstream_delta.message_builder, tx_blob_id)
             logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                           reuse_blob_rest_id)
-
-        deadline = Deadline(timeout)
 
         # internal paths: Exploder/Notification (rest uses get_blob_writer())
         body_blob = None
@@ -233,18 +212,15 @@ class StorageWriterFilter(AsyncFilter):
                     logging.debug('StorageWriterFilter.update conflict %s',
                                   self.tx_cursor.tx)
 
-        logging.debug('StorageWriterFilter.update %s %s result %s',
-                      self.rest_id, timeout, self.tx_cursor.tx)
+        logging.debug('StorageWriterFilter.update %s result %s',
+                      self.rest_id, self.tx_cursor.tx)
 
-        updated = self._get(deadline)
-        logging.debug('StorageWriterFilter.update %s updated %s',
-                      self.rest_id, updated)
-
-        upstream_delta = downstream_tx.delta(updated)
+        # empty?
+        upstream_delta = downstream_tx.delta(self.tx_cursor.tx)
         assert upstream_delta is not None
         assert len(upstream_delta.rcpt_response) <= len(tx.rcpt_to)
 
-        tx.merge_from(upstream_delta)
+        tx.merge_from(upstream_delta)  # noop (because empty)?
         tx.rest_id = self.rest_id
         upstream_delta.rest_id = self.rest_id
         return upstream_delta

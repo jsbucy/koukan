@@ -362,6 +362,5 @@ class OutputHandler:
         # should result in the parent retrying even if it was
         # permfail, better to dupe than fail to emit the bounce
 
-        # XXX timeout?
-        notification_endpoint.update(notification_tx, notification_tx,
-                                     timeout=0)
+        notification_endpoint.update(notification_tx, notification_tx)
+        # no wait -> fire&forget

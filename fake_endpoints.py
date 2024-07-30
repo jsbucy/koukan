@@ -41,7 +41,6 @@ class FakeAsyncEndpoint(AsyncFilter):
             assert self.tx.merge_from(delta)
             self._version += 1
             self.cv.notify_all()
-            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             upstream_delta = tx.delta(self.tx)
             assert upstream_delta is not None
             tx.replace_from(self.tx)
@@ -51,7 +50,6 @@ class FakeAsyncEndpoint(AsyncFilter):
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
-            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             return self.tx.copy()
 
 
@@ -65,6 +63,11 @@ class FakeAsyncEndpoint(AsyncFilter):
 
     def version(self):
         return self._version
+
+    # TODO version() samples version and this waits for that?
+    def wait(self, timeout) -> bool:
+        with self.mu:
+            self.cv.wait(timeout)
 
     async def wait_async(self, timeout) -> bool:
         raise NotImplementedError()

@@ -252,7 +252,9 @@ class TransactionCursor:
                input_done = False):
         assert final_attempt_reason != 'oneshot'  # internal-only
 
-        assert self.final_attempt_reason == 'oneshot' or self.final_attempt_reason is None or final_attempt_reason is None
+        assert (self.final_attempt_reason == 'oneshot' or
+                self.final_attempt_reason is None or
+                final_attempt_reason is None)
 
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
