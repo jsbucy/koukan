@@ -232,5 +232,25 @@ class FilterTest(unittest.TestCase):
         self.assertEqual([r.code for r in merged.rcpt_response], [201,202])
         self.assertIsNone(merged.merge(delta))
 
+    def test_req_inflight_json(self):
+        json = {}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['mail_from'] = {}
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['mail_response'] = {'code': 500}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['mail_response'] = {'code': 200}
+        json['rcpt_to'] = [{}]
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 200}]
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 500}]
+        json['body'] = {}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 200}]
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['data_response'] = [{'code': 200}]
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+
 if __name__ == '__main__':
     unittest.main()

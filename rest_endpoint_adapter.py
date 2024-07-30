@@ -371,6 +371,8 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
 
         cfut = self.executor.submit(lambda: self._create(request, req_json, 0))
+        if cfut is None:
+            return self.response(request, code=500, msg='server busy')
         afut = asyncio.wrap_future(cfut)
         # xxx timeout?
         await afut
@@ -551,6 +553,8 @@ class RestHandler(Handler):
 
         cfut = self.executor.submit(
             lambda: self._patch(request, req_json, message_builder))
+        if cfut is None:
+            return self.response(request, code=500, msg='server busy')
         afut = asyncio.wrap_future(cfut)
         await afut  # xxx timeout?
         patch_resp = afut.result()

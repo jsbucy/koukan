@@ -76,27 +76,27 @@ class StorageWriterFilter(AsyncFilter):
                 pass
 
     def _load(self):
-        self.tx_cursor = self.storage.get_transaction_cursor(rest_id=self.rest_id)
+        self.tx_cursor = self.storage.get_transaction_cursor(
+            rest_id=self.rest_id)
         self._load_tx()
 
-    # AsyncFilter
-    def _get(self, deadline : Deadline) -> Optional[TransactionMetadata]:
-        # XXX
+    def _get(self, deadline : Deadline, point_read : Optional[bool] = False
+             ) -> Optional[TransactionMetadata]:
         if self.tx_cursor is None:
             self._load()
 
         logging.debug('StorageWriterFilter._get %s %s %s', self.rest_id,
                       deadline.deadline_left(), self.tx_cursor.tx)
 
-        while self.tx_cursor.tx.req_inflight():
+        while point_read or (
+                deadline.remaining(1) and self.tx_cursor.tx.req_inflight()):
+            point_read = False
             deadline_left = deadline.deadline_left()
-            if not deadline.remaining(1):
-                break
             logging.debug('StorageWriterFilter._get %s deadline_left %s '
                           'tx %s',
                           self.rest_id, deadline_left, self.tx_cursor.tx)
-            # XXX timeout?
-            self.tx_cursor.wait(deadline.deadline_left())
+            if deadline.remaining():
+                self.tx_cursor.wait(deadline_left)
             self._load_tx()
 
         logging.debug('StorageWriterFilter._get %s %s', self.rest_id,
@@ -104,16 +104,11 @@ class StorageWriterFilter(AsyncFilter):
 
         return self.tx_cursor.tx.copy()
 
+    # AsyncFilter
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
-        # XXX _get() doesn't just do a point read with timeout==0
-        if timeout == 0:
-            if self.tx_cursor is None:
-                self._load()
-            else:
-                self._load_tx()
-            return self.tx_cursor.tx.copy()
-        return self._get(Deadline(timeout))
+        point_read = (timeout is None) or timeout == 0
+        return self._get(Deadline(timeout), point_read)
 
     def _body(self, tx):
         body_blob = tx.body_blob

@@ -125,8 +125,9 @@ class OutputHandler:
                 continue
 
             body_blob = None
-            if self.cursor.input_done and self.cursor.tx.body:  #upstream_tx.body:
-                logging.info('OutputHandler._output() %s load body blob', self.rest_id)
+            if self.cursor.input_done and self.cursor.tx.body:
+                logging.info('OutputHandler._output() %s load body blob',
+                             self.rest_id)
                 blob_reader = self.cursor.parent.get_blob_reader()
                 assert blob_reader.load(
                     rest_id = upstream_tx.body,
@@ -147,8 +148,6 @@ class OutputHandler:
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
             if delta.mail_from is None and not delta.rcpt_to and not have_body:
-                    #not self.cursor.input_done or (
-                    #    not delta.body_blob and delta.message_builder is None)):
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
 
