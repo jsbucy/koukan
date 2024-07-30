@@ -16,8 +16,6 @@ from filter import (
 from dsn import read_headers, generate_dsn
 from blob import InlineBlob
 
-from version_cache import IdVersionMap
-
 def default_notification_factory():
     raise NotImplementedError()
 
@@ -27,12 +25,10 @@ class OutputHandler:
     rest_id : str
     notification_factory : Callable[[], SyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
-    version_cache : IdVersionMap
 
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
-                 version_cache : IdVersionMap,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
@@ -46,7 +42,6 @@ class OutputHandler:
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
-        self.version_cache = version_cache
 
     def _wait_downstream(self, delta : TransactionMetadata,
                          have_body : bool, ok_rcpt : bool
@@ -66,16 +61,19 @@ class OutputHandler:
             timeout = self.data_timeout
             msg = 'body'
 
-        if not self.version_cache.wait(
-                self.cursor.id, self.cursor.version, self.env_timeout):
-            logging.debug(
-                'OutputHandler._output() %s timeout %s=%d',
-                self.rest_id, msg, timeout)
-            return None, Response(
-                400,
-                'OutputHandler downstream timeout (%s=%d)' % (msg, timeout))
-        self.cursor.load()
-        return True, None
+        while True:
+            try:
+                if not self.cursor.wait(self.env_timeout):
+                    logging.debug(
+                        'OutputHandler._output() %s timeout %s=%d',
+                        self.rest_id, msg, timeout)
+                    return None, Response(
+                        400, 'OutputHandler downstream timeout (%s=%d)' % (
+                            msg, timeout))
+                self.cursor.load()
+                return True, None
+            except VersionConflictException:
+                pass
 
     def _output(self) -> Optional[Response]:
         ok_rcpt = False

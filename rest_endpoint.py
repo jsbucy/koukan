@@ -485,30 +485,28 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint._get() %s %s',
                           self.transaction_url, deadline.deadline_left())
             start = time.monotonic()
-            json = self._get_json(timeout=deadline.deadline_left())
+            prev_etag = self.etag
+            tx_json = self._get_json(timeout=deadline.deadline_left())
             delta = time.monotonic() - start
             logging.debug('RestEndpoint._get() %s done %s',
-                          self.transaction_url, json)
+                          self.transaction_url, tx_json)
 
-            if json is not None:
+            # TODO this should abort on some http errs? 4xx?
+
+            if tx_json is not None and (
+                    not TransactionMetadata.req_inflight_json(tx_json)):
                 tx_out = TransactionMetadata.from_json(
-                    json, WhichJson.REST_READ)
-
-            # XXX req_inflight() doesn't work on tx constructed from
-            # REST_READ json with placeholders?!
-            if (tx_out is not None) and (
-                    not TransactionMetadata.req_inflight_json(json)):
-                logging.debug('RestEndpoint._get() %s done %s',
-                              self.transaction_url, tx_out)
-                return tx_out
-            logging.debug('RestEndpoint._get() %s inflight %s',
-                          self.transaction_url, tx_out)
+                    tx_json, WhichJson.REST_READ)
+                if tx_out is not None:
+                    logging.debug('RestEndpoint._get() %s done %s',
+                                  self.transaction_url, tx_out)
+                    return tx_out
 
             # min delta
             # XXX configurable
             # XXX backoff?
             if not deadline.remaining(1):
                 break
-            if delta < 1:
+            if (self.etag is None or self.etag == prev_etag) and (delta < 1):
                 time.sleep(1 - delta)
         return tx_out

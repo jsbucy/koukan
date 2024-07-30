@@ -8,6 +8,7 @@ from weakref import WeakValueDictionary
 
 import asyncio
 from functools import partial
+from storage_schema import VersionConflictException
 
 class IdVersion:
     id : int
@@ -42,14 +43,8 @@ class IdVersion:
         with self.lock:
             logging.debug('IdVersion.update %d id=%d version=%d new %d',
                           id(self), self.id, self.version, version)
-            # There is an expected edge case case where a waiter reads
-            # the db and updates this in between a write commiting to
-            # the db and updating this so == is expected
             if version < self.version:
-                logging.critical('IdVersion.update precondition failure '
-                                 ' id=%d cur=%d new=%d',
-                                 self.id, self.version, version)
-                assert not 'IdVersion.update precondition failure '
+                raise VersionConflictException()
             self.version = version
             self.cv.notify_all()
 
@@ -67,9 +62,7 @@ class IdVersion:
 
     async def wait_async(self,
                          version : int,
-                         timeout : float,
-                         db_id : Optional[int] = None,
-                         rest_id : Optional[str] = None) -> bool:
+                         timeout : float) -> bool:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 

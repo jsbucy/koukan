@@ -328,20 +328,20 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNotNone(reader.load(writer.id))
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
-        self.assertFalse(self.version_cache.wait(reader.id, reader.version, 1))
+        self.assertFalse(reader.wait(1))
 
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
 
-        self.assertTrue(self.version_cache.wait(reader.id, reader.version, 0))
+        self.assertTrue(reader.wait(0))
         reader.load()
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
         self.assertEqual(reader.tx.rcpt_to[0].mailbox, 'bob')
 
     def wait_for(self, reader, rv):
         logging.info('test wait')
-        rv[0] = self.version_cache.wait(reader.id, reader.version, 5)
+        rv[0] = reader.wait(5)
 
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
@@ -445,7 +445,7 @@ class StorageTestSqlite(StorageTestBase):
 class StorageTestSqliteInMemory(StorageTestBase):
     def setUp(self):
         super().setUp()
-        self.s = Storage.get_sqlite_inmemory_for_test(self.version_cache)
+        self.s = Storage.get_sqlite_inmemory_for_test()
 
     def load_recovery(self):
         with open('storage_test_recovery.sql', 'r') as f:

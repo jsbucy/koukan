@@ -675,7 +675,8 @@ class AsyncFilter(ABC):
     def version(self) -> Optional[int]:
         pass
 
-    # wait until version != <version>
+    # wait until version() would return a different value from the
+    # previous call
     @abstractmethod
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, timeout) -> bool:
         pass

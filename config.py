@@ -22,8 +22,6 @@ from received_header_filter import ReceivedHeaderFilter
 from relay_auth_filter import RelayAuthFilter
 from executor import Executor
 
-from version_cache import IdVersionMap
-
 class FilterSpec:
     def __init__(self, builder, t):
         self.builder = builder
@@ -36,7 +34,6 @@ class Config:
     endpoint_yaml : Optional[dict] = None
     storage_writer_factory : Optional[StorageWriterFactory] = None
     executor : Optional[Executor] = None
-    version_cache : IdVersionMap
 
     def __init__(
             self,
@@ -58,9 +55,6 @@ class Config:
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, SyncFilter)
        }
-
-    def set_version_cache(self, version_cache : IdVersionMap):
-        self.version_cache = version_cache
 
     def set_storage(self, storage : Storage):
         self.storage = storage
@@ -102,7 +96,6 @@ class Config:
     def notification_endpoint(self):
         return StorageWriterFilter(
             self.storage,
-            self.version_cache,
             rest_id_factory=self.rest_id_factory(),
             create_leased=False)
 

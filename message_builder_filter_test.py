@@ -8,7 +8,6 @@ from filter import HostPort, Mailbox, TransactionMetadata
 from fake_endpoints import FakeSyncFilter
 from response import Response
 from storage import Storage
-from version_cache import IdVersionMap
 
 from message_builder_filter import MessageBuilderFilter
 
@@ -16,8 +15,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.version_cache =IdVersionMap()
-        self.storage = Storage.get_sqlite_inmemory_for_test(self.version_cache)
+        self.storage = Storage.get_sqlite_inmemory_for_test()
 
     def test_basic(self):
         upstream = FakeSyncFilter()

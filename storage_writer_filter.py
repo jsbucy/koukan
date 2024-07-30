@@ -20,8 +20,6 @@ from message_builder import MessageBuilder
 
 from rest_schema import BlobUri, parse_blob_uri
 
-from version_cache import IdVersion, IdVersionMap
-
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
@@ -33,11 +31,7 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
 
-    version_cache : IdVersionMap
-    id_version : Optional[IdVersion] = None
-
     def __init__(self, storage,
-                 version_cache : IdVersionMap,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False):
@@ -46,13 +40,9 @@ class StorageWriterFilter(AsyncFilter):
         self.rest_id = rest_id
         self.mu = Lock()
         self.cv = Condition(self.mu)
-        self.version_cache = version_cache
 
-    async def wait_async(self, version, timeout):
-        return await self.version_cache.wait_async(
-            version, timeout,
-            db_id=self.tx_cursor.id if self.tx_cursor else None,
-            rest_id=self.rest_id)
+    async def wait_async(self, timeout):
+        return await self.tx_cursor.wait_async(timeout)
 
     def get_rest_id(self):
         with self.mu:
@@ -60,12 +50,10 @@ class StorageWriterFilter(AsyncFilter):
             return self.rest_id
 
     def version(self) -> Optional[int]:
-        if self.tx_cursor is not None:
-            return self.tx_cursor.version
-        self.id_version = self.version_cache.get(rest_id=self.rest_id)
-        logging.debug('StorageWriterFilter.version %s %s',
-                      self.rest_id, self.id_version)
-        return self.id_version.version if self.id_version is not None else None
+        if self.tx_cursor is None:
+            self.tx_cursor = self.storage.get_transaction_cursor(
+                rest_id=self.rest_id)
+        return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata,
                 reuse_blob_rest_id : Optional[List[str]] = None):
@@ -79,9 +67,17 @@ class StorageWriterFilter(AsyncFilter):
             self.rest_id = rest_id
             self.cv.notify_all()
 
+    def _load_tx(self):
+        while True:
+            try:
+                self.tx_cursor.load()
+                break
+            except VersionConflictException:
+                pass
+
     def _load(self):
-        self.tx_cursor = self.storage.get_transaction_cursor()
-        self.tx_cursor.load(rest_id=self.rest_id)
+        self.tx_cursor = self.storage.get_transaction_cursor(rest_id=self.rest_id)
+        self._load_tx()
 
     # AsyncFilter
     def _get(self, deadline : Deadline) -> Optional[TransactionMetadata]:
@@ -99,10 +95,9 @@ class StorageWriterFilter(AsyncFilter):
             logging.debug('StorageWriterFilter._get %s deadline_left %s '
                           'tx %s',
                           self.rest_id, deadline_left, self.tx_cursor.tx)
-            self.version_cache.wait(
-                self.tx_cursor.id, self.tx_cursor.version,
-                deadline.deadline_left())
-            self.tx_cursor.load()
+            # XXX timeout?
+            self.tx_cursor.wait(deadline.deadline_left())
+            self._load_tx()
 
         logging.debug('StorageWriterFilter._get %s %s', self.rest_id,
                       self.tx_cursor.tx)
@@ -115,7 +110,8 @@ class StorageWriterFilter(AsyncFilter):
         if timeout == 0:
             if self.tx_cursor is None:
                 self._load()
-            self.tx_cursor.load()
+            else:
+                self._load_tx()
             return self.tx_cursor.tx.copy()
         return self._get(Deadline(timeout))
 

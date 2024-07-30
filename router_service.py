@@ -140,7 +140,6 @@ class Service:
 
         self.storage.recover()
 
-        self.config.set_version_cache(self.version_cache)
         self.config.set_storage(self.storage)
 
         # TODO storage should manage this internally?
@@ -186,8 +185,7 @@ class Service:
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.config.rest_id_factory(),
-            create_leased=True,
-            version_cache=self.version_cache)
+            create_leased=True)
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer))
         if fut is None:
@@ -198,8 +196,7 @@ class Service:
                            ) -> Optional[StorageWriterFilter]:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.config.rest_id_factory(),
-            version_cache=self.version_cache)
+            rest_id_factory=self.config.rest_id_factory())
 
     def _handle_new_tx(self, writer : StorageWriterFilter):
         tx_rest_id = writer.get_rest_id()
@@ -227,8 +224,7 @@ class Service:
             notification_factory=lambda: self.config.notification_endpoint(),
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
-            retry_params = output_yaml.get('retry_params', {}),
-            version_cache=self.version_cache)
+            retry_params = output_yaml.get('retry_params', {}))
         handler.handle()
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
 

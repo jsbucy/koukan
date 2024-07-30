@@ -203,7 +203,7 @@ class RouterServiceTest(unittest.TestCase):
         # probe for startup
         def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
-                mail_response = Response())
+                mail_response = Response(299, 'probe mail ok'))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_cancel(tx, tx_delta):
@@ -338,10 +338,16 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 203)
 
+        # the previous on_update() waited on req_inflight() so this
+        # just does a point read
         tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_rest_smoke create %s',
+        logging.debug('RouterServiceTest.test_rest_body create %s',
                       tx_json)
+
         if 'attempt_count' in tx_json:
             del tx_json['attempt_count']
         self.assertEqual(tx_json, {

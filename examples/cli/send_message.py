@@ -141,6 +141,7 @@ def main(mail_from, rcpt_to):
     done = False
     etag = None
     while not done:
+        spin = True
         if rest_resp is None:
             start = time.monotonic()
             logging.info('GET %s', tx_url)
@@ -151,7 +152,10 @@ def main(mail_from, rcpt_to):
             logging.info('GET /%s %d %s',
                          tx_url, rest_resp.status_code, rest_resp.text)
             if rest_resp.status_code in [200, 304] and 'etag' in rest_resp.headers:
-                etag = rest_resp.headers['etag']
+                resp_etag = rest_resp.headers['etag']
+                if resp_etag != etag:
+                    spin = False
+                etag = resp_etag
                 logging.debug('etag %s', etag)
             else:
                 etag = None
@@ -172,12 +176,11 @@ def main(mail_from, rcpt_to):
         rest_resp = None
         if done:
             break
-        # etag didn't change and delta < 1?
-        # delta = time.monotonic() - start
-        # if delta < 1:
-        #     dt = 1 - delta
-        #     logging.debug('nospin %f', dt)
-        #     time.sleep(dt)
+        delta = time.monotonic() - start
+        if spin and delta < 1:
+            dt = 1 - delta
+            logging.debug('nospin %f', dt)
+            time.sleep(dt)
         tx_json = None
 
 

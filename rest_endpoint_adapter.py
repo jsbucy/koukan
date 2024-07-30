@@ -77,6 +77,7 @@ class SyncFilterAdapter(AsyncFilter):
     # transaction has reached a final status: data response or cancelled
     done : bool = False
     id_version : IdVersion
+    sampled_version : Optional[int] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -98,11 +99,13 @@ class SyncFilterAdapter(AsyncFilter):
             return (now - self._last_update) > t
 
     def version(self):
-        return self._version
+        self.sampled_version = self._version
+        return self.sampled_version
 
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, timeout) -> bool:
+        assert self.sampled_version is not None
         return await self.id_version.wait_async(
-            version=version, timeout=timeout)
+            version=self.sampled_version, timeout=timeout)
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -357,7 +360,7 @@ class RestHandler(Handler):
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', make_tx_uri(tx.rest_id))],
             etag=self._etag(self.async_filter.version()))
-        logging.debug('RestHandler.create_tx %s', resp)
+        logging.debug('RestHandler._create %s', resp)
         return resp
 
     async def create_tx_async(self, request : HttpRequest, req_json : dict
@@ -444,9 +447,10 @@ class RestHandler(Handler):
 
     async def _get_tx_async(self, request : HttpRequest,
                             version : Optional[int], deadline) -> HttpResponse:
+        logging.debug('RestHandler._get_tx_async version %s', version)
         if version is not None:
             wait_result = await self.async_filter.wait_async(
-                version, deadline.deadline_left())
+                deadline.deadline_left())
             if not wait_result:
                 return self.response(request, code=304, msg='unchanged',
                                      headers=[('etag', self._etag(version))])
