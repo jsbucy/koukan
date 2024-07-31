@@ -109,14 +109,6 @@ class IdVersionMap:
                 id_version.update(version)
             return id_version
 
-    def wait(self, db_id : int, version : int, timeout : Optional[float] = None
-             ) -> bool:
-        # precondition: get_id/rest_id() returned non-none
-        # (or previous call to insert_or_update())
-        id_version = self.id_version_map.get(db_id)
-        assert id_version is not None
-        return id_version.wait(version, timeout)
-
     def get(self, db_id : Optional[int] = None, rest_id : Optional[str] = None
             ) -> Optional[IdVersion]:
         with self.lock:
@@ -126,12 +118,3 @@ class IdVersionMap:
                 return self.rest_id_map.get(rest_id, None)
             else:
                 raise ValueError
-
-    async def wait_async(self,
-                         version : int,
-                         timeout : float,
-                         db_id : Optional[int] = None,
-                         rest_id : Optional[str] = None) -> bool:
-        id_version = self.get(db_id, rest_id)
-        assert id_version is not None  # precondition
-        return await id_version.wait_async(version, timeout)
