@@ -16,12 +16,15 @@ pytype_library(name='response',
 pytype_library(name='filter',
                srcs=['filter.py'],
                deps=[':blob',
+                     ':deadline',
                      ':response'])
 
 py_test(name='filter_test',
         srcs=['filter_test.py'],
         deps=[':filter',
-              ':blob'])
+              ':blob',
+              ':deadline',
+              ':fake_endpoints'])
 
 pytype_library(name='filter_adapters',
                srcs=['filter_adapters.py'],

@@ -7,6 +7,7 @@ import copy
 from response import Response
 
 from blob import Blob, WritableBlob
+from deadline import Deadline
 
 class HostPort:
     host : str
@@ -704,3 +705,28 @@ class AsyncFilter(ABC):
     @abstractmethod
     async def wait_async(self, timeout) -> bool:
         pass
+
+
+# async_filter.update(tx, tx_delta) and loop up to deadline
+# on tx.req_inflight()
+# returns
+def update_wait_inflight(async_filter : AsyncFilter,
+                         tx : TransactionMetadata,
+                         tx_delta : TransactionMetadata,
+                         deadline : Deadline
+                         ) -> TransactionMetadata:
+    tx_orig = tx.copy()
+    upstream_tx = tx.copy()
+    upstream_delta = async_filter.update(upstream_tx, tx_delta)
+    while deadline.remaining() and upstream_tx.req_inflight():
+        if not async_filter.wait(deadline.deadline_left()):
+            break
+        upstream_tx = async_filter.get()
+
+    # TODO: we have a few of these hacks due to the way body/body_blob
+    # get swapped around in and out of storage
+    if tx_orig.body_blob:
+        del tx_orig.body_blob
+    upstream_delta = tx_orig.delta(upstream_tx)
+    tx.replace_from(upstream_tx)
+    return upstream_delta
