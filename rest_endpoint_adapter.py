@@ -304,11 +304,17 @@ class RestHandler(Handler):
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
         logging.debug('RestHandler.handle_async req %s', request)
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        deadline = Deadline(timeout)
         cfut = self.executor.submit(fn, 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
-        await fut
+        if not await asyncio.wait_for(fut, deadline.deadline_left()):
+            cfut.cancel()
+            return self.response(request, code=500, msg='timeout')
         resp = fut.result()
         logging.debug('RestHandler.handle_async resp %s', resp)
         return resp
@@ -316,9 +322,8 @@ class RestHandler(Handler):
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], HttpResponse]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
-        # return 0 i.e. no waiting if header not present
         if not (timeout_header := req.headers.get('request-timeout', None)):
-            return 0, None
+            return MAX_TIMEOUT, None
         timeout = None
         try:
             timeout = min(int(timeout_header), MAX_TIMEOUT)
