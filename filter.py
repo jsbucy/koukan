@@ -241,6 +241,9 @@ _tx_fields = [
     TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB])),
+    TxField('parsed_blobs', validity=None),
+    TxField('parsed_blob_ids', validity=None),
+    TxField('parsed_json', validity=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -287,6 +290,9 @@ class TransactionMetadata:
     tx_db_id : Optional[int] = None
     inline_body : Optional[str] = None
     cancelled : Optional[bool] = None
+    parsed_blobs : Optional[List[Blob]] = None
+    parsed_blob_ids : Optional[List[str]] = None
+    parsed_json : Optional[dict] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,

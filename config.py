@@ -11,6 +11,7 @@ from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
 from message_builder_filter import MessageBuilderFilter
+from message_parser_filter import MessageParserFilter
 from filter import (
     HostPort,
     SyncFilter )
@@ -51,6 +52,7 @@ class Config:
             'dkim': FilterSpec(self.dkim, SyncFilter),
             'exploder': FilterSpec(self.exploder, SyncFilter),
             'message_builder': FilterSpec(self.message_builder, SyncFilter),
+            'message_parser': FilterSpec(self.message_parser, SyncFilter),
             'remote_host': FilterSpec(self.remote_host, SyncFilter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, SyncFilter)
@@ -146,6 +148,9 @@ class Config:
 
     def message_builder(self, yaml, next):
         return MessageBuilderFilter(self.storage, next)
+
+    def message_parser(self, yaml, next):
+        return MessageParserFilter(next)
 
     def remote_host(self, yaml, next):
         return RemoteHostFilter(next)

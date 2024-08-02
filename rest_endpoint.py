@@ -139,6 +139,24 @@ class RestEndpoint(SyncFilter):
 
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
+        body_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
+        if body_json == {}:
+            return HttpResponse(status_code=200)
+
+        rest_resp = self._post_tx(
+            self.transaction_url, body_json, self.client.patch, deadline)
+        if rest_resp is None:
+            return None
+        resp_json = get_resp_json(rest_resp)
+        logging.info('RestEndpoint._update resp_json %s', resp_json)
+        if resp_json is None:
+            return None
+        return rest_resp
+
+    def _post_tx(self, uri, body_json : dict,
+                 http_method,
+                 deadline : Deadline) -> Optional[HttpResponse]:
+        logging.debug('RestEndpoint._post_tx %s', uri)
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
@@ -146,30 +164,34 @@ class RestEndpoint(SyncFilter):
         self._set_request_timeout(req_headers, deadline_left)
         if self.etag:
             req_headers['if-match'] = self.etag
-        json = downstream_delta.to_json(WhichJson.REST_UPDATE)
-        if json == {}:
-            return HttpResponse(status_code=200)
         try:
-            rest_resp = self.client.patch(
-                self.transaction_url,
-                json=downstream_delta.to_json(WhichJson.REST_UPDATE),
+            rest_resp = http_method(
+                uri,
+                json=body_json,
                 headers=req_headers,
                 timeout=deadline_left)
         except RequestError:
             return None
         logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.http_version)
-        resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint._update resp_json %s', resp_json)
-        if resp_json is None:
-            return None
 
         if rest_resp.status_code < 300:
             self.etag = rest_resp.headers.get('etag', None)
         else:
             self.etag = None
             # xxx err?
+
         return rest_resp
+
+    def _update_message_builder(self, delta : TransactionMetadata,
+                                deadline : Deadline
+                                ) -> Optional[Response]:
+        rest_resp = self._post_tx(
+            self.transaction_url + '/message_builder', delta.parsed_json,
+            self.client.post, deadline)
+        if rest_resp.status_code != 200:
+            return Response(400, 'RestEndpoint._update_message_builder err')
+        return None
 
     def _cancel(self):
         logging.debug('RestEndpoint._cancel %s ', self.transaction_url)
@@ -206,6 +228,8 @@ class RestEndpoint(SyncFilter):
         downstream_delta = tx_delta.copy()
         if downstream_delta.body_blob:
             del downstream_delta.body_blob
+            # del downstream_delta.parsed_json
+            # del downstream_delta.parsed_blobs
 
         # We are going to send a slightly different delta upstream per
         # remote_host (discovery in _start()) and body_blob (below).
@@ -265,7 +289,7 @@ class RestEndpoint(SyncFilter):
             if err:
                 tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint bad resp_json'))
-                return
+                return  # xxx delta
 
             upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or
@@ -279,7 +303,12 @@ class RestEndpoint(SyncFilter):
                 assert tx.merge_from(errs) is not None
                 return errs
 
-        if tx.body_blob is None:
+        if tx_delta.parsed_json is not None:
+            tx.data_response = self._update_message_builder(tx_delta, deadline)
+            if tx.data_response is not None and tx.data_response.err():
+                return  # xxx delta
+
+        if tx.body_blob is None and not(tx_delta.parsed_blobs):
             return upstream_delta
 
         err = None
@@ -310,6 +339,22 @@ class RestEndpoint(SyncFilter):
                     data_response = put_blob_resp)
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
+
+        if tx_delta.parsed_blobs:
+            blob_id_delta = TransactionMetadata()
+            blob_id_delta.parsed_blob_ids = []
+            for blob in tx_delta.parsed_blobs:
+                put_blob_resp = self._put_blob(
+                    blob, testonly_non_body_blob=True)
+                if not put_blob_resp.ok():
+                    upstream_delta = TransactionMetadata(
+                        data_response = put_blob_resp)
+                    assert tx.merge_from(upstream_delta) is not None
+                    return upstream_delta
+                blob_id_delta.parsed_blob_ids.append(self.blob_url)
+                self.blob_url = None
+            tx.merge_from(blob_id_delta)
+            return blob_id_delta
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',

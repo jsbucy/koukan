@@ -94,6 +94,7 @@ endpoint:
       name: local_domain
       domains:
       - name: d
+  - filter: message_parser
   - filter: rest_output
     static_endpoint: http://localhost:8002
     verify: localhost.crt
