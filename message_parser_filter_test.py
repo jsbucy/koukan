@@ -14,7 +14,7 @@ class MessageParserFilterTest(unittest.TestCase):
                             format='%(asctime)s %(message)s')
 
     def test_smoke(self):
-        with open('testdata/nested.msg', 'rb') as f:
+        with open('testdata/multipart.msg', 'rb') as f:
             b = f.read()
         tx=TransactionMetadata(
             body_blob=InlineBlob(b, len(b)))
@@ -30,8 +30,9 @@ class MessageParserFilterTest(unittest.TestCase):
                 upstream_delta.data_response = Response()
             tx.merge_from(upstream_delta)
             return upstream_delta
-        upstream.add_expectation(exp)
-        upstream.add_expectation(exp)
+        upstream.add_expectation(exp)  # blobs
+        upstream.add_expectation(exp)  # json
+        upstream.add_expectation(exp)  # raw/body
 
         filter = MessageParserFilter(upstream)
         upstream_delta = filter.on_update(tx, tx.copy())

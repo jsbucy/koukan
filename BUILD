@@ -135,6 +135,30 @@ py_test(name='message_builder_filter_test',
               ':response',
               ':storage'])
 
+pytype_library(name='message_parser',
+               srcs=['message_parser.py'],
+               deps=[':blob'])
+
+py_test(name='message_parser_test',
+        srcs=['message_parser_test.py'],
+        deps=[':message_parser',
+              ':blob'],
+        data=['testdata/multipart.msg'])
+
+pytype_library(name='message_parser_filter',
+               srcs=['message_parser_filter.py'],
+               deps=[':message_parser',
+                     ':blob',
+                     ':filter'],
+        data=['testdata/multipart.msg'])
+
+py_test(name='message_parser_filter_test',
+        srcs=['message_parser_filter_test.py'],
+        deps=[':message_parser_filter',
+              ':blob',
+              ':fake_endpoints',
+              ':filter',
+              ':response'])
 
 pytype_library(name='address',
                srcs=['address.py'])
@@ -251,6 +275,7 @@ pytype_library(name='config',
                      ':local_domain_policy',
                      ':dest_domain_policy',
                      ':message_builder_filter',
+                     ':message_parser_filter',
                      ':recipient_router_filter',
                      ':dkim_endpoint',
                      ':mx_resolution',

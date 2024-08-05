@@ -1,7 +1,7 @@
 from typing import Callable, Dict, List, Optional, Union
 import logging
 
-from email.message import EmailMessage
+from email.message import EmailMessage, MIMEPart
 from email.parser import BytesParser
 from email.headerregistry import (
     Address,
@@ -81,7 +81,7 @@ class MessageParser:
     def _parse_generic_header(self, header : BaseHeader):
         return str(header)
 
-    def parse_headers(self, message : EmailMessage, out):
+    def parse_headers(self, message : MIMEPart, out):
         headers_out = []
         out['headers'] = headers_out
         for name,value in message.items():
@@ -93,7 +93,7 @@ class MessageParser:
                 out_i = self._parse_generic_header(value)
             headers_out.append([name.lower(), out_i])
 
-    def _parse_part(self, part, out):
+    def _parse_part(self, part : MIMEPart, out):
         logging.debug(part.get_content_type())
         logging.debug(part.get_content())
 
@@ -115,7 +115,8 @@ class MessageParser:
         out['blob_id'] = len(self.out.blobs)
         self.out.blobs.append(blob)
 
-    def _parse_mime_tree(self, part, depth, parse_headers, out : dict):
+    def _parse_mime_tree(self, part : MIMEPart,
+                         depth, parse_headers, out : dict):
         if parse_headers:
             self.parse_headers(part, out)
 
@@ -134,6 +135,7 @@ class MessageParser:
             for part_i in part.iter_parts():
                 out_i = {}
                 out['parts'].append(out_i)
+                assert isinstance(part_i, MIMEPart)
                 self._parse_mime_tree(part_i, depth + 1, is_message, out_i)
         else:
             self._parse_part(part, out)
@@ -146,6 +148,7 @@ class MessageParser:
 
         parts = {}
         self.out.json['parts'] = parts
+        assert isinstance(parsed, MIMEPart)
         self._parse_mime_tree(parsed, 0, True, parts)
 
         logging.debug(self.out.json)
@@ -178,6 +181,14 @@ class MessageParser:
 
         # don't recurse into message/* -> single blob
 
+    def _add_blob_ids(self, blob_ids, part):
+        if 'blob_id' in part:
+            part['blob_id'] = blob_ids[part['blob_id']]
+            return
+
+        for part_i in part['parts']:
+            self._add_blob_ids(blob_ids, part_i)
+
     def add_blob_ids(self, blob_ids : List[str]):
-        logging.debug(self.out.blobs)
-        logging.debug(blob_ids)
+        logging.debug('MessageParser.add_blob_ids %s', blob_ids)
+        self._add_blob_ids(blob_ids, self.out.json['parts'])

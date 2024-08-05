@@ -61,6 +61,7 @@ class Transaction:
 
     # returns True if there are no missing blobs, False otherwise
     def _check_blobs(self, part_json) -> bool:
+        logging.debug(part_json)
         if 'parts' not in part_json:
             if 'blob_id' not in part_json:
                 return True
@@ -75,9 +76,9 @@ class Transaction:
     def update_message_builder(self, message_json):
         logging.debug('Tx.update_message_json %s', message_json)
         self.message_json = message_json
-        #if not self._check_blobs(self.message_json):
-        #    self.tx_json['data_response'] = {
-        #        'code': 450, 'message': 'missing blobs'}
+        if not self._check_blobs(self.message_json['parts']):
+            self.tx_json['data_response'] = {
+                'code': 450, 'message': 'missing blobs'}
 
 
     def create_tx_body(self, upload_chunked : bool, tx_body : bool, stream

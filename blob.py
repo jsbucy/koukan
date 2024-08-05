@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple
 from abc import ABC, abstractmethod
 import os
+from io import IOBase
 
 class Blob(ABC):
     @abstractmethod
@@ -83,12 +84,16 @@ class InlineBlob(Blob, WritableBlob):
         return True, len(self.d), content_length
 
 # already finalized
-class FileLikeBlob(Blob):
-    def __init__(self, f):
+class FileLikeBlob(Blob, WritableBlob):
+    _content_length : Optional[int] = None
+    f : IOBase
+
+    def __init__(self, f : IOBase):
         self.f = f
-        stat = os.stat(f.fileno())
-        self._len = stat.st_size
-        self._content_length = self._len
+        if not f.writable():
+            stat = os.stat(f.fileno())
+            self._len = stat.st_size
+            self._content_length = self._len
 
     def read(self, offset, len=None) -> bytes:
         self.f.seek(offset)
@@ -98,7 +103,24 @@ class FileLikeBlob(Blob):
         return self._content_length
 
     def len(self) -> int:
-        return self._len
+        if self._content_length is not None:
+            return self._content_length
+        return self.f.tell()
+
+    def append_data(self, offset : int, d : bytes,
+                    content_length : Optional[int] = None
+                    ) -> Tuple[bool, int, Optional[int]]:
+        if offset != self.f.tell():
+            raise ValueError
+        self.f.write(d)
+        finalized = False
+        if content_length is not None:
+            assert self.f.tell() <= content_length
+            assert (self._content_length is None or
+                    self._content_length == content_length)
+            self._content_length = content_length
+            finalized = True
+        return finalized, self.f.tell(), self._content_length
 
     def __del__(self):
         if self.f:
