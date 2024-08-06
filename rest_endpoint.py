@@ -43,7 +43,6 @@ def constant_resolution(x):
 class RestEndpoint(SyncFilter):
     transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
-    static_base_url : Optional[str] = None
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
     etag : Optional[str] = None
@@ -79,7 +78,7 @@ class RestEndpoint(SyncFilter):
                  max_inline=1024,
                  chunk_size=1048576,
                  verify=True):
-        self.base_url = self.static_base_url = static_base_url
+        self.base_url = static_base_url
         self.http_host = http_host
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
@@ -235,6 +234,8 @@ class RestEndpoint(SyncFilter):
         # When we look at the delta of what we got back, these fields
         # should not appear so it will merge cleanly with the original input.
         if self.upstream_tx is None:
+            if self.base_url is None:
+                self.base_url = tx.rest_endpoint
             self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None

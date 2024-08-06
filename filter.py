@@ -337,6 +337,10 @@ class TransactionMetadata:
         out += 'body_blob=%s ' % (self.body_blob)
         out += 'message_builder=%s ' % (self.message_builder)
         out += 'data_response=%s ' % self.data_response
+        if self.rest_endpoint:
+            out += 'rest_endpoint=%s' % self.rest_endpoint
+        if self.remote_host:
+            out += 'remote_host=%s' % self.remote_host
         if self.cancelled is not None:
             out += 'cancelled=%s ' % self.cancelled
         return out

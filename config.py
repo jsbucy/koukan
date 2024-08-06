@@ -117,7 +117,7 @@ class Config:
         rcpt_timeout = 30
         data_timeout = 300
         return RestEndpoint(
-            static_base_url = yaml['static_endpoint'],
+            static_base_url = yaml.get('static_endpoint', None),
             http_host = yaml['http_host'],
             remote_host_resolution = remote_host_disco,
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
@@ -130,6 +130,7 @@ class Config:
     def router_policy_local_domain(self, policy_yaml):
         d = {}
         for domain in policy_yaml['domains']:
+            logging.debug('Config.router_policy_local_domain %s', domain)
             d[domain['name']] = domain.get('endpoint', None)
         logging.info('router_policy_local_domain %s', d)
         return LocalDomainPolicy(d)

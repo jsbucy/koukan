@@ -32,7 +32,7 @@ class RecipientRouterFilter(SyncFilter):
 
     def _route(self, downstream_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        logging.debug('Router._route() %s %s',
+        logging.debug('RecipientRouterFilter._route() %s %s',
                       self.upstream_tx.mail_from, self.upstream_tx.rcpt_to)
         mailbox = self.upstream_tx.rcpt_to[0]
         assert mailbox is not None

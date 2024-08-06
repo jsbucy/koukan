@@ -25,7 +25,7 @@ class Transaction:
 
     tx_json : dict
     file : Optional[TemporaryFile] = None
-    message_json : dict
+    message_json : Optional[dict] = None
 
     blobs : Dict[str, TemporaryFile]
 
@@ -138,12 +138,15 @@ class Transaction:
 
     def log(self):
         logging.debug('received tx %s', self.tx_json)
-        logging.debug('received parsed %s', self.message_json)
+        logging.debug('received parsed %s',
+                      self.message_json if self.message_json else None)
         self.file.seek(0)
         logging.debug('received body %s', self.file.read())
         for blob_id,file in self.blobs.items():
             file.seek(0)
             logging.debug('received blob %s %s', blob_id, file.read())
+        else:
+            logging.debug('received blob %s', self.blobs)
 
     def cancel(self):
         pass

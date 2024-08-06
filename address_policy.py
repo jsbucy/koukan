@@ -30,7 +30,7 @@ class PrefixAddr:
 class AddressPolicy(RoutingPolicy):
     patterns : List[PrefixAddr] = None
 
-    def __init__(self, patterns):
+    def __init__(self, patterns : List[PrefixAddr]):
         self.patterns = patterns
 
     # called on the first recipient in the transaction
