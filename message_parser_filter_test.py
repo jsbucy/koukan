@@ -23,15 +23,12 @@ class MessageParserFilterTest(unittest.TestCase):
         def exp(tx, delta):
             upstream_delta = TransactionMetadata()
             if delta.parsed_blobs:
-                upstream_delta.parsed_blob_ids = [
-                    str(i) for i in range(0, len(delta.parsed_blobs)) ]
-            elif delta.parsed_json:
-                logging.debug(delta.parsed_json)
+                logging.debug('blobs %s', delta.parsed_blobs)
+            if delta.parsed_json:
+                logging.debug('parsed json %s', delta.parsed_json)
                 upstream_delta.data_response = Response()
             tx.merge_from(upstream_delta)
             return upstream_delta
-        upstream.add_expectation(exp)  # blobs
-        upstream.add_expectation(exp)  # json
         upstream.add_expectation(exp)  # raw/body
 
         filter = MessageParserFilter(upstream)

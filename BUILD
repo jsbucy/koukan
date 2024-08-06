@@ -143,7 +143,7 @@ py_test(name='message_parser_test',
         srcs=['message_parser_test.py'],
         deps=[':message_parser',
               ':blob'],
-        data=['testdata/multipart.msg'])
+        data=['testdata/trivial.msg'])
 
 pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
@@ -333,7 +333,8 @@ py_test(name='router_service_test_flask',
               ':blob',
               ':config',
               ':fake_endpoints',
-              ':filter'])
+              ':filter'],
+        data=['testdata/trivial.msg'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
@@ -345,7 +346,8 @@ py_test(name='router_service_test_fastapi',
               ':blob',
               ':config',
               ':fake_endpoints',
-              ':filter'])
+              ':filter'],
+        data=['testdata/trivial.msg'])
 
 pytype_library(name='smtp_auth',
                srcs=['smtp_auth.py'])

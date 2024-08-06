@@ -10,6 +10,7 @@ from email.headerregistry import (
     DateHeader,
     MessageIDHeader )
 import email.policy
+import email.contentmanager
 
 from blob import (
     Blob,
@@ -108,11 +109,13 @@ class MessageParser:
         blob = self.blob_factory()
         content : bytes
         if part.get_content_maintype() == 'text':
-            content = part.get_content().encode('utf-8')
+            content_str = part.get_content()
+            content = content_str.encode('utf-8')
         else:
             content = part.get_content()
+
         blob.append_data(0, content, len(content))
-        out['blob_id'] = len(self.out.blobs)
+        out['blob_id'] = blob.rest_id()
         self.out.blobs.append(blob)
 
     def _parse_mime_tree(self, part : MIMEPart,
@@ -181,14 +184,3 @@ class MessageParser:
 
         # don't recurse into message/* -> single blob
 
-    def _add_blob_ids(self, blob_ids, part):
-        if 'blob_id' in part:
-            part['blob_id'] = blob_ids[part['blob_id']]
-            return
-
-        for part_i in part['parts']:
-            self._add_blob_ids(blob_ids, part_i)
-
-    def add_blob_ids(self, blob_ids : List[str]):
-        logging.debug('MessageParser.add_blob_ids %s', blob_ids)
-        self._add_blob_ids(blob_ids, self.out.json['parts'])

@@ -49,7 +49,6 @@ class RestEndpoint(SyncFilter):
     etag : Optional[str] = None
     max_inline : int
     chunk_size : int
-    body_len : int = 0
 
     blob_path : Optional[str] = None
     blob_url : Optional[str] = None
@@ -329,6 +328,17 @@ class RestEndpoint(SyncFilter):
             assert tx.merge_from(data_err) is not None
             return upstream_delta
 
+        if tx_delta.parsed_blobs:
+            for blob in tx_delta.parsed_blobs:
+                put_blob_resp = self._put_blob(
+                    blob, testonly_non_body_blob=True)
+                if not put_blob_resp.ok():
+                    upstream_delta = TransactionMetadata(
+                        data_response = put_blob_resp)
+                    assert tx.merge_from(upstream_delta) is not None
+                    return upstream_delta
+                self.blob_url = None
+
         put_blob_resp = None
         if data_last:
             put_blob_resp = self._put_blob(tx_delta.body_blob)
@@ -339,22 +349,6 @@ class RestEndpoint(SyncFilter):
                     data_response = put_blob_resp)
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
-
-        if tx_delta.parsed_blobs:
-            blob_id_delta = TransactionMetadata()
-            blob_id_delta.parsed_blob_ids = []
-            for blob in tx_delta.parsed_blobs:
-                put_blob_resp = self._put_blob(
-                    blob, testonly_non_body_blob=True)
-                if not put_blob_resp.ok():
-                    upstream_delta = TransactionMetadata(
-                        data_response = put_blob_resp)
-                    assert tx.merge_from(upstream_delta) is not None
-                    return upstream_delta
-                blob_id_delta.parsed_blob_ids.append(self.blob_url)
-                self.blob_url = None
-            tx.merge_from(blob_id_delta)
-            return blob_id_delta
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -392,30 +386,31 @@ class RestEndpoint(SyncFilter):
             chunk_last = (offset + len(chunk) >= blob.len())
             logging.debug('RestEndpoint._put_blob() '
                           'chunk_offset %d chunk len %d '
-                          'body_len %d chunk_last %s',
-                          offset, len(chunk), self.body_len, chunk_last)
+                          'chunk_last %s',
+                          offset, len(chunk), chunk_last)
 
             resp, result_length = self._put_blob_chunk(
-                offset=self.body_len,
+                offset=offset,
                 d=chunk,
                 last=chunk_last,
-                testonly_non_body_blob=testonly_non_body_blob)
+                testonly_non_body_blob=testonly_non_body_blob,
+                blob_rest_id=blob.rest_id())
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
                 return resp
             # how many bytes from chunk were actually accepted?
-            chunk_out = result_length - self.body_len
+            chunk_out = result_length - offset
             logging.debug('RestEndpoint._put_blob() '
                           'result_length %d chunk_out %d',
                           result_length, chunk_out)
             offset += chunk_out
-            self.body_len += chunk_out
         return Response()
 
     # -> (resp, len)
     def _put_blob_chunk(self, offset, d : bytes, last : bool,
-                        testonly_non_body_blob=False
+                        testonly_non_body_blob=False,
+                        blob_rest_id : Optional[str] = None
                         ) -> Tuple[Optional[Response], Optional[int]]:
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
@@ -424,7 +419,9 @@ class RestEndpoint(SyncFilter):
             headers['host'] = self.http_host
         try:
             if self.blob_url is None:
-                if not testonly_non_body_blob:
+                if blob_rest_id is not None:
+                    endpoint = self.transaction_url + '/blob/' + blob_rest_id
+                elif not testonly_non_body_blob:
                     self.blob_path = self.transaction_path + '/body'
                     self.blob_url = self._maybe_qualify_url(self.blob_path)
                     endpoint = self.blob_url

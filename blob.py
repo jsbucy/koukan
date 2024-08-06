@@ -8,8 +8,7 @@ class Blob(ABC):
     def len(self) -> int:
         pass
 
-    # TODO this id is vestigal?
-    def id(self) -> Optional[str]:
+    def rest_id(self) -> Optional[str]:
         return None
 
     def unref(self, Any) -> None:
@@ -28,6 +27,7 @@ class Blob(ABC):
         cl = self.content_length()
         return cl is not None and cl == self.len()
 
+
 class WritableBlob(ABC):
     # write at offset which must be the current end
     # bool: whether offset was correct/write was applied, resulting range
@@ -36,6 +36,9 @@ class WritableBlob(ABC):
                     content_length : Optional[int] = None
                     ) -> Tuple[bool, int, Optional[int]]:
         pass
+
+    def rest_id(self) -> Optional[str]:
+        return None
 
 
 class InlineBlob(Blob, WritableBlob):
@@ -87,13 +90,19 @@ class InlineBlob(Blob, WritableBlob):
 class FileLikeBlob(Blob, WritableBlob):
     _content_length : Optional[int] = None
     f : IOBase
+    _rest_id : Optional[str] = None
 
-    def __init__(self, f : IOBase):
+    def __init__(self, f : IOBase,
+                 rest_id : Optional[str] = None):
         self.f = f
+        self._rest_id = rest_id
         if not f.writable():
             stat = os.stat(f.fileno())
             self._len = stat.st_size
             self._content_length = self._len
+
+    def rest_id(self):
+        return self._rest_id
 
     def read(self, offset, len=None) -> bytes:
         self.f.seek(offset)

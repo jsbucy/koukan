@@ -1,7 +1,7 @@
 # gunicorn3 -b localhost:8002 --access-logfile - --log-level debug
 #   'examples.receiver.receiver:create_app()'
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import logging
 from tempfile import TemporaryFile
 import json
@@ -27,10 +27,10 @@ class Transaction:
     file : Optional[TemporaryFile] = None
     message_json : dict
 
-    blobs : List[TemporaryFile]
+    blobs : Dict[str, TemporaryFile]
 
     def __init__(self, tx_json):
-        self.blobs = []
+        self.blobs = {}
 
         logging.debug('Tx.init %s', tx_json)
         self.tx_json = copy.copy(tx_json)
@@ -50,62 +50,69 @@ class Transaction:
         logging.debug('Tx.get %s', json_out)
         return json_out
 
-    def _parse_blob_id(self, blob_id : str) -> Optional[int]:
-        off = blob_id.find('/blob/')
-        if off < 0:
-            return None
-        try:
-            return int(blob_id[off+6])
-        except ValueError:
-            return None
+    # def _parse_blob_id(self, blob_id : str) -> Optional[int]:
+    #     off = blob_id.find('/blob/')
+    #     if off < 0:
+    #         return None
+    #     try:
+    #         return int(blob_id[off+6])
+    #     except ValueError:
+    #         return None
 
     # returns True if there are no missing blobs, False otherwise
     def _check_blobs(self, part_json) -> bool:
-        logging.debug(part_json)
+        logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
             if 'blob_id' not in part_json:
-                return True
-            blob_id = self._parse_blob_id(part_json['blob_id'])
-            return (blob_id is not None) and (blob_id < len(self.blobs))
+                return
+            blob_id = part_json['blob_id']
+            logging.debug('check_blobs %s', blob_id)
+            self.blobs[blob_id] = None
+            return
 
         for part_i in part_json['parts']:
-            if not self._check_blobs(part_i):
-                return False
-        return True
+            self._check_blobs(part_i)
 
     def update_message_builder(self, message_json):
         logging.debug('Tx.update_message_json %s', message_json)
         self.message_json = message_json
-        if not self._check_blobs(self.message_json['parts']):
-            self.tx_json['data_response'] = {
-                'code': 450, 'message': 'missing blobs'}
+        self._check_blobs(self.message_json['parts'])
 
-
-    def create_tx_body(self, upload_chunked : bool, tx_body : bool, stream
+    def create_tx_body(self, upload_chunked : bool,
+                       tx_body : bool = False,
+                       blob_id : Optional[str] = None,
+                       stream = None
                        ) -> Optional[str]:  # blob-id if !tx_body
         assert upload_chunked or stream
-        file = TemporaryFile('w+b')
-        blob_id = None
         if tx_body:
+            if self.file is not None:
+                return None  # bad
+            file = TemporaryFile('w+b')
             self.file = file
         else:
-            blob_id = str(len(self.blobs))
-            self.blobs.append(file)
+            logging.debug('create_tx_body %s %s', self.blobs, blob_id)
+            if blob_id not in self.blobs or self.blobs[blob_id] != None:
+                return None  # bad
+            file = TemporaryFile('w+b')
+            self.blobs[blob_id] = file
         if stream is None:
             return
+        if upload_chunked:
+            return blob_id
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
         if tx_body:
             self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+            self.log()
         file.seek(0)
-        logging.debug(file.read())
+        #logging.debug(file.read())
         return blob_id
 
     def _put_blob(self, range : ContentRange, stream,
                   file
                   ) -> Tuple[int, ContentRange]:
         if range.start != file.tell():
-            return 412, ContentRange('bytes', 0, self.file.tell())
+            return 412, ContentRange('bytes', 0, file.tell())
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
         if file.tell() == range.length:
@@ -115,22 +122,28 @@ class Transaction:
 
     def put_tx_body(self, range : ContentRange, stream
                     ) -> Tuple[int, ContentRange]:
+        logging.debug('put_tx_body %s', range)
         resp = self._put_blob(range, stream, self.file)
-        if self.file.tell == range.length:
+        if range.length is not None and self.file.tell() == range.length:
             self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
             self.log()
         return resp
 
     def put_blob(self, blob_id, range : ContentRange, stream
                     ) -> Tuple[int, ContentRange]:
-        parsed_blob_id = self._parse_blob_id(blob_id)
-        assert parsed_blob_id < len(self.blobs)
-        return self._put_blob(range, stream, self.blobs[parsed_blob_id])
+        logging.debug('put_blob %s %s', blob_id, range)
+        #parsed_blob_id = self._parse_blob_id(blob_id)
+        #assert parsed_blob_id < len(self.blobs)
+        return self._put_blob(range, stream, self.blobs[blob_id])
 
     def log(self):
-        logging.debug('received %s', self.tx_json)
-        #self.file.seek(0)
-        #logging.debug(self.file.read())
+        logging.debug('received tx %s', self.tx_json)
+        logging.debug('received parsed %s', self.message_json)
+        self.file.seek(0)
+        logging.debug('received body %s', self.file.read())
+        for blob_id,file in self.blobs.items():
+            file.seek(0)
+            logging.debug('received blob %s %s', blob_id, file.read())
 
     def cancel(self):
         pass
@@ -157,10 +170,12 @@ class Receiver:
 
     def create_tx_body(self, tx_rest_id : str,
                        upload_chunked : bool,
-                       tx_body : bool,
-                       stream):
+                       tx_body : bool = False,
+                       blob_id : Optional[str] = None,
+                       stream = None):
+        logging.debug('create_tx_body %s', blob_id)
         return self.transactions[tx_rest_id].create_tx_body(
-            upload_chunked, tx_body, stream)
+            upload_chunked, tx_body, blob_id, stream)
 
     def put_tx_body(self, tx_rest_id: str, range : ContentRange, stream):
         status, range = self.transactions[tx_rest_id].put_tx_body(range, stream)
@@ -211,8 +226,8 @@ def create_app():
         receiver.create_tx_body(
             tx_rest_id,
             request.args.get('upload', None),
-            True,
-            request.stream)
+            tx_body=True,
+            stream=request.stream)
         return FlaskResponse(status=201)
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
@@ -221,14 +236,21 @@ def create_app():
             request.headers.get('content-range'))
         return receiver.put_tx_body(tx_rest_id, range, request.stream)
 
-    @app.route('/transactions/<tx_rest_id>/blob', methods=['POST'])
-    def create_tx_blob(tx_rest_id) -> FlaskResponse:
+    @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['POST'])
+    def create_tx_blob(tx_rest_id, blob_id) -> FlaskResponse:
+        logging.debug('create_tx_blob %s', blob_id)
         blob_id = receiver.create_tx_body(
             tx_rest_id,
             request.args.get('upload', None),
-            False,
-            request.stream)
-        headers = {'location': '/transactions/' + tx_rest_id + '/blob/' + blob_id}
+            tx_body=False,
+            blob_id = blob_id,
+            stream=request.stream)
+        if blob_id is None:
+            resp = FlaskResponse(status=400)
+            resp.content = 'bad blob id'
+            return resp
+        headers = {'location':
+                   '/transactions/' + tx_rest_id + '/blob/' + blob_id}
         return FlaskResponse(status=201, headers=headers)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])

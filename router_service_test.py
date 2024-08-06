@@ -111,7 +111,8 @@ root_yaml = {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1
             },
-            'chain': [{'filter': 'sync'}]
+            'chain': [ { 'filter': 'message_parser' },
+                       {'filter': 'sync'} ]
         },
     ],
     'storage': {
@@ -772,6 +773,53 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp2)
 
         rest_endpoint.on_update(tx2, tx2.copy(), 10)
+
+
+    def test_receive_parsing(self):
+        logging.info('RouterServiceTest.test_receive_parsing')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, http_host='smtp-in',
+            timeout_start=5, timeout_data=5)
+        with open('testdata/trivial.msg', 'rb') as f:
+            body = f.read()
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            inline_body=body.decode('ascii'))
+
+        def exp(tx, tx_delta):
+            logging.debug('test_receive_parsing %s', tx)
+            upstream_delta=TransactionMetadata()
+            if tx_delta.mail_from:
+                upstream_delta.mail_response=Response(201)
+            if tx_delta.rcpt_to:
+                upstream_delta.rcpt_response=[Response(202)]
+            if tx_delta.body_blob:
+                logging.debug('test_receive_parsing json %s',
+                              tx_delta.parsed_json)
+                logging.debug('test_receive_parsing blobs %s',
+                              tx_delta.parsed_blobs)
+                logging.debug('test_receive_parsing body %s',
+                              tx_delta.body_blob)
+
+                self.assertIn(['subject', 'hello'],
+                              tx_delta.parsed_json['parts']['headers'])
+                # NOTE: I can't figure out how to get email.parser to
+                # leave the line endings alone
+                self.assertEqual(tx_delta.parsed_blobs[0].read(0),
+                                 b'world!\n')
+                self.assertIsNotNone(tx_delta.parsed_json)
+                self.assertIsNotNone(tx_delta.parsed_blobs)
+                upstream_delta.data_response=Response(203)
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
 
 
 class RouterServiceTestFlask(RouterServiceTest):
