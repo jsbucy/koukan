@@ -488,11 +488,15 @@ class RestEndpoint(SyncFilter):
 
         return Response(), dlen
 
-    def get_json(self, timeout : Optional[float] = None):
+    def _get_json(self, timeout : Optional[float] = None,
+                  testonly_point_read = False
+                 ) -> Optional[dict]:
         try:
             req_headers = {}
             if self.http_host:
                 req_headers['host'] = self.http_host
+            if self.etag and not testonly_point_read:
+                req_headers['if-none-match'] = self.etag
             self._set_request_timeout(req_headers, timeout)
             rest_resp = self.client.get(self.transaction_url,
                                         headers=req_headers,
@@ -502,11 +506,18 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint.get_json() timeout %s',
                           self.transaction_url)
             return None
-        if rest_resp.status_code < 300:
+        if rest_resp.status_code in [200, 304]:
             self.etag = rest_resp.headers.get('etag', None)
         else:
             self.etag = None
+        if rest_resp.status_code != 200:
+            return None
         return get_resp_json(rest_resp)
+
+    # test only
+    def get_json(self, timeout : Optional[float] = None
+                 ) -> Optional[dict]:
+        return self._get_json(timeout, testonly_point_read=True)
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
@@ -515,27 +526,29 @@ class RestEndpoint(SyncFilter):
         while deadline.remaining():
             logging.debug('RestEndpoint._get() %s %s',
                           self.transaction_url, deadline.deadline_left())
-
-            json = self.get_json(timeout=deadline.deadline_left())
+            start = time.monotonic()
+            prev_etag = self.etag
+            tx_json = self._get_json(timeout=deadline.deadline_left())
+            delta = time.monotonic() - start
             logging.debug('RestEndpoint._get() %s done %s',
-                          self.transaction_url, json)
+                          self.transaction_url, tx_json)
 
-            if json is not None:
+            # TODO this should abort on some http errs? 4xx?
+
+            if tx_json is not None and (
+                    not TransactionMetadata.req_inflight_json(tx_json)):
                 tx_out = TransactionMetadata.from_json(
-                    json, WhichJson.REST_READ)
-
-            if (tx_out is not None) and (
-                    not self.upstream_tx.req_inflight(tx_out)):
-                logging.debug('RestEndpoint._get() %s done %s',
-                              self.transaction_url, tx_out)
-                return tx_out
-            logging.debug('RestEndpoint._get() %s inflight %s',
-                          self.transaction_url, tx_out)
+                    tx_json, WhichJson.REST_READ)
+                if tx_out is not None:
+                    logging.debug('RestEndpoint._get() %s done %s',
+                                  self.transaction_url, tx_out)
+                    return tx_out
 
             # min delta
             # XXX configurable
             # XXX backoff?
             if not deadline.remaining(1):
                 break
-            time.sleep(1)
+            if (self.etag is None or self.etag == prev_etag) and (delta < 1):
+                time.sleep(1 - delta)
         return tx_out

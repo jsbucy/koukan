@@ -4,7 +4,12 @@ import time
 import faulthandler
 import sys
 
-from threading import Lock, Condition, Thread, current_thread, BoundedSemaphore
+from threading import (
+    Lock,
+    Condition,
+    Thread,
+    current_thread,
+    BoundedSemaphore )
 from concurrent.futures import Future, ThreadPoolExecutor
 
 # wrapper for ThreadPoolExecutor
@@ -24,7 +29,7 @@ class Executor:
     def __init__(self, inflight_limit, watchdog_timeout : int,
                  debug_futures=False):
         self.inflight = {}
-        self.inflight_sem = BoundedSemaphore(inflight_limit)
+        self.inflight_sem = BoundedSemaphore(2*inflight_limit)
 
         self.lock = Lock()
         self.cv = Condition(self.lock)

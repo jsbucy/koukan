@@ -17,7 +17,6 @@ class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-
         self.storage = Storage.get_sqlite_inmemory_for_test()
 
     def dump_db(self):
@@ -25,14 +24,14 @@ class StorageWriterFilterTest(unittest.TestCase):
             for l in db_tx.connection.iterdump():
                 logging.debug('%s', l)
 
-    def update(self, filter, tx, tx_delta, timeout):
-        upstream_delta = filter.update(tx, tx_delta, timeout)
+    def update(self, filter, tx, tx_delta):
+        upstream_delta = filter.update(tx, tx_delta)
         self.assertTrue(len(upstream_delta.rcpt_response) <=
                         len(tx.rcpt_to))
 
-    def start_update(self, filter, tx, tx_delta, timeout=None):
-        t = Thread(target=lambda: self.update(
-            filter, tx, tx_delta, timeout=timeout),
+    def start_update(self, filter, tx, tx_delta):
+        # xxx executor
+        t = Thread(target=lambda: self.update(filter, tx, tx_delta),
                    daemon=True)
         t.start()
         time.sleep(0.1)
@@ -66,7 +65,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             TransactionMetadata(mail_response=Response(201)))
 
         self.join(t)
-
+        tx = filter.get()
         self.assertEqual(tx.mail_response.code, 201)
 
         tx_delta = TransactionMetadata(rcpt_to = [Mailbox('bob')])
@@ -76,12 +75,14 @@ class StorageWriterFilterTest(unittest.TestCase):
             if len(tx_cursor.tx.rcpt_to) == 1:
                 break
             tx_cursor.wait(1)
+            tx_cursor.load()
         else:
             self.fail('no rcpt')
         tx_cursor.write_envelope(
             TransactionMetadata(rcpt_response=[Response(202)]))
         self.join(t)
 
+        tx = filter.get()
         self.assertEqual(
             [rr.code for rr in tx.rcpt_response], [202])
 
@@ -117,13 +118,14 @@ class StorageWriterFilterTest(unittest.TestCase):
             if tx_cursor.tx.body is not None:
                 break
             tx_cursor.wait(1)
+            tx_cursor.load()
         else:
             self.fail('no body')
         tx_cursor.write_envelope(
             TransactionMetadata(data_response=Response(203)))
 
         self.join(t)
-
+        tx = filter.get()
         self.assertEqual(tx.data_response.code, 203)
 
     def test_message_builder(self):
@@ -148,7 +150,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             }]
         }
 
-        t = self.start_update(filter, tx, tx.copy(), timeout=3)
+        t = self.start_update(filter, tx, tx.copy())
 
         upstream_cursor = self.storage.get_transaction_cursor()
         upstream_cursor.load(rest_id='test_message_builder')
@@ -174,7 +176,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
-        t = self.start_update(filter, tx, tx, timeout=2)
+        t = self.start_update(filter, tx, tx)
         self.join(t, 3)
         self.assertIsNone(tx.mail_response)
 
@@ -186,7 +188,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
                                  rcpt_to = [Mailbox('bob')])
-        t = self.start_update(filter, tx, tx, timeout=2)
+        t = self.start_update(filter, tx, tx)
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -197,6 +199,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             TransactionMetadata(mail_response=Response(201)))
 
         self.join(t, 3)
+        tx = filter.get()
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual(tx.rcpt_response, [])
 
@@ -218,7 +221,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
                                  rcpt_to = [Mailbox('bob')],
                                  body_blob=blob_reader)
-        t = self.start_update(filter, tx, tx, timeout=2)
+        t = self.start_update(filter, tx, tx)
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -231,6 +234,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             TransactionMetadata(rcpt_response=[Response(202)]))
 
         self.join(t, 3)
+        tx = filter.get()
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertIsNone(tx.data_response)
@@ -243,7 +247,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata(
                 host = 'outbound-gw',
                 inline_body = b)
-        filter.update(tx, tx.copy(), 0)
+        filter.update(tx, tx.copy())
 
         filter2 = StorageWriterFilter(
             self.storage,
@@ -251,7 +255,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx2 = TransactionMetadata(
                 host = 'outbound-gw',
                 body = '/transactions/inline/body')
-        filter2.update(tx2, tx2.copy(), 0)
+        filter2.update(tx2, tx2.copy())
 
         cursor = self.storage.get_transaction_cursor()
         cursor.load(rest_id='reuse')

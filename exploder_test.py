@@ -357,7 +357,6 @@ class ExploderTest(unittest.TestCase):
 
         self.mu = Lock()
         self.cv = Condition(self.mu)
-
         self.storage = Storage.get_sqlite_inmemory_for_test()
         self.upstream_endpoints = []
 

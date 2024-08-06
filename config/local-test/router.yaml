@@ -1,7 +1,7 @@
 global:
   dequeue: true
   executor:
-    max_inflight: 10
+    max_inflight: 100
     watchdog_timeout: 10
   # needs to authenticate!
   mailer_daemon_mailbox: mailer-daemon@d

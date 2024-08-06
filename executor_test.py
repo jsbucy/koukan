@@ -29,8 +29,11 @@ class ExecutorTest(unittest.TestCase):
         ex = Executor(1, 10)
         sem = Semaphore(0)
         fut = ex.submit(lambda: sem.acquire())
-        fut2 = ex.submit(lambda: None, timeout=0)
-        self.assertIsNone(fut2)
+        fut2 = ex.submit(lambda: sem.acquire())
+        fut3 = ex.submit(lambda: None, timeout=0)
+        self.assertIsNone(fut3)
+        self.assertTrue(fut2.cancel())
+        self.assertTrue(fut2.cancelled())
         sem.release(1)
         fut.result()
 

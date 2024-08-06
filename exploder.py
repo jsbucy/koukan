@@ -10,7 +10,8 @@ from filter import (
     AsyncFilter,
     Mailbox,
     SyncFilter,
-    TransactionMetadata )
+    TransactionMetadata,
+    update_wait_inflight )
 from blob import Blob
 from response import Response
 
@@ -103,8 +104,8 @@ class Recipient:
             del self.tx.body_blob
 
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
-        upstream_delta = self.upstream.update(
-            self.tx, self.tx.copy(), deadline.deadline_left())
+        upstream_delta = update_wait_inflight(
+            self.upstream, self.tx, self.tx.copy(), deadline)
 
         logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
 
@@ -122,6 +123,8 @@ class Recipient:
             assert not(upstream_delta.rcpt_response)  # buggy upstream
         else:
             self.mail_response = upstream_delta.mail_response
+
+        assert self.mail_response is not None
 
         # if mail failed upstream, return this in the rcpt response
         # Exploder often has to return a no-op 250 to mail and this is
@@ -165,13 +168,15 @@ class Recipient:
         # don't wait for a status if it's already failed
         # TODO maybe storage writer filter, etc, should know that and
         # not wait?
-        timeout = 0 if self.store_and_forward else deadline.deadline_left()
+        deadline = Deadline(0) if self.store_and_forward else deadline
         logging.debug('exploder Recipient._append_upstream %d/%s timeout=%s',
-                      blob.len(), blob.content_length(), timeout)
+                      blob.len(), blob.content_length(),
+                      deadline.deadline_left())
         body_delta = TransactionMetadata()
         body_delta.body_blob = blob
         self.tx.merge_from(body_delta)
-        upstream_delta = self.upstream.update(self.tx, body_delta, timeout)
+        upstream_delta = update_wait_inflight(
+            self.upstream, self.tx, body_delta, deadline)
         if upstream_delta is None:
             data_resp = Response(
                 450, 'exploder Recipient._append_upstream internal error: '
@@ -202,7 +207,7 @@ class Recipient:
         logging.info('exploder.Recipient.cancel')
         delta = TransactionMetadata(cancelled=True)
         assert self.tx.merge_from(delta) is not None
-        upstream_delta = self.upstream.update(self.tx, delta, timeout=0)
+        upstream_delta = self.upstream.update(self.tx, delta)
 
 
 class Exploder(SyncFilter):
@@ -390,9 +395,9 @@ class Exploder(SyncFilter):
             if not ri.mail_response.ok() or not ri.rcpt_response.ok():
                 continue
             si = ri.status
-            if si is None != s0 is None:
+            if (si is None) != (s0 is None):
                 return None
-            if s0 is not None and s0.major_code() != si.major_code():
+            if (s0 is not None) and (s0.major_code() != si.major_code()):
                 return None
         else:
             if s0 is not None:
@@ -445,8 +450,7 @@ class Exploder(SyncFilter):
 
             recipient.tx.merge_from(retry_delta)
             recipient.upstream.update(
-                recipient.tx, retry_delta,
-                timeout=0)  # i.e. don't wait on inflight
+                recipient.tx, retry_delta)
 
         return Response(250, 'accepted (exploder store&forward DATA)')
 

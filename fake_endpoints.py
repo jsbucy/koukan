@@ -41,7 +41,6 @@ class FakeAsyncEndpoint(AsyncFilter):
             assert self.tx.merge_from(delta)
             self._version += 1
             self.cv.notify_all()
-            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             upstream_delta = tx.delta(self.tx)
             assert upstream_delta is not None
             tx.replace_from(self.tx)
@@ -51,7 +50,6 @@ class FakeAsyncEndpoint(AsyncFilter):
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
-            self.cv.wait_for(lambda: not self.tx.req_inflight(), timeout)
             return self.tx.copy()
 
 
@@ -65,6 +63,62 @@ class FakeAsyncEndpoint(AsyncFilter):
 
     def version(self):
         return self._version
+
+    # TODO version() samples version and this waits for that?
+    def wait(self, timeout) -> bool:
+        with self.mu:
+            return self.cv.wait(timeout)
+
+    async def wait_async(self, timeout) -> bool:
+        raise NotImplementedError()
+
+
+UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
+                             Optional[TransactionMetadata]]
+class MockAsyncFilter(AsyncFilter):
+    update_expectation : List[UpdateExpectation]
+    get_expectation : List[TransactionMetadata]
+
+    def __init__(self):
+        self.update_expectation = []
+        self.get_expectation = []
+
+    def expect_update(self, exp : UpdateExpectation):
+        self.update_expectation.append(exp)
+    def expect_get(self, tx : TransactionMetadata):
+        self.get_expectation.append(tx)
+
+    def update(self,
+               tx : TransactionMetadata,
+               tx_delta : TransactionMetadata
+               ) -> TransactionMetadata:
+        exp = self.update_expectation[0]
+        self.update_expectation.pop(0)
+        upstream_delta = exp(tx, tx_delta)
+        assert upstream_delta is not None
+        return upstream_delta
+
+    def get(self) -> TransactionMetadata:
+        tx = self.get_expectation[0]
+        self.get_expectation.pop(0)
+        return tx
+
+    def get_blob_writer(
+            self,
+            create : bool,
+            blob_rest_id : Optional[str] = None,
+            tx_body : Optional[bool] = None
+    ) -> Optional[WritableBlob]:
+        raise NotImplementedError()
+
+    def version(self) -> Optional[int]:
+        pass
+
+    def wait(self, timeout) -> bool:
+        return bool(self.get_expectation)
+
+    async def wait_async(self, timeout) -> bool:
+        return bool(self.get_expectation)
 
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],

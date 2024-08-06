@@ -8,6 +8,7 @@ from storage import Storage, TransactionCursor, BlobReader, BlobWriter
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import (
+    AsyncFilter,
     HostPort,
     Mailbox,
     SyncFilter,
@@ -23,7 +24,7 @@ class OutputHandler:
     cursor : TransactionCursor
     endpoint : SyncFilter
     rest_id : str
-    notification_factory : Callable[[], SyncFilter]
+    notification_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
 
     def __init__(self,
@@ -61,14 +62,19 @@ class OutputHandler:
             timeout = self.data_timeout
             msg = 'body'
 
-        if not self.cursor.wait(self.env_timeout):
-            logging.debug(
-                'OutputHandler._output() %s timeout %s=%d',
-                self.rest_id, msg, timeout)
-            return None, Response(
-                400,
-                'OutputHandler downstream timeout (%s=%d)' % (msg, timeout))
-        return True, None
+        while True:
+            try:
+                if not self.cursor.wait(self.env_timeout):
+                    logging.debug(
+                        'OutputHandler._output() %s timeout %s=%d',
+                        self.rest_id, msg, timeout)
+                    return None, Response(
+                        400, 'OutputHandler downstream timeout (%s=%d)' % (
+                            msg, timeout))
+                self.cursor.load()
+                return True, None
+            except VersionConflictException:
+                pass
 
     def _output(self) -> Optional[Response]:
         ok_rcpt = False
@@ -120,7 +126,9 @@ class OutputHandler:
                 continue
 
             body_blob = None
-            if self.cursor.input_done and upstream_tx.body:
+            if self.cursor.input_done and self.cursor.tx.body:
+                logging.info('OutputHandler._output() %s load body blob',
+                             self.rest_id)
                 blob_reader = self.cursor.parent.get_blob_reader()
                 assert blob_reader.load(
                     rest_id = upstream_tx.body,
@@ -140,9 +148,7 @@ class OutputHandler:
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
-            if delta.mail_from is None and not delta.rcpt_to and (
-                    not self.cursor.input_done or (
-                        not delta.body_blob and delta.message_builder is None)):
+            if delta.mail_from is None and not delta.rcpt_to and not have_body:
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
 
@@ -213,7 +219,6 @@ class OutputHandler:
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
 
-
         resp = self._output()
         if resp is None:
             logging.warning('OutputHandler._cursor_to_endpoint() %s abort',
@@ -237,8 +242,10 @@ class OutputHandler:
                 self._next_attempt_time(time.time()))
 
         logging.debug(
-            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s final_attempt_reason %s',
-            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry, final_attempt_reason)
+            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s '
+            'final_attempt_reason %s',
+            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry,
+            final_attempt_reason)
 
         return final_attempt_reason, next_attempt_time
 
@@ -355,6 +362,5 @@ class OutputHandler:
         # should result in the parent retrying even if it was
         # permfail, better to dupe than fail to emit the bounce
 
-        # XXX timeout?
-        notification_endpoint.update(notification_tx, notification_tx,
-                                     timeout=0)
+        notification_endpoint.update(notification_tx, notification_tx)
+        # no wait -> fire&forget

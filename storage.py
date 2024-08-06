@@ -26,6 +26,8 @@ from response import Response
 from storage_schema import InvalidActionException, VersionConflictException
 from filter import TransactionMetadata, WhichJson
 
+from version_cache import IdVersion, IdVersionMap
+
 # the implementation of CursorResult.rowcount apparently involves too
 # much metaprogramming for pytype to infer correctly
 def rowcount(res : CursorResult) -> int:
@@ -53,17 +55,26 @@ class TransactionCursor:
 
     body_blob_id : Optional[int] = None
     body_rest_id : Optional[str] = None
+    id_version : Optional[IdVersion] = None
 
-    def __init__(self, storage):
+    def __init__(self, storage,
+                 db_id : Optional[int] = None,
+                 rest_id : Optional[str] = None):
         self.parent = storage
-        self.id = None
+        self.id = db_id
+        self.rest_id = rest_id
+        if (self.id is not None) or (self.rest_id is not None):
+            self.id_version = self.parent.tx_versions.get(self.id, self.rest_id)
+            if self.id_version is not None:
+                self.version = self.id_version.version
 
-    def etag(self) -> str:
-        base = '%d.%d.%d' % (self.creation, self.id, self.version)
-        return base
-        # xxx enable in prod
-        #return b64encode(
-        #    sha256(base.encode('us-ascii')).digest()).decode('us-ascii')
+    def _update_version_cache(self):
+        assert (self.id is not None) and (self.rest_id is not None)
+        id_version = self.parent.tx_versions.insert_or_update(
+            self.id, self.rest_id, self.version)
+        if self.id_version is not None:
+            assert id_version == self.id_version
+        self.id_version = id_version
 
     def create(self,
                rest_id : str,
@@ -96,9 +107,12 @@ class TransactionCursor:
             res = db_tx.execute(ins)
             row = res.fetchone()
             self.id = row[0]
+            self.rest_id = rest_id
             self.tx = TransactionMetadata()  # tx
 
             self._write(db_tx, tx, reuse_blob_rest_id)
+
+        self._update_version_cache()
 
     def _reuse_blob(self, db_tx, blob_rest_ids : List[str]
                     ) -> List[Tuple[int, str, bool]]:
@@ -171,7 +185,7 @@ class TransactionCursor:
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
-        self.parent.tx_versions.update(self.id, self.version)
+        self._update_version_cache()
 
     def _write_blob(self,
                     db_tx,
@@ -238,7 +252,9 @@ class TransactionCursor:
                input_done = False):
         assert final_attempt_reason != 'oneshot'  # internal-only
 
-        assert self.final_attempt_reason == 'oneshot' or self.final_attempt_reason is None or final_attempt_reason is None
+        assert (self.final_attempt_reason == 'oneshot' or
+                self.final_attempt_reason is None or
+                final_attempt_reason is None)
 
         assert self.tx is not None
         tx_to_db = self.tx.merge(tx_delta)
@@ -333,18 +349,20 @@ class TransactionCursor:
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None,
              start_attempt : bool = False) -> Optional[TransactionMetadata]:
-        if self.id is not None:
+        if self.id is not None or self.rest_id is not None:
             assert(db_id is None and rest_id is None)
             db_id = self.id
-        assert(db_id is not None or rest_id is not None)
+            rest_id = self.rest_id
+        else:
+            assert(db_id is not None or rest_id is not None)
         started = False
         with self.parent.begin_transaction() as db_tx:
             res = self._load_db(db_tx, db_id, rest_id)
             if start_attempt:
                 self._start_attempt_db(db_tx, self.id, self.version)
                 started = True
-        if started:
-            self.parent.tx_versions.update(self.id, self.version)
+        if res is not None:
+            self._update_version_cache()
         return res
 
     def _load_db(self, db_tx,
@@ -371,10 +389,17 @@ class TransactionCursor:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
         elif rest_id is not None:
             sel = sel.where(self.parent.tx_table.c.rest_id == rest_id)
+        else:
+            raise ValueError
         res = db_tx.execute(sel)
         row = res.fetchone()
         if not row:
             return None
+
+        if self.id is not None:
+            assert row[0] == self.id
+        if self.rest_id is not None:
+            assert row[1] == self.rest_id
 
         (self.id,
          self.rest_id,
@@ -476,25 +501,13 @@ class TransactionCursor:
         assert (row := res.fetchone())
         self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
+        self._update_version_cache()
 
-    def wait(self, timeout=None) -> bool:
-        with Waiter(self.parent.tx_versions, self.id, self.version, self
-                    ) as id_version:
-            old = self.version
-            self.load()
-            if self.version > old:
-                return True
-            old = self.version
+    def wait(self, timeout : Optional[float] = None) -> bool:
+        return self.id_version.wait(self.version, timeout)
 
-            if not id_version.wait(old, timeout):
-                logging.debug('TransactionCursor.wait timed out')
-                return False
-            self.load()
-            if self.version <= old:
-                logging.critical(
-                    'TransactionCursor.wait() BUG id=%d old=%d new=%d',
-                    self.id, old, self.version)
-            return self.version > old  # xxx assert?
+    async def wait_async(self, timeout : float) -> bool:
+        return await self.id_version.wait_async(self.version, timeout)
 
 
 class BlobWriter(WritableBlob):
@@ -535,7 +548,7 @@ class BlobWriter(WritableBlob):
     def create(self, rest_id : str):
         with self.parent.begin_transaction() as db_tx:
             self._create(rest_id, db_tx)
-            return self.id
+        return self.id
 
     def load(self, rest_id : str, tx_rest_id : Optional[str] = None):
         with self.parent.begin_transaction() as db_tx:
@@ -657,7 +670,7 @@ class BlobWriter(WritableBlob):
                         break
                 except VersionConflictException:
                     pass
-            self.parent.tx_versions.update(cursor.id, cursor.version)
+            cursor._update_version_cache()
         return True, self.length, self._content_length
 
 
@@ -718,6 +731,8 @@ class BlobReader(Blob):
             sel = sel.where(self.parent.blob_table.c.id == db_id)
         elif rest_id is not None:
             sel = sel.where(self.parent.blob_table.c.rest_id == rest_id)
+        else:
+            raise ValueError
 
         with self.parent.begin_transaction() as db_tx:
             res = db_tx.execute(sel)
@@ -727,6 +742,11 @@ class BlobReader(Blob):
             blob_id = row[0]
             if not self._check_ref(db_tx, blob_id, tx_id):
                 return None
+
+        if self.blob_id is not None:
+            assert self.blob_id == row[0]
+        if self.rest_id is not None:
+            assert self.rest_id == row[1]
 
         self.blob_id = row[0]
         self.rest_id = row[1]
@@ -753,104 +773,6 @@ class BlobReader(Blob):
                 return bytes()
             return row[0]
 
-    # wait for self.length to increase or timeout
-    def wait(self, timeout=None):
-        # version is len(content) in BlobContent
-        with Waiter(self.parent.blob_versions, self.blob_id, self.length, self
-                    ) as id_version:
-            old_len = self.length
-            self.load()
-            if self.length > old_len:
-                return True
-            if self.last:
-                return False
-            old_len = self.length
-            if not id_version.wait(old_len, timeout):
-                return False
-            self.load()
-            return self.length > old_len
-
-class IdVersion:
-    id : int
-    lock : Lock
-    cv : Condition
-
-    version : int
-    waiters : set[object]
-    def __init__(self, db_id, version):
-        self.id = db_id
-        self.lock = Lock()
-        self.cv = Condition(self.lock)
-
-        self.waiters = set()
-        self.version = version
-
-    def wait(self, version, timeout):
-        with self.lock:
-            logging.debug('IdVersion.wait %d %d %d %d',
-                          id(self), self.id, self.version, version)
-            rv = self.cv.wait_for(lambda: self.version > version, timeout)
-            logging.debug('IdVersion.wait done %d %d %d %d',
-                          self.id, self.version, version, rv)
-            return rv
-
-    def update(self, version):
-        with self.lock:
-            logging.debug('IdVersion.update %d id=%d version=%d new %d',
-                          id(self), self.id, self.version, version)
-            # There is an expected edge case case where a waiter reads
-            # the db and updates this in between a write commiting to
-            # the db and updating this so == is expected
-            if version < self.version:
-                logging.critical('IdVersion.update precondition failure '
-                                 ' id=%d cur=%d new=%d',
-                                 self.id, self.version, version)
-                assert not 'IdVersion.update precondition failure '
-            self.version = version
-            self.cv.notify_all()
-
-class Waiter:
-    def __init__(self, parent, db_id, version, obj):
-        self.parent = parent
-        self.db_id = db_id
-        self.obj = obj
-        self.id_version = self.parent.get_id_version(db_id, version, obj)
-    def __enter__(self):
-        return self.id_version
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.parent.del_waiter(self.db_id, self.id_version, self.obj)
-
-class IdVersionMap:
-    lock : Lock
-    id_version_map : dict[int,IdVersion]  # db-id
-
-    def __init__(self):
-        self.id_version_map = {}
-        self.lock = Lock()
-
-    def del_waiter(self, id, id_version, obj):
-        with self.lock:
-            id_version.waiters.remove(obj)
-            if not id_version.waiters:
-                del self.id_version_map[id]
-
-    def update(self, db_id, version):
-        with self.lock:
-            if db_id not in self.id_version_map:
-                logging.debug('IdVersionMap.update id=%d version %d no waiters',
-                              db_id, version)
-                return
-            waiter = self.id_version_map[db_id]
-            waiter.update(version)
-
-    def get_id_version(self, db_id, version, obj):
-        with self.lock:
-            if db_id not in self.id_version_map:
-                self.id_version_map[db_id] = IdVersion(db_id, version)
-            waiter = self.id_version_map[db_id]
-            waiter.waiters.add(obj)
-            return waiter
-
 
 class Storage():
     session_id = None
@@ -863,12 +785,16 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    def __init__(self, engine : Optional[Engine] = None):
+    def __init__(self, version_cache : IdVersionMap,
+                 engine : Optional[Engine] = None):
+        self.tx_versions = version_cache
         self.engine = engine
-        self.tx_versions = IdVersionMap()
 
     @staticmethod
-    def get_sqlite_inmemory_for_test():
+    def get_sqlite_inmemory_for_test(
+            version_cache : Optional[IdVersionMap] = None):
+        if version_cache is None:
+            version_cache = IdVersionMap()
         engine = create_engine("sqlite+pysqlite://",
                                connect_args={'check_same_thread':False},
                                poolclass=QueuePool,
@@ -883,12 +809,12 @@ class Storage():
                 # pytype: disable=attribute-error
                 cursor.executescript(f.read())
                 # pytype: enable=attribute-error
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 
     @staticmethod
-    def connect_sqlite(filename):
+    def connect_sqlite(version_cache : IdVersionMap, filename):
         engine = create_engine("sqlite+pysqlite:///" + filename,
                                pool_size=1, max_overflow=0)
         with engine.begin() as db_tx:
@@ -902,12 +828,13 @@ class Storage():
             cursor.execute("PRAGMA synchronous=2")
             cursor.execute("PRAGMA auto_vacuum=2")
 
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 
     @staticmethod
     def connect_postgres(
+            version_cache : IdVersionMap,
             db_user=None, db_name=None, host=None, port=None,
             unix_socket_dir=None):
         db_url = 'postgresql+psycopg://' + db_user + '@'
@@ -920,7 +847,7 @@ class Storage():
                 db_url += ('&port=%d' % port)
         logging.info('Storage.connect_postgres %s', db_url)
         engine = create_engine(db_url)
-        s = Storage(engine)
+        s = Storage(version_cache, engine)
         s._init_session()
         return s
 
@@ -1016,7 +943,7 @@ class Storage():
                     break
             except VersionConflictException:
                 pass
-        self.tx_versions.update(cursor.id, cursor.version)
+        cursor._update_version_cache()
 
         writer.update_tx = tx_rest_id
         writer.finalize_tx = tx_body
@@ -1042,8 +969,10 @@ class Storage():
 
         return blob_writer
 
-    def get_transaction_cursor(self) -> TransactionCursor:
-        return TransactionCursor(self)
+    def get_transaction_cursor(self, db_id : Optional[int] = None,
+                               rest_id : Optional[str] = None
+                               ) -> TransactionCursor:
+        return TransactionCursor(self, db_id, rest_id)
 
     def load_one(self):
         with self.begin_transaction() as db_tx:
@@ -1093,7 +1022,6 @@ class Storage():
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(db_tx, db_id, version)
-            self.tx_versions.update(tx.id, tx.version)
 
             # TODO: if the last n consecutive attempts weren't
             # finalized, this transaction may be crashing the system

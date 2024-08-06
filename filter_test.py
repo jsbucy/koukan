@@ -1,9 +1,17 @@
 import unittest
 import logging
 
-from filter import HostPort, Mailbox, TransactionMetadata, WhichJson
+from filter import (
+    HostPort,
+    Mailbox,
+    TransactionMetadata,
+    WhichJson,
+    update_wait_inflight )
 from response import Response
 from blob import InlineBlob
+from deadline import Deadline
+
+from fake_endpoints import MockAsyncFilter
 
 class FilterTest(unittest.TestCase):
 
@@ -231,6 +239,46 @@ class FilterTest(unittest.TestCase):
         merged = tx.merge(delta)
         self.assertEqual([r.code for r in merged.rcpt_response], [201,202])
         self.assertIsNone(merged.merge(delta))
+
+    def test_req_inflight_json(self):
+        json = {}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['mail_from'] = {}
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['mail_response'] = {'code': 500}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['mail_response'] = {'code': 200}
+        json['rcpt_to'] = [{}]
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 200}]
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 500}]
+        json['body'] = {}
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+        json['rcpt_response'] = [{'code': 200}]
+        self.assertTrue(TransactionMetadata.req_inflight_json(json))
+        json['data_response'] = [{'code': 200}]
+        self.assertFalse(TransactionMetadata.req_inflight_json(json))
+
+    def test_update_wait_inflight(self):
+        async_filter = MockAsyncFilter()
+
+        def exp(tx, tx_delta):
+            return TransactionMetadata()
+        async_filter.expect_update(exp)
+
+        # TODO see comment in implementation, this is what you
+        # actually get with StorageWriterFilter today
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice')))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            body_blob=InlineBlob(b'hello'))
+        upstream_delta = update_wait_inflight(
+            async_filter, tx, tx.copy(), Deadline(1))
+        self.assertIsNotNone(upstream_delta)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -331,7 +331,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.body, b'{}')
         self.assertEqual(resp.headers['location'], '/transactions/rest_id')
-        logging.debug('%s', resp.headers)
+        logging.debug('test_create_tx create resp %s', resp.headers)
         self.assertIsNotNone(resp.headers.get('etag', None))
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
@@ -345,9 +345,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         resp = await handler.handle_async(
             req, lambda: handler.patch_tx(
                 req, req_json={"mail_from": {"m": "alice"}}))
-        logging.debug(resp.body)
+        logging.debug('test_create_tx patch tx resp %s', resp.body)
         self.assertEqual(resp.status_code, 200)
-
 
         endpoint.merge(
             TransactionMetadata(mail_response=Response(201)))
@@ -358,7 +357,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(req, lambda: handler.get_tx(req))
+
+        resp = await handler.get_tx_async(req)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
@@ -377,7 +377,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             req, lambda: handler.patch_tx(
                 req, req_json={"rcpt_to": [{"m": "bob"}]}))
         self.assertEqual(resp.status_code, 200)
-        logging.debug('%s', resp.body)
+        logging.debug('test_create_tx patch tx resp %s', resp.body)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'mail_response': {'code': 201, 'message': 'ok'},
@@ -390,7 +390,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(req, lambda: handler.get_tx(req))
+        resp = await handler.get_tx_async(req)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
@@ -412,7 +412,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                 req, req_json={"rcpt_to": [{"m": "bob2"}],
                                "rcpt_to_list_offset": 1}))
         self.assertEqual(resp.status_code, 200)
-        logging.debug('%s', resp.body)
+        logging.debug('test_create_tx patch tx resp %s', resp.body)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],
@@ -431,8 +431,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.get_tx(req))
+        resp = await handler.get_tx_async(req)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],
@@ -460,7 +459,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                      ('content-length', str(len(body)))])}
         req = FastApiRequest(scope, input)
         resp = await handler.create_blob_async(req, tx_body=True)
-        logging.debug(resp.body)
+        logging.debug('test_create_tx create blob resp %s', resp.body)
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(endpoint.body_blob.d, body)
         self.assertEqual(endpoint.body_blob.content_length(), len(body))
@@ -471,7 +470,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(req, lambda: handler.get_tx(req))
+        resp = await handler.get_tx_async(req)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],

@@ -103,8 +103,6 @@ class SmtpHandler:
                 partial(self._update_tx,
                         self.cx_id, self.endpoint, self.tx,
                         TransactionMetadata(cancelled=True)), timeout=0)
-        #await asyncio.wait([asyncio.wrap_future(fut)],
-        #                   timeout=self.timeout_rcpt)
         self.endpoint = self.tx = None
 
     async def handle_QUIT(self, server, session, envelope):

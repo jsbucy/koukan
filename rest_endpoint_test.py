@@ -26,16 +26,19 @@ class Request:
     content_range = None
     request_timeout : Optional[int] = None
     body = None
+    etag = None
     def __init__(self,
                  method = None,
                  path = None,
                  content_type = None,
                  content_range = None,
-                 body = None):
+                 body = None,
+                 etag = None):
         self.path = path
         self.content_type = content_type
         self.content_range = content_range
         self.body = body
+        self.etag = etag
 
 class Response:
     http_resp = None
@@ -43,13 +46,15 @@ class Response:
     body = None
     content_range = None
     location = None
+    etag = None
     def __init__(self,
                  http_resp = None,
                  content_type = None,
                  body = None,
                  content_range = None,
                  location = None,
-                 resp_json = None):
+                 resp_json = None,
+                 etag = None):
         self.http_resp = http_resp
         self.content_type = content_type
         self.body = body
@@ -58,6 +63,7 @@ class Response:
         if resp_json is not None:
             self.body = json.dumps(resp_json)
             self.content_type = 'application/json'
+        self.etag = etag
 
 def eq_range(lhs, rhs):
     return (lhs.units == rhs.units and
@@ -109,6 +115,7 @@ class RestEndpointTest(unittest.TestCase):
         req.path = environ['PATH_INFO']
         req.query = environ['QUERY_STRING']
         req.content_type = environ['CONTENT_TYPE']
+        req.etag = environ.get('HTTP_IF_NONE_MATCH', None)
         if range_header := environ.get('HTTP_CONTENT_RANGE', None):
             req.content_range = (
                 werkzeug.http.parse_content_range_header(range_header))
@@ -121,7 +128,7 @@ class RestEndpointTest(unittest.TestCase):
         self.requests.append(req)
 
         if not self.responses:
-            # some test uses this to exercise timeouts but we want to
+            # XXX some test uses this to exercise timeouts but we want to
             # fastfail the rest of the time?
             time.sleep(5)
             start_response('500 timeout', [])
@@ -135,6 +142,8 @@ class RestEndpointTest(unittest.TestCase):
             resp_headers.append(('content-range', str(resp.content_range)))
         if resp.location:
             resp_headers.append(('location', resp.location))
+        if resp.etag:
+            resp_headers.append(('etag', resp.etag))
 
         start_response(resp.http_resp, resp_headers)
         resp_body = []
@@ -571,7 +580,8 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag = '1'))
 
         logging.debug('testFilterApi envelope')
         tx = TransactionMetadata(
@@ -628,7 +638,13 @@ class RestEndpointTest(unittest.TestCase):
 
         # GET
         self.responses.append(Response(
+            http_resp = '304 not modified',
+            etag = '1'))
+
+        # GET
+        self.responses.append(Response(
             http_resp = '200 ok',
+            etag = '2',
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
@@ -661,7 +677,12 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'GET')
         self.assertEqual(req.path, '/transactions/123')
+        self.assertEqual(req.etag, '1')
 
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'GET')
+        self.assertEqual(req.path, '/transactions/123')
+        self.assertEqual(req.etag, '1')
 
     def testFilterApiOneshot(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,

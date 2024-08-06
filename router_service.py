@@ -25,6 +25,7 @@ from filter import AsyncFilter, SyncFilter
 
 from storage_writer_filter import StorageWriterFilter
 from storage_schema import VersionConflictException
+from version_cache import IdVersionMap
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
@@ -40,6 +41,7 @@ class Service:
     lock : Lock
     cv : Condition
     storage : Optional[Storage] = None
+    version_cache : IdVersionMap
     last_gc = 0
 
     rest_handler_factory : Optional[RestHandlerFactory] = None
@@ -72,6 +74,7 @@ class Service:
         if self.config:
             self.config.storage_writer_factory = partial(
                 self.create_storage_writer, None)
+        self.version_cache = IdVersionMap()
 
     def shutdown(self):
         logging.info("router_service shutdown()")
@@ -116,9 +119,11 @@ class Service:
         engine = storage_yaml.get('engine', None)
         if engine == 'sqlite_memory':
             logging.warning("*** using in-memory/non-durable storage")
-            self.storage = Storage.get_sqlite_inmemory_for_test()
+            self.storage = Storage.get_sqlite_inmemory_for_test(
+                self.version_cache)
         elif engine == 'sqlite':
             self.storage = Storage.connect_sqlite(
+                self.version_cache,
                 storage_yaml['sqlite_db_filename'])
         elif engine == 'postgres':
             args = {}
@@ -131,7 +136,7 @@ class Service:
                     args[v] = storage_yaml[k]
             if 'db_user' not in args:
                 args['db_user'] = os.getlogin()
-            self.storage = Storage.connect_postgres(**args)
+            self.storage = Storage.connect_postgres(self.version_cache, **args)
 
         self.storage.recover()
 
@@ -163,7 +168,7 @@ class Service:
             self.cv.notify_all()
 
         listener_yaml = self.config.root_yaml['rest_listener']
-        if listener_yaml['use_fastapi']:
+        if listener_yaml.get('use_fastapi', False):
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)
@@ -225,7 +230,6 @@ class Service:
 
     def _dequeue(self, wait : bool = True) -> bool:
         storage_tx = None
-        #self.storage.wait_created(self.created_id, timeout=1 if wait else 0)
         try:
             storage_tx = self.storage.load_one()
         except VersionConflictException:

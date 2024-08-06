@@ -13,6 +13,7 @@ from mx_resolution import resolve as resolve_mx
 from message_builder_filter import MessageBuilderFilter
 from message_parser_filter import MessageParserFilter
 from filter import (
+    AsyncFilter,
     HostPort,
     SyncFilter )
 from storage_writer_filter import StorageWriterFilter
@@ -95,7 +96,7 @@ class Config:
         entropy = self.root_yaml.get('global', {}).get('rest_id_entropy', 16)
         return lambda: secrets.token_urlsafe(entropy)
 
-    def notification_endpoint(self):
+    def notification_endpoint(self) -> AsyncFilter:
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory(),

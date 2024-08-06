@@ -44,6 +44,7 @@ from filter import (
 from executor import Executor
 
 from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
+from version_cache import IdVersion
 
 
 # runs SyncFilter on Executor with AsyncFilter interface for
@@ -75,6 +76,8 @@ class SyncFilterAdapter(AsyncFilter):
     body_blob : Optional[BlobWriter] = None
     # transaction has reached a final status: data response or cancelled
     done : bool = False
+    id_version : IdVersion
+    sampled_version : Optional[int] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -86,6 +89,7 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
+        self.id_version = IdVersion(1, '1', self._version)
 
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
@@ -95,7 +99,18 @@ class SyncFilterAdapter(AsyncFilter):
             return (now - self._last_update) > t
 
     def version(self):
-        return self._version
+        self.sampled_version = self._version
+        return self.sampled_version
+
+    def wait(self, timeout) -> bool:
+        assert self.sampled_version is not None
+        return self.id_version.wait(
+            version=self.sampled_version, timeout=timeout)
+
+    async def wait_async(self, timeout) -> bool:
+        assert self.sampled_version is not None
+        return await self.id_version.wait_async(
+            version=self.sampled_version, timeout=timeout)
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -145,6 +160,7 @@ class SyncFilterAdapter(AsyncFilter):
             self.done = self.tx.cancelled or self.tx.data_response is not None
             self._version += 1
             self.cv.notify_all()
+            self.id_version.update(version=self._version)
             self._last_update = time.monotonic()
         return True
 
@@ -187,8 +203,8 @@ class SyncFilterAdapter(AsyncFilter):
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
-            tx = self.tx.copy()
-            self._get_locked(tx, timeout)
+            if timeout:
+                self._get_locked(self.tx.copy(), timeout)
             return self.tx.copy()
 
 
@@ -288,11 +304,17 @@ class RestHandler(Handler):
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
         logging.debug('RestHandler.handle_async req %s', request)
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+        deadline = Deadline(timeout)
         cfut = self.executor.submit(fn, 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
-        await fut
+        if not await asyncio.wait_for(fut, deadline.deadline_left()):
+            cfut.cancel()
+            return self.response(request, code=500, msg='timeout')
         resp = fut.result()
         logging.debug('RestHandler.handle_async resp %s', resp)
         return resp
@@ -300,9 +322,8 @@ class RestHandler(Handler):
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], HttpResponse]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
-        # return 0 i.e. no waiting if header not present
         if not (timeout_header := req.headers.get('request-timeout', None)):
-            return 0, None
+            return MAX_TIMEOUT, None
         timeout = None
         try:
             timeout = min(int(timeout_header), MAX_TIMEOUT)
@@ -322,17 +343,17 @@ class RestHandler(Handler):
         # TODO only accept smtp_meta from trusted peer i.e. the
         # well-known address of the gateway
         logging.debug('RestHandler.create_tx %s %s', request, req_json)
+
+        if self.async_filter is None:
+            return self.response(
+                request, code=500, msg='internal error creating transaction')
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(request, code=400, msg='invalid request')
         tx.host = self.http_host
-        prev_tx = tx.copy()
         body = tx.body
-        timeout, err = self._get_timeout(request)
-        if self.async_filter is None:
-            return self.response(
-                request, code=500, msg='internal error creating transaction')
-        upstream = self.async_filter.update(tx, tx.copy(), timeout)
+
+        upstream = self.async_filter.update(tx, tx.copy())
         if upstream is None:
             return self.response(request, code=400, msg='bad request')
         assert tx.rest_id is not None
@@ -345,7 +366,7 @@ class RestHandler(Handler):
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', make_tx_uri(tx.rest_id))],
             etag=self._etag(self.async_filter.version()))
-        logging.debug('RestHandler.create_tx %s', resp)
+        logging.debug('RestHandler._create %s', resp)
         return resp
 
     def get_tx(self, request : HttpRequest) -> HttpResponse:
@@ -355,11 +376,26 @@ class RestHandler(Handler):
         if self.async_filter is None:
             return self.response(
                 request, code=404, msg='transaction not found')
-        tx = self.async_filter.get(timeout)
+
+        deadline = Deadline(timeout)
+
+        version = self._get_tx_req(request)
+        if version is not None:
+            wait_result = self.async_filter.wait(deadline.deadline_left())
+            if not wait_result:
+                return self.response(request, code=304, msg='unchanged',
+                                     headers=[('etag', self._etag(version))])
+
+        tx = self._get_tx()
         if tx is None:
             return self.response(request, code=500, msg='get tx')
+        return self._get_tx_resp(request, tx)
 
-
+    def _get_tx(self) -> HttpResponse:
+        tx = self.async_filter.get()
+        if tx is None:
+            return None
+        logging.debug('_get_tx %s', tx)
         if tx.body_blob is not None:
             tx.body = ''
             del tx.body_blob
@@ -367,10 +403,69 @@ class RestHandler(Handler):
         if tx.body_blob is not None:
             tx.body = ''
             del tx.body_blob
+        return tx
+
+    def _get_tx_resp(self, request, tx):
         return self.response(
             request,
             etag=self._etag(self.async_filter.version()),
             resp_json=tx.to_json(WhichJson.REST_READ))
+
+    def _get_tx_req(self, request):
+        etag = request.headers.get('if-none-match', None)
+        version = None
+        if etag is not None:
+            cached_version = self.async_filter.version()
+            logging.debug(
+                'RestHandler._get_tx_req %s etag %s cached_version %s',
+                self._tx_rest_id, etag, cached_version)
+
+            if cached_version is not None and (
+                    self._etag(cached_version) == etag):
+                version = cached_version
+        # else: no waiting/point read
+        return version
+
+    async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
+        logging.debug('RestHandler.get_tx_async %s', self._tx_rest_id)
+        if self.async_filter is None:
+            return self.response(
+                request, code=404, msg='transaction not found')
+
+        timeout, err = self._get_timeout(request)
+        if err is not None:
+            return err
+
+        deadline = Deadline(timeout)
+
+        version = self._get_tx_req(request)
+
+        logging.debug('RestHandler._get_tx_async version %s', version)
+        if version is not None:
+            wait_result = await self.async_filter.wait_async(
+                deadline.deadline_left())
+            if not wait_result:
+                return self.response(request, code=304, msg='unchanged',
+                                     headers=[('etag', self._etag(version))])
+
+        cfut = self.executor.submit(lambda: self._get_tx())
+        if cfut is None:
+            return self.response(
+                request, code=500, msg='get tx async schedule read')
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(request, code=500, msg='get tx async read')
+        if not afut.done():
+            return self.response(request, code=500,
+                                 msg='get tx async read fut done')
+        tx = afut.result()
+        return self._get_tx_resp(request, tx)
+
 
     def patch_tx(self, request : HttpRequest,
                  req_json : dict,
@@ -378,10 +473,6 @@ class RestHandler(Handler):
                  ) -> HttpResponse:
         logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
-        timeout, err = self._get_timeout(request)
-        if err is not None:
-            return err
-        deadline = Deadline(timeout)
         if message_builder:
             downstream_delta = TransactionMetadata()
             downstream_delta.message_builder = req_json
@@ -397,9 +488,7 @@ class RestHandler(Handler):
                 request, code=400, msg='etags required for update')
         req_etag = req_etag.strip('"')
 
-        # TODO optimization in the case of StorageWriterFilter, this
-        # should be able to return the tx that was just loaded in the cursor
-        tx = self.async_filter.get(deadline.deadline_left())
+        tx = self.async_filter.get()
         if tx is None:
             return self.response(
                 request,
@@ -415,9 +504,8 @@ class RestHandler(Handler):
             logging.debug('RestHandler.patch_tx conflict %s %s',
                           req_etag, self._etag(self.async_filter.version()))
             return self.response(request, code=412, msg='update conflict')
-        upstream = self.async_filter.update(
-            tx, downstream_delta, deadline.deadline_left())
-        if upstream is None:
+        upstream_delta = self.async_filter.update(tx, downstream_delta)
+        if upstream_delta is None:
             return self.response(
                 request, code=400,
                 msg='RestHandler.patch_tx bad request')
@@ -427,6 +515,7 @@ class RestHandler(Handler):
         return self.response(
             request, etag=self._etag(self.async_filter.version()),
             resp_json=tx.to_json(WhichJson.REST_READ))
+
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
@@ -644,7 +733,7 @@ class RestHandler(Handler):
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
-        tx = self.async_filter.get(0)
+        tx = self.async_filter.get()
         if tx is None:
             return self.response(request)
         delta = TransactionMetadata(cancelled=True)

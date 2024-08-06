@@ -7,6 +7,7 @@ import copy
 from response import Response
 
 from blob import Blob, WritableBlob
+from deadline import Deadline
 
 class HostPort:
     host : str
@@ -356,15 +357,15 @@ class TransactionMetadata:
 
 
     @staticmethod
-    def from_json(json, which_js=WhichJson.ALL):
+    def from_json(tx_json, which_js=WhichJson.ALL):
         tx = TransactionMetadata()
-        for f in json.keys():
-            if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX FIX BEFORE SUBMIT
+        for f in tx_json.keys():
+            if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX
                 continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
                 return None  # invalid
-            js_v = json[f]
+            js_v = tx_json[f]
             if js_v is None:
                 # TODO for now setting a non-null field back to null
                 # is not a valid operation so reject json with that
@@ -378,8 +379,9 @@ class TransactionMetadata:
                     v = [None for v in js_v]
                 else:
                     v = [field.from_json(v) for v in js_v]
-                if field.list_offset() in json and which_js == WhichJson.REST_UPDATE:
-                    offset = json.get(field.list_offset())
+                if field.list_offset() in tx_json and (
+                        which_js == WhichJson.REST_UPDATE):
+                    offset = tx_json.get(field.list_offset())
                     setattr(tx, field.list_offset(), offset)
             else:
                 if field.emit_rest_placeholder(which_js):
@@ -393,11 +395,8 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
-
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
-    # XXX depending on the context, the upstream will not populate
-    # replies e.g. after upstream mail_resp err?
     def req_inflight(self, tx : Optional['TransactionMetadata'] = None) -> bool:
         if tx is None:
             tx = self
@@ -414,9 +413,42 @@ class TransactionMetadata:
                 return True
         body_blob_last = self.body_blob is not None and (
             self.body_blob.finalized())
-        if (self.body or body_blob_last or self.message_builder
-            ) and tx.data_response is None:
+        if self.body or body_blob_last or self.message_builder:
+            # if we have the body, then we aren't getting any more
+            # rcpts. If they all failed, then we can't make forward
+            # progress.
+            if not any([r.ok() for r in tx.rcpt_response]):
+                return False
+            if tx.data_response is None:
+                return True
+        return False
+
+    # version that operates on json with REST_READ placeholders.
+    # These parse into None so the normal version doesn't work there.
+    @staticmethod
+    def req_inflight_json(json : dict) -> bool:
+        mail_response_json = json.get('mail_response', None)
+        if 'mail_from' in json and mail_response_json is None:
             return True
+        if mail_response_json:
+            mail_response = Response.from_json(mail_response_json)
+            # invalid response or err: cannot make forward progress
+            if mail_response is None or mail_response.err():
+                return False
+        rcpt_response_json = json.get('rcpt_response', [])
+        if 'rcpt_to' in json and (
+                len(json['rcpt_to']) != len(rcpt_response_json)):
+            return True
+        rcpt_response = [Response.from_json(r) for r in rcpt_response_json]
+        # body or all rcpt err?
+        if 'body' in json:
+            # if we have the body, then we aren't getting any more
+            # rcpts. If they all failed, then we can't make forward
+            # progress.
+            if not any ([r is not None and r.ok() for r in rcpt_response]):
+                return False
+            if 'data_response' not in json:
+                return True
         return False
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
@@ -643,14 +675,12 @@ class AsyncFilter(ABC):
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,
-               tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None
-               ) -> Optional[TransactionMetadata]:
+               tx_delta : TransactionMetadata
+               ) -> TransactionMetadata:
         pass
 
     @abstractmethod
-    def get(self, timeout : Optional[float] = None
-            ) -> Optional[TransactionMetadata]:
+    def get(self) -> TransactionMetadata:
         pass
 
     # pass exactly one of blob_rest_id or tx_body=True
@@ -663,8 +693,44 @@ class AsyncFilter(ABC):
     ) -> Optional[WritableBlob]:
         pass
 
-
-    # returns a "cached" value from the last get/update
+    # returns a "cached" value from the last get/update if any
+    # if none, returns the version from IdVersionMap
+    # else None
     @abstractmethod
-    def version(self) -> int:
+    def version(self) -> Optional[int]:
         pass
+
+    @abstractmethod
+    def wait(self, timeout) -> bool:
+        pass
+
+    # wait until version() would return a different value from the
+    # previous call
+    @abstractmethod
+    async def wait_async(self, timeout) -> bool:
+        pass
+
+
+# async_filter.update(tx, tx_delta) and loop up to deadline
+# on tx.req_inflight()
+# returns
+def update_wait_inflight(async_filter : AsyncFilter,
+                         tx : TransactionMetadata,
+                         tx_delta : TransactionMetadata,
+                         deadline : Deadline
+                         ) -> TransactionMetadata:
+    tx_orig = tx.copy()
+    upstream_tx = tx.copy()
+    upstream_delta = async_filter.update(upstream_tx, tx_delta)
+    while deadline.remaining() and upstream_tx.req_inflight():
+        if not async_filter.wait(deadline.deadline_left()):
+            break
+        upstream_tx = async_filter.get()
+
+    # TODO: we have a few of these hacks due to the way body/body_blob
+    # get swapped around in and out of storage
+    if tx_orig.body_blob:
+        del tx_orig.body_blob
+    upstream_delta = tx_orig.delta(upstream_tx)
+    tx.replace_from(upstream_tx)
+    return upstream_delta

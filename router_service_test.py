@@ -52,8 +52,8 @@ root_yaml = {
             'name': 'smtp-msa',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 2,
-                'downstream_data_timeout': 2,
+                'downstream_env_timeout': 10,
+                'downstream_data_timeout': 10,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -65,8 +65,8 @@ root_yaml = {
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
-                       'rcpt_timeout': 2,
-                       'data_timeout': 2,
+                       'rcpt_timeout': 10,
+                       'data_timeout': 10,
                        'default_notification': {
                            'host': 'submission'
                        }}]
@@ -75,8 +75,8 @@ root_yaml = {
             'name': 'submission',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 2,
-                'downstream_data_timeout': 2,
+                'downstream_env_timeout': 10,
+                'downstream_data_timeout': 10,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -204,15 +204,18 @@ class RouterServiceTest(unittest.TestCase):
         # probe for startup
         def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
-                mail_response = Response())
+                mail_response = Response(299, 'probe mail ok'))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
+        def exp_cancel(tx, tx_delta):
+            return TransactionMetadata()
 
         for i in range(0,3):
             logging.info('RouterServiceTest.setUp probe %d', i)
 
             upstream = FakeSyncFilter()
             upstream.add_expectation(exp)
+            upstream.add_expectation(exp_cancel)
             self.add_endpoint(upstream)
 
             rest_endpoint = RestEndpoint(
@@ -222,6 +225,9 @@ class RouterServiceTest(unittest.TestCase):
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
             rest_endpoint.on_update(tx, tx.copy(), 5)
+            delta = TransactionMetadata(cancelled=True)
+            tx.merge_from(delta)
+            rest_endpoint.on_update(tx, delta)
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
@@ -238,7 +244,7 @@ class RouterServiceTest(unittest.TestCase):
         # TODO this should verify that there are no open tx attempts in storage
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
-        self.executor.shutdown(timeout=10)
+        self.executor.shutdown(timeout=30)
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:
@@ -333,10 +339,16 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 203)
 
+        # the previous on_update() waited on req_inflight() so this
+        # just does a point read
         tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_rest_smoke create %s',
+        logging.debug('RouterServiceTest.test_rest_body create %s',
                       tx_json)
+
         if 'attempt_count' in tx_json:
             del tx_json['attempt_count']
         self.assertEqual(tx_json, {

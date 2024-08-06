@@ -18,7 +18,6 @@ class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-
         self.storage = Storage.get_sqlite_inmemory_for_test()
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
 
