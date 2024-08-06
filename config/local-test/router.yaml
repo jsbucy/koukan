@@ -101,7 +101,7 @@ endpoint:
         endpoint: http://localhost:8002
         options:
           receive_parsing:
-  # - filter: message_parser
+  - filter: message_parser
   - filter: rest_output
     #static_endpoint: http://localhost:8002
     verify: localhost.crt

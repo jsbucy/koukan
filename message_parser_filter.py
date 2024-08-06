@@ -2,6 +2,8 @@ from typing import Optional
 from tempfile import TemporaryFile
 from io import IOBase
 
+import logging
+
 from blob import (
     FileLikeBlob,
     InlineBlob )
@@ -15,6 +17,8 @@ from message_parser import (
 class MessageParserFilter(SyncFilter):
     upstream : Optional[SyncFilter] = None
     _blob_i = 0
+    parsed_delta : Optional[TransactionMetadata] = None
+    parsed : bool = False
 
     def __init__(self, upstream : Optional[SyncFilter] = None):
         self.upstream = upstream
@@ -29,27 +33,43 @@ class MessageParserFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if tx.body_blob is None or not tx.body_blob.finalized():
-            if self.upstream:
-                return self.upstream.on_update(tx, tx_delta)
-            else:
+        logging.debug('MessageParserFilter options %s', tx.options)
+
+        parsed = False
+        if (not self.parsed and
+            (tx.options and 'receive_parsing' in tx.options) and
+            tx.body_blob is not None and tx.body_blob.finalized()):
+            file = TemporaryFile('w+b')
+            file.write(tx.body_blob.read(0))
+            file.flush()
+            file.seek(0)
+            parser = MessageParser(self._blob_factory, max_inline=0)
+            parsed_message = parser.parse(file)
+            file.close()
+            parsed = self.parsed = True
+            if parsed_message is not None:
+                self.parsed_delta = TransactionMetadata()
+                self.parsed_delta.parsed_blobs = parsed_message.blobs
+                self.parsed_delta.parsed_json = parsed_message.json
+
+        if self.parsed_delta is None:
+            if self.upstream is None:
                 return TransactionMetadata()
+            return self.upstream.on_update(tx, tx_delta)
 
-        file = TemporaryFile('w+b')
-        file.write(tx.body_blob.read(0))
-        file.flush()
-        file.seek(0)
-        parser = MessageParser(self._blob_factory, max_inline=0)
-        parsed = parser.parse(file)
-        file.close()
-
-        parsed_delta = TransactionMetadata()
-        if parsed is not None:
-            parsed_delta.parsed_blobs = parsed.blobs
-            parsed_delta.parsed_json = parsed.json
             tx.merge_from(parsed_delta)
+
+        # cf "filter chain" doc 2024/8/6, we can't add internal fields
+        # to the downstream tx because it will cause a delta/conflict
+        # when we do the next db read in the OutputHandler
+
+        downstream_tx = tx.copy()
+        downstream_tx.merge_from(self.parsed_delta)
+        downstream_delta = tx_delta.copy()
+        if parsed:
+            downstream_delta.merge_from(self.parsed_delta)
         upstream_delta = self.upstream.on_update(
-            tx, tx_delta.merge(parsed_delta))
+            downstream_tx, downstream_delta)
         assert upstream_delta is not None
-        upstream_delta.merge_from(parsed_delta)
+        tx.merge_from(upstream_delta)
         return upstream_delta

@@ -3,7 +3,10 @@ import unittest
 import logging
 
 from blob import InlineBlob
-from recipient_router_filter import RecipientRouterFilter, RoutingPolicy
+from recipient_router_filter import (
+    Destination,
+    RecipientRouterFilter,
+    RoutingPolicy )
 from filter import HostPort, Mailbox, TransactionMetadata
 from response import Response
 from fake_endpoints import FakeSyncFilter
@@ -11,14 +14,14 @@ from response import Response
 
 class SuccessPolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[str], Optional[HostPort], Optional[Response]]:
-        return 'http://gateway', HostPort('example.com', 1234), None
+            Optional[Destination], Optional[Response]]:
+        return Destination(
+            'http://gateway', HostPort('example.com', 1234)), None
 
 class FailurePolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[str], Optional[HostPort], Optional[Response]]:
-        return None, None, Response(500, 'not found')
-
+            Optional[Destination], Optional[Response]]:
+        return None, Response(500, 'not found')
 
 class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):

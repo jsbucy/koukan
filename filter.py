@@ -243,7 +243,10 @@ _tx_fields = [
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB])),
     TxField('parsed_blobs', validity=None),
-    TxField('parsed_json', validity=None)
+    TxField('parsed_json', validity=None),
+
+    TxField('rest_endpoint', validity=None),
+    TxField('options', validity=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -293,6 +296,8 @@ class TransactionMetadata:
     parsed_blobs : Optional[List[Blob]] = None
     parsed_json : Optional[dict] = None
 
+    options : Optional[dict] = None
+
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
@@ -338,11 +343,13 @@ class TransactionMetadata:
         out += 'message_builder=%s ' % (self.message_builder)
         out += 'data_response=%s ' % self.data_response
         if self.rest_endpoint:
-            out += 'rest_endpoint=%s' % self.rest_endpoint
+            out += 'rest_endpoint=%s ' % self.rest_endpoint
         if self.remote_host:
-            out += 'remote_host=%s' % self.remote_host
+            out += 'remote_host=%s ' % self.remote_host
         if self.cancelled is not None:
             out += 'cancelled=%s ' % self.cancelled
+        if self.options:
+            out += 'options=%s ' % self.options
         return out
 
     def __bool__(self):

@@ -111,8 +111,19 @@ root_yaml = {
                 'downstream_env_timeout': 1,
                 'downstream_data_timeout': 1
             },
-            'chain': [ { 'filter': 'message_parser' },
-                       {'filter': 'sync'} ]
+            'chain': [
+                {'filter': 'router',
+                 'policy': {
+                     'name': 'local_domain',
+                     'domains': [{
+                         'name': 'd',
+                         #endpoint: https://localhost:8001
+                         'options': { 'receive_parsing': {}}
+                     }]
+                 }
+                },
+                {'filter': 'message_parser'},
+                {'filter': 'sync'} ]
         },
     ],
     'storage': {
@@ -797,7 +808,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             #retry={},
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            rcpt_to=[Mailbox('bob@d')],
             inline_body=body.decode('ascii'))
 
         def exp(tx, tx_delta):
@@ -832,6 +843,9 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertRcptCodesEqual(tx.rcpt_response, [202])
+        self.assertEqual(tx.data_response.code, 203)
 
 
 class RouterServiceTestFlask(RouterServiceTest):

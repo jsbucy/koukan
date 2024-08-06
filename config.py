@@ -6,7 +6,7 @@ import secrets
 from yaml import load, CLoader as Loader
 from local_domain_policy import LocalDomainPolicy
 from dest_domain_policy import DestDomainPolicy
-from recipient_router_filter import RecipientRouterFilter
+from recipient_router_filter import Destination, RecipientRouterFilter
 from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
@@ -131,7 +131,9 @@ class Config:
         d = {}
         for domain in policy_yaml['domains']:
             logging.debug('Config.router_policy_local_domain %s', domain)
-            d[domain['name']] = domain.get('endpoint', None)
+            d[domain['name']] = Destination(
+                rest_endpoint=domain.get('endpoint', None),
+                options = domain.get('options', None))
         logging.info('router_policy_local_domain %s', d)
         return LocalDomainPolicy(d)
 

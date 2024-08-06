@@ -142,11 +142,10 @@ class Transaction:
                       self.message_json if self.message_json else None)
         self.file.seek(0)
         logging.debug('received body %s', self.file.read())
+        logging.debug('received blob %s', self.blobs.keys())
         for blob_id,file in self.blobs.items():
             file.seek(0)
             logging.debug('received blob %s %s', blob_id, file.read())
-        else:
-            logging.debug('received blob %s', self.blobs)
 
     def cancel(self):
         pass

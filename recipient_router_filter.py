@@ -9,66 +9,84 @@ from filter import (
     SyncFilter,
     TransactionMetadata )
 
+class Destination:
+    rest_endpoint : Optional[str] = None
+    remote_host : Optional[HostPort] = None
+    options : dict
+
+    def __init__(self, rest_endpoint : Optional[str] = None,
+                 remote_host : Optional[HostPort] = None,
+                 options : Optional[dict] = None):
+        self.rest_endpoint = rest_endpoint
+        self.remote_host = remote_host
+        self.options = options if options else {}
+
 class RoutingPolicy(ABC):
     # called on the first recipient in the transaction
 
-    # -> rest endpoint base url, remote_host, Response
-    # returns one of endpoint and possibly dest_host or response which
-    # is probably a not-found error
+    # returns either dest or resp (err)
     @abstractmethod
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[str], Optional[HostPort], Optional[Response]]:
+            Optional[Destination], Optional[Response]]:
         raise NotImplementedError
-
 
 class RecipientRouterFilter(SyncFilter):
     upstream: SyncFilter
     policy : RoutingPolicy
-    upstream_tx : Optional[TransactionMetadata] = None
+    dest_delta : Optional[TransactionMetadata] = None
 
     def __init__(self, policy : RoutingPolicy, upstream : SyncFilter):
         self.policy = policy
         self.upstream = upstream
 
-    def _route(self, downstream_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
-        logging.debug('RecipientRouterFilter._route() %s %s',
-                      self.upstream_tx.mail_from, self.upstream_tx.rcpt_to)
-        mailbox = self.upstream_tx.rcpt_to[0]
+    def _route(self, tx : TransactionMetadata
+               ) -> TransactionMetadata:
+        logging.debug('RecipientRouterFilter._route() %s', tx)
+        mailbox = tx.rcpt_to[0]
         assert mailbox is not None
-        rest_endpoint, next_hop, resp = self.policy.endpoint_for_rcpt(
-            mailbox.mailbox)
+        dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place
+        dest_delta = TransactionMetadata()
         if resp and resp.err():
-            upstream_delta = TransactionMetadata()
-            if self.upstream_tx.mail_from:
-                upstream_delta.mail_response = Response(
+            if tx.mail_from and not tx.mail_response:
+                dest_delta.mail_response = Response(
                     250, 'MAIL ok (RecipientRouterFilter')
-            upstream_delta.rcpt_response = [resp]
-            return upstream_delta
+            dest_delta.rcpt_response = [resp]
+            return dest_delta
 
-        downstream_delta.rest_endpoint = rest_endpoint
-        self.upstream_tx.rest_endpoint = rest_endpoint
-        downstream_delta.remote_host = self.upstream_tx.remote_host = next_hop
-
+        dest_delta.rest_endpoint = dest.rest_endpoint
+        dest_delta.remote_host = dest.remote_host
+        dest_delta.options = dest.options
+        logging.debug('RecipientRouterFilter._route() dest_delta %s', dest_delta)
+        return dest_delta
 
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if self.upstream_tx is None:
-            self.upstream_tx = tx.copy()
-        else:
-            assert self.upstream_tx.merge_from(tx_delta) is not None
+        routed = False
+        if self.dest_delta is None and tx.rcpt_to:
+            self.dest_delta = self._route(tx)
+            if self.dest_delta.rcpt_response:  # i.e. err
+                tx.merge_from(self.dest_delta)
+                return self.dest_delta
+            routed = True
 
+        if self.dest_delta is None:
+            if self.upstream is None:
+                return TransactionMetadata()
+            return self.upstream.on_update(tx, tx_delta)
+
+        # cf "filter chain" doc 2024/8/6, we can't add internal fields
+        # to the downstream tx because it will cause a delta/conflict
+        # when we do the next db read in the OutputHandler
+        downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-
-        upstream_delta = None
-        if len(tx.rcpt_to) == len(tx_delta.rcpt_to) == 1:
-            upstream_delta = self._route(downstream_delta)
-
-        if upstream_delta is None:
-            upstream_delta = self.upstream.on_update(
-                self.upstream_tx, downstream_delta)
-        assert tx.merge_from(upstream_delta) is not None
+        downstream_tx.merge_from(self.dest_delta)
+        if routed:
+            downstream_delta.merge_from(self.dest_delta)
+        upstream_delta = self.upstream.on_update(
+            downstream_tx, downstream_delta)
+        assert upstream_delta is not None
+        tx.merge_from(upstream_delta)
         return upstream_delta

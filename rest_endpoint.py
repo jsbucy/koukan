@@ -245,7 +245,6 @@ class RestEndpoint(SyncFilter):
 
         tx_update = False
         if not self.transaction_url:
-            which_js = WhichJson.REST_CREATE
             rest_resp = self._start(self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
@@ -254,7 +253,6 @@ class RestEndpoint(SyncFilter):
                 return
             tx_update = True
         elif downstream_delta:
-            which_js = WhichJson.REST_UPDATE
             rest_resp = self._update(downstream_delta, deadline)
             # TODO handle 412 failed precondition
             tx_update = True
