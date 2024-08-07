@@ -193,11 +193,15 @@ py_test(name='recipient_router_filter_test',
         deps=[':recipient_router_filter',
               ':fake_endpoints'])
 
-pytype_library(name='local_domain_policy',
-               srcs=['local_domain_policy.py'],
+pytype_library(name='address_list_policy',
+               srcs=['address_list_policy.py'],
                deps=[':recipient_router_filter',
                      ':address',
                      ':response'])
+
+py_test(name='address_list_policy_test',
+        srcs=['address_list_policy_test.py'],
+        deps=[':address_list_policy'])
 
 pytype_library(name='dest_domain_policy',
                srcs=['dest_domain_policy.py'],
@@ -291,7 +295,7 @@ pytype_library(name='config',
                      ':filter',
                      ':filter_adapters',
                      ':rest_endpoint',
-                     ':local_domain_policy',
+                     ':address_list_policy',
                      ':dest_domain_policy',
                      ':message_builder_filter',
                      ':message_parser_filter',

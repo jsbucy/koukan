@@ -47,12 +47,16 @@ endpoint:
   - filter: router
     policy:
       name: dest_domain
+      endpoint: https://localhost:8001
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest -> reject all
   - filter: dkim
     key: config/local-test/dkim.key
     domain: d
     selector: sel
   - filter: rest_output
-    static_endpoint: https://localhost:8001
     verify: localhost.crt
     http_host: outbound
     # remote_host_discovery: mx
@@ -91,16 +95,30 @@ endpoint:
     received_hostname: gargantua1    
   - filter: router
     policy:
-      name: local_domain
+      name: address_list
       domains:
-      - name: d
+      - d
+      delimter: '+'
+      #prefixes:
+      #- base: alice
+      destination:
         endpoint: https://localhost:8001
-        #options:
-        #  receive_parsing:
-      - name: dd
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - dd
+      delimiter: '+'
+      prefixes:
+      - bob
+      destination:
         endpoint: http://localhost:8002
         options:
           receive_parsing:
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest = reject all
   - filter: message_parser
   - filter: rest_output
     #static_endpoint: http://localhost:8002

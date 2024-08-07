@@ -114,14 +114,14 @@ root_yaml = {
             'chain': [
                 {'filter': 'router',
                  'policy': {
-                     'name': 'local_domain',
-                     'domains': [{
-                         'name': 'd',
-                         #endpoint: https://localhost:8001
-                         'options': { 'receive_parsing': {}}
-                     }]
-                 }
+                     'name': 'address_list',
+                     'domains': ['d'],
+                     #endpoint: https://localhost:8001
+                     'destination': {'options': { 'receive_parsing': {}}}
+                     }
                 },
+                {'filter': 'router',
+                 'policy': { 'name': 'address_list' }},
                 {'filter': 'message_parser'},
                 {'filter': 'sync'} ]
         },

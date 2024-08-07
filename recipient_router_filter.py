@@ -21,14 +21,21 @@ class Destination:
         self.remote_host = remote_host
         self.options = options if options else {}
 
+
 class RoutingPolicy(ABC):
     # called on the first recipient in the transaction
 
-    # returns either dest or resp (err)
+    # Returns either a Destination or an error Response.
+    # The error response is really to say "we were explicitly
+    # configured to reject this address" vs "address syntax error"
+    # Possibly there should be input validation near the beginning of
+    # the chain to emit "501 5.1.3 Bad destination system address" in
+    # that case.
     @abstractmethod
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
             Optional[Destination], Optional[Response]]:
         raise NotImplementedError
+
 
 class RecipientRouterFilter(SyncFilter):
     upstream: SyncFilter
@@ -40,7 +47,7 @@ class RecipientRouterFilter(SyncFilter):
         self.upstream = upstream
 
     def _route(self, tx : TransactionMetadata
-               ) -> TransactionMetadata:
+               ) -> Optional[TransactionMetadata]:
         logging.debug('RecipientRouterFilter._route() %s', tx)
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
@@ -54,20 +61,25 @@ class RecipientRouterFilter(SyncFilter):
                     250, 'MAIL ok (RecipientRouterFilter')
             dest_delta.rcpt_response = [resp]
             return dest_delta
+        elif dest is None:
+            return None
 
         dest_delta.rest_endpoint = dest.rest_endpoint
         dest_delta.remote_host = dest.remote_host
         dest_delta.options = dest.options
-        logging.debug('RecipientRouterFilter._route() dest_delta %s', dest_delta)
+        logging.debug('RecipientRouterFilter._route() dest_delta %s',
+                      dest_delta)
         return dest_delta
 
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         routed = False
-        if self.dest_delta is None and tx.rcpt_to:
+        if (tx.rest_endpoint is None and tx.options is None and
+                self.dest_delta is None and tx.rcpt_to):
             self.dest_delta = self._route(tx)
-            if self.dest_delta.rcpt_response:  # i.e. err
+            # i.e. err
+            if self.dest_delta is not None and self.dest_delta.rcpt_response:
                 tx.merge_from(self.dest_delta)
                 return self.dest_delta
             routed = True

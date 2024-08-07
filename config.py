@@ -4,9 +4,11 @@ import sys
 import secrets
 
 from yaml import load, CLoader as Loader
-from local_domain_policy import LocalDomainPolicy
+from address_list_policy import AddressListPolicy
 from dest_domain_policy import DestDomainPolicy
-from recipient_router_filter import Destination, RecipientRouterFilter
+from recipient_router_filter import (
+    Destination,
+    RecipientRouterFilter )
 from rest_endpoint import RestEndpoint, constant_resolution
 from dkim_endpoint import DkimEndpoint
 from mx_resolution import resolve as resolve_mx
@@ -46,7 +48,7 @@ class Config:
         self.storage_writer_factory = storage_writer_factory
         self.router_policies = {
             'dest_domain': self.router_policy_dest_domain,
-            'local_domain': self.router_policy_local_domain}
+            'address_list': self.router_policy_address_list }
         self.filters = {
             'rest_output': FilterSpec(self.rest_output, SyncFilter),
             'router': FilterSpec(self.router, SyncFilter),
@@ -125,24 +127,28 @@ class Config:
             verify=yaml.get('verify', True))
 
     def router_policy_dest_domain(self, policy_yaml):
-        return DestDomainPolicy()
+        return DestDomainPolicy(policy_yaml['endpoint'])
 
-    def router_policy_local_domain(self, policy_yaml):
-        d = {}
-        for domain in policy_yaml['domains']:
-            logging.debug('Config.router_policy_local_domain %s', domain)
-            d[domain['name']] = Destination(
-                rest_endpoint=domain.get('endpoint', None),
-                options = domain.get('options', None))
-        logging.info('router_policy_local_domain %s', d)
-        return LocalDomainPolicy(d)
+    def _route_destination(self, yaml):
+        dest = yaml.get('destination', None)
+        if dest is None:
+            return None
+        return Destination(
+            rest_endpoint = dest.get('endpoint', None),
+            options = dest.get('options', None))
+
+    def router_policy_address_list(self, policy_yaml):
+        return AddressListPolicy(
+            policy_yaml.get('domains', []),
+            policy_yaml.get('delimiter', None),
+            policy_yaml.get('prefixes', []),
+            self._route_destination(policy_yaml))
 
     def router(self, yaml, next):
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)
-        return RecipientRouterFilter(
-            policy, next)
+        return RecipientRouterFilter(policy, next)
 
     def dkim(self, yaml, next):
         if 'key' not in yaml:
