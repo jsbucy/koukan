@@ -7,8 +7,11 @@ from email.headerregistry import (
     Address,
     AddressHeader,
     BaseHeader,
+    ContentDispositionHeader,
+    ContentTypeHeader,
     DateHeader,
-    MessageIDHeader )
+    MessageIDHeader,
+    ParameterizedMIMEHeader )
 import email.policy
 import email.contentmanager
 
@@ -49,7 +52,13 @@ class MessageParser:
             'bcc': self._parse_address_header,
             'date': self._parse_date_header,
             'message-id': self._parse_messageid_header,
-            'in-reply-to': self._parse_messageid_header,
+            'content-disposition': self._parse_parameter_header,
+            'content-type': self._parse_parameter_header,
+
+            # TODO default HeaderRegistery doesn't map in-reply-to to
+            # MessageIDHeader
+            #'in-reply-to': self._parse_messageid_header,
+
             # TODO MessageIDHeader only holds one but we will want to
             # parse References: at some point
             #'references': self._parse_messageid_header
@@ -79,6 +88,18 @@ class MessageParser:
         msgid = msgid.removesuffix('>')
         return msgid
 
+    def _parse_parameter_header(self, header : BaseHeader):
+        assert isinstance(header, ParameterizedMIMEHeader)
+        params = { k:v for k,v in header.params.items() }
+        if isinstance(header, ContentTypeHeader):
+            return [header.content_type, params]
+        elif isinstance(header, ContentDispositionHeader):
+            return [header.content_disposition, params]
+        elif isinstance(header, ContentTransferEncodingHeader):
+            return [header.cte, params]
+        else:
+            return _parse_generic_header(header)
+
     def _parse_generic_header(self, header : BaseHeader):
         return str(header)
 
@@ -87,17 +108,21 @@ class MessageParser:
         out['headers'] = headers_out
         for name,value in message.items():
             name = name.lower()
-            logging.debug('%s: %s', name, value)
             if parser := self._header_parsers.get(name, None):
                 out_i = parser(value)
             else:
                 out_i = self._parse_generic_header(value)
             headers_out.append([name.lower(), out_i])
 
-    def _parse_part(self, part : MIMEPart, out):
-        logging.debug(part.get_content_type())
-        logging.debug(part.get_content())
+    def _parse_text_headers(self, part : MIMEPart, out):
+        parser = BytesParser(policy=email.policy.SMTP)
+        # this probably gets the line endings converted to LF but it
+        # should be ok here
+        parsed = parser.parsebytes(part.get_content().encode('ascii'))
+        assert isinstance(parsed, MIMEPart)
+        self.parse_headers(parsed, out)
 
+    def _parse_part(self, part : MIMEPart, out):
         if part.get_content_maintype() == 'text' and (
                 self.inline + len(part.get_content()) < self.max_inline):
             utf8_len = len(part.get_content().encode('utf-8'))
@@ -119,9 +144,9 @@ class MessageParser:
         self.out.blobs.append(blob)
 
     def _parse_mime_tree(self, part : MIMEPart,
-                         depth, parse_headers, out : dict):
-        if parse_headers:
-            self.parse_headers(part, out)
+                         depth, parse_headers : bool,
+                         out : dict):
+        self.parse_headers(part, out)
 
         out['content_type'] = part.get_content_type()
         # disposition/filename
@@ -130,18 +155,25 @@ class MessageParser:
         # 'text/rfc822-headers' for DSN, need to reparse the content
         # since email.parser probably doesn't do it?
         is_message = (part.get_content_maintype() == 'message')
+        is_text_headers = (part.get_content_type() == 'text/rfc822-headers')
         # assert not is_message or (
         #   part.is_multipart() and len(part.iter_parts()) == 1)
 
-        if part.is_multipart() and depth < self.max_depth:
-            out['parts'] = []
-            for part_i in part.iter_parts():
-                out_i = {}
-                out['parts'].append(out_i)
-                assert isinstance(part_i, MIMEPart)
-                self._parse_mime_tree(part_i, depth + 1, is_message, out_i)
-        else:
+        if is_text_headers:
+            out_i = {}
+            out['parts'] = [out_i]
+            self._parse_text_headers(part, out_i)
+            return
+        elif not part.is_multipart() or depth >= self.max_depth:
             self._parse_part(part, out)
+            return
+
+        out['parts'] = []
+        for part_i in part.iter_parts():
+            out_i = {}
+            out['parts'].append(out_i)
+            assert isinstance(part_i, MIMEPart)
+            self._parse_mime_tree(part_i, depth + 1, is_message, out_i)
 
 
     def parse(self, raw_file  # binary file
@@ -153,9 +185,6 @@ class MessageParser:
         self.out.json['parts'] = parts
         assert isinstance(parsed, MIMEPart)
         self._parse_mime_tree(parsed, 0, True, parts)
-
-        logging.debug(self.out.json)
-        logging.debug(self.out.blobs)
 
         return self.out
 
@@ -181,6 +210,4 @@ class MessageParser:
 
         # but there's stuff like e.g. s/mime that the whole thing will
         # be wrapped in multipart/signed ?
-
-        # don't recurse into message/* -> single blob
 

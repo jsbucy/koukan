@@ -23,17 +23,20 @@ class MessageParserFilterTest(unittest.TestCase):
         upstream = FakeSyncFilter()
         def exp(tx, delta):
             upstream_delta = TransactionMetadata()
-            if delta.parsed_blobs:
-                logging.debug('blobs %s', delta.parsed_blobs)
-            if delta.parsed_json:
-                logging.debug('parsed json %s', delta.parsed_json)
-                upstream_delta.data_response = Response()
+
+            self.assertEqual(
+                tx.parsed_blobs[0].read(0), b'image/png')
+            self.assertEqual(
+                tx.parsed_json['parts']['content_type'],
+                'multipart/mixed')
+            upstream_delta.data_response = Response()
             tx.merge_from(upstream_delta)
             return upstream_delta
         upstream.add_expectation(exp)  # raw/body
 
         filter = MessageParserFilter(upstream)
         upstream_delta = filter.on_update(tx, tx.copy())
+
 
 if __name__ == '__main__':
     unittest.main()

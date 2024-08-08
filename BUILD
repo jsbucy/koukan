@@ -162,7 +162,10 @@ py_test(name='message_parser_test',
         srcs=['message_parser_test.py'],
         deps=[':message_parser',
               ':blob'],
-        data=['testdata/trivial.msg'])
+        data=['testdata/multipart.msg',
+              'testdata/multipart.json',
+              'testdata/dsn.msg',
+              'testdata/dsn-text-rfc822-headers.msg'])
 
 pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
@@ -358,7 +361,7 @@ py_test(name='router_service_test_flask',
               ':config',
               ':fake_endpoints',
               ':filter'],
-        data=['testdata/trivial.msg'])
+        data=['testdata/multipart.msg'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
@@ -371,7 +374,7 @@ py_test(name='router_service_test_fastapi',
               ':config',
               ':fake_endpoints',
               ':filter'],
-        data=['testdata/trivial.msg'])
+        data=['testdata/multipart.msg'])
 
 pytype_library(name='smtp_auth',
                srcs=['smtp_auth.py'])

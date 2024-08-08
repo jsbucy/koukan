@@ -19,5 +19,10 @@ content-type: text/html
 --zzz--
 
 --yyy---
+--xxx
+content-type: image/png
+content-disposition: attachment; filename="funny cats.png"
+content-transfer-encoding: base64
 
+aW1hZ2UvcG5n
 --xxx--

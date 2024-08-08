@@ -802,7 +802,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, http_host='smtp-in',
             timeout_start=5, timeout_data=5)
-        with open('testdata/trivial.msg', 'rb') as f:
+        with open('testdata/multipart.msg', 'rb') as f:
             body = f.read()
         tx = TransactionMetadata(
             #retry={},
@@ -830,7 +830,7 @@ class RouterServiceTest(unittest.TestCase):
                 # NOTE: I can't figure out how to get email.parser to
                 # leave the line endings alone
                 self.assertEqual(tx_delta.parsed_blobs[0].read(0),
-                                 b'world!\n')
+                                 b'image/png')
                 self.assertIsNotNone(tx_delta.parsed_json)
                 self.assertIsNotNone(tx_delta.parsed_blobs)
                 upstream_delta.data_response=Response(203)

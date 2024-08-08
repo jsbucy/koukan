@@ -1,0 +1,126 @@
+{
+  "parts": {
+    "headers": [
+      [
+        "from",
+        [
+          {
+            "display_name": "alice a",
+            "address": "alice@example.com"
+          }
+        ]
+      ],
+      [
+        "subject",
+        "hello"
+      ],
+      [
+        "message-id",
+        "abc@xyz"
+      ],
+      [
+        "date",
+        {
+          "unix_secs": 1709750551,
+          "tz_offset": -28800
+        }
+      ],
+      [
+        "content-type",
+        [
+          "multipart/mixed",
+          {
+            "boundary": "xxx"
+          }
+        ]
+      ]
+    ],
+    "content_type": "multipart/mixed",
+    "parts": [
+      {
+        "headers": [
+          [
+            "content-type",
+            [
+              "multipart/related",
+              {
+                "boundary": "yyy"
+              }
+            ]
+          ]
+        ],
+        "content_type": "multipart/related",
+        "parts": [
+          {
+            "headers": [
+              [
+                "content-type",
+                [
+                  "multipart/alternative",
+                  {
+                    "boundary": "zzz"
+                  }
+                ]
+              ]
+            ],
+            "content_type": "multipart/alternative",
+            "parts": [
+              {
+                "headers": [
+                  [
+                    "content-type",
+                    [
+                      "text/plain",
+                      {}
+                    ]
+                  ]
+                ],
+                "content_type": "text/plain",
+                "content": "hello"
+              },
+              {
+                "headers": [
+                  [
+                    "content-type",
+                    [
+                      "text/html",
+                      {}
+                    ]
+                  ]
+                ],
+                "content_type": "text/html",
+                "content": "<b>hello</b>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "headers": [
+          [
+            "content-type",
+            [
+              "image/png",
+              {}
+            ]
+          ],
+          [
+            "content-disposition",
+            [
+              "attachment",
+              {
+                "filename": "funny cats.png"
+              }
+            ]
+          ],
+          [
+            "content-transfer-encoding",
+            "base64"
+          ]
+        ],
+        "content_type": "image/png",
+        "blob_id": "0"
+      }
+    ]
+  }
+}

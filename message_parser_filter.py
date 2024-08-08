@@ -43,7 +43,9 @@ class MessageParserFilter(SyncFilter):
             file.write(tx.body_blob.read(0))
             file.flush()
             file.seek(0)
-            parser = MessageParser(self._blob_factory, max_inline=0)
+            parser = MessageParser(
+                self._blob_factory,
+                max_inline=tx.options.get('receive_parsing_max_inline', 65536))
             parsed_message = parser.parse(file)
             file.close()
             parsed = self.parsed = True
@@ -56,8 +58,6 @@ class MessageParserFilter(SyncFilter):
             if self.upstream is None:
                 return TransactionMetadata()
             return self.upstream.on_update(tx, tx_delta)
-
-            tx.merge_from(parsed_delta)
 
         # cf "filter chain" doc 2024/8/6, we can't add internal fields
         # to the downstream tx because it will cause a delta/conflict
