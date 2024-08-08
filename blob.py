@@ -44,20 +44,20 @@ class WritableBlob(ABC):
 class InlineBlob(Blob, WritableBlob):
     d : bytes
     _content_length : Optional[int] = None
+    _rest_id : Optional[str] = None
 
-    # TODO this id is vestigal?
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
-                 id : Optional[str] = None):
+                 rest_id : Optional[str] = None):
         self.d = d
         self._content_length = content_length
-        self.blob_id = id
+        self._rest_id = rest_id
 
     def len(self):
         return len(self.d)
 
-    def id(self):
-        return self.blob_id
+    def rest_id(self):
+        return self._rest_id
 
     def read(self, offset, len=None):
         return self.d[offset : offset + len if len is not None else None]

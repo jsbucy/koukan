@@ -823,7 +823,6 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
-
     def test_bad_post_resp(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1,
@@ -845,6 +844,237 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)  # POST /transactions
         self.assertEqual(tx.mail_response.code, 450)
 
+    def test_parsed(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}] },
+            location = '/transactions/123'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
+            location = '/transactions/123'))
+
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+
+        parsed_delta = TransactionMetadata()
+        parsed_delta.parsed_json = {'parts': {}}
+        blob = b'hello, world!\r\n'
+        parsed_delta.parsed_blobs = [ InlineBlob(
+            blob, len(blob), 'blob_rest_id')
+        ]
+        body = (b'Message-id: <abc@def>\r\n'
+                b'\r\n'
+                b'hello, world!\r\n')
+        parsed_delta.body_blob = InlineBlob(body, len(body))
+        tx.merge_from(parsed_delta)
+
+        # POST /transactions/123/message_builder
+        self.responses.append(Response(
+            http_resp = '200 ok'))
+
+        # POST /transactions/123/blob/blob_id
+        self.responses.append(Response(
+            http_resp = '201 created'))
+
+        # POST /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '201 created'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'}}))
+
+        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
+        self.assertEqual(upstream_delta.data_response.code, 203)
+
+
+    def test_parsed_json_err(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}] },
+            location = '/transactions/123'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
+            location = '/transactions/123'))
+
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+
+        parsed_delta = TransactionMetadata()
+        parsed_delta.parsed_json = {'parts': {}}
+        blob = b'hello, world!\r\n'
+        parsed_delta.parsed_blobs = [ InlineBlob(
+            blob, len(blob), 'blob_rest_id')
+        ]
+        body = (b'Message-id: <abc@def>\r\n'
+                b'\r\n'
+                b'hello, world!\r\n')
+        parsed_delta.body_blob = InlineBlob(body, len(body))
+        tx.merge_from(parsed_delta)
+
+        # POST /transactions/123/message_builder
+        self.responses.append(Response(
+            http_resp = '500 err'))
+
+        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
+        self.assertEqual(upstream_delta.data_response.code, 400)
+
+    def test_parsed_blob_err(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}] },
+            location = '/transactions/123'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
+            location = '/transactions/123'))
+
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+
+        parsed_delta = TransactionMetadata()
+        parsed_delta.parsed_json = {'parts': {}}
+        blob = b'hello, world!\r\n'
+        parsed_delta.parsed_blobs = [ InlineBlob(
+            blob, len(blob), 'blob_rest_id')
+        ]
+        body = (b'Message-id: <abc@def>\r\n'
+                b'\r\n'
+                b'hello, world!\r\n')
+        parsed_delta.body_blob = InlineBlob(body, len(body))
+        tx.merge_from(parsed_delta)
+
+        # POST /transactions/123/message_builder
+        self.responses.append(Response(http_resp = '200 ok'))
+
+        # POST /transactions/123/blob/blob_id
+        self.responses.append(Response(http_resp = '500 err'))
+
+        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
+        self.assertEqual(upstream_delta.data_response.code, 450)
+
+    def test_all_rcpts_fail(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        body = b'hello, world'
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(body, len(body)))
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 502, 'message': 'err'}] },
+            location = '/transactions/123'))
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [502])
+        self.assertEqual(upstream_delta.data_response.code, 400)
+
+    def test_cancel(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
+            location = '/transactions/123'))
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+
+        # POST /transactions/123/cancel
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={}))
+
+        tx = TransactionMetadata(cancelled = True)
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        self.assertTrue(upstream_delta.cancelled)
+        upstream_delta = rest_endpoint.on_update(tx, TransactionMetadata())
+        self.assertFalse(upstream_delta.cancelled)
 
 
 if __name__ == '__main__':

@@ -714,8 +714,7 @@ class RouterServiceTest(unittest.TestCase):
 
         b = b"hello, world!"
         blob = InlineBlob(b)
-        blob_resp = rest_endpoint._put_blob(
-            blob, testonly_non_body_blob=True)
+        blob_resp = rest_endpoint._put_blob(blob, non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
 
         message_builder_spec = {

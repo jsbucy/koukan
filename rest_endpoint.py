@@ -211,6 +211,8 @@ class RestEndpoint(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         if tx_delta.cancelled:
             return self._cancel()
+        elif tx.cancelled:
+            return TransactionMetadata()
 
         # xxx envelope vs data timeout
         if timeout is None:
@@ -226,8 +228,10 @@ class RestEndpoint(SyncFilter):
         downstream_delta = tx_delta.copy()
         if downstream_delta.body_blob:
             del downstream_delta.body_blob
-            # del downstream_delta.parsed_json
-            # del downstream_delta.parsed_blobs
+        if downstream_delta.parsed_json:
+            del downstream_delta.parsed_json
+        if downstream_delta.parsed_blobs:
+            del downstream_delta.parsed_blobs
 
         # We are going to send a slightly different delta upstream per
         # remote_host (discovery in _start()) and body_blob (below).
@@ -270,6 +274,9 @@ class RestEndpoint(SyncFilter):
             tx_out = TransactionMetadata.from_json(
                 resp_json, WhichJson.REST_READ)
 
+            logging.debug('RestEndpoint.on_update %s tx_out %s',
+                          self.transaction_url, tx_out)
+
             if tx_out is None:
                 logging.debug('RestEndpoint.on_update bad resp_json %s',
                               resp_json)
@@ -302,9 +309,11 @@ class RestEndpoint(SyncFilter):
                 return errs
 
         if tx_delta.parsed_json is not None:
-            tx.data_response = self._update_message_builder(tx_delta, deadline)
-            if tx.data_response is not None and tx.data_response.err():
-                return  # xxx delta
+            err = self._update_message_builder(tx_delta, deadline)
+            if err is not None:
+                delta = TransactionMetadata(data_response = err)
+                tx.merge_from(delta)
+                return  delta
 
         if tx.body_blob is None and not(tx_delta.parsed_blobs):
             return upstream_delta
@@ -314,8 +323,6 @@ class RestEndpoint(SyncFilter):
             err = "all rcpts failed"
 
         if err is not None:
-            # TODO cancel upstream
-            # POST /tx/123/cancel etc.
             data_err = TransactionMetadata(
                 data_response=Response(
                     400, "data failed precondition: " + err +
@@ -329,8 +336,7 @@ class RestEndpoint(SyncFilter):
 
         if tx_delta.parsed_blobs:
             for blob in tx_delta.parsed_blobs:
-                put_blob_resp = self._put_blob(
-                    blob, testonly_non_body_blob=True)
+                put_blob_resp = self._put_blob(blob, non_body_blob=True)
                 if not put_blob_resp.ok():
                     upstream_delta = TransactionMetadata(
                         data_response = put_blob_resp)
@@ -377,8 +383,7 @@ class RestEndpoint(SyncFilter):
         assert upstream_delta.merge_from(errs) is not None
         return upstream_delta
 
-    def _put_blob(self, blob,
-                  testonly_non_body_blob=False) -> Response:
+    def _put_blob(self, blob, non_body_blob=False) -> Response:
         offset = 0
         while offset < blob.len():
             chunk = blob.read(offset, self.chunk_size)
@@ -392,7 +397,7 @@ class RestEndpoint(SyncFilter):
                 offset=offset,
                 d=chunk,
                 last=chunk_last,
-                testonly_non_body_blob=testonly_non_body_blob,
+                non_body_blob=non_body_blob,
                 blob_rest_id=blob.rest_id())
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
@@ -408,7 +413,7 @@ class RestEndpoint(SyncFilter):
 
     # -> (resp, len)
     def _put_blob_chunk(self, offset, d : bytes, last : bool,
-                        testonly_non_body_blob=False,
+                        non_body_blob=False,
                         blob_rest_id : Optional[str] = None
                         ) -> Tuple[Optional[Response], Optional[int]]:
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
@@ -420,7 +425,7 @@ class RestEndpoint(SyncFilter):
             if self.blob_url is None:
                 if blob_rest_id is not None:
                     endpoint = self.transaction_url + '/blob/' + blob_rest_id
-                elif not testonly_non_body_blob:
+                elif not non_body_blob:
                     self.blob_path = self.transaction_path + '/body'
                     self.blob_url = self._maybe_qualify_url(self.blob_path)
                     endpoint = self.blob_url
@@ -441,7 +446,7 @@ class RestEndpoint(SyncFilter):
                              rest_resp, rest_resp.headers)
                 if rest_resp.status_code != 201:
                     return None, None
-                if testonly_non_body_blob:
+                if blob_rest_id is None and non_body_blob:
                     self.blob_path = rest_resp.headers.get('location', None)
                     if not self.blob_path:
                         return None, None
@@ -534,6 +539,7 @@ class RestEndpoint(SyncFilter):
 
             # TODO this should abort on some http errs? 4xx?
 
+            # TODO self.upstream_tx.req_inflight(tx_out) ?
             if tx_json is not None and (
                     not TransactionMetadata.req_inflight_json(tx_json)):
                 tx_out = TransactionMetadata.from_json(

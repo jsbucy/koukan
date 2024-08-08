@@ -740,6 +740,7 @@ class RestHandler(Handler):
         assert tx.merge_from(delta) is not None
         assert tx.cancelled
         self.async_filter.update(tx, delta)
+        # TODO this should probably return the tx?
         return self.response(request)
 
 
