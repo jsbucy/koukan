@@ -424,41 +424,14 @@ class TransactionMetadata:
                 return True
         body_blob_last = self.body_blob is not None and (
             self.body_blob.finalized())
-        if self.body or body_blob_last or self.message_builder:
+        if (self.inline_body or self.body or body_blob_last or
+            self.message_builder):
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward
             # progress.
             if not any([r.ok() for r in tx.rcpt_response]):
                 return False
             if tx.data_response is None:
-                return True
-        return False
-
-    # version that operates on json with REST_READ placeholders.
-    # These parse into None so the normal version doesn't work there.
-    @staticmethod
-    def req_inflight_json(json : dict) -> bool:
-        mail_response_json = json.get('mail_response', None)
-        if 'mail_from' in json and mail_response_json is None:
-            return True
-        if mail_response_json:
-            mail_response = Response.from_json(mail_response_json)
-            # invalid response or err: cannot make forward progress
-            if mail_response is None or mail_response.err():
-                return False
-        rcpt_response_json = json.get('rcpt_response', [])
-        if 'rcpt_to' in json and (
-                len(json['rcpt_to']) != len(rcpt_response_json)):
-            return True
-        rcpt_response = [Response.from_json(r) for r in rcpt_response_json]
-        # body or all rcpt err?
-        if 'body' in json:
-            # if we have the body, then we aren't getting any more
-            # rcpts. If they all failed, then we can't make forward
-            # progress.
-            if not any ([r is not None and r.ok() for r in rcpt_response]):
-                return False
-            if 'data_response' not in json:
                 return True
         return False
 

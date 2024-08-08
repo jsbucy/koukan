@@ -60,6 +60,7 @@ class RestEndpoint(SyncFilter):
     client : Client
 
     upstream_tx : Optional[TransactionMetadata] = None
+    sent_data_last : bool = False
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
@@ -355,6 +356,8 @@ class RestEndpoint(SyncFilter):
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
 
+        self.sent_data_last = True
+
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
                       self.transaction_url, tx_out)
@@ -539,15 +542,17 @@ class RestEndpoint(SyncFilter):
 
             # TODO this should abort on some http errs? 4xx?
 
-            # TODO self.upstream_tx.req_inflight(tx_out) ?
-            if tx_json is not None and (
-                    not TransactionMetadata.req_inflight_json(tx_json)):
+            if tx_json is not None:
                 tx_out = TransactionMetadata.from_json(
                     tx_json, WhichJson.REST_READ)
-                if tx_out is not None:
-                    logging.debug('RestEndpoint._get() %s done %s',
-                                  self.transaction_url, tx_out)
-                    return tx_out
+
+            logging.debug('RestEndpoint._get() %s done tx_out %s',
+                          self.transaction_url, tx_out)
+
+            if (tx_out is not None) and (
+                    not self.upstream_tx.req_inflight(tx_out) and not
+                    (self.sent_data_last and tx_out.data_response is None)):
+                return tx_out
 
             # min delta
             # XXX configurable

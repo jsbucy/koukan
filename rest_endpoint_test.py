@@ -1045,6 +1045,63 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [502])
         self.assertEqual(upstream_delta.data_response.code, 400)
 
+    def test_data_resp_wait(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        body = b'hello, world'
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=InlineBlob(body, len(body)))
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'err'}] },
+            location = '/transactions/123'))
+
+        # POST /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '201 created',
+            etag='1'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'err'}],
+                'body': {}},
+            etag='2'))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'err'}],
+                'body': {},
+                'data_response': {'code': 203, 'message': 'ok'}},
+            etag='3'))
+
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        self.assertEqual(upstream_delta.data_response.code, 203)
+
+
     def test_cancel(self):
         rest_endpoint = RestEndpoint(
             static_base_url=self.static_base_url,
