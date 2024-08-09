@@ -140,7 +140,7 @@ class MessageParser:
             content = part.get_content()
 
         blob.append_data(0, content, len(content))
-        out['blob_id'] = blob.rest_id()
+        out['blob_rest_id'] = blob.rest_id()
         self.out.blobs.append(blob)
 
     def _parse_mime_tree(self, part : MIMEPart,
@@ -175,6 +175,70 @@ class MessageParser:
             assert isinstance(part_i, MIMEPart)
             self._parse_mime_tree(part_i, depth + 1, is_message, out_i)
 
+    def _flatten_part(self, part_json) -> dict:
+        out = {}
+        out['content_type'] = part_json['content_type']
+
+        # content_id or filename
+        for k,v in part_json['headers']:
+            if (k == 'content-disposition' and len(v) == 2 and
+                v[0] == 'attachment'):
+                if 'filename' in v[1]:
+                    out['filename'] = v[1]['filename']
+                break
+            elif k == 'content-id':
+                out['content_id'] = v
+                break
+
+        for c in ['content', 'blob_rest_id']:
+            if c in part_json:
+                out[c] = part_json[c]
+
+        return out
+
+    def _flatten(self):
+        next = self.out.json['parts']
+        text = []
+        related = None
+        attach = []
+
+        # S/MIME https://www.rfc-editor.org/rfc/rfc1847.html
+        if next['content_type'] == 'multipart/signed':
+            next = next['parts'][0]
+
+        if next['content_type'] == 'multipart/mixed':
+            attach = next['parts'][1:]
+            next = next['parts'][0]
+
+        if next['content_type'] == 'multipart/related':
+            related = next['parts'][1:]
+            if next['parts'][0]['content_type'] == 'text/html':
+                text.append(next['parts'][0])
+                next = None
+            else:
+                next = next['parts'][0]
+
+        if next and next['content_type'] == 'multipart/alternative':
+            if next['parts'][0]['content_type'] == 'text/plain':
+                text.append(next['parts'][0])
+                next = next['parts'][1]
+            else:
+                next = None
+
+        if (next and related is None and
+            next['content_type'] == 'multipart/related'):
+            related = next['parts'][1:]
+            next = next['parts'][0]
+
+        if next and next['content_type'] in ['text/plain', 'text/html']:
+            text.append(next)
+
+        for k,v in [('text_body', text),
+                    ('related_attachments', related),
+                    ('file_attachments', attach)]:
+            if v:
+                self.out.json[k] = [ self._flatten_part(p) for p in v ]
+
 
     def parse(self, raw_file  # binary file
               ) -> Optional[ParsedMessage]:
@@ -186,28 +250,7 @@ class MessageParser:
         assert isinstance(parsed, MIMEPart)
         self._parse_mime_tree(parsed, 0, True, parts)
 
+        self._flatten()
+
         return self.out
-
-        # generally expecting one of
-
-        # multipart/mixed
-        #   multipart/related
-        #     multipart/alternative
-        #       text/plain
-        #       text/html
-        #     inline parts
-        #   attachments
-
-        # or
-
-        # multipart/mixed
-        #   multipart/alternative
-        #     text/plain
-        #     multipart/related
-        #       text/html
-        #       inline parts
-        #   attachments
-
-        # but there's stuff like e.g. s/mime that the whole thing will
-        # be wrapped in multipart/signed ?
 

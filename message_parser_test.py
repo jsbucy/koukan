@@ -25,35 +25,24 @@ class MessageParserTest(unittest.TestCase):
                 return parsed
 
     def test_smoke(self):
-        parser = MessageParser(blob_factory=self._blob_factory,
-                               max_inline=1000)
+        for base, blob in [('multipart', [b'yolocat', b'yolocat2']),
+                     ('multipart2', [b'yolocat', b'yolocat2']),
+                     ('related', [b'yolocat'])
+                     ]:
+            parser = MessageParser(blob_factory=self._blob_factory,
+                                   max_inline=1000)
+            logging.debug('test_smoke %s', base)
+            parsed = self._parse(parser, 'testdata/' + base + '.msg')
 
-        parsed = self._parse(parser, 'testdata/multipart.msg')
+            logging.debug(json.dumps(parsed.json, indent=2))
 
-        with open('testdata/multipart.json', 'r') as f:
-            expected_json = json.loads(f.read())
+            with open('testdata/' + base + '.json', 'r') as f:
+                expected_json = json.loads(f.read())
+            self.assertEqual(parsed.json, expected_json)
 
-        mixed = parsed.json['parts']
-        self.assertEqual(parsed.json, expected_json)
-
-        self.assertEqual(mixed['content_type'], 'multipart/mixed')
-
-        related = mixed['parts'][0]
-        self.assertEqual(related['content_type'], 'multipart/related')
-
-        alternative = related['parts'][0]
-        self.assertEqual(alternative['content_type'], 'multipart/alternative')
-
-        plain = alternative['parts'][0]
-        self.assertEqual(plain['content_type'], 'text/plain')
-        html = alternative['parts'][1]
-        self.assertEqual(html['content_type'], 'text/html')
-
-        image = mixed['parts'][1]
-        self.assertEqual(image['content_type'], 'image/png')
-        self.assertEqual(image['blob_id'], '0')
-        self.assertEqual(parsed.blobs[0].read(0), b'image/png')
-
+            self.assertEqual(len(parsed.blobs), len(blob))
+            for i in range(0, len(blob)):
+                self.assertEqual(blob[i], parsed.blobs[i].read(0))
 
     def test_dsn(self):
 

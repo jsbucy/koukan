@@ -829,8 +829,12 @@ class RouterServiceTest(unittest.TestCase):
                               tx_delta.parsed_json['parts']['headers'])
                 # NOTE: I can't figure out how to get email.parser to
                 # leave the line endings alone
+                logging.debug('test_receive_parsing exp parsed_blobs %s',
+                              tx_delta.parsed_blobs)
                 self.assertEqual(tx_delta.parsed_blobs[0].read(0),
-                                 b'image/png')
+                                 b'yolocat')
+                self.assertEqual(tx_delta.parsed_blobs[1].read(0),
+                                 b'yolocat2')
                 self.assertIsNotNone(tx_delta.parsed_json)
                 self.assertIsNotNone(tx_delta.parsed_blobs)
                 upstream_delta.data_response=Response(203)

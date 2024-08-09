@@ -164,8 +164,12 @@ py_test(name='message_parser_test',
               ':blob'],
         data=['testdata/multipart.msg',
               'testdata/multipart.json',
+              'testdata/multipart2.msg',
+              'testdata/multipart2.json',
               'testdata/dsn.msg',
-              'testdata/dsn-text-rfc822-headers.msg'])
+              'testdata/dsn-text-rfc822-headers.msg',
+              'testdata/related.msg',
+              'testdata/related.json',])
 
 pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],

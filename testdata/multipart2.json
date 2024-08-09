@@ -42,42 +42,42 @@
           [
             "content-type",
             [
-              "multipart/related",
+              "multipart/alternative",
               {
-                "boundary": "yyy"
+                "boundary": "zzz"
               }
             ]
           ]
         ],
-        "content_type": "multipart/related",
+        "content_type": "multipart/alternative",
         "parts": [
           {
             "headers": [
               [
                 "content-type",
                 [
-                  "multipart/alternative",
+                  "text/plain",
+                  {}
+                ]
+              ]
+            ],
+            "content_type": "text/plain",
+            "content": "hello"
+          },
+          {
+            "headers": [
+              [
+                "content-type",
+                [
+                  "multipart/related",
                   {
-                    "boundary": "zzz"
+                    "boundary": "yyy"
                   }
                 ]
               ]
             ],
-            "content_type": "multipart/alternative",
+            "content_type": "multipart/related",
             "parts": [
-              {
-                "headers": [
-                  [
-                    "content-type",
-                    [
-                      "text/plain",
-                      {}
-                    ]
-                  ]
-                ],
-                "content_type": "text/plain",
-                "content": "hello"
-              },
               {
                 "headers": [
                   [
@@ -90,29 +90,29 @@
                 ],
                 "content_type": "text/html",
                 "content": "<b>hello</b>"
+              },
+              {
+                "headers": [
+                  [
+                    "content-type",
+                    [
+                      "image/png",
+                      {}
+                    ]
+                  ],
+                  [
+                    "content-id",
+                    "xyz"
+                  ],
+                  [
+                    "content-transfer-encoding",
+                    "base64"
+                  ]
+                ],
+                "content_type": "image/png",
+                "blob_rest_id": "2"
               }
             ]
-          },
-          {
-            "headers": [
-              [
-                "content-type",
-                [
-                  "image/png",
-                  {}
-                ]
-              ],
-              [
-                "content-id",
-                "xyz"
-              ],
-              [
-                "content-transfer-encoding",
-                "base64"
-              ]
-            ],
-            "content_type": "image/png",
-            "blob_rest_id": "0"
           }
         ]
       },
@@ -140,7 +140,7 @@
           ]
         ],
         "content_type": "image/png",
-        "blob_rest_id": "1"
+        "blob_rest_id": "3"
       }
     ]
   },
@@ -158,14 +158,14 @@
     {
       "content_type": "image/png",
       "content_id": "xyz",
-      "blob_rest_id": "0"
+      "blob_rest_id": "2"
     }
   ],
   "file_attachments": [
     {
       "content_type": "image/png",
       "filename": "funny cats.png",
-      "blob_rest_id": "1"
+      "blob_rest_id": "3"
     }
   ]
 }

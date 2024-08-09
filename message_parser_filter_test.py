@@ -24,8 +24,11 @@ class MessageParserFilterTest(unittest.TestCase):
         def exp(tx, delta):
             upstream_delta = TransactionMetadata()
 
-            self.assertEqual(
-                tx.parsed_blobs[0].read(0), b'image/png')
+            exp_blobs = [b'yolocat', b'yolocat2']
+            self.assertEqual(len(exp_blobs), len(tx.parsed_blobs))
+            for i in range(0, len(exp_blobs)):
+                self.assertEqual(tx.parsed_blobs[i].read(0), exp_blobs[i])
+
             self.assertEqual(
                 tx.parsed_json['parts']['content_type'],
                 'multipart/mixed')

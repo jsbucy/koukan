@@ -1,0 +1,89 @@
+{
+  "parts": {
+    "headers": [
+      [
+        "from",
+        [
+          {
+            "display_name": "alice a",
+            "address": "alice@example.com"
+          }
+        ]
+      ],
+      [
+        "subject",
+        "hello"
+      ],
+      [
+        "message-id",
+        "abc@xyz"
+      ],
+      [
+        "date",
+        {
+          "unix_secs": 1709750551,
+          "tz_offset": -28800
+        }
+      ],
+      [
+        "content-type",
+        [
+          "multipart/related",
+          {
+            "boundary": "yyy"
+          }
+        ]
+      ]
+    ],
+    "content_type": "multipart/related",
+    "parts": [
+      {
+        "headers": [
+          [
+            "content-type",
+            [
+              "text/html",
+              {}
+            ]
+          ]
+        ],
+        "content_type": "text/html",
+        "content": "<b>hello</b>"
+      },
+      {
+        "headers": [
+          [
+            "content-type",
+            [
+              "image/png",
+              {}
+            ]
+          ],
+          [
+            "content-id",
+            "xyz"
+          ],
+          [
+            "content-transfer-encoding",
+            "base64"
+          ]
+        ],
+        "content_type": "image/png",
+        "blob_rest_id": "4"
+      }
+    ]
+  },
+  "text_body": [
+    {
+      "content_type": "text/html",
+      "content": "<b>hello</b>"
+    }
+  ],
+  "related_attachments": [
+    {
+      "content_type": "image/png",
+      "content_id": "xyz",
+      "blob_rest_id": "4"
+    }
+  ]
+}
