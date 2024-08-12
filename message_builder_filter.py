@@ -11,7 +11,8 @@ from storage import Storage
 from blob import FileLikeBlob
 
 class MessageBuilderFilter(SyncFilter):
-    upstream_tx : Optional[TransactionMetadata] = None
+    upstream : Optional[SyncFilter] = None
+    body_delta : Optional[TransactionMetadata] = None
 
     def __init__(self, storage : Storage, upstream):
         self.storage = storage
@@ -26,14 +27,7 @@ class MessageBuilderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata] :
-        if self.upstream_tx is None:
-            self.upstream_tx = tx.copy()
-        else:
-            assert self.upstream_tx.merge_from(tx_delta) is not None
-
-        downstream_delta = tx_delta.copy()
-
-        if tx_delta.message_builder is not None:
+        if self.body_delta is None and tx_delta.message_builder is not None:
             builder = MessageBuilder(
                 tx_delta.message_builder,
                 lambda blob_id: self._blob_factory(tx.tx_db_id, blob_id))
@@ -43,14 +37,26 @@ class MessageBuilderFilter(SyncFilter):
             builder.build(file)
             file.flush()
             body_blob = FileLikeBlob(file, finalized=True)
-            self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
-            del self.upstream_tx.message_builder
-            del downstream_delta.message_builder
+            self.body_delta = TransactionMetadata(body_blob = body_blob)
             logging.debug('MessageBuilderFilter.on_update %d %s',
                           body_blob.len(), body_blob.content_length())
 
+        downstream_tx = tx.copy()
+        downstream_delta = tx_delta.copy()
+
+        if downstream_tx.message_builder:
+            downstream_tx.message_builder = None
+        if downstream_delta.message_builder:
+            downstream_delta.message_builder = None
+
+        if self.body_delta is None:
+            if self.upstream is None:
+                return TransactionMetadata()
+            return self.upstream.on_update(downstream_tx, downstream_delta)
+
+        assert downstream_tx.merge_from(self.body_delta) is not None
+        assert downstream_delta.merge_from(self.body_delta) is not None
         upstream_delta = self.upstream.on_update(
-            self.upstream_tx, downstream_delta)
+            downstream_tx, downstream_delta)
         assert tx.merge_from(upstream_delta) is not None
-        logging.debug('MessageBuilderFilter upstream_delta %s', upstream_delta)
         return upstream_delta
