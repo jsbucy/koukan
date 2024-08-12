@@ -93,10 +93,11 @@ class FileLikeBlob(Blob, WritableBlob):
     _rest_id : Optional[str] = None
 
     def __init__(self, f : IOBase,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 finalized = False):
         self.f = f
         self._rest_id = rest_id
-        if not f.writable():
+        if finalized:
             stat = os.stat(f.fileno())
             self._len = stat.st_size
             self._content_length = self._len

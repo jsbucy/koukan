@@ -122,7 +122,7 @@ ToJson = Callable[[Any], Dict[object, object]]
 class TxField:
     json_field : str
 
-    validity = Optional[set[WhichJson]]
+    validity = set[WhichJson]
 
     rest_placeholder : bool
     from_json : Optional[FromJson] = None
@@ -137,7 +137,8 @@ class TxField:
                  rest_placeholder : bool = False,
                  is_list : bool = False):
         self.json_field = json_field
-        self.validity = validity
+        # None -> in-process/internal only, never serialized to json
+        self.validity = validity if validity else set()
 
         # none here means identity i.e. plain old data/int/str
         self.from_json = from_json
@@ -146,9 +147,9 @@ class TxField:
         self.is_list = is_list
 
     def valid(self, which_json : WhichJson):
-        if self.validity is None:  # internal-only
-            return False
-        return which_json == WhichJson.ALL or (which_json in self.validity)
+        if which_json == WhichJson.ALL:
+            return True
+        return which_json in self.validity
 
     def emit_rest_placeholder(self, which_json):
         if which_json == WhichJson.REST_READ and self.rest_placeholder:
@@ -352,20 +353,24 @@ class TransactionMetadata:
             out += 'options=%s ' % self.options
         return out
 
-    def __bool__(self):
+    def empty(self, which_js : WhichJson):
         for name,field in tx_json_fields.items():
+            if not field.valid(which_js):
+                continue
             if not hasattr(self, name):
                 continue
             if (v:= getattr(self, name)) is None:
                 continue
             if field.is_list:
                 if bool(v):
-                    return True
+                    return False
             else:
-                return True
+                return False
 
-        return False
+        return True
 
+    def __bool__(self):
+        return not self.empty(WhichJson.ALL)
 
     @staticmethod
     def from_json(tx_json, which_js=WhichJson.ALL):
@@ -440,7 +445,8 @@ class TransactionMetadata:
     # TODO possibly this should populate the first of mail/rcpt/data
     # and either leave the rest unset or set them to "failed
     # precondition/bad sequence of commands"
-    def fill_inflight_responses(self, resp : Response, dest=None):
+    def fill_inflight_responses(self, resp : Response,
+                                dest : Optional['TransactionMetadata'] = None):
         if dest is None:
             dest = self
         if self.mail_from and not self.mail_response:

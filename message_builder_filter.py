@@ -1,7 +1,7 @@
 from typing import Optional
-import copy
 from tempfile import TemporaryFile
 import logging
+from io import IOBase
 
 from filter import (
     SyncFilter,
@@ -39,14 +39,15 @@ class MessageBuilderFilter(SyncFilter):
                 lambda blob_id: self._blob_factory(tx.tx_db_id, blob_id))
 
             file = TemporaryFile('w+b')
+            assert isinstance(file, IOBase)
             builder.build(file)
             file.flush()
-            body_blob = FileLikeBlob(file)
+            body_blob = FileLikeBlob(file, finalized=True)
             self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
             del self.upstream_tx.message_builder
             del downstream_delta.message_builder
-            logging.debug('MessageBuilderFilter.on_update %d %d',
-                      body_blob.len(), body_blob.content_length())
+            logging.debug('MessageBuilderFilter.on_update %d %s',
+                          body_blob.len(), body_blob.content_length())
 
         upstream_delta = self.upstream.on_update(
             self.upstream_tx, downstream_delta)

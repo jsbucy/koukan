@@ -156,7 +156,10 @@ class OutputHandler:
             logging.info('OutputHandler._output() %s '
                          'tx after upstream update %s',
                          self.rest_id, upstream_tx)
-            if upstream_delta is None:
+            if upstream_delta is None or not(upstream_delta):
+                logging.warning('OutputHandler._output() %s '
+                                'BUG empty upstream_delta %s',
+                                self.rest_id, upstream_delta)
                 return None  # internal error
             assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
 

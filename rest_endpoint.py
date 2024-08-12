@@ -293,9 +293,11 @@ class RestEndpoint(SyncFilter):
             elif self.upstream_tx.req_inflight(tx_out):
                 err = 'upstream timeout'
             if err:
+                err_delta = TransactionMetadata()
                 tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint bad resp_json'))
-                return  # xxx delta
+                    Response(450, 'RestEndpoint bad resp_json'), err_delta)
+                tx.merge_from(err_delta)
+                return err_delta
 
             upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or

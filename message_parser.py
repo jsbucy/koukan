@@ -151,13 +151,8 @@ class MessageParser:
         out['content_type'] = part.get_content_type()
         # disposition/filename
 
-        # TODO also parse headers if content_type ==
-        # 'text/rfc822-headers' for DSN, need to reparse the content
-        # since email.parser probably doesn't do it?
         is_message = (part.get_content_maintype() == 'message')
         is_text_headers = (part.get_content_type() == 'text/rfc822-headers')
-        # assert not is_message or (
-        #   part.is_multipart() and len(part.iter_parts()) == 1)
 
         if is_text_headers:
             out_i = {}

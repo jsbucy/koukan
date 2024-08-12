@@ -46,6 +46,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=['blob_rest_id'])
 
         def exp(tx, delta):
+            self.assertTrue(delta.body_blob.finalized())
             self.assertNotEqual(
                 delta.body_blob.read(0).find(b'MIME-Version'), -1)
             self.assertIsNone(tx.message_builder)

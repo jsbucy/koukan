@@ -73,8 +73,15 @@ class StorageTestBase(unittest.TestCase):
 
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
+
+        tx_writer.load()
+        tx_version = tx_writer.version
         blob_writer.append_data(3, d=b'xyz', content_length=9)
         self.assertFalse(blob_writer.last)
+
+        # blob write should ping tx version
+        tx_writer.load()
+        self.assertNotEqual(tx_version, tx_writer.version)
 
         blob_writer = self.s.get_blob_for_append(
             tx_rest_id='tx_rest_id', tx_body=True)

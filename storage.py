@@ -249,7 +249,8 @@ class TransactionCursor:
                next_attempt_time : Optional[int] = None,
                notification_done : Optional[bool] = None,
                # only for upcalls from BlobWriter
-               input_done = False):
+               input_done = False,
+               ping_tx = False):
         assert final_attempt_reason != 'oneshot'  # internal-only
 
         assert (self.final_attempt_reason == 'oneshot' or
@@ -257,6 +258,21 @@ class TransactionCursor:
                 final_attempt_reason is None)
 
         assert self.tx is not None
+
+        if (tx_delta.empty(WhichJson.DB) and
+            tx_delta.empty(WhichJson.DB_ATTEMPT) and
+            (not tx_delta.body) and
+            (not reuse_blob_rest_id) and
+            (final_attempt_reason is None) and
+            (notification_done is None) and
+            (not input_done) and
+            (not finalize_attempt) and
+            (not ping_tx)):
+            logging.debug(
+                'TransactionCursor._write %d %s empty delta %s',
+                self.id, self.rest_id, tx_delta)
+            return True
+
         tx_to_db = self.tx.merge(tx_delta)
         # e.g. overwriting an existing field
         # xxx return/throw
@@ -663,9 +679,13 @@ class BlobWriter(WritableBlob):
                     with self.parent.begin_transaction() as db_tx:
                         cursor._load_db(db_tx, rest_id=self.update_tx)
                         kwargs = {}
+                        logging.debug('BlobWriter.append_data tx %s %s',
+                                      self.update_tx, kwargs)
                         if self.last and self.finalize_tx:
                             kwargs['input_done'] = True
-                        # else empty write to ping last_update
+                        else:
+                            # ping last_update
+                            kwargs['ping_tx'] = True
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
@@ -766,7 +786,8 @@ class BlobReader(Blob):
         with self.parent.begin_transaction() as db_tx:
             res = db_tx.execute(stmt)
             row = res.fetchone()
-            logging.debug('read blob row %s', row)  # xxx debug
+            logging.debug('read blob row %s',
+                          row if not row or not row[0] else len(row[0]))
             if row is None:
                 return None
             if row[0] is None:
