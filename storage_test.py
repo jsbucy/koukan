@@ -68,8 +68,14 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_writer.tx.mail_response.code, 450)
         self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
 
+        with self.s.begin_transaction() as db_tx:
+            self.assertTrue(tx_writer.check_input_done(db_tx))
+
         blob_writer = self.s.create_blob(
             tx_rest_id='tx_rest_id', blob_rest_id='blob_rest_id', tx_body=True)
+
+        with self.s.begin_transaction() as db_tx:
+            self.assertFalse(tx_writer.check_input_done(db_tx))
 
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)

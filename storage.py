@@ -526,6 +526,20 @@ class TransactionCursor:
         return await self.id_version.wait_async(self.version, timeout)
 
 
+    # returns True if all blobs ref'd from this tx are finalized
+    def check_input_done(self, db_tx) -> bool:
+        j = join(self.parent.blob_table, self.parent.tx_blobref_table,
+             self.parent.blob_table.c.id == self.parent.tx_blobref_table.c.blob_id,
+             isouter=False)
+        sel = (select(self.parent.blob_table.c.id).select_from(j)
+               .where(self.parent.tx_blobref_table.c.transaction_id == self.id,
+                      self.parent.blob_table.c.length.is_(None))
+               .limit(1))
+        res = db_tx.execute(sel)
+        row = res.fetchone()
+        return row is None
+
+
 class BlobWriter(WritableBlob):
     id = None
     length : int = 0  # max offset+len from BlobContent, next offset to write
