@@ -203,6 +203,10 @@ class TransactionCursor:
             refd_blobs.add(row[0])
         unrefd_blobs = [b for b in reuse_blob_rest_id if b not in refd_blobs]
 
+        logging.debug('_write_blob reuse %s', reuse_blob_rest_id)
+        logging.debug('_write_blob refd %s', refd_blobs)
+        logging.debug('_write_blob unrefd %s', unrefd_blobs)
+
         reuse_blob_id = self._reuse_blob(db_tx, unrefd_blobs)
         logging.debug('_write_blob reuse_blob_id %s', reuse_blob_id)
 
@@ -251,6 +255,7 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
+        logging.debug('TxCursor._write %s', tx_delta)
         assert final_attempt_reason != 'oneshot'  # internal-only
 
         assert (self.final_attempt_reason == 'oneshot' or
@@ -744,15 +749,14 @@ class BlobReader(Blob):
         logging.debug('BlobReader._check_ref blobref %s', ref_row)
         return ref_row and ref_row[0]
 
-    # tx_id should be passed in most situations to verify that the
+    # tx_id should be passed to verify that the
     # blob is referenced by the transaction in TransactionBlobRefs
-    # no_tx_id must only be used in a path that is adding a blob
-    # reference to a transaction
-    def load(self, db_id = None, rest_id = None,
+    def load(self, db_id : Optional[int] = None,
+             rest_id : Optional[str] = None,
              tx_id : Optional[int] = None,
-             no_tx_id : Optional[bool] = None
+             testonly_no_tx_id : Optional[bool] = None
              ) -> Optional[int]:
-        assert tx_id is not None or no_tx_id
+        assert tx_id is not None or testonly_no_tx_id
         if self.blob_id:
             db_id = self.blob_id
 

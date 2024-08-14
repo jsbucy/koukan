@@ -63,6 +63,7 @@ class InlineBlob(Blob, WritableBlob):
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
+        # XXX wat?!
         return self._content_length if self._content_length is not None else len(self.d)
 
     def append(self, dd : bytes):

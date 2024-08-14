@@ -647,6 +647,8 @@ class TransactionMetadata:
 # upstream_delta = sync_filter.on_update(new_tx, downstream_delta)
 # assert tx.merge(upstream_delta) == new_tx
 
+# output chain filters always return the upstream response or a
+# timeout error that terminates the OutputHandler
 class SyncFilter(ABC):
     # tx is the full state vector
     # tx_delta is what's new since the last call
@@ -658,7 +660,7 @@ class SyncFilter(ABC):
                   ) -> Optional[TransactionMetadata]:
         pass
 
-# interface for injecting new transactions
+# interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
     # may return None for reqs on timeout/still inflight
     # may continue after this
@@ -672,6 +674,10 @@ class AsyncFilter(ABC):
     @abstractmethod
     def get(self) -> TransactionMetadata:
         pass
+
+    # XXX this should encapsulate WritableBlob?
+    # def create_blob(self, BlobUri)
+    # def append_to_blob(self, BlobUri, offset, d : bytes, content_length)
 
     # pass exactly one of blob_rest_id or tx_body=True
     @abstractmethod
@@ -701,6 +707,13 @@ class AsyncFilter(ABC):
         pass
 
 
+# TODO this is the beginning of a AsyncToSyncFilterWrapper
+# RestEndpoint should probably be AsyncFilter and wrapped for the sync
+# output chain
+# ditto for Exploder->StorageWriterFilter
+# and OutputHandler->StorageWriterFilter
+#   _maybe_send_notification() though that's basically fire&forget
+
 # async_filter.update(tx, tx_delta) and loop up to deadline
 # on tx.req_inflight()
 # returns
@@ -721,6 +734,17 @@ def update_wait_inflight(async_filter : AsyncFilter,
     # get swapped around in and out of storage
     if tx_orig.body_blob:
         del tx_orig.body_blob
+
+    # e.g. with rest, the client may
+    # PUT /tx/123/body
+    # GET /tx/123
+    # and expect to see {...'body': {}}
+
+    # however in internal call sites (i.e. Exploder), it's updating with
+    # body_blob and not expecting to get body back
+    # so only do this if tx_orig.body_blob?
+    if upstream_tx.body:
+        del upstream_tx.body
     upstream_delta = tx_orig.delta(upstream_tx)
-    tx.replace_from(upstream_tx)
+    tx.replace_from(upstream_tx)  # xxx merge_from?
     return upstream_delta

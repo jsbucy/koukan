@@ -658,20 +658,26 @@ class RouterServiceTest(unittest.TestCase):
             self.add_endpoint(unused_upstream_endpoint)
 
         dsn_endpoint = FakeSyncFilter()
-        def exp_dsn(tx, tx_delta):
+        def exp_dsn_env(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(250),
+                rcpt_response=[Response(250)])
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+
+        def exp_dsn_body(tx, tx_delta):
             dsn = tx.body_blob.read(0)
             logging.debug('test_notification %s', dsn)
             self.assertIn(b'subject: Delivery Status Notification', dsn)
 
             upstream_delta=TransactionMetadata(
-                mail_response=Response(250),
-                rcpt_response=[Response(250)],
                 data_response=Response(250))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        dsn_endpoint.add_expectation(exp_dsn)
+        dsn_endpoint.add_expectation(exp_dsn_env)
+        dsn_endpoint.add_expectation(exp_dsn_body)
         self.add_endpoint(dsn_endpoint)
         # no_final_notification x2 + dsn output
         self._dequeue(3)

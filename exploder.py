@@ -106,6 +106,7 @@ class Recipient:
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
         upstream_delta = update_wait_inflight(
             self.upstream, self.tx, self.tx.copy(), deadline)
+        assert not self.tx.body
 
         logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
 
@@ -175,8 +176,10 @@ class Recipient:
         body_delta = TransactionMetadata()
         body_delta.body_blob = blob
         self.tx.merge_from(body_delta)
+        assert not self.tx.body
         upstream_delta = update_wait_inflight(
             self.upstream, self.tx, body_delta, deadline)
+        assert not self.tx.body
         if upstream_delta is None:
             data_resp = Response(
                 450, 'exploder Recipient._append_upstream internal error: '
@@ -364,7 +367,7 @@ class Exploder(SyncFilter):
             logging.info('Exploder.on_update: cancel')
             self._run([r.cancel for r in self.recipients],
                       Deadline(self.rcpt_timeout))
-            return
+            return TransactionMetadata()
 
         updated_tx = tx.copy()
         if tx_delta.mail_from is not None:
@@ -449,6 +452,7 @@ class Exploder(SyncFilter):
                 notification=self.default_notification)
 
             recipient.tx.merge_from(retry_delta)
+            assert not recipient.tx.body
             recipient.upstream.update(
                 recipient.tx, retry_delta)
 

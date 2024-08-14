@@ -156,7 +156,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(len(d), d, len(d)*2)
         del blob_writer
         blob_reader = self.s.get_blob_reader()
-        blob_reader.load(rest_id='blob_rest_id', no_tx_id=True)
+        blob_reader.load(rest_id='blob_rest_id', testonly_no_tx_id=True)
         self.assertEqual(blob_reader.read(0), d+d)
 
     def test_body_reuse(self):
@@ -406,7 +406,7 @@ class StorageTestBase(unittest.TestCase):
         while (reader.content_length() is None or
                reader.len() < reader.content_length()):
             logging.info('reader %d', len(d))
-            reader.load(no_tx_id=True)
+            reader.load(testonly_no_tx_id=True)
             d += reader.read(len(d))
         dd[0] = d
 
@@ -415,7 +415,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.create('blob_rest_id')
 
         reader = self.s.get_blob_reader()
-        reader.load(blob_writer.id, no_tx_id=True)
+        reader.load(blob_writer.id, testonly_no_tx_id=True)
 
         dd = [None]
         t = Thread(target = lambda: self.reader(reader, dd), daemon=True)

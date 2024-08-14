@@ -131,7 +131,7 @@ class OutputHandler:
                              self.rest_id)
                 blob_reader = self.cursor.parent.get_blob_reader()
                 assert blob_reader.load(
-                    rest_id = upstream_tx.body,
+                    rest_id = self.cursor.tx.body,
                     tx_id = self.cursor.id) is not None
                 assert blob_reader.finalized()
                 upstream_tx.body_blob = delta.body_blob = blob_reader
@@ -151,6 +151,9 @@ class OutputHandler:
             if delta.mail_from is None and not delta.rcpt_to and not have_body:
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
+
+            assert not upstream_tx.body
+            assert not delta.body
 
             upstream_delta = self.endpoint.on_update(upstream_tx, delta)
             logging.info('OutputHandler._output() %s '
@@ -172,7 +175,13 @@ class OutputHandler:
                     logging.info(
                         'OutputHandler._output() VersionConflictException %s ',
                         self.rest_id)
-                    self.cursor.load()
+                    # version cache can raise
+                    # VersionConflictException again here \o/
+                    try:
+                        self.cursor.load()
+                    except VersionConflictException:
+                        pass
+
             if (upstream_delta.mail_response is not None and
                 upstream_delta.mail_response.err()):
                 return upstream_delta.mail_response
@@ -214,9 +223,8 @@ class OutputHandler:
                     notification_done=bool(self.cursor.tx.notification))
                 break
             except VersionConflictException:
-                time.sleep(0.1)
+                # XXX VersionConflictException?
                 self.cursor.load()
-
 
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
@@ -365,5 +373,5 @@ class OutputHandler:
         # should result in the parent retrying even if it was
         # permfail, better to dupe than fail to emit the bounce
 
-        notification_endpoint.update(notification_tx, notification_tx)
+        notification_endpoint.update(notification_tx, notification_tx.copy())
         # no wait -> fire&forget

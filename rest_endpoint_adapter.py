@@ -531,7 +531,7 @@ class RestHandler(Handler):
         if not range or range.units != 'bytes':
             return self.response(request, 400, 'bad range'), None
         # no idea if underlying stack enforces this
-        assert(range.stop - range.start == content_length) #request.content_length)
+        assert(range.stop - range.start == content_length)
         return None, range
 
     def create_blob(self, request : HttpRequest,

@@ -41,10 +41,63 @@ class StorageWriterFilterTest(unittest.TestCase):
         t.join(timeout=timeout)
         self.assertFalse(t.is_alive())
 
+    # REST use cases
+
+    # covered by test_tx_body_inline_reuse (below)
+    # POST /tx w/inline body in json
+    # POST /tx w/body reuse
+
+    # body upload
+    # POST /tx
+    # POST /tx/123/body
+    # (or chunked)
+    # PUT /tx/123/body
+
+
+
+    # POST /tx w/message_builder w/inline content
+    # POST /tx w/message_builder w/blob reuse
+
+    # POST /tx
+    # POST /tx/123/blob
+    # POST /tx/123/message_builder
+    # (or chunked)
+
+    # create w/body_blob InlineBlob() (notifications)
+    # create w/body_blob BlobReader (Exploder probably)
+
+    def test_invalid(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'tx_rest_id')
+
+        tx = TransactionMetadata(
+            host = 'outbound-gw',
+            body = '/transactions/123/body',
+            body_blob = InlineBlob(b'wat'))
+        upstream_delta = filter.update(tx, tx.copy())
+        self.assertEqual(upstream_delta.data_response.code, 550)
+
+    def test_cancel(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'tx_rest_id')
+
+        tx = TransactionMetadata(host = 'outbound-gw')
+        filter.update(tx, tx.copy())
+        tx = TransactionMetadata(cancelled = True)
+        filter.update(tx, tx.copy())
+
+        cursor = self.storage.get_transaction_cursor()
+        cursor.load(rest_id='tx_rest_id')
+        self.assertEqual(cursor.final_attempt_reason, 'downstream cancelled')
+
+    # this is probably representative of Exploder which writes
+    # body_blob=BlobReader
     def testBlob(self):
         filter = StorageWriterFilter(
             self.storage,
-            rest_id_factory = lambda: str(time.time()))
+            rest_id_factory = lambda: 'tx_rest_id')  #str(time.time()))
         filter._create(TransactionMetadata(host = 'outbound-gw'))
 
         tx = TransactionMetadata()
@@ -54,6 +107,8 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
+
+        self.assertEqual(filter.get_rest_id(), 'tx_rest_id')
 
         for i in range(0,5):
             if tx_cursor.tx.mail_from is not None:
@@ -93,7 +148,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(
-            rest_id='blob_rest_id', no_tx_id=True))
+            rest_id='blob_rest_id', testonly_no_tx_id=True))
 
         # update w/incomplete blob ->noop
         tx_delta = TransactionMetadata()
@@ -108,7 +163,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertTrue(appended)
         self.assertEqual(length, content_length)
 
-        blob_reader.load(no_tx_id=True)
+        blob_reader.load(testonly_no_tx_id=True)
 
         tx_delta = TransactionMetadata(body_blob=blob_reader)
         tx.merge_from(tx_delta)
@@ -137,8 +192,13 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_writer = filter.get_blob_writer(
             create=True,
             blob_rest_id='test_message_builder_blob')
-        body = b'hello, world!'
-        blob_writer.append_data(0, body, len(body))
+        b1 = b'hello, '
+        blob_writer.append_data(0, b1)
+        blob_writer = filter.get_blob_writer(
+            create=False,
+            blob_rest_id='test_message_builder_blob')
+        b2 = b'world!'
+        blob_writer.append_data(len(b1), b2, len(b1) + len(b2))
 
         tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -146,10 +206,14 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx.message_builder = {
             "text_body": [{
                 "content_type": "text/plain",
-                "content_uri": "/transactions/test_message_builder/blob/test_message_builder_blob"
+                "content_uri": "/transactions/test_message_builder/blob/"
+                               "test_message_builder_blob"
             }]
         }
 
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id = 'test_message_builder')
         t = self.start_update(filter, tx, tx.copy())
 
         upstream_cursor = self.storage.get_transaction_cursor()
@@ -167,6 +231,30 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(
             rest_id='test_message_builder_blob', tx_id=upstream_cursor.id))
+
+
+        # now do it again reusing the same blob
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'test_message_builder_reuse')
+        tx = TransactionMetadata(
+            host = 'outbound-gw',
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')],
+            message_builder = {
+            "text_body": [{
+                "content_type": "text/plain",
+                "content_uri": "/transactions/test_message_builder/blob/"
+                               "test_message_builder_blob"
+            }]
+            })
+        upstream_delta = filter.update(tx, tx.copy())
+        self.assertIsNone(upstream_delta.data_response)
+        upstream_cursor = self.storage.get_transaction_cursor()
+        upstream_cursor.load(rest_id='test_message_builder_reuse')
+        self.assertEqual(
+            upstream_cursor.tx.message_builder['text_body'][0]['blob_rest_id'],
+            'test_message_builder_blob')
 
 
     def testTimeoutMail(self):
@@ -216,7 +304,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(
-            rest_id='blob_rest_id', no_tx_id=True))
+            rest_id='blob_rest_id', testonly_no_tx_id=True))
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
                                  rcpt_to = [Mailbox('bob')],
@@ -247,6 +335,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata(
                 host = 'outbound-gw',
                 inline_body = b)
+        # create w/ tx.inline_body
         filter.update(tx, tx.copy())
 
         filter2 = StorageWriterFilter(
@@ -255,6 +344,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx2 = TransactionMetadata(
                 host = 'outbound-gw',
                 body = '/transactions/inline/body')
+        # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
 
         cursor = self.storage.get_transaction_cursor()

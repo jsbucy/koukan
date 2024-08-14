@@ -15,7 +15,7 @@ from filter import (
     Mailbox,
     SyncFilter,
     TransactionMetadata )
-from blob import Blob, WritableBlob
+from blob import Blob, InlineBlob, WritableBlob
 from deadline import Deadline
 from message_builder import MessageBuilder
 
@@ -26,11 +26,12 @@ class StorageWriterFilter(AsyncFilter):
     tx_cursor : Optional[TransactionCursor] = None
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
-    blob_writer : Optional[BlobWriter] = None
     create_leased : bool = False
 
     mu : Lock
     cv : Condition
+
+    body_blob_uri : bool = False
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -92,24 +93,84 @@ class StorageWriterFilter(AsyncFilter):
         self._load()
         return self.tx_cursor.tx.copy()
 
-    def _body(self, tx):
-        body_blob = tx.body_blob
-        if isinstance(body_blob, BlobReader):
-            tx.body = body_blob.rest_id
+    def _get_body_blob_uri(self, tx) -> Optional[str]:
+        logging.debug('_get_body_blob_uri')
+        if self.body_blob_uri:
+            return None
+        if not tx.body and (not tx.body_blob or not tx.body_blob.finalized()):
+            return None
+        if isinstance(tx.body_blob, BlobReader):
+            self.body_blob_uri = True
+            return tx.body_blob.rest_id
+        elif tx.body:
+            self.body_blob_uri = True
+            uri = parse_blob_uri(tx.body)
+            assert uri and uri.tx_body
+            source_cursor = self.storage.get_transaction_cursor()
+            source_cursor.load(rest_id=uri.tx_id)
+            tx.body = source_cursor.body_rest_id
+            return source_cursor.body_rest_id
+        return None
+
+    # -> data err
+    def _maybe_write_body_blob(self, tx) -> Optional[Response]:
+        # XXX maybe RestHandler should deal with inline_body before it
+        # gets here?
+        logging.debug('_maybe_write_body_blob inline %s blob %s',
+                      len(tx.inline_body) if tx.inline_body else None,
+                      tx.body_blob)
+        if tx.inline_body:
+            # TODO need to worry about roundtripping
+            # utf8 -> python str -> utf8 is ever lossy?
+            body_utf8 = tx.inline_body.encode('utf-8')
+            body_blob = InlineBlob(body_utf8, len(body_utf8))
+            # xxx downstream_tx/delta in caller
+            del tx.inline_body
+        elif tx.body_blob and tx.body_blob.finalized():
+            body_blob = tx.body_blob
+        else:
             return
 
-        blob_writer = self.storage.get_blob_writer()
-        # xxx this should be able to use storage id instead of rest id
-        rest_id = self.rest_id_factory()
-        blob_writer.create(rest_id)
-        d = tx.body_blob.read(0)
-        appended, length, content_length = blob_writer.append_data(
-            0, d, len(d))
-        if not appended or length != content_length or length != len(d):
-            tx.data_response = Response(
-                400, 'StorageWriterFilter: internal error')
-        else:
-            tx.body=rest_id
+        # refs into tx
+        blob_writer = self.get_blob_writer(
+            create=True, blob_rest_id=self.rest_id_factory(), tx_body=True)
+        if blob_writer is None:
+            return Response(400, 'StorageWriterFilter: internal error')
+        off = 0
+        while True:
+            CHUNK_SIZE = 1048576
+            d = body_blob.read(0, CHUNK_SIZE)
+            last = len(d) < CHUNK_SIZE
+            content_length = off + len(d) if last else None
+            logging.debug('_maybe_write_body_blob %s %d %s',
+                          off, len(d), content_length)
+            appended, length, content_length_out = blob_writer.append_data(
+                off, d, content_length)
+            if (not appended or length != (off + len(d)) or
+                content_length_out != content_length):
+                return Response(400, 'StorageWriterFilter: internal error')
+            off = length
+            if last:
+                break
+
+    def _get_message_builder_blobs(self, tx) -> List[str]:
+        def tx_blob_id(uri) -> Optional[str]:  #Optional[BlobUri]:
+            uri = parse_blob_uri(uri)
+            if uri is None:
+                return None
+            # this is unlikely but ought to work? reuse another tx body
+            # as a message_builder blob? fix w/BlobUri
+            if uri.tx_body:
+                return None
+            return uri.blob
+
+        if not tx.message_builder:
+            return []
+
+        # TODO maybe this should this blob-ify larger inline content in
+        # message_builder a la _maybe_write_body_blob() with inline_body?
+
+        return MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
 
     # AsyncFilter
     def update(self,
@@ -126,78 +187,68 @@ class StorageWriterFilter(AsyncFilter):
         if tx_delta.cancelled:
             self.tx_cursor.write_envelope(
                 tx_delta, final_attempt_reason='downstream cancelled')
-            return tx_delta
-
-        def tx_blob_id(uri):
-            uri = parse_blob_uri(uri)
-            if uri is None:
-                return None
-            if uri.tx_body:
-                return None
-            return uri.blob
+            return TransactionMetadata()
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
         if getattr(downstream_tx, 'rest_id', None) is not None:
             del downstream_tx.rest_id
 
-        if downstream_delta.message_builder:
-            reuse_blob_rest_id = MessageBuilder.get_blobs(
-                downstream_delta.message_builder, tx_blob_id)
-            logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
-                          reuse_blob_rest_id)
+        # TODO move to TransactionMetadata.from_json()?
+        body_fields = 0
+        for body_field in [
+                'body', 'body_blob', 'inline_body', 'message_builder']:
+            if getattr(tx, body_field):
+                body_fields += 1
+        if body_fields > 1:
+            err_delta = TransactionMetadata(data_response=Response(
+                550, 'internal error (StorageWriterFilter)'))
+            tx.merge_from(err_delta)
+            return err_delta
 
-        # internal paths: Exploder/Notification (rest uses get_blob_writer())
-        body_blob = None
-        if downstream_delta.body_blob is not None:
-            body_blob = downstream_delta.body_blob
-            if body_blob.finalized():
-                self._body(downstream_delta)
-                if downstream_delta.data_response is not None:
-                    return  # XXX
-                reuse_blob_rest_id=[downstream_delta.body]
-            del downstream_delta.body_blob
-        elif downstream_delta.body:
-            uri = parse_blob_uri(downstream_delta.body)
-            assert uri and uri.tx_body
-            source_cursor = self.storage.get_transaction_cursor()
-            source_cursor.load(rest_id=uri.tx_id)
-            downstream_tx.body = downstream_delta.body = (
-                source_cursor.body_rest_id)
-            reuse_blob_rest_id = [source_cursor.body_rest_id]
+        reuse_blob_rest_id = self._get_message_builder_blobs(tx_delta)
+        logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
+                      reuse_blob_rest_id)
+
+        # finalized body_blob w/uri:
+        # rest body reuse (body is uri)
+        # exploder (body_blob is storage.BlobReader)
+
+        if body_blob_uri := self._get_body_blob_uri(downstream_tx):
+            logging.debug('body_blob_uri %s', body_blob_uri)
+            assert not reuse_blob_rest_id
+            reuse_blob_rest_id = [body_blob_uri]
+            if not downstream_delta.body:
+                downstream_delta.body = body_blob_uri
 
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
-
+        if downstream_delta.body_blob is not None:
+            del downstream_delta.body_blob
 
         created = False
         if self.rest_id is None:
             created = True
-            body_utf8 = None
-            if downstream_delta.inline_body:
-                # TODO need to worry about roundtripping
-                # utf8 -> python str -> utf8 is ever lossy?
-                body_utf8 = tx_delta.inline_body.encode('utf-8')
-                del downstream_tx.inline_body
-                del downstream_delta.inline_body
-
-            self._create(downstream_delta,
+            self._create(downstream_tx,
                          reuse_blob_rest_id=reuse_blob_rest_id)
             reuse_blob_rest_id = None
-            if body_blob is not None:
-                pass
-            elif body_utf8 is not None:
-                logging.debug('StorageWriterFilter inline body %d',
-                              len(body_utf8))
-                writer = self.storage.create_blob(
-                    tx_rest_id=self.rest_id,
-                    blob_rest_id=self.rest_id_factory(),
-                    tx_body=True)
-                writer.append_data(0, body_utf8, len(body_utf8))
-                # create_blob() refs into tx for tx_body
+            tx.rest_id = self.rest_id
 
-            downstream_delta = TransactionMetadata()
+        # blobs w/o uri:
+        # notification/dsn: InlineBlob w/dsn,
+        # exploder currently sends downstream BlobReader verbatim but
+        # could chain received header which would send us CompositeBlob
+        if body_blob_uri is None:
+            err = self._maybe_write_body_blob(tx_delta)
+            if err:
+                err_delta = TransactionMetadata(data_response=err)
+                tx.merge_from(err_delta)
+                return err_delta
+            assert not downstream_delta.body
 
+        # reuse_blob_rest_id is only
+        # POST /tx/123/message_builder  ?
+        # new body upload handled via get_blob_reader()
         if not created or reuse_blob_rest_id:
             if self.tx_cursor is None:
                 self._load()
@@ -212,19 +263,14 @@ class StorageWriterFilter(AsyncFilter):
                     logging.debug('StorageWriterFilter.update conflict %s',
                                   self.tx_cursor.tx)
 
-        logging.debug('StorageWriterFilter.update %s result %s',
-                      self.rest_id, self.tx_cursor.tx)
+        logging.debug('StorageWriterFilter.update %s result %s '
+                      'input tx %s',
+                      self.rest_id, self.tx_cursor.tx, tx)
 
-        # empty?
-        upstream_delta = downstream_tx.delta(self.tx_cursor.tx)
-        assert upstream_delta is not None
-        assert len(upstream_delta.rcpt_response) <= len(tx.rcpt_to)
-
-        tx.merge_from(upstream_delta)  # noop (because empty)?
-        tx.rest_id = self.rest_id
-        upstream_delta.rest_id = self.rest_id
-        return upstream_delta
-
+        # TODO even though this no longer does inflight waiting on the
+        # upstream, it's possible one of the version conflict paths
+        # yielded upstream responses?
+        return TransactionMetadata()
 
     def get_blob_writer(self,
                         create : bool,
