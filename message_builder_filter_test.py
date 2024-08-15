@@ -8,6 +8,7 @@ from filter import HostPort, Mailbox, TransactionMetadata
 from fake_endpoints import FakeSyncFilter
 from response import Response
 from storage import Storage
+from rest_schema import BlobUri
 
 from message_builder_filter import MessageBuilderFilter
 
@@ -28,8 +29,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('tx_rest_id', tx)
 
-        blob_writer = self.storage.create_blob(
-            tx_rest_id='tx_rest_id', blob_rest_id='blob_rest_id')
+        blob_uri = BlobUri(tx_id='tx_rest_id', blob='blob_rest_id')
+        blob_writer = self.storage.create_blob(blob_uri)
         d = b'hello, world!'
         blob_writer.append_data(0, d, len(d))
 
@@ -43,7 +44,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             ]
         }
         tx_cursor.load()
-        tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=['blob_rest_id'])
+        tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=[blob_uri])
 
         def exp(tx, delta):
             self.assertTrue(delta.body_blob.finalized())

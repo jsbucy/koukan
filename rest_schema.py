@@ -22,6 +22,12 @@ class BlobUri:
         self.tx_id = tx_id
         self.tx_body = tx_body
         self.blob = blob
+    def __repr__(self):
+        out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
+        if self.blob:
+            out += ' blob=' + self.blob
+        return out
+
 
 def parse_blob_uri(uri) -> Optional[BlobUri]:
     if not uri.startswith('/transactions/'):

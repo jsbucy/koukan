@@ -67,6 +67,7 @@ pytype_library(name='storage',
                data=['init_storage.sql',
                      'init_storage_postgres.sql'],
                deps=[':storage_schema',
+                     ':rest_schema',
                      ':version_cache',
                      ':blob',
                      ':response',
@@ -78,6 +79,7 @@ py_test(name='storage_test_sqlite',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
         deps=[':storage',
+              ':rest_schema',
               ':version_cache'])
 
 py_test(name='storage_test_sqlite_inmemory',
@@ -86,6 +88,7 @@ py_test(name='storage_test_sqlite_inmemory',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
         deps=[':storage',
+              ':rest_schema',
               ':version_cache'])
 
 py_test(name='storage_test_postgres',
@@ -94,6 +97,7 @@ py_test(name='storage_test_postgres',
         srcs=['storage_test.py'],
         data=['storage_test_recovery.sql'],
         deps=[':storage',
+              ':rest_schema',
               ':version_cache'])
 
 pytype_library(name='fake_endpoints',
@@ -152,6 +156,7 @@ py_test(name='message_builder_filter_test',
               ':filter',
               ':message_builder_filter',
               ':response',
+              ':rest_schema',
               ':storage'])
 
 pytype_library(name='message_parser',

@@ -93,7 +93,7 @@ class StorageWriterFilter(AsyncFilter):
         self._load()
         return self.tx_cursor.tx.copy()
 
-    def _get_body_blob_uri(self, tx) -> Optional[str]:
+    def _get_body_blob_uri(self, tx) -> Optional[BlobUri]:
         logging.debug('_get_body_blob_uri')
         if self.body_blob_uri:
             return None
@@ -101,15 +101,20 @@ class StorageWriterFilter(AsyncFilter):
             return None
         if isinstance(tx.body_blob, BlobReader):
             self.body_blob_uri = True
-            return tx.body_blob.rest_id
+            return BlobUri(tx_id='', blob=tx.body_blob.rest_id)  # XXX
         elif tx.body:
             self.body_blob_uri = True
             uri = parse_blob_uri(tx.body)
+            # xxx parse error -> err Response
             assert uri and uri.tx_body
+            # XXX move to Storage
             source_cursor = self.storage.get_transaction_cursor()
             source_cursor.load(rest_id=uri.tx_id)
-            tx.body = source_cursor.body_rest_id
-            return source_cursor.body_rest_id
+            # should be able to eliminate tx table body_rest_id col
+            # it's always blobrefs(tx_id, '__koukan_internal_tx_body')
+            # etc
+            uri.blob = tx.body = source_cursor.body_rest_id
+            return uri
         return None
 
     # -> data err
@@ -153,8 +158,9 @@ class StorageWriterFilter(AsyncFilter):
             if last:
                 break
 
-    def _get_message_builder_blobs(self, tx) -> List[str]:
-        def tx_blob_id(uri) -> Optional[str]:  #Optional[BlobUri]:
+    def _get_message_builder_blobs(self, tx) -> List[BlobUri]:
+        blobs = []
+        def tx_blob_id(uri) -> Optional[str]:
             uri = parse_blob_uri(uri)
             if uri is None:
                 return None
@@ -162,6 +168,7 @@ class StorageWriterFilter(AsyncFilter):
             # as a message_builder blob? fix w/BlobUri
             if uri.tx_body:
                 return None
+            blobs.append(uri)
             return uri.blob
 
         if not tx.message_builder:
@@ -170,7 +177,8 @@ class StorageWriterFilter(AsyncFilter):
         # TODO maybe this should this blob-ify larger inline content in
         # message_builder a la _maybe_write_body_blob() with inline_body?
 
-        return MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
+        MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
+        return blobs
 
     # AsyncFilter
     def update(self,
@@ -182,7 +190,7 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
-        reuse_blob_rest_id=None
+        reuse_blob_rest_id : Optional[List[BlobUri]] = None
 
         if tx_delta.cancelled:
             self.tx_cursor.write_envelope(
@@ -219,7 +227,7 @@ class StorageWriterFilter(AsyncFilter):
             assert not reuse_blob_rest_id
             reuse_blob_rest_id = [body_blob_uri]
             if not downstream_delta.body:
-                downstream_delta.body = body_blob_uri
+                downstream_delta.body = body_blob_uri.blob
 
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
@@ -282,15 +290,15 @@ class StorageWriterFilter(AsyncFilter):
         if create:
             while True:
                 try:
-                    blob = self.storage.create_blob(
-                        tx_rest_id=self.rest_id,
-                        blob_rest_id=blob_rest_id,
-                        tx_body=tx_body)
+                    blob_uri = BlobUri(tx_id=self.rest_id,
+                                       blob=blob_rest_id,
+                                       tx_body=tx_body)
+                    blob = self.storage.create_blob(blob_uri)
                     break
                 except VersionConflictException:
                     pass
         else:
             blob = self.storage.get_blob_for_append(
-                tx_rest_id=self.rest_id, blob_rest_id=blob_rest_id)
+                BlobUri(tx_id=self.rest_id, blob=blob_rest_id))
 
         return blob

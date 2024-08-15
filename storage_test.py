@@ -15,6 +15,7 @@ from storage import Storage, TransactionCursor
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
+from rest_schema import BlobUri
 
 from version_cache import IdVersionMap
 
@@ -72,7 +73,7 @@ class StorageTestBase(unittest.TestCase):
             self.assertTrue(tx_writer.check_input_done(db_tx))
 
         blob_writer = self.s.create_blob(
-            tx_rest_id='tx_rest_id', blob_rest_id='blob_rest_id', tx_body=True)
+            BlobUri(tx_id='tx_rest_id', blob='blob_rest_id', tx_body=True))
 
         with self.s.begin_transaction() as db_tx:
             self.assertFalse(tx_writer.check_input_done(db_tx))
@@ -90,7 +91,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertNotEqual(tx_version, tx_writer.version)
 
         blob_writer = self.s.get_blob_for_append(
-            tx_rest_id='tx_rest_id', tx_body=True)
+            BlobUri(tx_id='tx_rest_id', tx_body=True))
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
         del blob_writer
@@ -182,7 +183,8 @@ class StorageTestBase(unittest.TestCase):
             body = 'q')
 
         with self.assertRaises(ValueError):
-            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
+            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[
+                BlobUri(tx_id=tx.rest_id, blob=tx.body)])
 
         reader = self.s.get_transaction_cursor()
         self.assertIsNone(reader.load(rest_id='tx_rest_id2'))
@@ -191,13 +193,15 @@ class StorageTestBase(unittest.TestCase):
         with self.assertRaises(ValueError):
             tx.body = 'body_rest_id'
             tx_writer = self.s.get_transaction_cursor()
-            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
+            tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[
+                BlobUri(tx_id=tx.rest_id, blob=tx.body)])
 
         blob_writer.append_data(7, d[7:], len(d))
 
         tx.body = 'body_rest_id'
         tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[tx.body])
+        tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[
+            BlobUri(tx_id=tx.rest_id, blob=tx.body)])
         self.assertTrue(tx_writer.input_done)
 
         blob_reader = self.s.get_blob_reader()
@@ -211,8 +215,8 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        blob_writer1 = self.s.create_blob(
-            tx_rest_id='tx_rest_id1', blob_rest_id='blob_rest_id1')
+        blob1 = BlobUri(tx_id='tx_rest_id1', blob='blob_rest_id1')
+        blob_writer1 = self.s.create_blob(blob1)
         b1 = b'hello, world!'
         blob_writer1.append_data(0, b1, len(b1))
 
@@ -222,12 +226,12 @@ class StorageTestBase(unittest.TestCase):
         tx_writer2.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        blob_writer2 = self.s.create_blob(
-            tx_rest_id='tx_rest_id2', blob_rest_id='blob_rest_id2')
+        blob2 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id2')
+        blob_writer2 = self.s.create_blob(blob2)
         b2 = b'another blob'
         blob_writer2.append_data(0, b2, len(b2))
         tx_writer2.load()
-        reuse_blob_rest_id=['blob_rest_id1', 'blob_rest_id2']
+        reuse_blob_rest_id=[blob1, blob2]
         tx_writer2.write_envelope(
             TransactionMetadata(message_builder={}),
             reuse_blob_rest_id=reuse_blob_rest_id)
@@ -235,7 +239,7 @@ class StorageTestBase(unittest.TestCase):
         for blob in reuse_blob_rest_id:
             blob_reader = self.s.get_blob_reader()
             self.assertIsNotNone(blob_reader.load(
-                rest_id=blob, tx_id=tx_writer2.id))
+                rest_id=blob.blob, tx_id=tx_writer2.id))
 
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -298,7 +302,8 @@ class StorageTestBase(unittest.TestCase):
             remote_host=HostPort('remote_host', 2525),
             body=blob_writer.rest_id,
             retry={}),
-            reuse_blob_rest_id=[blob_writer.rest_id])
+            # XXX
+            reuse_blob_rest_id=[BlobUri(tx_id=None, blob=blob_writer.rest_id)])
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],))

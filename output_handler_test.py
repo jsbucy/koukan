@@ -12,7 +12,7 @@ from response import Response
 from output_handler import OutputHandler
 from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
 from filter import Mailbox, TransactionMetadata
-
+from rest_schema import BlobUri
 
 class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
@@ -45,17 +45,13 @@ class OutputHandlerTest(unittest.TestCase):
         tx_meta = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         tx_cursor.write_envelope(tx_meta)
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(rest_id='blob_rest_id')
+        blob_uri = BlobUri(
+            tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
+        blob_writer = self.storage.create_blob(blob_uri)
         d = b'hello, world!'
         for i in range(0,len(d)):
             blob_writer.append_data(i, d[i:i+1], len(d))
 
-        tx_cursor.write_envelope(
-            TransactionMetadata(
-                body='blob_rest_id',
-                retry = {'max_attempts': 100}),
-            reuse_blob_rest_id=['blob_rest_id'])
         del tx_cursor
 
         endpoint = FakeSyncFilter()
@@ -173,8 +169,8 @@ class OutputHandlerTest(unittest.TestCase):
 
         # write & patch blob
 
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(rest_id='blob_rest_id')
+        blob_writer = self.storage.create_blob(
+            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
         blob_writer.append_data(0, body, len(body))
 
@@ -187,13 +183,6 @@ class OutputHandlerTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_body)
-
-
-        tx_cursor.write_envelope(
-            TransactionMetadata(
-                body='blob_rest_id',
-                retry = {'max_attempts': 100}),
-            reuse_blob_rest_id=['blob_rest_id'])
 
         # read data resp
         for j in range(0,3):
@@ -266,21 +255,18 @@ class OutputHandlerTest(unittest.TestCase):
         # no additional expectation on endpoint, should not send blob
         # upstream since all rcpts failed
 
-        blob_writer = self.storage.get_blob_writer()
-        self.assertIsNotNone(blob_writer.create('rest_blob_id'))
+        blob_writer = self.storage.create_blob(
+            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='rest_blob_id'))
         d = b'hello, world!'
         blob_writer.append_data(0, d, len(d))
-
-        self.write_envelope(tx_cursor,
-                            TransactionMetadata(body='rest_blob_id'),
-                            reuse_blob_rest_id=['rest_blob_id'])
 
         fut.result(timeout=5)
 
         tx_cursor.load()
         self.assertIsNone(tx_cursor.final_attempt_reason)
         self.assertEqual(tx_cursor.tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx_cursor.tx.rcpt_response], [402,403])
+        self.assertEqual([r.code for r in tx_cursor.tx.rcpt_response],
+                         [402, 403])
         self.assertIsNone(tx_cursor.tx.data_response)
 
 
@@ -373,8 +359,18 @@ class OutputHandlerTest(unittest.TestCase):
 
     # 1: handle w/notification request set that permfails
     def test_notification(self):
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(rest_id='blob_rest_id')
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            retry={'max_attempts': 1},
+            notification = {'host': 'smtp-out'})
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', tx)
+
+        blob_uri = BlobUri(
+            tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
+        blob_writer = self.storage.create_blob(blob_uri)
         d = (b'from: alice\r\n'
              b'to: bob\r\n'
              b'message-id: <abc@xyz>\r\n'
@@ -382,16 +378,6 @@ class OutputHandlerTest(unittest.TestCase):
              b'hello\r\n')
         blob_writer.append_data(0, d, len(d))
 
-        tx = TransactionMetadata(
-            host='outbound',
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body='blob_rest_id',
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'})
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx,
-                         reuse_blob_rest_id=['blob_rest_id'])
 
         endpoint = FakeSyncFilter()
 
@@ -436,25 +422,24 @@ class OutputHandlerTest(unittest.TestCase):
 
     # 2: handle w/o notification that permfails, recover, handle -> dsn
     def test_notification_post_facto(self):
-        blob_writer = self.storage.get_blob_writer()
-        blob_writer.create(rest_id='blob_rest_id')
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            retry={'max_attempts': 1})
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', tx)
+                         #reuse_blob_rest_id=['blob_rest_id'])
+        tx_id = tx_cursor.id
+
+        blob_writer = self.storage.create_blob(
+            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         d = (b'from: alice\r\n'
              b'to: bob\r\n'
              b'message-id: <abc@xyz>\r\n'
              b'\r\n'
              b'hello\r\n')
         blob_writer.append_data(0, d, len(d))
-
-        tx = TransactionMetadata(
-            host='outbound',
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body='blob_rest_id',
-            retry={'max_attempts': 1})
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx,
-                         reuse_blob_rest_id=['blob_rest_id'])
-        tx_id = tx_cursor.id
 
         endpoint = FakeSyncFilter()
 
