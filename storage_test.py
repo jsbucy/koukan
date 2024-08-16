@@ -179,8 +179,7 @@ class StorageTestBase(unittest.TestCase):
         tx_writer2 = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host',
-            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
-            body = 'q')
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         with self.assertRaises(ValueError):
             tx_writer2.create('tx_rest_id2', tx, reuse_blob_rest_id=[

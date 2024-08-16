@@ -55,6 +55,7 @@ class OutputHandler:
 
         timeout = self.env_timeout
         msg = 'envelope'
+        # XXX no longer true, PUTs ping the tx last_update
         # The way the REST api is currently structured doesn't make
         # the fact that the client is making progress sending the blob
         # visibile to the transaction until they PATCH the uri in at
@@ -88,6 +89,9 @@ class OutputHandler:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
                          self.rest_id, self.cursor.tx, self.cursor.input_done)
 
+            if not self.cursor.input_done and self.cursor.tx.message_builder:
+                del self.cursor.tx.message_builder
+
             if last_tx is None:
                 last_tx = self.cursor.tx.copy()
                 upstream_tx = self.cursor.tx.copy()
@@ -101,7 +105,7 @@ class OutputHandler:
             assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
             assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
 
-            have_body = ((self.cursor.input_done) and
+            have_body = (self.cursor.input_done and
                          ((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
@@ -140,11 +144,6 @@ class OutputHandler:
                 del upstream_tx.body
             if delta.body:
                 del delta.body
-
-            # TODO possibly dead code, presence of message builder
-            # entails input_done?
-            if not self.cursor.input_done and delta.message_builder:
-                del delta.message_builder
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update

@@ -82,7 +82,8 @@ class TransactionCursor:
                rest_id : str,
                tx : TransactionMetadata,
                reuse_blob_rest_id : List[BlobUri] = [],
-               create_leased : bool = False):
+               create_leased : bool = False,
+               blobs_to_create : bool = False):
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.begin_transaction() as db_tx:
@@ -119,7 +120,8 @@ class TransactionCursor:
                     blob = body_blob_uri(blob)
                     reuse_blob.append(blob)
 
-            self._write(db_tx, tx, reuse_blob_rest_id=reuse_blob)
+            self._write(db_tx, tx, reuse_blob_rest_id=reuse_blob,
+                        blobs_to_create=blobs_to_create)
             self.tx.rest_id = rest_id
 
         self._update_version_cache()
@@ -292,7 +294,8 @@ class TransactionCursor:
                notification_done : Optional[bool] = None,
                # only for upcalls from BlobWriter
                input_done = False,
-               ping_tx = False):
+               ping_tx = False,
+               blobs_to_create = False):
         logging.debug('TxCursor._write %s %s', self.rest_id, tx_delta)
         assert final_attempt_reason != 'oneshot'  # internal-only
 
@@ -381,7 +384,10 @@ class TransactionCursor:
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)
         if input_done or (
-                blobs_done and (tx_delta.body or tx_delta.message_builder)):
+                (tx_delta.message_builder and not blobs_to_create) or
+                (reuse_blob_rest_id is not None
+                 and len(reuse_blob_rest_id) == 1 and
+                 reuse_blob_rest_id[0].tx_body)):
             logging.debug('_write %s input_done', self.rest_id)
             upd = upd.values(input_done = True)
             self.input_done = True
@@ -580,7 +586,9 @@ class TransactionCursor:
              isouter=False)
         sel = (select(self.parent.blob_table.c.id).select_from(j)
                .where(self.parent.tx_blobref_table.c.transaction_id == self.id,
-                      self.parent.blob_table.c.length.is_(None))
+                      or_(self.parent.blob_table.c.length.is_(None),
+                          func.length(self.parent.blob_table.c.content) !=
+                          self.parent.blob_table.c.length))
                .limit(1))
         res = db_tx.execute(sel)
         row = res.fetchone()
@@ -593,7 +601,6 @@ class BlobCursor(Blob, WritableBlob):
     _content_length : Optional[int] = None  # overall length from content-range
     last = False
     update_tx : Optional[str] = None
-    finalize_tx : bool = False
     blob_uri : Optional[BlobUri] = None
 
     def __init__(self, storage,
@@ -601,7 +608,6 @@ class BlobCursor(Blob, WritableBlob):
                  finalize_tx : Optional[bool] = False):
         self.parent = storage
         self.update_tx = update_tx
-        self.finalize_tx = finalize_tx
 
     def len(self):
         return self.length
@@ -730,13 +736,15 @@ class BlobCursor(Blob, WritableBlob):
                     with self.parent.begin_transaction() as db_tx:
                         cursor._load_db(db_tx, rest_id=self.update_tx)
                         kwargs = {}
-                        logging.debug('BlobWriter.append_data tx %s %s',
-                                      self.update_tx, kwargs)
-                        if self.last and self.finalize_tx:
+                        input_done = False
+                        if self.last:
+                            input_done = cursor.check_input_done(db_tx)
+                        if input_done:
                             kwargs['input_done'] = True
                         else:
-                            # ping last_update
-                            kwargs['ping_tx'] = True
+                            kwargs['ping_tx'] = True  # ping last_update
+                        logging.debug('BlobWriter.append_data tx %s %s',
+                                      self.update_tx, kwargs)
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
@@ -928,7 +936,6 @@ class Storage():
         cursor._update_version_cache()
 
         writer.update_tx = blob_uri.tx_id
-        writer.finalize_tx = blob_uri.tx_body
 
         return writer
 
@@ -939,7 +946,6 @@ class Storage():
         if blob_writer.load(blob_uri) is None:
             return None
         blob_writer.update_tx = blob_uri.tx_id
-        blob_writer.finalize_tx = blob_uri.tx_body
 
         return blob_writer
 

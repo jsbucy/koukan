@@ -590,6 +590,7 @@ class RestHandler(Handler):
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
+    # still used for tx_body
     async def create_blob_async(
             self, request : FastApiRequest,
             tx_body : bool = False,
@@ -617,6 +618,7 @@ class RestHandler(Handler):
             tx_body=tx_body)
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
+
 
     def put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,

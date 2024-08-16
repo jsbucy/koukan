@@ -17,23 +17,18 @@ session.verify = 'localhost.crt'
 
 # -> uri
 def send_part(tx_url,
+              blob_id : str,
               inline : Optional[str] = None,
               filename : Optional[str] = None) -> Optional[str]:
     assert inline or filename
-
-    resp = session.post(tx_url + '/blob?upload=chunked')
-    logging.info('POST /blob %s', resp)
-
-    if resp.status_code != 201:
-        return None
-    if not (uri := resp.headers.get('location', None)):
-        return None
 
     if inline:
         content = inline.encode('utf-8')
     elif filename:
         with open(filename, 'rb') as f:
             content = f.read()
+    uri = tx_url + '/blob/' + blob_id
+    logging.info('PUT %s', uri)
     resp = session.put(base_url + uri, content)
     logging.info('PUT %s %s', uri, resp)
     if resp.status_code >= 300:
@@ -47,7 +42,7 @@ def send_body(tx_url, json):
             continue
         for part in multipart:
             logging.info('send_body %s', part)
-            if 'content_uri' in part:
+            if part['content_uri'].startswith('/'):
                 continue
             inline = part.get('put_content', None)
             filename = part.get('file_content', None)
@@ -55,7 +50,8 @@ def send_body(tx_url, json):
                 continue
 
             if (uri := send_part(
-                    tx_url, inline=inline, filename=filename)) is None:
+                    tx_url, part['content_uri'], inline=inline,
+                    filename=filename)) is None:
                 return False
 
             for part_field in ['put_content', 'file_content']:
@@ -75,11 +71,13 @@ message_builder = {
     "text_body": [
         {
             "content_type": "text/html",
-            "put_content": "<b>hello</b>"
+            "put_content": "<b>hello</b>",
+            "content_uri": "my_html_body",
         },
         {
             "content_type": "text/plain",
-            "file_content": "/etc/lsb-release"
+            "file_content": "/etc/lsb-release",
+            "content_uri": "my_plain_body",
         }
     ]
 }
@@ -92,9 +90,8 @@ def main(mail_from, rcpt_to):
     json={
         'mail_from': {'m': mail_from},
         'rcpt_to': [{'m': rcpt_to}],
-    }
-    if blobs_done:
-        json['message_builder'] = message_builder
+        'message_builder': message_builder }
+
     logging.debug('POST /transactions')
     start = time.monotonic()
     rest_resp = session.post(
@@ -107,7 +104,8 @@ def main(mail_from, rcpt_to):
         return
 
     tx_json = rest_resp.json()
-    tx_url = urljoin(base_url, rest_resp.headers['location'])
+    tx_path = rest_resp.headers['location']
+    tx_url = urljoin(base_url, tx_path)
 
     for resp_field in ['mail_response', 'rcpt_response']:
         if not (resp := tx_json.get(resp_field, None)):
@@ -122,27 +120,19 @@ def main(mail_from, rcpt_to):
             return
 
     if not blobs_done:
-        if not send_body(tx_url, message_builder):
+        if not send_body(tx_path, message_builder):
             return
         logging.info('main message_builder spec %s', message_builder)
-
         get_tx_resp = session.get(tx_url)
-
-        resp = session.post(
-            tx_url + '/message_builder',
-            json=message_builder,
-            headers = {'if-match': get_tx_resp.headers['etag']})
-        if resp.status_code >= 300:
-            logging.info('patch message builder spec resp %s', resp)
-            return
         blobs_done = True
         rest_resp = None
 
     done = False
     etag = None
     while not done:
-        spin = True
+        spin = False
         if rest_resp is None:
+            spin = True
             start = time.monotonic()
             logging.info('GET %s', tx_url)
             headers = {'request-timeout': '5'}
@@ -151,7 +141,8 @@ def main(mail_from, rcpt_to):
             rest_resp = session.get(tx_url, headers=headers)
             logging.info('GET /%s %d %s',
                          tx_url, rest_resp.status_code, rest_resp.text)
-            if rest_resp.status_code in [200, 304] and 'etag' in rest_resp.headers:
+            if rest_resp.status_code in [200, 304] and (
+                    'etag' in rest_resp.headers):
                 resp_etag = rest_resp.headers['etag']
                 if resp_etag != etag:
                     spin = False

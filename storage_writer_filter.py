@@ -63,13 +63,15 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata,
-                reuse_blob_rest_id : Optional[List[str]] = None):
+                reuse_blob_rest_id : Optional[List[str]] = None,
+                blobs_to_create=False):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
         self.tx_cursor.create(
             rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id,
-            create_leased=self.create_leased)
+            create_leased=self.create_leased,
+            blobs_to_create=blobs_to_create)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -152,27 +154,32 @@ class StorageWriterFilter(AsyncFilter):
             if last:
                 break
 
-    def _get_message_builder_blobs(self, tx) -> List[BlobUri]:
+    # -> blobs to reuse, blobs to create in tx
+    def _get_message_builder_blobs(
+            self, tx) -> Tuple[List[BlobUri], List[str]]:
         blobs = []
+        create_blobs = []
         def tx_blob_id(uri) -> Optional[str]:
-            uri = parse_blob_uri(uri)
-            if uri is None:
+            blob_uri = parse_blob_uri(uri)
+            # xxx not uri.startswith('/')
+            # other limits? ascii printable, etc?
+            if blob_uri is None:
+                create_blobs.append(uri)
+                return uri
+            if blob_uri.tx_body:
                 return None
-            # this is unlikely but ought to work? reuse another tx body
-            # as a message_builder blob? fix w/BlobUri
-            if uri.tx_body:
-                return None
-            blobs.append(uri)
-            return uri.blob
+            blobs.append(blob_uri)
+            return blob_uri.blob
 
         if not tx.message_builder:
-            return []
+            return [], []
 
         # TODO maybe this should this blob-ify larger inline content in
         # message_builder a la _maybe_write_body_blob() with inline_body?
 
         MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
-        return blobs
+
+        return blobs, create_blobs
 
     # AsyncFilter
     def update(self,
@@ -208,7 +215,7 @@ class StorageWriterFilter(AsyncFilter):
             tx.merge_from(err_delta)
             return err_delta
 
-        reuse_blob_rest_id = self._get_message_builder_blobs(tx_delta)
+        reuse_blob_rest_id, create_blobs = self._get_message_builder_blobs(tx_delta)
         logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                       reuse_blob_rest_id)
 
@@ -233,9 +240,13 @@ class StorageWriterFilter(AsyncFilter):
         if self.rest_id is None:
             created = True
             self._create(downstream_tx,
-                         reuse_blob_rest_id=reuse_blob_rest_id)
+                         reuse_blob_rest_id=reuse_blob_rest_id,
+                         blobs_to_create=bool(create_blobs))
             reuse_blob_rest_id = None
             tx.rest_id = self.rest_id
+
+        for blob in create_blobs:
+            self.get_blob_writer(create=True, blob_rest_id = blob)
 
         # blobs w/o uri:
         # notification/dsn: InlineBlob w/dsn,

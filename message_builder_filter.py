@@ -30,6 +30,7 @@ class MessageBuilderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata] :
+        logging.debug('MessageBuilderFilter.on_update %s', tx_delta)
         if self.body_delta is None and tx_delta.message_builder is not None:
             builder = MessageBuilder(
                 tx_delta.message_builder,
