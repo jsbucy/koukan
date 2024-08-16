@@ -24,7 +24,7 @@ import psutil
 from blob import Blob, InlineBlob, WritableBlob
 from response import Response
 from storage_schema import (
-    InvalidActionException,
+    TX_BODY,
     VersionConflictException,
     body_blob_uri )
 from filter import TransactionMetadata, WhichJson
@@ -57,8 +57,6 @@ class TransactionCursor:
 
     no_final_notification : Optional[bool] = None
 
-    body_blob_id : Optional[int] = None
-    body_rest_id : Optional[str] = None
     id_version : Optional[IdVersion] = None
 
     def __init__(self, storage,
@@ -265,21 +263,6 @@ class TransactionCursor:
         logging.debug('TransactionCursor._write_blob %d body %s',
                       self.id, tx.body)
 
-        if tx.body:
-            logging.debug('_write_blob tx body %s %s %s',
-                          reuse_blob_rest_id, ref_blob_id, tx.body)
-            # if ref_blob_id is not None:
-            #     assert ref_blob_id[1].blob == tx.body
-            # else:
-            #     assert [b.blob for b in reuse_blob_rest_id] == [tx.body]
-            assert ref_blob_id is not None or len(reuse_blob_rest_id) == 1
-            assert len(reuse_blob_id) == 1
-            #assert reuse_blob_id[0][1] == tx.body
-            logging.debug('TransactionCursor._write_blob %d reuse', self.id)
-            upd = upd.values(
-                body_blob_id = reuse_blob_id[0][0],
-                body_rest_id = reuse_blob_id[0][1]) #reuse_blob_rest_id[0].blob)
-
         blobrefs = []
         blobs_done = True
         for blob_id, rest_id, input_done in reuse_blob_id:
@@ -456,10 +439,8 @@ class TransactionCursor:
                      self.parent.tx_table.c.last,
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.final_attempt_reason,
-                     self.parent.tx_table.c.body_rest_id,
                      self.parent.tx_table.c.message_builder,
-                     self.parent.tx_table.c.no_final_notification,
-                     self.parent.tx_table.c.body_blob_id)
+                     self.parent.tx_table.c.no_final_notification)
 
         if db_id is not None:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
@@ -485,20 +466,22 @@ class TransactionCursor:
          self.last,
          self.input_done,
          self.final_attempt_reason,
-         self.body_rest_id,
          self.message_builder,
-         self.no_final_notification,
-         self.body_blob_id) = row
+         self.no_final_notification) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
             return None
-        # TODO this (and the db col) are probably vestigal? The
-        # references are tracked in TransactionBlobRefs and the tx
-        # json is supposed to be opaque to the storage code. The
-        # message_builder spec makes somewhat more sense since it
-        # could have inline bodies in it and be ~large?
-        self.tx.body = self.body_rest_id
+
+        sel_body = select(self.parent.tx_blobref_table.c.blob_id).where(
+            self.parent.tx_blobref_table.c.transaction_id == self.id,
+            self.parent.tx_blobref_table.c.rest_id == TX_BODY)
+        res = db_tx.execute(sel_body)
+        if res and res.fetchone():
+            # TODO this is a minor kludge, this needs to be any
+            # non-empty string to be converted to a placeholder in the
+            # rest read path
+            self.tx.body = 'b'
         self.tx.message_builder = self.message_builder
         self.tx.tx_db_id = self.id
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
@@ -916,12 +899,7 @@ class Storage():
             return False
         return True
 
-    # remove?
-    def get_blob_writer(self) -> BlobCursor:
-        return BlobCursor(self)
-    def get_blob_reader(self) -> BlobCursor:
-        return BlobCursor(self)
-
+    # TODO these blob methods should move into TransactionCursor?
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
         with self.begin_transaction() as db_tx:
             writer = None
@@ -939,8 +917,6 @@ class Storage():
                     cursor = self.get_transaction_cursor()
                     cursor._load_db(db_tx=db_tx, rest_id=blob_uri.tx_id)
                     tx = TransactionMetadata()
-                    if blob_uri.tx_body:
-                        tx.body = blob_uri.blob
                     cursor._write(
                         db_tx=db_tx,
                         tx_delta=tx,

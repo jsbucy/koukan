@@ -42,9 +42,6 @@ CREATE TABLE Transactions (
 
   next_attempt_time INTEGER,  -- unix secs
 
-  body_blob_id INTEGER,
-  body_rest_id TEXT,
-
   message_builder JSON,
 
   -- json.notification is present and non-empty
@@ -55,21 +52,12 @@ CREATE TABLE Transactions (
   -- after it has reached a final status; this is to facilitate recovering these
   no_final_notification BOOL,
 
-  FOREIGN KEY(body_blob_id) REFERENCES Blob(id)
-    ON UPDATE CASCADE
-    ON DELETE SET NULL,
-
-  -- FOREIGN KEY(body_rest_id) REFERENCES Blob(rest_id)
-  --   ON UPDATE CASCADE
-  --   ON DELETE SET NULL,
-
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
     ON UPDATE CASCADE  -- xxx moot?
     ON DELETE SET NULL
 );
 
 CREATE INDEX TxRestId on Transactions (rest_id);
-CREATE INDEX TxBodyBlobId on Transactions (body_blob_id);
 
 CREATE TABLE TransactionBlobRefs (
   transaction_id INTEGER,

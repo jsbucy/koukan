@@ -11,7 +11,7 @@ import testing.postgresql
 import sqlite3
 import psycopg
 import psycopg.errors
-from storage import Storage, TransactionCursor
+from storage import BlobCursor, Storage, TransactionCursor
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import HostPort, Mailbox, TransactionMetadata
@@ -147,7 +147,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNone(self.s.load_one())
 
     def test_blob_8bitclean(self):
-        blob_writer = self.s.get_blob_writer()
+        blob_writer = BlobCursor(self.s)
         blob_writer.create()
         # 32 random bytes, not valid utf8, etc.
         d = base64.b64decode('LNGxKynVCXMDfb6HD4PMryGN7/wb8WoAz1YcDgRBLdc=')
@@ -156,7 +156,7 @@ class StorageTestBase(unittest.TestCase):
             s = d.decode('utf-8')
         blob_writer.append_data(0, d, len(d)*2)
         blob_writer.append_data(len(d), d, len(d)*2)
-        blob_reader = self.s.get_blob_reader()
+        blob_reader = BlobCursor(self.s)
         blob_reader.load(blob_id=blob_writer.id)
         self.assertEqual(blob_reader.read(0), d+d)
 
@@ -201,9 +201,7 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug('test_body_reuse reuse success')
 
-        tx_writer.load()  # XXX write doesn't populate body_rest_id??
-        self.assertIsNotNone(tx_writer.body_rest_id)
-        tx.body = tx_writer.body_rest_id  # XXX
+        tx_writer.load()
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[
             BlobUri(tx_id='tx_rest_id', tx_body=True)])
@@ -243,7 +241,7 @@ class StorageTestBase(unittest.TestCase):
             reuse_blob_rest_id=reuse_blob_rest_id)
 
         for blob in reuse_blob_rest_id:
-            blob_reader = self.s.get_blob_reader()
+            blob_reader = BlobCursor(self.s)
             self.assertIsNotNone(blob_reader.load(blob2))
 
     def test_message_builder_no_blob(self):
@@ -311,7 +309,7 @@ class StorageTestBase(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],))
 
         tx_reader = self.s.load_one()
-        blob_reader = self.s.get_blob_reader()
+        blob_reader = BlobCursor(self.s)
         self.assertEqual(tx_reader.id, tx_writer.id)
 
         # not expired, leased
@@ -421,10 +419,10 @@ class StorageTestBase(unittest.TestCase):
         dd[0] = d
 
     def test_blob_waiting_poll(self):
-        blob_writer = self.s.get_blob_writer()
+        blob_writer = BlobCursor(self.s)
         blob_writer.create()
 
-        reader = self.s.get_blob_reader()
+        reader = BlobCursor(self.s)
         reader.load(blob_id=blob_writer.id)
 
         dd = [None]

@@ -105,15 +105,9 @@ class StorageWriterFilter(AsyncFilter):
         elif tx.body:
             self.body_blob_uri = True
             uri = parse_blob_uri(tx.body)
+            logging.debug('_get_body_blob_uri %s %s', tx.body, uri)
             # xxx parse error -> err Response
             assert uri and uri.tx_body
-            # XXX move to Storage
-            source_cursor = self.storage.get_transaction_cursor()
-            source_cursor.load(rest_id=uri.tx_id)
-            # should be able to eliminate tx table body_rest_id col
-            # it's always blobrefs(tx_id, '__koukan_internal_tx_body')
-            # etc
-            uri.blob = tx.body = source_cursor.body_rest_id
             return uri
         return None
 
@@ -228,7 +222,7 @@ class StorageWriterFilter(AsyncFilter):
             reuse_blob_rest_id = [body_blob_uri]
             # XXX
             if not downstream_delta.body:
-                downstream_delta.body = body_blob_uri.blob
+                downstream_delta.body = 'b'  #body_blob_uri.blob
 
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
