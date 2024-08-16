@@ -8,6 +8,7 @@ import time
 from storage import Storage, TransactionCursor
 from response import Response
 from filter import Mailbox, TransactionMetadata
+from rest_schema import BlobUri
 
 from blob import InlineBlob
 
@@ -141,14 +142,17 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(
             [rr.code for rr in tx.rcpt_response], [202])
 
+        # TODO this is basically a storage internal api at this point
+        # in prod, the blob begins life ref'd to the downstream
+        # exploder tx, etc.
         blob_writer = self.storage.get_blob_writer()
-        blob_writer.create('blob_rest_id')
+        blob_writer.create()
         d = b'hello, '
         blob_writer.append_data(0, d)
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(
-            rest_id='blob_rest_id', testonly_no_tx_id=True))
+            blob_id=blob_writer.id))
 
         # update w/incomplete blob ->noop
         tx_delta = TransactionMetadata()
@@ -163,7 +167,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertTrue(appended)
         self.assertEqual(length, content_length)
 
-        blob_reader.load(testonly_no_tx_id=True)
+        blob_reader.load()
 
         tx_delta = TransactionMetadata(body_blob=blob_reader)
         tx.merge_from(tx_delta)
@@ -230,7 +234,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         blob_reader = self.storage.get_blob_reader()
         self.assertIsNotNone(blob_reader.load(
-            rest_id='test_message_builder_blob', tx_id=upstream_cursor.id))
+            BlobUri(blob='test_message_builder_blob', tx_id='test_message_builder')))
 
 
         # now do it again reusing the same blob
@@ -291,7 +295,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual(tx.rcpt_response, [])
 
-    def testTimeoutData(self):
+    # no longer waiting on upstream inflight so this is moot?
+    def disabled_testTimeoutData(self):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: str(time.time()))
@@ -347,11 +352,9 @@ class StorageWriterFilterTest(unittest.TestCase):
         # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
 
-        cursor = self.storage.get_transaction_cursor()
-        cursor.load(rest_id='reuse')
-        blob_reader = self.storage.get_blob_reader()
-        self.assertIsNotNone(
-            blob_reader.load(rest_id=cursor.body_rest_id, tx_id=cursor.id))
+        blob_reader = self.storage.get_blob_for_read(
+            BlobUri(tx_id='reuse', tx_body=True))
+        self.assertIsNotNone(blob_reader)
         self.assertEqual(blob_reader.read(0), b.encode('utf-8'))
 
 

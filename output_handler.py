@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 
-from storage import Storage, TransactionCursor, BlobReader, BlobWriter
+from storage import Storage, TransactionCursor, BlobCursor
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import (
@@ -16,6 +16,7 @@ from filter import (
     WhichJson )
 from dsn import read_headers, generate_dsn
 from blob import InlineBlob
+from rest_schema import BlobUri
 
 def default_notification_factory():
     raise NotImplementedError()
@@ -129,10 +130,9 @@ class OutputHandler:
             if self.cursor.input_done and self.cursor.tx.body:
                 logging.info('OutputHandler._output() %s load body blob',
                              self.rest_id)
-                blob_reader = self.cursor.parent.get_blob_reader()
-                assert blob_reader.load(
-                    rest_id = self.cursor.tx.body,
-                    tx_id = self.cursor.id) is not None
+                blob_reader = self.cursor.parent.get_blob_for_read(
+                    BlobUri(tx_id=self.rest_id, tx_body=True))
+                assert blob_reader
                 assert blob_reader.finalized()
                 upstream_tx.body_blob = delta.body_blob = blob_reader
 
@@ -338,9 +338,8 @@ class OutputHandler:
             if msgid:
                 orig_headers = b'Message-ID: <' + msgid + b'>\r\n\r\n'
         elif self.cursor.tx.body is not None:
-            blob_reader = self.cursor.parent.get_blob_reader()
-            blob_reader.load(rest_id = self.cursor.tx.body,
-                             tx_id = self.cursor.id)
+            blob_reader = self.cursor.parent.get_blob_for_read(
+                BlobUri(tx_id = self.cursor.rest_id, tx_body=True))
             orig_headers = read_headers(blob_reader)
 
         assert bool(self.cursor.tx.rcpt_to)

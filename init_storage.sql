@@ -57,9 +57,9 @@ CREATE TABLE Transactions (
     ON UPDATE CASCADE
     ON DELETE SET NULL,
 
-  FOREIGN KEY(body_rest_id) REFERENCES Blob(rest_id)
-    ON UPDATE CASCADE
-    ON DELETE SET NULL,
+  -- FOREIGN KEY(body_rest_id) REFERENCES Blob(rest_id)
+  --   ON UPDATE CASCADE
+  --   ON DELETE SET NULL,
 
   FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
     ON UPDATE CASCADE  -- xxx moot?
@@ -71,6 +71,7 @@ CREATE INDEX TxBodyBlobId on Transactions (body_blob_id);
 
 CREATE TABLE TransactionBlobRefs (
   transaction_id INTEGER,
+  tx_rest_id TEXT,
   blob_id INTEGER,
   rest_id TEXT,
 
@@ -78,11 +79,11 @@ CREATE TABLE TransactionBlobRefs (
     ON UPDATE CASCADE
     ON DELETE CASCADE,
 
-  FOREIGN KEY(blob_id) REFERENCES Blob(id)
+  FOREIGN KEY(tx_rest_id) REFERENCES Transactions(rest_id)
     ON UPDATE CASCADE
-    ON DELETE SET NULL,
+    ON DELETE CASCADE,
 
-  FOREIGN KEY(rest_id) REFERENCES Blob(rest_id)
+  FOREIGN KEY(blob_id) REFERENCES Blob(id)
     ON UPDATE CASCADE
     ON DELETE SET NULL,
 
@@ -105,12 +106,10 @@ CREATE TABLE TransactionAttempts (
 
 CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
-  rest_id TEXT UNIQUE,
   -- final length declared by client in content-length header
   length INTEGER,
   last_update INTEGER NOT NULL,
   content BLOB
 );
 
-CREATE INDEX BlobRestId on Blob (rest_id);
-
+-- CREATE INDEX BlobRestId on Blob (rest_id);

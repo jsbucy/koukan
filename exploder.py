@@ -91,6 +91,8 @@ class Recipient:
         # TODO save any downstream notification/retry params
         # TODO copy_valid(REST_CREATE) ?
         self.tx = tx.copy()
+        if self.tx.rest_id:    # XXXXXXXXXXXX
+            del self.tx.rest_id
         if self.tx.tx_db_id:
             del self.tx.tx_db_id
         self.tx.mail_response = None
@@ -369,7 +371,9 @@ class Exploder(SyncFilter):
                       Deadline(self.rcpt_timeout))
             return TransactionMetadata()
 
+        # XXX
         updated_tx = tx.copy()
+
         if tx_delta.mail_from is not None:
             self._on_mail(tx_delta, updated_tx)
 

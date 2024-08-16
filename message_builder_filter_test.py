@@ -28,7 +28,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@domain')])
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('tx_rest_id', tx)
-
+        self.assertEqual(tx_cursor.tx.rest_id, 'tx_rest_id')
         blob_uri = BlobUri(tx_id='tx_rest_id', blob='blob_rest_id')
         blob_writer = self.storage.create_blob(blob_uri)
         d = b'hello, world!'
@@ -60,7 +60,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             return upstream_delta
 
         upstream.add_expectation(exp)
-        tx.tx_db_id = tx_cursor.id
+        tx.rest_id = tx_cursor.rest_id  # XXX pass tx_cursor.tx instead?
         upstream_delta = message_builder.on_update(tx, tx.copy())
         self.assertEqual(upstream_delta.mail_response.code, 201)
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])

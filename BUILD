@@ -51,7 +51,8 @@ pytype_library(name='rest_service_handler',
                srcs=['rest_service_handler.py'])
 
 pytype_library(name='storage_schema',
-               srcs=['storage_schema.py'])
+               srcs=['storage_schema.py'],
+               deps=[':rest_schema'])
 
 pytype_library(name='version_cache',
                srcs=['version_cache.py'],
@@ -122,7 +123,8 @@ pytype_library(name='output_handler',
                      ':storage',
                      ':storage_schema',
                      ':message_builder',
-                     ':dsn'])
+                     ':dsn',
+                     ':rest_schema'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
@@ -147,6 +149,7 @@ pytype_library(name='message_builder_filter',
                deps=[':blob',
                      ':filter',
                      ':message_builder',
+                     ':rest_schema',
                      ':storage'])
 
 py_test(name='message_builder_filter_test',
@@ -252,6 +255,7 @@ py_test(name='storage_writer_filter_test',
               ':filter',
               ':fake_endpoints',
               ':response',
+              ':rest_schema',
               ':storage'])
 
 pytype_library(name='exploder',

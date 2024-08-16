@@ -221,7 +221,7 @@ class RouterServiceTest(unittest.TestCase):
         def exp_cancel(tx, tx_delta):
             return TransactionMetadata()
 
-        for i in range(0,3):
+        for i in range(0,10):
             logging.info('RouterServiceTest.setUp probe %d', i)
 
             upstream = FakeSyncFilter()
@@ -242,7 +242,7 @@ class RouterServiceTest(unittest.TestCase):
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
-            time.sleep(0.1)
+            time.sleep(1)
         else:
             self.fail('service not ready')
 
@@ -320,6 +320,7 @@ class RouterServiceTest(unittest.TestCase):
             #'retry': {},
             'mail_from': {},
             'rcpt_to': [{}],
+            # xxx RestEndpoint doesn't actually care about the placeholders now?
             'body': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],

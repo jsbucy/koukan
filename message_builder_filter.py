@@ -9,6 +9,7 @@ from filter import (
 from message_builder import MessageBuilder
 from storage import Storage
 from blob import FileLikeBlob
+from rest_schema import BlobUri
 
 class MessageBuilderFilter(SyncFilter):
     upstream : Optional[SyncFilter] = None
@@ -18,9 +19,11 @@ class MessageBuilderFilter(SyncFilter):
         self.storage = storage
         self.upstream = upstream
 
-    def _blob_factory(self, tx_rest_id, blob_id):
-        blob_reader = self.storage.get_blob_reader()
-        if blob_reader.load(rest_id=blob_id, tx_id=tx_rest_id) is None:
+    def _blob_factory(self, tx_rest_id : str, blob_id : str):
+        logging.debug('message builder %s %s', tx_rest_id, blob_id)
+        blob_reader = self.storage.get_blob_for_read(
+            BlobUri(tx_id=tx_rest_id, blob=blob_id))
+        if blob_reader is None:
             return None
         return blob_reader
 
@@ -30,7 +33,7 @@ class MessageBuilderFilter(SyncFilter):
         if self.body_delta is None and tx_delta.message_builder is not None:
             builder = MessageBuilder(
                 tx_delta.message_builder,
-                lambda blob_id: self._blob_factory(tx.tx_db_id, blob_id))
+                lambda blob_id: self._blob_factory(tx.rest_id, blob_id))
 
             file = TemporaryFile('w+b')
             assert isinstance(file, IOBase)

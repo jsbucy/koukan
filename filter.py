@@ -219,7 +219,7 @@ _tx_fields = [
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
-                          WhichJson.REST_READ])),  # xxx WhichJson.DB],
+                          WhichJson.REST_READ])),
     TxField('message_builder',
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
@@ -373,7 +373,8 @@ class TransactionMetadata:
         return not self.empty(WhichJson.ALL)
 
     @staticmethod
-    def from_json(tx_json, which_js=WhichJson.ALL):
+    def from_json(tx_json, which_js=WhichJson.ALL
+                  ) -> Optional['TransactionMetadata']:
         tx = TransactionMetadata()
         for f in tx_json.keys():
             if which_js == WhichJson.REST_UPDATE and f.endswith('_list_offset'):  # XXX

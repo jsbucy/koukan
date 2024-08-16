@@ -6,7 +6,7 @@ import time
 from functools import partial
 from threading import Lock, Condition
 
-from storage import Storage, TransactionCursor, BlobReader, BlobWriter
+from storage import Storage, TransactionCursor, BlobCursor
 from storage_schema import InvalidActionException, VersionConflictException
 from response import Response
 from filter import (
@@ -99,9 +99,9 @@ class StorageWriterFilter(AsyncFilter):
             return None
         if not tx.body and (not tx.body_blob or not tx.body_blob.finalized()):
             return None
-        if isinstance(tx.body_blob, BlobReader):
+        if isinstance(tx.body_blob, BlobCursor):
             self.body_blob_uri = True
-            return BlobUri(tx_id='', blob=tx.body_blob.rest_id)  # XXX
+            return tx.body_blob.blob_uri
         elif tx.body:
             self.body_blob_uri = True
             uri = parse_blob_uri(tx.body)
@@ -220,12 +220,13 @@ class StorageWriterFilter(AsyncFilter):
 
         # finalized body_blob w/uri:
         # rest body reuse (body is uri)
-        # exploder (body_blob is storage.BlobReader)
+        # exploder (body_blob is storage.BlobCursor)
 
         if body_blob_uri := self._get_body_blob_uri(downstream_tx):
             logging.debug('body_blob_uri %s', body_blob_uri)
             assert not reuse_blob_rest_id
             reuse_blob_rest_id = [body_blob_uri]
+            # XXX
             if not downstream_delta.body:
                 downstream_delta.body = body_blob_uri.blob
 
@@ -244,7 +245,7 @@ class StorageWriterFilter(AsyncFilter):
 
         # blobs w/o uri:
         # notification/dsn: InlineBlob w/dsn,
-        # exploder currently sends downstream BlobReader verbatim but
+        # exploder currently sends downstream BlobCursor verbatim but
         # could chain received header which would send us CompositeBlob
         if body_blob_uri is None:
             err = self._maybe_write_body_blob(tx_delta)

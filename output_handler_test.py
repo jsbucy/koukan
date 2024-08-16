@@ -232,6 +232,9 @@ class OutputHandlerTest(unittest.TestCase):
 
         fut = self.executor.submit(lambda: self.output('rest_tx_id', endpoint))
 
+        while endpoint.expectation:
+            time.sleep(0.1)
+
         def exp_rcpt2(tx, tx_delta):
             self.assertEqual([m.mailbox for m in tx_delta.rcpt_to], ['bob2'])
             updated_tx = tx.copy()

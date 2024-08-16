@@ -396,10 +396,7 @@ class RestHandler(Handler):
         if tx is None:
             return None
         logging.debug('_get_tx %s', tx)
-        if tx.body_blob is not None:
-            tx.body = ''
-            del tx.body_blob
-
+        # xxx when does this have body_blob?
         if tx.body_blob is not None:
             tx.body = ''
             del tx.body_blob
