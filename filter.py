@@ -676,7 +676,7 @@ class AsyncFilter(ABC):
     def get(self) -> TransactionMetadata:
         pass
 
-    # XXX this should encapsulate WritableBlob?
+    # TODO this should encapsulate WritableBlob?
     # def create_blob(self, BlobUri)
     # def append_to_blob(self, BlobUri, offset, d : bytes, content_length)
 
@@ -747,5 +747,6 @@ def update_wait_inflight(async_filter : AsyncFilter,
     if upstream_tx.body:
         del upstream_tx.body
     upstream_delta = tx_orig.delta(upstream_tx)
-    tx.replace_from(upstream_tx)  # xxx merge_from?
+    # TODO one would expect merge_from()?
+    tx.replace_from(upstream_tx)
     return upstream_delta

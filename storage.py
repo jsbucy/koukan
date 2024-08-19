@@ -83,7 +83,7 @@ class TransactionCursor:
                tx : TransactionMetadata,
                reuse_blob_rest_id : List[BlobUri] = [],
                create_leased : bool = False,
-               blobs_to_create : bool = False):
+               message_builder_blobs_done : bool = False):
         parent = self.parent
         self.creation = int(time.time())
         with self.parent.begin_transaction() as db_tx:
@@ -121,7 +121,7 @@ class TransactionCursor:
                     reuse_blob.append(blob)
 
             self._write(db_tx, tx, reuse_blob_rest_id=reuse_blob,
-                        blobs_to_create=blobs_to_create)
+                        message_builder_blobs_done=message_builder_blobs_done)
             self.tx.rest_id = rest_id
 
         self._update_version_cache()
@@ -139,10 +139,6 @@ class TransactionCursor:
             refd_blobs.add(row[0])
         unrefd_blobs = [b for b in blob_rest_id
                         if b.blob not in refd_blobs]
-
-        logging.debug('_write_blob reuse %s', blob_rest_id)
-        logging.debug('_write_blob refd %s', refd_blobs)
-        logging.debug('_write_blob unrefd %s', unrefd_blobs)
 
         if not unrefd_blobs:
             return []
@@ -194,7 +190,6 @@ class TransactionCursor:
         res = db_tx.execute(sel)
         ids = {}
         for row in res:
-            logging.debug('_reuse_blob %s', row)
             blob_id, rest_id, length, content_length = row
             done = (length == content_length)
             ids[rest_id] = (blob_id, done)
@@ -295,7 +290,7 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False,
-               blobs_to_create = False):
+               message_builder_blobs_done = False):
         logging.debug('TxCursor._write %s %s', self.rest_id, tx_delta)
         assert final_attempt_reason != 'oneshot'  # internal-only
 
@@ -380,15 +375,13 @@ class TransactionCursor:
                 ref_blob_id=ref_blob_id,
                 require_finalized=require_finalized_blobs)
 
-        logging.debug('_write %s blobs_done %s', self.rest_id, blobs_done)
         if tx_delta.message_builder:
             upd = upd.values(message_builder = tx_delta.message_builder)
         if input_done or (
-                (tx_delta.message_builder and not blobs_to_create) or
+                (tx_delta.message_builder and message_builder_blobs_done) or
                 (reuse_blob_rest_id is not None
                  and len(reuse_blob_rest_id) == 1 and
                  reuse_blob_rest_id[0].tx_body)):
-            logging.debug('_write %s input_done', self.rest_id)
             upd = upd.values(input_done = True)
             self.input_done = True
 

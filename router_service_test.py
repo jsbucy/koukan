@@ -320,7 +320,6 @@ class RouterServiceTest(unittest.TestCase):
             #'retry': {},
             'mail_from': {},
             'rcpt_to': [{}],
-            # xxx RestEndpoint doesn't actually care about the placeholders now?
             'body': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],

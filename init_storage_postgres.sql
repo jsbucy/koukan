@@ -13,8 +13,6 @@ CREATE TABLE Blob (
   content BYTEA
 );
 
---CREATE INDEX BlobRestId on Blob (rest_id);
-
 CREATE TABLE Transactions (
   id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   rest_id TEXT UNIQUE,

@@ -250,6 +250,14 @@ class StorageTestBase(unittest.TestCase):
             host='host')
         tx.message_builder = { "headers": [ ["subject", "hello"] ] }
         tx_writer.create('tx_rest_id', tx)
+        self.assertFalse(tx_writer.input_done)
+
+        tx_writer = self.s.get_transaction_cursor()
+        tx = TransactionMetadata(
+            remote_host=HostPort('remote_host', 2525),
+            host='host')
+        tx.message_builder = { "headers": [ ["subject", "hello"] ] }
+        tx_writer.create('tx_rest_id2', tx, message_builder_blobs_done=True)
         self.assertTrue(tx_writer.input_done)
 
     def test_recovery(self):

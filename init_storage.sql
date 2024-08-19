@@ -99,5 +99,3 @@ CREATE TABLE Blob (
   last_update INTEGER NOT NULL,
   content BLOB
 );
-
--- CREATE INDEX BlobRestId on Blob (rest_id);

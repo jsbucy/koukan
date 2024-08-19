@@ -89,9 +89,11 @@ class Recipient:
         # requested from downstream since we're may report errors downstream
         # synchronously
         # TODO save any downstream notification/retry params
-        # TODO copy_valid(REST_CREATE) ?
+        # TODO may need a different variant of tx.copy_valid() to do
+        # the right thing here so we don't have to manually fix it up
+        # like this
         self.tx = tx.copy()
-        if self.tx.rest_id:    # XXXXXXXXXXXX
+        if self.tx.rest_id:
             del self.tx.rest_id
         if self.tx.tx_db_id:
             del self.tx.tx_db_id
@@ -108,7 +110,6 @@ class Recipient:
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
         upstream_delta = update_wait_inflight(
             self.upstream, self.tx, self.tx.copy(), deadline)
-        assert not self.tx.body
 
         logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
 
@@ -178,10 +179,8 @@ class Recipient:
         body_delta = TransactionMetadata()
         body_delta.body_blob = blob
         self.tx.merge_from(body_delta)
-        assert not self.tx.body
         upstream_delta = update_wait_inflight(
             self.upstream, self.tx, body_delta, deadline)
-        assert not self.tx.body
         if upstream_delta is None:
             data_resp = Response(
                 450, 'exploder Recipient._append_upstream internal error: '
@@ -371,9 +370,7 @@ class Exploder(SyncFilter):
                       Deadline(self.rcpt_timeout))
             return TransactionMetadata()
 
-        # XXX
         updated_tx = tx.copy()
-
         if tx_delta.mail_from is not None:
             self._on_mail(tx_delta, updated_tx)
 

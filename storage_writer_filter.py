@@ -64,14 +64,14 @@ class StorageWriterFilter(AsyncFilter):
 
     def _create(self, tx : TransactionMetadata,
                 reuse_blob_rest_id : Optional[List[str]] = None,
-                blobs_to_create=False):
+                message_builder_blobs_done=False):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
         self.tx_cursor.create(
             rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id,
             create_leased=self.create_leased,
-            blobs_to_create=blobs_to_create)
+            message_builder_blobs_done=message_builder_blobs_done)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -215,7 +215,10 @@ class StorageWriterFilter(AsyncFilter):
             tx.merge_from(err_delta)
             return err_delta
 
-        reuse_blob_rest_id, create_blobs = self._get_message_builder_blobs(tx_delta)
+        # TODO move message builder blob creation into
+        # cursor.create/write_env w/message builder?
+        reuse_blob_rest_id, create_blobs = (
+            self._get_message_builder_blobs(tx_delta))
         logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
                       reuse_blob_rest_id)
 
@@ -229,7 +232,7 @@ class StorageWriterFilter(AsyncFilter):
             reuse_blob_rest_id = [body_blob_uri]
             # XXX
             if not downstream_delta.body:
-                downstream_delta.body = 'b'  #body_blob_uri.blob
+                downstream_delta.body = 'b'
 
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob
@@ -241,7 +244,7 @@ class StorageWriterFilter(AsyncFilter):
             created = True
             self._create(downstream_tx,
                          reuse_blob_rest_id=reuse_blob_rest_id,
-                         blobs_to_create=bool(create_blobs))
+                         message_builder_blobs_done=not bool(create_blobs))
             reuse_blob_rest_id = None
             tx.rest_id = self.rest_id
 

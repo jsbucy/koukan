@@ -55,11 +55,6 @@ class OutputHandler:
 
         timeout = self.env_timeout
         msg = 'envelope'
-        # XXX no longer true, PUTs ping the tx last_update
-        # The way the REST api is currently structured doesn't make
-        # the fact that the client is making progress sending the blob
-        # visibile to the transaction until they PATCH the uri in at
-        # the end.
         if ok_rcpt:
             timeout = self.data_timeout
             msg = 'body'
@@ -207,8 +202,10 @@ class OutputHandler:
             # leave the existing value
             final_attempt_reason = None
 
+        notification_done = False
         if self.cursor.tx.notification:
             self._maybe_send_notification(final_attempt_reason)
+            notification_done = True
 
         while True:
             try:
@@ -219,7 +216,7 @@ class OutputHandler:
                     final_attempt_reason=final_attempt_reason,
                     next_attempt_time=next_attempt_time,
                     finalize_attempt=True,
-                    notification_done=bool(self.cursor.tx.notification))
+                    notification_done=notification_done)
                 break
             except VersionConflictException:
                 # XXX VersionConflictException?
