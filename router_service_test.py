@@ -243,6 +243,8 @@ class RouterServiceTest(unittest.TestCase):
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
+            # we may have gotten http error before we got this far
+            self.endpoints = []
             time.sleep(1)
         else:
             self.fail('service not ready')

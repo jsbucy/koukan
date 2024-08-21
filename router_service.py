@@ -22,7 +22,7 @@ from output_handler import OutputHandler
 from response import Response
 from executor import Executor
 from config import Config
-from filter import AsyncFilter, SyncFilter
+from filter import AsyncFilter, SyncFilter, TransactionMetadata
 
 from storage_writer_filter import StorageWriterFilter
 from storage_schema import VersionConflictException
@@ -74,11 +74,16 @@ class Service:
             self.daemon_executor = Executor(10, watchdog_timeout=300,
                                             debug_futures=True)
 
+    def wait_shutdown(self, timeout):
+        with self.lock:
+            self.cv.wait_for(lambda: self._shutdown, timeout)
+
     def shutdown(self):
         if self._shutdown:
             return
         logging.info("router_service shutdown()")
-        self._shutdown = True
+        with self.lock:
+            self._shutdown = True
 
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
@@ -231,55 +236,62 @@ class Service:
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,
                   endpoint_yaml):
-        output_yaml = endpoint_yaml.get('output_handler', {})
-        handler = OutputHandler(
-            storage_tx, endpoint,
-            downstream_env_timeout =
-              output_yaml.get('downstream_env_timeout', 30),
-            downstream_data_timeout =
-              output_yaml.get('downstream_data_timeout', 60),
-            notification_factory=lambda: self.config.notification_endpoint(),
-            mailer_daemon_mailbox=self.config.root_yaml['global'].get(
-                'mailer_daemon_mailbox', None),
-            retry_params = output_yaml.get('retry_params', {}))
-        handler.handle()
-        # TODO wrap all of this in try...finally cursor.finalize_attempt()?
+        try:
+            output_yaml = endpoint_yaml.get('output_handler', {})
+            handler = OutputHandler(
+                storage_tx, endpoint,
+                downstream_env_timeout =
+                    output_yaml.get('downstream_env_timeout', 30),
+                downstream_data_timeout =
+                    output_yaml.get('downstream_data_timeout', 60),
+                notification_factory=self.config.notification_endpoint,
+                mailer_daemon_mailbox=self.config.root_yaml['global'].get(
+                    'mailer_daemon_mailbox', None),
+                retry_params = output_yaml.get('retry_params', {}))
+            handler.handle()
+        finally:
+            if storage_tx.in_attempt:
+                logging.error('handle_tx OutputHandler returned open tx')
+                storage_tx.write_envelope(TransactionMetadata(),
+                                          finalize_attempt=True)
 
-    def _dequeue(self, wait : bool = True) -> bool:
-        storage_tx = None
+    def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         try:
             storage_tx = self.storage.load_one()
         except VersionConflictException:
             return False
+        if deq is not None:
+            with self.lock:
+                deq[0] = storage_tx is not None
+                self.cv.notify_all()
+
         if storage_tx is None:
-            return False
+            return
 
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
         logging.debug('_dequeue %s %s',
                       storage_tx.id, storage_tx.rest_id)
 
-        # XXX this is the wrong workflow, load_one() starts attempt,
-        # we shouldn't do that until we know we can schedule it
-        # possibly handle_tx() should do this at the end? (need to
-        # refresh watchdog timeout, similar logic only to do it if
-        # it's been >1s or it succeeded last time not to busy wait on
-        # db!)
-        self.executor.submit(
-            lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
+        self.handle_tx(storage_tx, endpoint, endpoint_yaml)
 
-        # TODO wrap all of this in try...finally cursor.finalize_attempt()?
-        # otherwise tx won't be recovered until storage session expiration?
         return True
 
     def dequeue(self, executor):
-        prev = True
         while not self._shutdown:
             executor.ping_watchdog()
-            prev = self._dequeue(wait=(not prev))
-            if not prev:
-                with self.lock:
-                    self.cv.wait_for(lambda: self._shutdown, 1)
-
+            deq = [None]
+            if self.executor.submit(partial(self._dequeue, deq)) is None:
+                self.wait_shutdown(1)
+                continue
+            with self.lock:
+                # Wait 1s for _dequeue() including executor queueing.
+                self.cv.wait_for(
+                    lambda: (deq[0] is not None) or self._shutdown, 1)
+            # if we dequeued something, try again immediately in case
+            # there's another
+            if deq[0]:
+                continue
+            self.wait_shutdown(1)
 
     def gc(self, executor):
         storage_yaml = self.config.root_yaml['storage']
@@ -288,16 +300,14 @@ class Service:
         while not self.shutdown:
             executor.ping_watchdog()
             self._gc(ttl)
-            with self.lock:
-                self.cv.wait_for(lambda: self._shutdown, interval)
+            self.wait_shutdown(interval)
 
     def refresh_storage_session(self, executor, interval : int):
         while not self._shutdown:
             executor.ping_watchdog()
             assert self.storage._refresh_session()
             self.storage._gc_session(timedelta(seconds = 10 * interval))
-            with self.lock:
-                self.cv.wait_for(lambda: self._shutdown, interval)
+            self.wait_shutdown(interval)
 
     def _gc(self, gc_ttl=None):
         logging.info('router_service _gc %d', gc_ttl)
