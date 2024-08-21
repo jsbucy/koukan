@@ -98,7 +98,7 @@ endpoint:
       name: address_list
       domains:
       - d
-      delimter: '+'
+      delimiter: '+'
       #prefixes:
       #- base: alice
       destination:
