@@ -70,6 +70,12 @@ class EsmtpParam:
             json['p'] = self.value
         return json
 
+def get_esmtp_param(params : List[EsmtpParam], param : str
+                    ) -> Optional[EsmtpParam]:
+    for p in params:
+        if p.keyword.lower() == param.lower():
+            return p
+    return None
 
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2

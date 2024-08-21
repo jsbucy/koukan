@@ -3,7 +3,12 @@ import logging
 from datetime import datetime, timezone
 
 from blob import InlineBlob
-from filter import HostPort, Mailbox, Response, TransactionMetadata
+from filter import (
+    EsmtpParam,
+    HostPort,
+    Mailbox,
+    Response,
+    TransactionMetadata )
 from received_header_filter import ReceivedHeaderFilter
 from fake_endpoints import FakeSyncFilter
 
@@ -90,6 +95,43 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
+
+    def test_smtputf8(self):
+        upstream = FakeSyncFilter()
+
+        tx = TransactionMetadata(
+            remote_host=HostPort('1.2.3.4', port=25000),
+            mail_from=Mailbox('alice', [EsmtpParam('smtputf8')]),
+            body_blob=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n'))
+        tx.remote_hostname = 'gargantua1'
+        tx.fcrdns = True
+
+        tx.smtp_meta = {
+            'ehlo_host': 'gargantua1',
+            'esmtp': True,
+            'tls': True
+        }
+
+        filter = ReceivedHeaderFilter(
+            upstream = upstream,
+            received_hostname = 'gargantua1',
+            inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
+
+        def exp(tx, tx_delta):
+            self.assertEqual(
+                tx.body_blob.read(0),
+                b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
+                b'\tby gargantua1\r\n'
+                b'\twith UTF8SMTPS;\r\n'
+                b'\tFri, 13 Feb 2009 23:31:30 +0000\r\n'
+                b'From: <alice>\r\n'
+                b'\r\n'
+                b'hello\r\n')
+            assert tx_delta.smtp_meta
+            return TransactionMetadata()
+        upstream.add_expectation(exp)
+        filter.on_update(tx, tx_delta=tx)
+
 
     def test_max_received_headers(self):
         upstream = FakeSyncFilter()

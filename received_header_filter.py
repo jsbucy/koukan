@@ -11,7 +11,8 @@ from filter import (
     HostPort,
     Mailbox,
     SyncFilter,
-    TransactionMetadata )
+    TransactionMetadata,
+    get_esmtp_param )
 from response import Response
 
 class ReceivedHeaderFilter(SyncFilter):
@@ -54,8 +55,8 @@ class ReceivedHeaderFilter(SyncFilter):
         with_protocol = None
         if tx.smtp_meta is not None:
             ehlo = tx.smtp_meta.get('ehlo_host', None)
-
-            if tx.mail_from.esmtp and 'SMTPUTF8' in tx.mail_from.esmtp:
+            if tx.mail_from.esmtp and get_esmtp_param(
+                    tx.mail_from.esmtp, 'smtputf8') is not None:
                 with_protocol = 'UTF8SMTP'
             elif tx.smtp_meta.get('esmtp', False):
                 with_protocol = 'ESMTP'
@@ -67,6 +68,8 @@ class ReceivedHeaderFilter(SyncFilter):
                 with_protocol += 'A'
             with_protocol = 'with ' + with_protocol
         else:
+            # TODO other paths besides rest end up here
+            # i.e. internally generated messages/notification/dsn
             if tx.remote_hostname and tx.fcrdns:
                 ehlo = tx.remote_hostname
             elif received_host_literal:
