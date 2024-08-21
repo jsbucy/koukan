@@ -302,11 +302,32 @@ class Service:
             self._gc(ttl)
             self.wait_shutdown(interval)
 
+    def _refresh(self, ref : List[bool], stale_timeout : int):
+        if self.storage._refresh_session():
+            with self.lock:
+                ref[0] = True
+                self.cv.notify_all()
+        self.storage._gc_session(timedelta(seconds = stale_timeout))
+
     def refresh_storage_session(self, executor, interval : int):
+        last_refresh = time.monotonic()
         while not self._shutdown:
+            delta = time.monotonic() - last_refresh
+            if delta > (5 * interval):
+                logging.error('stale storage session')
+                self.shutdown()
+                return
             executor.ping_watchdog()
-            assert self.storage._refresh_session()
-            self.storage._gc_session(timedelta(seconds = 10 * interval))
+            ref = [False]
+            stale_timeout = 10 * interval
+            if self.daemon_executor.submit(
+                    partial(self._refresh, ref, stale_timeout)) is None:
+                self.wait_shutdown(1)
+                continue
+            with self.lock:
+                self.cv.wait_for(lambda: ref[0] or self._shutdown, 1)
+                if ref[0]:
+                    last_refresh = time.monotonic()
             self.wait_shutdown(interval)
 
     def _gc(self, gc_ttl=None):
