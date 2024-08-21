@@ -4,9 +4,10 @@ PRAGMA auto_vacuum=2;  -- incremental
 
 CREATE TABLE Sessions (
   id INTEGER PRIMARY KEY,
-  pid INTEGER,
-  pid_create INTEGER,
-  UNIQUE(pid, pid_create)
+  creation INTEGER,
+  live BOOL,
+  last_update INTEGER,
+  UNIQUE(id, live)
 );
 
 CREATE TABLE Transactions (
@@ -33,6 +34,7 @@ CREATE TABLE Transactions (
   creation_session_id INTEGER,
   -- session that output attempt is currently active in
   inflight_session_id INTEGER,
+  inflight_session_live BOOL,
 
   creation INTEGER,
   last_update INTEGER,
@@ -50,8 +52,8 @@ CREATE TABLE Transactions (
   -- after it has reached a final status; this is to facilitate recovering these
   no_final_notification BOOL,
 
-  FOREIGN KEY(inflight_session_id) REFERENCES Sessions(id)
-    ON UPDATE CASCADE  -- xxx moot?
+  FOREIGN KEY(inflight_session_id, inflight_session_live) REFERENCES Sessions(id, live)
+    ON UPDATE SET NULL
     ON DELETE SET NULL
 );
 

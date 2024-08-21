@@ -129,6 +129,12 @@ root_yaml = {
     'storage': {
         'engine': 'postgres',  #'sqlite_memory'
         'postgres_db_name': 'storage_test',
+        'session_refresh_interval': 1,
+    },
+    'executor': {
+        'max_inflight': 10,
+        'watchdog_timeout': 10,
+        'testonly_debug_futures': True
     }
 }
 
@@ -136,7 +142,6 @@ class RouterServiceTest(unittest.TestCase):
     lock : Lock
     cv : Condition
     endpoints : List[FakeSyncFilter]
-    executor : Executor
 
     def get_endpoint(self):
         logging.debug('RouterServiceTest.get_endpoint')
@@ -192,9 +197,6 @@ class RouterServiceTest(unittest.TestCase):
 
         self.setupPostgres()
 
-        self.executor = Executor(inflight_limit=10, watchdog_timeout=300,
-                                 debug_futures=True)
-
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             self.port = s.server_address[1]
@@ -202,13 +204,12 @@ class RouterServiceTest(unittest.TestCase):
         root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
         self.router_url = 'http://localhost:%d' % self.port
         self.endpoints = []
-        self.config = Config(executor=self.executor)
+        self.config = Config()
         self.config.inject_yaml(root_yaml)
         self.config.inject_filter(
             'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)
-        self.service = Service(config=self.config,
-                               executor = self.executor)
-        self.executor.submit(lambda: self.service.main())
+        self.service = Service(config=self.config)
+        self.service.start_main()
 
         self.assertTrue(self.service.wait_started(1))
 
@@ -242,6 +243,8 @@ class RouterServiceTest(unittest.TestCase):
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
+            # we may have gotten http error before we got this far
+            self.endpoints = []
             time.sleep(1)
         else:
             self.fail('service not ready')
@@ -255,7 +258,6 @@ class RouterServiceTest(unittest.TestCase):
         # TODO this should verify that there are no open tx attempts in storage
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.service.shutdown()
-        self.executor.shutdown(timeout=30)
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:

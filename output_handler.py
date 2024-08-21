@@ -193,6 +193,7 @@ class OutputHandler:
         final_attempt_reason = None
         next_attempt_time = None
         delta = TransactionMetadata()
+        post_notify = False
         if not self.cursor.no_final_notification:
             final_attempt_reason, next_attempt_time = self._cursor_to_endpoint()
             # xxx why is this here?
@@ -201,13 +202,14 @@ class OutputHandler:
             # post facto notification
             # leave the existing value
             final_attempt_reason = None
+            post_notify = True
 
         notification_done = False
         if self.cursor.tx.notification:
             self._maybe_send_notification(final_attempt_reason)
             notification_done = True
 
-        while True:
+        while not post_notify:
             try:
                 # TODO it probably wouldn't be hard to merge this
                 # write with the one at the end of _output()

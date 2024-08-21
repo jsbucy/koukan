@@ -23,10 +23,11 @@ class Executor:
     lock : Lock
     cv : Condition
     executor : ThreadPoolExecutor
-    watchdog_timeout : int
+    watchdog_timeout : Optional[int] = None
     debug_futures : Optional[List[Future]] = None
 
-    def __init__(self, inflight_limit, watchdog_timeout : int,
+    def __init__(self, inflight_limit,
+                 watchdog_timeout : Optional[int] = None,
                  debug_futures=False):
         self.inflight = {}
         self.inflight_sem = BoundedSemaphore(2*inflight_limit)
@@ -41,6 +42,8 @@ class Executor:
     def _check_watchdog_locked(self, timeout = None):
         if timeout is None:
             timeout = self.watchdog_timeout
+        if timeout is None:
+            return
         now = time.monotonic()
         for (thread, start) in self.inflight.items():
             runtime = now - start
@@ -83,6 +86,10 @@ class Executor:
                 self.inflight_sem.release(1)
                 del self.inflight[this_thread]
                 self.cv.notify_all()
+
+    def ping_watchdog(self):
+        with self.lock:
+            self.inflight[current_thread()] = time.monotonic()
 
     def shutdown(self, timeout=None) -> bool:
         ex = self.executor

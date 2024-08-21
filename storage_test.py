@@ -5,6 +5,7 @@ import logging
 import base64
 import tempfile
 import os
+from datetime import datetime, timedelta
 
 import testing.postgresql
 
@@ -39,24 +40,20 @@ class StorageTestBase(unittest.TestCase):
         self.version_cache = IdVersionMap()
 
     def tearDown(self):
+        self.s._del_session()
         self.s.engine.dispose()
-
-    def dump_db(self):
-        with self.s.begin_transaction() as db_tx:
-            for l in db_tx.connection.iterdump():
-                logging.debug(l)
 
     def test_basic(self):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
+            remote_host=HostPort('remote_host', 2525), host='host'),
+                         create_leased=True)
 
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
 
-        tx_reader = self.s.load_one()
-        self.assertIsNotNone(tx_reader)
-        self.assertEqual(tx_writer.id, tx_reader.id)
+        tx_reader = self.s.get_transaction_cursor()
+        tx_reader.load(tx_writer.id, start_attempt=True)
         tx_reader.write_envelope(TransactionMetadata(
             mail_response=Response(450)))
 
@@ -92,7 +89,6 @@ class StorageTestBase(unittest.TestCase):
 
         blob_writer = self.s.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-#        self.dump_db()
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
         del blob_writer
@@ -114,7 +110,6 @@ class StorageTestBase(unittest.TestCase):
 
         blob_reader = self.s.get_blob_for_read(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-        #self.assertIsNotNone( blob_reader
         b = blob_reader.read(0, 3)
         self.assertEqual(b'abc', b)
         b = blob_reader.read(3)
@@ -138,13 +133,18 @@ class StorageTestBase(unittest.TestCase):
             final_attempt_reason = 'retry max attempts',
             finalize_attempt = True)
         self.assertIsNone(self.s.load_one())
-        tx_reader.write_envelope(
-            TransactionMetadata(notification={'yes': True}))
 
+        self.assertTrue(self.s._refresh_session())
+        tx_writer.load()
+        tx_writer.write_envelope(
+            TransactionMetadata(notification={'yes': True}))
         tx_reader = self.s.load_one()
+        self.assertIsNotNone(tx_reader)
         self.assertTrue(tx_reader.no_final_notification)
         tx_reader.write_envelope(TransactionMetadata(), notification_done=True)
         self.assertIsNone(self.s.load_one())
+
+        logging.debug(self.s.debug_dump())
 
     def test_blob_8bitclean(self):
         blob_writer = BlobCursor(self.s)
@@ -260,18 +260,34 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.create('tx_rest_id2', tx, message_builder_blobs_done=True)
         self.assertTrue(tx_writer.input_done)
 
+    def test_sessions(self):
+        self.assertTrue(self.s._refresh_session())
+
+        self.s._gc_session(timedelta(minutes=1))
+
     def test_recovery(self):
-        # note storage_test_recovery.sql has
-        # creation_session_id = (select min(id) from sessions)
-        # since self.s session will be created before the one in the
-        # .sql and we create a fresh db for each test
-        self.load_recovery()
-        #self.dump_db()
-        self.s.recover()
+        old_session = self._connect()
+        old_session._init_session(datetime.fromtimestamp(1234567890))
+        old_tx = old_session.get_transaction_cursor()
+        old_tx.create('tx_rest_id', TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')]))
+        blob_writer = old_session.create_blob(
+            BlobUri(tx_id='tx_rest_id', tx_body=True))
+        b = b'hello, world!'
+        blob_writer.append_data(0, b, len(b))
+        old_session.engine = None
+        try:
+            del old_session
+        except:
+            pass
+
+        self.s.recover(ttl=timedelta(hours=24))
+
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(reader.creation, 1707248590)
-        self.assertEqual(reader.tx.mail_from.mailbox, 'alice@example.com')
+        self.assertEqual(reader.id, old_tx.id)
+        self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
 
     def test_non_durable(self):
         writer = self.s.get_transaction_cursor()
@@ -294,7 +310,6 @@ class StorageTestBase(unittest.TestCase):
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))
-        #self.dump_db()
 
         reader = self.s.load_one()
         self.assertIsNone(reader)
@@ -456,18 +471,16 @@ class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()
         tempdir = tempfile.TemporaryDirectory()
-        filename = tempdir.name + '/db'
-        conn = sqlite3.connect(filename)
+        self.filename = tempdir.name + '/db'
+        conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
         with open("init_storage.sql", "r") as f:
             cursor.executescript(f.read())
 
-        self.s = Storage.connect_sqlite(self.version_cache, filename)
+        self.s = Storage.connect_sqlite(self.version_cache, self.filename)
 
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().executescript(f.read())
+    def _connect(self):
+        return Storage(self.s.tx_versions, self.s.engine)
 
 
 class StorageTestSqliteInMemory(StorageTestBase):
@@ -475,10 +488,9 @@ class StorageTestSqliteInMemory(StorageTestBase):
         super().setUp()
         self.s = Storage.get_sqlite_inmemory_for_test()
 
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().executescript(f.read())
+    def _connect(self):
+        return Storage(self.s.tx_versions, self.s.engine)
+
 
 class StorageTestPostgres(StorageTestBase):
     def postgres_url(self, unix_socket_dir, port, db):
@@ -492,12 +504,12 @@ class StorageTestPostgres(StorageTestBase):
 
         global pg_factory
         self.pg = pg_factory()
-        unix_socket_dir = self.pg.base_dir + '/tmp'
-        port = self.pg.dsn()['port']
-        url = self.postgres_url(unix_socket_dir, port, 'postgres')
-        logging.info('StorageTest setup_postgres %s', url)
+        self.unix_socket_dir = self.pg.base_dir + '/tmp'
+        self.port = self.pg.dsn()['port']
+        self.url = self.postgres_url(self.unix_socket_dir, self.port, 'postgres')
+        logging.info('StorageTest setup_postgres %s', self.url)
 
-        with psycopg.connect(url) as conn:
+        with psycopg.connect(self.url) as conn:
             conn.autocommit = True
             with conn.cursor() as cursor:
                 try:
@@ -507,8 +519,8 @@ class StorageTestPostgres(StorageTestBase):
                 cursor.execute('create database storage_test;')
                 conn.commit()
 
-        url = self.postgres_url(unix_socket_dir, port, 'storage_test')
-        with psycopg.connect(url) as conn:
+        self.url = self.postgres_url(self.unix_socket_dir, self.port, 'storage_test')
+        with psycopg.connect(self.url) as conn:
             with open('init_storage_postgres.sql', 'r') as f:
                 with conn.cursor() as cursor:
                     cursor.execute(f.read())
@@ -516,13 +528,13 @@ class StorageTestPostgres(StorageTestBase):
         self.s = Storage.connect_postgres(
             self.version_cache,
             db_user='postgres', db_name='storage_test',
-            unix_socket_dir=unix_socket_dir, port=port)
+            unix_socket_dir=self.unix_socket_dir, port=self.port)
 
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().execute(f.read())
-
+    def _connect(self):
+        return Storage.connect_postgres(
+            self.version_cache,
+            db_user='postgres', db_name='storage_test',
+            unix_socket_dir=self.unix_socket_dir, port=self.port)
 
 
 if __name__ == '__main__':

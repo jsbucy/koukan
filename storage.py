@@ -7,6 +7,8 @@ from threading import Lock, Condition
 from hashlib import sha256
 from base64 import b64encode
 from functools import reduce
+from datetime import datetime, timedelta
+import atexit
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import CursorResult, Engine
@@ -18,8 +20,6 @@ from sqlalchemy import (
     and_, cast, case as sa_case, column,
     delete, event, func, insert, join, literal, not_, or_, select,
     true as sa_true, update, union_all, values)
-
-import psutil
 
 from blob import Blob, InlineBlob, WritableBlob
 from response import Response
@@ -58,6 +58,8 @@ class TransactionCursor:
     no_final_notification : Optional[bool] = None
 
     id_version : Optional[IdVersion] = None
+
+    in_attempt : bool = False
 
     def __init__(self, storage,
                  db_id : Optional[int] = None,
@@ -105,7 +107,8 @@ class TransactionCursor:
 
             if create_leased:
                 ins = ins.values(
-                    inflight_session_id = self.parent.session_id)
+                    inflight_session_id = self.parent.session_id,
+                    inflight_session_live = True)
 
             res = db_tx.execute(ins)
             row = res.fetchone()
@@ -291,8 +294,11 @@ class TransactionCursor:
                input_done = False,
                ping_tx = False,
                message_builder_blobs_done = False):
-        logging.debug('TxCursor._write %s %s', self.rest_id, tx_delta)
+        logging.debug('TxCursor._write %s %s %s',
+                      self.rest_id, tx_delta,
+                      finalize_attempt)
         assert final_attempt_reason != 'oneshot'  # internal-only
+        assert not(finalize_attempt and not self.in_attempt)
 
         assert (self.final_attempt_reason == 'oneshot' or
                 self.final_attempt_reason is None or
@@ -327,8 +333,6 @@ class TransactionCursor:
             self.id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
-        # TODO all updates '... WHERE inflight_session_id =
-        #   self.parent.session' ?
         now = int(time.time())
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == self.id,
@@ -337,6 +341,21 @@ class TransactionCursor:
                        version = new_version,
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
+
+        if self.in_attempt:
+            upd = upd.where(
+                self.parent.tx_table.c.inflight_session_id ==
+                    self.parent.session_id,
+                self.parent.tx_table.c.inflight_session_live.is_(True))
+        else:
+            upd = upd.where(or_(
+                and_(
+                    self.parent.tx_table.c.inflight_session_id ==
+                        self.parent.session_id,
+                    self.parent.tx_table.c.inflight_session_live.is_(True)),
+                # NOT NULL?
+                not_(self.parent.tx_table.c.inflight_session_live.is_(True))
+            ))
 
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
@@ -365,6 +384,7 @@ class TransactionCursor:
 
         if finalize_attempt:
             upd = upd.values(inflight_session_id = None,
+                             inflight_session_live = None,
                              next_attempt_time = next_attempt_time)
 
         blobs_done = True
@@ -399,6 +419,9 @@ class TransactionCursor:
         # handle that?
         self.tx = self.tx.merge(tx_delta)
 
+        if finalize_attempt:
+            self.in_attempt = False
+
         logging.info('_write id=%d %s version=%d',
                      self.id, self.rest_id, self.version)
 
@@ -407,6 +430,7 @@ class TransactionCursor:
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None,
              start_attempt : bool = False) -> Optional[TransactionMetadata]:
+        assert not (self.in_attempt and start_attempt)
         if self.id is not None or self.rest_id is not None:
             assert(db_id is None and rest_id is None)
             db_id = self.id
@@ -525,7 +549,8 @@ class TransactionCursor:
                             self.parent.session_id,
                           self.parent.tx_table.c.inflight_session_id.is_(None)))
                .values(version = new_version,
-                       inflight_session_id = self.parent.session_id)
+                       inflight_session_id = self.parent.session_id,
+                       inflight_session_live = True)
                .returning(self.parent.tx_table.c.version))
 
         # tx without retries enabled can only be loaded once
@@ -564,6 +589,7 @@ class TransactionCursor:
         self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
         self._update_version_cache()
+        self.in_attempt = True
 
     def wait(self, timeout : Optional[float] = None) -> bool:
         return self.id_version.wait(self.version, timeout)
@@ -842,11 +868,30 @@ class Storage():
         s._init_session()
         return s
 
+    def __del__(self):
+        self._del_session()
 
     def begin_transaction(self):
         return self.engine.begin()
 
-    def _init_session(self):
+    def _del_session(self):
+        if self.session_id is None:
+            return
+        try:
+            with self.begin_transaction() as db_tx:
+                upd = update(self.session_table).values(
+                    live = False).where(
+                        self.session_table.c.id == self.session_id).returning(
+                            self.session_table.c.id)
+                res = db_tx.execute(upd)
+                row = res.fetchone()
+                logging.info('Storage._del_session deleted session %d',
+                             self.session_id)
+                self.session_id = None
+        except:
+            logging.exception('Storage._del_session failed to delete session')
+
+    def _init_session(self, creation : Optional[datetime] = None):
         self.metadata = MetaData()
         self.metadata.reflect(bind=self.engine)
         # the tablenames seem to be lowercased for postgres, sqlite
@@ -864,41 +909,56 @@ class Storage():
             'transactionattempts', self.metadata, autoload_with=self.engine)
 
         with self.begin_transaction() as db_tx:
-            # for the moment, we only evict sessions that the pid no
-            # longer exists but as this evolves, we might also
-            # periodically check that our own session hasn't been evicted
-            proc_self = psutil.Process()
+            creation = creation if creation is not None else func.current_timestamp()
             ins = (insert(self.session_table).values(
-                pid = proc_self.pid,
-                pid_create = int(proc_self.create_time()))
+                creation = creation,
+                last_update = creation,
+                live = True)
                    .returning(self.session_table.c.id))
             res = db_tx.execute(ins)
             self.session_id = res.fetchone()[0]
 
-    def recover(self):
-        with self.begin_transaction() as db_tx:
-            sel = select(self.session_table.c.id,
-                         self.session_table.c.pid,
-                         self.session_table.c.pid_create)
-            res = db_tx.execute(sel)
-            for row in res:
-                (db_id, pid, pid_create) = row
-                if not Storage.check_pid(pid, pid_create):
-                    logging.info('deleting stale session %s %s %s',
-                                 db_id, pid, pid_create)
-                    dele = (delete(self.session_table)
-                            .where(self.session_table.c.id == db_id))
-                    db_tx.execute(dele)
+        atexit.register(self._del_session)
 
-    @staticmethod
-    def check_pid(pid, pid_create):
-        try:
-            proc = psutil.Process(pid)
-        except psutil.NoSuchProcess:
-            return False
-        if int(proc.create_time()) != pid_create:
-            return False
-        return True
+    def _refresh_session(self):
+        with self.begin_transaction() as db_tx:
+            upd = update(self.session_table).values(
+                last_update = func.current_timestamp()).where(
+                    self.session_table.c.live).returning(
+                        self.session_table.c.live)
+            res = db_tx.execute(upd)
+            if not res:
+                return False
+            row = res.fetchone()
+            if not row:
+                return False
+            if not row[0]:
+                return False
+            return True
+
+    def _gc_session(self, ttl : timedelta):
+        with self.begin_transaction() as db_tx:
+            upd = (update(self.session_table).values(
+                live = False
+            ).where(
+                (func.current_timestamp() -
+                 self.session_table.c.last_update) > ttl,
+                self.session_table.c.live.is_(True)
+            ).returning(self.session_table.c.id,
+                        self.session_table.c.last_update))
+            res = db_tx.execute(upd)
+            if not res:
+                return None
+            rows = 0
+            for row in res:
+                logging.debug('_gc_session id %d last update %s',
+                              row[0], row[1])
+                rows += 1
+
+        return rows
+
+    def recover(self, ttl=timedelta(seconds=1)):
+        self._gc_session(ttl)
 
     # TODO these blob methods should move into TransactionCursor?
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
@@ -1046,3 +1106,18 @@ class Storage():
             deleted = self._gc(db_tx, ttl)
             return deleted
 
+
+    def debug_dump(self):
+        out = ''
+        with self.begin_transaction() as db_tx:
+            for table in [ self.session_table,
+                           self.blob_table,
+                           self.tx_table,
+                           self.tx_blobref_table,
+                           self.attempt_table ]:
+                sel = table.select()
+                res = db_tx.execute(sel)
+                for row in res:
+                    out += str(row._mapping)
+                    out += '\n'
+        return out
