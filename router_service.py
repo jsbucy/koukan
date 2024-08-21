@@ -1,11 +1,12 @@
 from typing import Any, Dict, List, Optional, Tuple
 import time
 import logging
-from threading import Lock, Condition, Thread
+from threading import Lock, Condition
 import json
 import os
 from functools import partial
 import asyncio
+from datetime import timedelta
 
 import rest_service
 import fastapi_service
@@ -47,12 +48,6 @@ class Service:
     rest_handler_factory : Optional[RestHandlerFactory] = None
     endpoint_factory : Optional[EndpointFactory] = None
 
-    # dequeue watermark
-    created_id : Optional[int] = None
-
-    dequeue_thread : Optional[Thread] = None
-    gc_thread : Optional[Thread] = None
-
     _shutdown = False
 
     config : Optional[Config] = None
@@ -60,6 +55,9 @@ class Service:
     started = False
     executor : Optional[Executor] = None
     owned_executor : Optional[Executor] = None
+
+    # TODO propagate out exceptions in tests
+    daemon_executor : Optional[Executor] = None
 
     hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
@@ -76,26 +74,37 @@ class Service:
                 self.create_storage_writer, None)
         self.version_cache = IdVersionMap()
 
+        if self.daemon_executor is None:
+            self.daemon_executor = Executor(10, watchdog_timeout=300,
+                                            debug_futures=True)
+
     def shutdown(self):
+        if self._shutdown:
+            return
         logging.info("router_service shutdown()")
         self._shutdown = True
-        if self.dequeue_thread is not None:
-            self.dequeue_thread.join()
-        if self.gc_thread is not None:
-            self.gc_thread.join()
-
-        if self.owned_executor is not None:
-            assert(self.owned_executor.shutdown(timeout=5))
 
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
-            self.hypercorn_shutdown[0].set_result(True)
+            try:
+                self.hypercorn_shutdown[0].set_result(True)
+            except:
+                pass
+
+        # tests schedule main() on daemon executor
+        if self.daemon_executor is not None:
+            assert(self.daemon_executor.shutdown(timeout=10))
+
+        if self.owned_executor is not None:
+            assert(self.owned_executor.shutdown(timeout=10))
+
+        self.storage._del_session()
 
     def wait_started(self, timeout=None):
         with self.lock:
             return self.cv.wait_for(lambda: self.started, timeout)
 
-    def main(self, config_filename=None):
+    def main(self, config_filename=None, alive=None):
         if config_filename:
             config = Config(
                 storage_writer_factory=partial(
@@ -142,16 +151,17 @@ class Service:
 
         self.config.set_storage(self.storage)
 
-        # TODO storage should manage this internally?
         if global_yaml.get('dequeue', True):
-            self.dequeue_thread = Thread(target = lambda: self.dequeue(),
-                                         daemon=True)
-            self.dequeue_thread.start()
+            self.daemon_executor.submit(
+                partial(self.dequeue, self.daemon_executor))
+
+        refresh = storage_yaml.get('session_refresh_interval', 30)
+        self.daemon_executor.submit(
+            partial(self.refresh_storage_session,
+                    self.daemon_executor, refresh))
 
         if storage_yaml.get('gc_interval', None):
-            self.gc_thread = Thread(target = lambda: self.gc(),
-                                    daemon=True)
-            self.gc_thread.start()
+            self.daemon_executor.submit(partial(self.gc, self.daemon_executor))
         else:
             logging.warning('gc disabled')
 
@@ -173,12 +183,22 @@ class Service:
         else:
             app = rest_service.create_app(self.rest_handler_factory)
         self.hypercorn_shutdown = []
-        hypercorn_main.run(
-            [listener_yaml['addr']],
-            listener_yaml.get('cert', None),
-            listener_yaml.get('key', None),
-            app,
-            self.hypercorn_shutdown)
+        try:
+            hypercorn_main.run(
+                [listener_yaml['addr']],
+                listener_yaml.get('cert', None),
+                listener_yaml.get('key', None),
+                app,
+                self.hypercorn_shutdown,
+                alive=alive)
+        except:
+            logging.exception('router service main: hypercorn_main exception')
+            pass
+        self.shutdown()
+
+    def start_main(self):
+        self.daemon_executor.submit(
+            partial(self.main, alive=self.daemon_executor.ping_watchdog))
 
     def create_storage_writer(self, http_host : str
                               ) -> Optional[StorageWriterFilter]:
@@ -234,39 +254,53 @@ class Service:
             storage_tx = self.storage.load_one()
         except VersionConflictException:
             return False
-        logging.info("dequeued id=%s", storage_tx.id if storage_tx else None)
         if storage_tx is None:
             return False
 
-        if self.created_id is None or (
-                storage_tx.id > self.created_id):
-            self.created_id = storage_tx.id
-
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
-        logging.info('_dequeue %s %s', endpoint, endpoint_yaml)
-        # xxx this could fail, finalize attempt (below)
+        logging.debug('_dequeue %s %s',
+                      storage_tx.id, storage_tx.rest_id)
+
+        # XXX this is the wrong workflow, load_one() starts attempt,
+        # we shouldn't do that until we know we can schedule it
+        # possibly handle_tx() should do this at the end? (need to
+        # refresh watchdog timeout, similar logic only to do it if
+        # it's been >1s or it succeeded last time not to busy wait on
+        # db!)
         self.executor.submit(
             lambda: self.handle_tx(storage_tx, endpoint, endpoint_yaml))
 
         # TODO wrap all of this in try...finally cursor.finalize_attempt()?
+        # otherwise tx won't be recovered until storage session expiration?
         return True
 
-    def dequeue(self):
+    def dequeue(self, executor):
         prev = True
         while not self._shutdown:
-            logging.info("RouterService.dequeue")
+            executor.ping_watchdog()
             prev = self._dequeue(wait=(not prev))
             if not prev:
-                time.sleep(1)
+                with self.lock:
+                    self.cv.wait_for(lambda: self._shutdown, 1)
 
-    def gc(self):
+
+    def gc(self, executor):
         storage_yaml = self.config.root_yaml['storage']
-        while True:
-            self._gc(storage_yaml.get('gc_ttl', 86400))
+        ttl = storage_yaml.get('gc_ttl', 86400)
+        interval = storage_yaml.get('gc_interval', 300)
+        while not self.shutdown:
+            executor.ping_watchdog()
+            self._gc(ttl)
             with self.lock:
-                if self.cv.wait_for(lambda: self.shutdown,
-                                    storage_yaml.get('gc_interval', 300)):
-                    break
+                self.cv.wait_for(lambda: self._shutdown, interval)
+
+    def refresh_storage_session(self, executor, interval : int):
+        while not self._shutdown:
+            executor.ping_watchdog()
+            assert self.storage._refresh_session()
+            self.storage._gc_session(timedelta(seconds = 10 * interval))
+            with self.lock:
+                self.cv.wait_for(lambda: self._shutdown, interval)
 
     def _gc(self, gc_ttl=None):
         logging.info('router_service _gc %d', gc_ttl)
