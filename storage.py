@@ -1106,3 +1106,18 @@ class Storage():
             deleted = self._gc(db_tx, ttl)
             return deleted
 
+
+    def debug_dump(self):
+        out = ''
+        with self.begin_transaction() as db_tx:
+            for table in [ self.session_table,
+                           self.blob_table,
+                           self.tx_table,
+                           self.tx_blobref_table,
+                           self.attempt_table ]:
+                sel = table.select()
+                res = db_tx.execute(sel)
+                for row in res:
+                    out += str(row._mapping)
+                    out += '\n'
+        return out

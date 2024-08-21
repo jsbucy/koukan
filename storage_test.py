@@ -40,12 +40,8 @@ class StorageTestBase(unittest.TestCase):
         self.version_cache = IdVersionMap()
 
     def tearDown(self):
+        self.s._del_session()
         self.s.engine.dispose()
-
-    def dump_db(self):
-        with self.s.begin_transaction() as db_tx:
-            for l in db_tx.connection.iterdump():
-                logging.debug(l)
 
     def test_basic(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -93,7 +89,6 @@ class StorageTestBase(unittest.TestCase):
 
         blob_writer = self.s.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-#        self.dump_db()
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
         del blob_writer
@@ -148,6 +143,8 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(tx_reader.no_final_notification)
         tx_reader.write_envelope(TransactionMetadata(), notification_done=True)
         self.assertIsNone(self.s.load_one())
+
+        logging.debug(self.s.debug_dump())
 
     def test_blob_8bitclean(self):
         blob_writer = BlobCursor(self.s)
@@ -269,12 +266,6 @@ class StorageTestBase(unittest.TestCase):
         self.s._gc_session(timedelta(minutes=1))
 
     def test_recovery(self):
-        # note storage_test_recovery.sql has
-        # creation_session_id = (select min(id) from sessions)
-        # since self.s session will be created before the one in the
-        # .sql and we create a fresh db for each test
-        #self.load_recovery()
-
         old_session = self._connect()
         old_session._init_session(datetime.fromtimestamp(1234567890))
         old_tx = old_session.get_transaction_cursor()
@@ -319,7 +310,6 @@ class StorageTestBase(unittest.TestCase):
 
         reader = self.s.get_transaction_cursor()
         self.assertTrue(reader.load(writer.id))
-        #self.dump_db()
 
         reader = self.s.load_one()
         self.assertIsNone(reader)
@@ -489,12 +479,6 @@ class StorageTestSqlite(StorageTestBase):
 
         self.s = Storage.connect_sqlite(self.version_cache, self.filename)
 
-    # TODO remove
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().executescript(f.read())
-
     def _connect(self):
         return Storage(self.s.tx_versions, self.s.engine)
 
@@ -503,11 +487,6 @@ class StorageTestSqliteInMemory(StorageTestBase):
     def setUp(self):
         super().setUp()
         self.s = Storage.get_sqlite_inmemory_for_test()
-
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().executescript(f.read())
 
     def _connect(self):
         return Storage(self.s.tx_versions, self.s.engine)
@@ -556,13 +535,6 @@ class StorageTestPostgres(StorageTestBase):
             self.version_cache,
             db_user='postgres', db_name='storage_test',
             unix_socket_dir=self.unix_socket_dir, port=self.port)
-
-
-    def load_recovery(self):
-        with open('storage_test_recovery.sql', 'r') as f:
-            with self.s.begin_transaction() as db_tx:
-                db_tx.connection.cursor().execute(f.read())
-
 
 
 if __name__ == '__main__':

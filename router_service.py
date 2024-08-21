@@ -54,20 +54,16 @@ class Service:
 
     started = False
     executor : Optional[Executor] = None
-    owned_executor : Optional[Executor] = None
-
-    # TODO propagate out exceptions in tests
+    # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
     hypercorn_shutdown : Optional[List[asyncio.Future]] = None
 
-    def __init__(self, config=None,
-                 executor : Optional[Executor] = None):
+    def __init__(self, config=None):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
         self.config = config
-        self.executor = executor
 
         if self.config:
             self.config.storage_writer_factory = partial(
@@ -95,8 +91,8 @@ class Service:
         if self.daemon_executor is not None:
             assert(self.daemon_executor.shutdown(timeout=10))
 
-        if self.owned_executor is not None:
-            assert(self.owned_executor.shutdown(timeout=10))
+        if self.executor is not None:
+            assert(self.executor.shutdown(timeout=10))
 
         self.storage._del_session()
 
@@ -116,10 +112,11 @@ class Service:
 
         if self.executor is None:
             executor_yaml = global_yaml.get('executor', {})
-            self.owned_executor = Executor(
+            self.executor = Executor(
                 executor_yaml.get('max_inflight', 10),
-                executor_yaml.get('watchdog_timeout', 30))
-            self.executor = self.owned_executor
+                executor_yaml.get('watchdog_timeout', 30),
+                debug_futures=executor_yaml.get(
+                    'testonly_debug_futures', False))
         # ick dependency cycle
         self.config.executor = self.executor
 

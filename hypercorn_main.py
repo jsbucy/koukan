@@ -18,7 +18,6 @@ def run(bind : List[Tuple[str,int]], cert, key, app, shutdown,
         config.keyfile = key
     async def _ping_alive():
         while True:
-            logging.debug('_ping_alive')
             alive()
             await asyncio.sleep(1)
 
