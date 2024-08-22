@@ -266,7 +266,7 @@ class Service:
                 self.cv.notify_all()
 
         if storage_tx is None:
-            return
+            return False
 
         endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
         logging.debug('_dequeue %s %s',
