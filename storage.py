@@ -566,27 +566,24 @@ class TransactionCursor:
         # This is a sort of pseudo-attempt for re-entering the
         # notification logic if it was enabled after the transaction
         # reached a final result.
-        if self.no_final_notification:
-            self.version = new_version
-            return
+        if not self.no_final_notification:
+            max_attempt_id = (
+                select(func.max(self.parent.attempt_table.c.attempt_id)
+                       .label('max'))
+                .where(self.parent.attempt_table.c.transaction_id == db_id)
+                .subquery())
+            new_attempt_id = select(
+                sa_case((max_attempt_id.c.max == None, 1),
+                        else_=max_attempt_id.c.max + 1)
+            ).scalar_subquery()
 
-        max_attempt_id = (
-            select(func.max(self.parent.attempt_table.c.attempt_id)
-                   .label('max'))
-            .where(self.parent.attempt_table.c.transaction_id == db_id)
-            .subquery())
-        new_attempt_id = select(
-            sa_case((max_attempt_id.c.max == None, 1),
-                    else_=max_attempt_id.c.max + 1)
-        ).scalar_subquery()
-
-        ins = (insert(self.parent.attempt_table)
-               .values(transaction_id = db_id,
-                       attempt_id = new_attempt_id)
-               .returning(self.parent.attempt_table.c.attempt_id))
-        res = db_tx.execute(ins)
-        assert (row := res.fetchone())
-        self.attempt_id = row[0]
+            ins = (insert(self.parent.attempt_table)
+                   .values(transaction_id = db_id,
+                           attempt_id = new_attempt_id)
+                   .returning(self.parent.attempt_table.c.attempt_id))
+            res = db_tx.execute(ins)
+            assert (row := res.fetchone())
+            self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
         self._update_version_cache()
         self.in_attempt = True
