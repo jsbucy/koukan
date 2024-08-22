@@ -1,7 +1,8 @@
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 import logging
 import sys
 import secrets
+import importlib
 
 from yaml import load, CLoader as Loader
 from address_list_policy import AddressListPolicy
@@ -38,6 +39,7 @@ class Config:
     endpoint_yaml : Optional[dict] = None
     storage_writer_factory : Optional[StorageWriterFactory] = None
     executor : Optional[Executor] = None
+    rest_resolution : Dict[str, Callable]
 
     def __init__(
             self,
@@ -59,7 +61,43 @@ class Config:
             'remote_host': FilterSpec(self.remote_host, SyncFilter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, SyncFilter)
-       }
+        }
+        self.rest_resolution = {
+            'static': constant_resolution,
+            'dns_mx': resolve_mx
+        }
+
+    def _load_user_module(self, name, mod, add_factory):
+        dot = mod.find('.')
+        if dot > 0:
+            mod_name = mod[0:dot]
+            fn_name = mod[dot+1:]
+        else:
+            mod_name = mod
+            fn_name = 'factory'
+        logging.debug('%s %s', mod_name, fn_name)
+        modd = importlib.import_module(mod_name)
+        fn = getattr(modd, fn_name)
+        add_factory(name, fn)
+
+    def add_filter(self, name, fn):
+        assert name not in self.filters
+        self.filters[name] = FilterSpec(fn, SyncFilter)
+
+    def add_router_policy(self, name, fn):
+        assert name not in self.router_policies
+        self.router_policies[name] = fn
+
+    def load_user_modules(self, yaml):
+        for modtype,add_factory in [
+                ('recipient_router_policy', self.add_router_policy),
+                ('sync_filter', self.add_filter),
+                ('rest_endpoint_resolution', self.rest_resolution)]:
+            if (modtype_yaml := yaml.get(modtype, None)) is None:
+                continue
+            for name,mod in modtype_yaml.items():
+                logging.debug('%s %s', name, mod)
+                self._load_user_module(name, mod, add_factory)
 
     def set_storage(self, storage : Storage):
         self.storage = storage
@@ -72,6 +110,8 @@ class Config:
         self.endpoint_yaml = {}
         for endpoint_yaml in self.root_yaml.get('endpoint', []):
             self.endpoint_yaml[endpoint_yaml['name']] = endpoint_yaml
+        if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
+            self.load_user_modules(modules_yaml)
 
     def load_yaml(self, filename):
         root_yaml = load(open(filename, 'r'), Loader=Loader)

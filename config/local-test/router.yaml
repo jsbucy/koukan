@@ -46,6 +46,9 @@ endpoint:
     received_hostname: gargantua1    
   - filter: router
     policy:
+      name: hello
+  - filter: router
+    policy:
       name: dest_domain
       endpoint: https://localhost:8001
   - filter: router
@@ -56,6 +59,7 @@ endpoint:
     key: config/local-test/dkim.key
     domain: d
     selector: sel
+  - filter: hello
   - filter: rest_output
     verify: localhost.crt
     http_host: outbound
@@ -124,12 +128,22 @@ endpoint:
     #static_endpoint: http://localhost:8002
     verify: localhost.crt
     http_host: outbound
+    # resolution:
+    #   - type: static
+    #     host: 127.0.0.1
+    #     port: 3025
+    #   - type: dns_mx
     static_remote_host:
       host: 127.0.0.1
       port: 3025
     rcpt_timeout: 5
     data_timeout: 5
 
+modules:
+  sync_filter:
+    hello: hello_filter
+  recipient_router_policy:
+    hello: hello_policy
 
 storage:
   # engine: sqlite_memory
