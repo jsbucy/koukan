@@ -33,6 +33,14 @@ class HostPort:
     def __eq__(self, h : 'HostPort'):
         return self.host == h.host and self.port == h.port
 
+class Resolution:
+    hosts : List[HostPort]
+    def __init__(self, hosts : Optional[List[HostPort]] = None):
+        self.hosts = hosts
+
+    def __repr__(self):
+        return str(self.hosts)
+
 # NOTE the SMTP syntax for the capability list returned from EHLO
 # isn't the same as that requested in MAIL/RCPT. This is for the latter.
 class EsmtpParam:
@@ -253,7 +261,8 @@ _tx_fields = [
     TxField('parsed_json', validity=None),
 
     TxField('rest_endpoint', validity=None),
-    TxField('options', validity=None)
+    TxField('options', validity=None),
+    TxField('resolution', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -304,6 +313,8 @@ class TransactionMetadata:
     parsed_json : Optional[dict] = None
 
     options : Optional[dict] = None
+
+    resolution : Optional[Resolution] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -357,6 +368,8 @@ class TransactionMetadata:
             out += 'cancelled=%s ' % self.cancelled
         if self.options:
             out += 'options=%s ' % self.options
+        if self.resolution:
+            out += 'resolution=%s ' % self.resolution
         return out
 
     def empty(self, which_js : WhichJson):

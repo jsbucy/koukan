@@ -232,7 +232,14 @@ py_test(name='dkim_endpoint_test',
               ':fake_endpoints'])
 
 pytype_library(name='mx_resolution',
-               srcs=['mx_resolution.py'])
+               srcs=['mx_resolution.py'],
+               deps=[':filter'])
+
+py_test(name='mx_resolution_test',
+        srcs=['mx_resolution_test.py'],
+        deps=[':mx_resolution',
+              ':filter',
+              ':fake_endpoints'])
 
 pytype_library(name='storage_writer_filter',
                srcs=['storage_writer_filter.py'],

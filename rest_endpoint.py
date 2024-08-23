@@ -12,6 +12,7 @@ import werkzeug.http
 from deadline import Deadline
 from filter import (
     HostPort,
+    Resolution,
     SyncFilter,
     TransactionMetadata,
     WhichJson )
@@ -31,14 +32,6 @@ def get_resp_json(resp):
         return resp.json()
     except json.decoder.JSONDecodeError:
         return None
-
-Resolution = Callable[[HostPort], Generator[HostPort, None, Any]]
-
-def identity_resolution(x):
-    yield x
-
-def constant_resolution(x):
-  return lambda ignored: identity_resolution(x)
 
 class RestEndpoint(SyncFilter):
     transaction_path : Optional[str] = None
@@ -74,7 +67,6 @@ class RestEndpoint(SyncFilter):
                  transaction_url=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
-                 remote_host_resolution : Resolution = identity_resolution,
                  min_poll=1,
                  max_inline=1024,
                  chunk_size=1048576,
@@ -84,8 +76,6 @@ class RestEndpoint(SyncFilter):
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
-
-        self.remote_host_resolution = remote_host_resolution
 
         self.min_poll = min_poll
         self.max_inline = max_inline
@@ -99,12 +89,14 @@ class RestEndpoint(SyncFilter):
             return url
         return urljoin(self.base_url, url)
 
-    def _start(self, tx : TransactionMetadata,
-                deadline : Deadline) -> Optional[HttpResponse]:
-        logging.debug('RestEndpoint._start %s', tx)
-
-        for remote_host in self.remote_host_resolution(tx.remote_host):
-            # none if no remote_host/disco (above)
+    def _start(self,
+               resolution : Resolution,
+               tx : TransactionMetadata,
+               deadline : Deadline) -> Optional[HttpResponse]:
+        logging.debug('RestEndpoint._start %s %s', resolution, tx)
+        hosts = resolution.hosts if resolution is not None else [None]
+        for remote_host in hosts:
+            # none if no resolution (above)
             if remote_host is not None:
                 tx.remote_host = remote_host
                 self.remote_host = remote_host
@@ -250,7 +242,7 @@ class RestEndpoint(SyncFilter):
 
         tx_update = False
         if not self.transaction_url:
-            rest_resp = self._start(self.upstream_tx, deadline)
+            rest_resp = self._start(tx.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
                 tx.fill_inflight_responses(

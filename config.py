@@ -10,14 +10,15 @@ from dest_domain_policy import DestDomainPolicy
 from recipient_router_filter import (
     Destination,
     RecipientRouterFilter )
-from rest_endpoint import RestEndpoint, constant_resolution
+from rest_endpoint import RestEndpoint
 from dkim_endpoint import DkimEndpoint
-from mx_resolution import resolve as resolve_mx
+from mx_resolution import DnsResolutionFilter, StaticResolutionFilter
 from message_builder_filter import MessageBuilderFilter
 from message_parser_filter import MessageParserFilter
 from filter import (
     AsyncFilter,
     HostPort,
+    Resolution,
     SyncFilter )
 from storage_writer_filter import StorageWriterFilter
 from exploder import Exploder
@@ -39,7 +40,6 @@ class Config:
     endpoint_yaml : Optional[dict] = None
     storage_writer_factory : Optional[StorageWriterFactory] = None
     executor : Optional[Executor] = None
-    rest_resolution : Dict[str, Callable]
 
     def __init__(
             self,
@@ -60,11 +60,9 @@ class Config:
             'message_parser': FilterSpec(self.message_parser, SyncFilter),
             'remote_host': FilterSpec(self.remote_host, SyncFilter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
-            'relay_auth': FilterSpec(self.relay_auth, SyncFilter)
-        }
-        self.rest_resolution = {
-            'static': constant_resolution,
-            'dns_mx': resolve_mx
+            'relay_auth': FilterSpec(self.relay_auth, SyncFilter),
+            'static_resolution': FilterSpec(self.static_resolution, SyncFilter),
+            'dns_resolution': FilterSpec(self.dns_resolution, SyncFilter),
         }
 
     def _load_user_module(self, name, mod, add_factory):
@@ -91,8 +89,7 @@ class Config:
     def load_user_modules(self, yaml):
         for modtype,add_factory in [
                 ('recipient_router_policy', self.add_router_policy),
-                ('sync_filter', self.add_filter),
-                ('rest_endpoint_resolution', self.rest_resolution)]:
+                ('sync_filter', self.add_filter)]:
             if (modtype_yaml := yaml.get(modtype, None)) is None:
                 continue
             for name,mod in modtype_yaml.items():
@@ -151,17 +148,11 @@ class Config:
         static_remote_host = (HostPort.from_yaml(static_remote_host_yaml)
                               if static_remote_host_yaml else None)
         logging.info('Factory.rest_output %s', static_remote_host)
-        remote_host_disco = None
-        if static_remote_host is not None:
-            remote_host_disco = constant_resolution(static_remote_host)
-        elif yaml.get('remote_host_discovery', '') == 'mx':
-            remote_host_disco = resolve_mx
         rcpt_timeout = 30
         data_timeout = 300
         return RestEndpoint(
             static_base_url = yaml.get('static_endpoint', None),
             http_host = yaml['http_host'],
-            remote_host_resolution = remote_host_disco,
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
             verify=yaml.get('verify', True))
@@ -173,9 +164,13 @@ class Config:
         dest = yaml.get('destination', None)
         if dest is None:
             return None
+        hosts = None
+        if 'host_list' in dest:
+            hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
         return Destination(
             rest_endpoint = dest.get('endpoint', None),
-            options = dest.get('options', None))
+            options = dest.get('options', None),
+            remote_host = hosts)
 
     def router_policy_address_list(self, policy_yaml):
         return AddressListPolicy(
@@ -210,6 +205,17 @@ class Config:
 
     def relay_auth(self, yaml, next):
         return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
+
+    def dns_resolution(self, yaml, next):
+        return DnsResolutionFilter(next)
+
+    def static_resolution(self, yaml, next):
+        return StaticResolutionFilter(
+            Resolution([HostPort.from_yaml(yaml)]),
+            next,
+            suffix=yaml.get('suffix', None),
+            literal=yaml.get('literal', None),
+            overwrite=yaml.get('overwrite', False))
 
     def get_endpoint(self, host) -> Tuple[SyncFilter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]

@@ -6,16 +6,17 @@ from response import Response, Esmtp
 from filter import (
     HostPort,
     Mailbox,
+    Resolution,
     SyncFilter,
     TransactionMetadata )
 
 class Destination:
     rest_endpoint : Optional[str] = None
-    remote_host : Optional[HostPort] = None
+    remote_host : Optional[List[HostPort]] = None
     options : dict
 
     def __init__(self, rest_endpoint : Optional[str] = None,
-                 remote_host : Optional[HostPort] = None,
+                 remote_host : Optional[List[HostPort]] = None,
                  options : Optional[dict] = None):
         self.rest_endpoint = rest_endpoint
         self.remote_host = remote_host
@@ -65,7 +66,8 @@ class RecipientRouterFilter(SyncFilter):
             return None
 
         dest_delta.rest_endpoint = dest.rest_endpoint
-        dest_delta.remote_host = dest.remote_host
+        if dest.remote_host is not None:
+            dest_delta.resolution = Resolution(dest.remote_host)
         dest_delta.options = dest.options
         logging.debug('RecipientRouterFilter._route() dest_delta %s',
                       dest_delta)

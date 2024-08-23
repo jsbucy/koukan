@@ -60,13 +60,14 @@ endpoint:
     domain: d
     selector: sel
   - filter: hello
+  - filter: static_resolution
+    suffix: ''  # match everything
+    host: 127.0.0.1
+    port: 3025
+    overwrite: true
   - filter: rest_output
     verify: localhost.crt
     http_host: outbound
-    # remote_host_discovery: mx
-    static_remote_host:
-      host: 127.0.0.1
-      port: 3025
     rcpt_timeout: 5
     data_timeout: 5
 
@@ -107,6 +108,9 @@ endpoint:
       #- base: alice
       destination:
         endpoint: https://localhost:8001
+        host_list:
+          - host: 'fake_smtpd'
+            port: 3025
   - filter: router
     policy:
       name: address_list
@@ -124,18 +128,15 @@ endpoint:
       name: address_list
       # no domains/dest = reject all
   - filter: message_parser
+  - filter: static_resolution
+    literal: 'fake_smtpd'
+    host: 127.0.0.1
+    port: 3025
+    overwrite: true
   - filter: rest_output
     #static_endpoint: http://localhost:8002
     verify: localhost.crt
     http_host: outbound
-    # resolution:
-    #   - type: static
-    #     host: 127.0.0.1
-    #     port: 3025
-    #   - type: dns_mx
-    static_remote_host:
-      host: 127.0.0.1
-      port: 3025
     rcpt_timeout: 5
     data_timeout: 5
 

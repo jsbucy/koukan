@@ -17,4 +17,4 @@ class DestDomainPolicy(RoutingPolicy):
         if domain is None:
             return None, None
         return Destination(self.rest_endpoint,
-                           remote_host=HostPort(domain, self.dest_port)), None
+                           remote_host=[HostPort(domain, self.dest_port)]), None
