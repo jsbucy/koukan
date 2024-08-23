@@ -12,7 +12,7 @@ from recipient_router_filter import (
     RecipientRouterFilter )
 from rest_endpoint import RestEndpoint
 from dkim_endpoint import DkimEndpoint
-from mx_resolution import DnsResolutionFilter, StaticResolutionFilter
+from mx_resolution import DnsResolutionFilter
 from message_builder_filter import MessageBuilderFilter
 from message_parser_filter import MessageParserFilter
 from filter import (
@@ -61,7 +61,6 @@ class Config:
             'remote_host': FilterSpec(self.remote_host, SyncFilter),
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, SyncFilter),
-            'static_resolution': FilterSpec(self.static_resolution, SyncFilter),
             'dns_resolution': FilterSpec(self.dns_resolution, SyncFilter),
         }
 
@@ -207,15 +206,16 @@ class Config:
         return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
 
     def dns_resolution(self, yaml, next):
-        return DnsResolutionFilter(next)
-
-    def static_resolution(self, yaml, next):
-        return StaticResolutionFilter(
-            Resolution([HostPort.from_yaml(yaml)]),
+        host_list = yaml.get('static_hosts', None)
+        static_resolution = None
+        if host_list:
+            static_resolution = Resolution(
+                [HostPort.from_yaml(h) for h in host_list])
+        return DnsResolutionFilter(
             next,
+            static_resolution=static_resolution,
             suffix=yaml.get('suffix', None),
-            literal=yaml.get('literal', None),
-            overwrite=yaml.get('overwrite', False))
+            literal=yaml.get('literal', None))
 
     def get_endpoint(self, host) -> Tuple[SyncFilter, bool]:
         endpoint_yaml = self.endpoint_yaml[host]

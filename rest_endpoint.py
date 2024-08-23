@@ -314,6 +314,8 @@ class RestEndpoint(SyncFilter):
             return upstream_delta
 
         err = None
+        # XXX possibly we should remember this internally? though it's
+        # definitely a bug if it gets dropped between calls...
         if not any([r.ok() for r in tx.rcpt_response]):
             err = "all rcpts failed"
 

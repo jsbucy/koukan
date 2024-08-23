@@ -20,6 +20,7 @@ class ReceivedHeaderFilter(SyncFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
+    # XXX rewrite per new template
     upstream_tx : Optional[TransactionMetadata] = None
 
     def __init__(self, upstream : Optional[SyncFilter] = None,
@@ -116,6 +117,7 @@ class ReceivedHeaderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
+        logging.debug('received header %s', tx)
         if self.upstream_tx is None:
             self.upstream_tx = tx.copy()
         else:
@@ -153,6 +155,7 @@ class ReceivedHeaderFilter(SyncFilter):
 
         # we continue upstream even if we already know we're going to
         # fail the body to get authoritative responses for mail/rcpt
+        logging.debug('received header upstream %s', self.upstream_tx)
         upstream_delta = self.upstream.on_update(
             self.upstream_tx, downstream_delta)
         assert upstream_delta is not None

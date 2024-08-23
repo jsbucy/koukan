@@ -60,10 +60,11 @@ endpoint:
     domain: d
     selector: sel
   - filter: hello
-  - filter: static_resolution
+  - filter: dns_resolution
     suffix: ''  # match everything
-    host: 127.0.0.1
-    port: 3025
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
     overwrite: true
   - filter: rest_output
     verify: localhost.crt
@@ -128,10 +129,11 @@ endpoint:
       name: address_list
       # no domains/dest = reject all
   - filter: message_parser
-  - filter: static_resolution
+  - filter: dns_resolution
     literal: 'fake_smtpd'
-    host: 127.0.0.1
-    port: 3025
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
     overwrite: true
   - filter: rest_output
     #static_endpoint: http://localhost:8002

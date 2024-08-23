@@ -20,6 +20,7 @@ _ServFailExceptions = (
 # of those are effectively "invalid argument" i.e. a bug in this
 # code/unexpected
 
+# TODO merge with dns_wrapper
 class Resolver:
     def __init__(self):
         pass
