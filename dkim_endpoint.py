@@ -12,8 +12,8 @@ from filter import (
 
 class DkimEndpoint(SyncFilter):
     data : bytes = None
-    upstream_tx : Optional[TransactionMetadata] = None
     upstream : SyncFilter
+    body_blob : Optional[Blob] = None
 
     def __init__(self, domain : str, selector : str, privkey,
                  upstream : SyncFilter):
@@ -26,29 +26,26 @@ class DkimEndpoint(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if self.upstream_tx is None:
-            self.upstream_tx = tx.copy()
-        else:
-            assert self.upstream_tx.merge_from(tx_delta) is not None
+        built = False
+        if (self.body_blob is None and
+            tx.body_blob is not None
+            and tx.body_blob.finalized()):
+            self.body_blob = CompositeBlob()
+            sig = InlineBlob(self.sign(tx.body_blob))
+            self.body_blob.append(sig, 0, sig.len())
+            self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
 
+        downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
+        downstream_tx.body_blob = self.body_blob
+        if built:
+            downstream_delta.body_blob = self.body_blob
 
-        body_blob = tx_delta.body_blob
-        if body_blob is not None and body_blob.finalized():
-            upstream_body = CompositeBlob()
-            sig = InlineBlob(self.sign(body_blob))
-            upstream_body.append(sig, 0, sig.len())
-            upstream_body.append(tx.body_blob, 0, body_blob.len(), True)
-            body_blob = upstream_body
+        if bool(downstream_delta):
+            upstream_delta = self.upstream.on_update(
+                downstream_tx, downstream_delta)
         else:
-            body_blob = None
-        self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
-
-        if not(downstream_delta):
-            return TransactionMetadata()
-
-        upstream_delta = self.upstream.on_update(
-            self.upstream_tx, downstream_delta)
+            upstream_delta = TransactionMetadata()
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 

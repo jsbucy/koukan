@@ -30,6 +30,7 @@ class MessageBuilderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata] :
+        built = False
         if self.body_delta is None and tx_delta.message_builder is not None:
             builder = MessageBuilder(
                 tx_delta.message_builder,
@@ -43,6 +44,7 @@ class MessageBuilderFilter(SyncFilter):
             self.body_delta = TransactionMetadata(body_blob = body_blob)
             logging.debug('MessageBuilderFilter.on_update %d %s',
                           body_blob.len(), body_blob.content_length())
+            built = True
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
@@ -52,13 +54,10 @@ class MessageBuilderFilter(SyncFilter):
         if downstream_delta.message_builder:
             downstream_delta.message_builder = None
 
-        if self.body_delta is None:
-            if self.upstream is None:
-                return TransactionMetadata()
-            return self.upstream.on_update(downstream_tx, downstream_delta)
-
-        assert downstream_tx.merge_from(self.body_delta) is not None
-        assert downstream_delta.merge_from(self.body_delta) is not None
+        if self.body_delta is not None:
+            assert downstream_tx.merge_from(self.body_delta) is not None
+            if built:
+                assert downstream_delta.merge_from(self.body_delta) is not None
         upstream_delta = self.upstream.on_update(
             downstream_tx, downstream_delta)
         assert tx.merge_from(upstream_delta) is not None

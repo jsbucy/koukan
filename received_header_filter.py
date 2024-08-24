@@ -20,7 +20,7 @@ class ReceivedHeaderFilter(SyncFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
-    upstream_tx : Optional[TransactionMetadata] = None
+    body_blob : Optional[Blob] = None
 
     def __init__(self, upstream : Optional[SyncFilter] = None,
                  received_hostname : Optional[str] = None,
@@ -116,49 +116,38 @@ class ReceivedHeaderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if self.upstream_tx is None:
-            self.upstream_tx = tx.copy()
-        else:
-            assert self.upstream_tx.merge_from(tx_delta) is not None
+        built = False
+        if (self.body_blob is None and
+            tx.body_blob is not None
+            and tx.body_blob.finalized()):
+            # TODO in this case, since the received header that's being
+            # prepended onto the body doesn't depend on the body contents,
+            # we could trickle out the body as it comes through rather than
+            # effectively buffering it all like this. However something
+            # else in the chain is likely to do that anyway so it's
+            # probably moot.
+            data_err : Optional[Response] = None
+            data_err = self._check_max_received_headers(tx.body_blob)
+            if data_err is not None:
+                delta = TransactionMetadata(data_response = data_err)
+                tx.merge_from(delta)
+                return delta
 
+            self.body_blob = CompositeBlob()
+            received = InlineBlob(self._format_received(tx).encode('ascii'))
+            self.body_blob.append(received, 0, received.len())
+            self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+            built = True
+
+        downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-
-        # TODO in this case, since the received header that's being
-        # prepended onto the body doesn't depend on the body contents,
-        # we could trickle out the body as it comes through rather than
-        # effectively buffering it all like this. However something
-        # else in the chain is likely to do that anyway so it's
-        # probably moot.
-
-        data_err : Optional[Response] = None
-        body_blob = tx_delta.body_blob
-        if body_blob is not None and body_blob.finalized():
-            data_err = self._check_max_received_headers(body_blob)
-
-            upstream_body = None
-            if data_err is None:
-                upstream_body = CompositeBlob()
-                received = InlineBlob(self._format_received(tx).encode('ascii'))
-                upstream_body.append(received, 0, received.len())
-                upstream_body.append(body_blob, 0, body_blob.len(), True)
-
-            body_blob = upstream_body
-            assert body_blob is None or data_err is None
+        downstream_tx.body_blob = self.body_blob
+        if built:
+            downstream_delta.body_blob = self.body_blob
+        if bool(downstream_delta):
+            upstream_delta = self.upstream.on_update(
+                downstream_tx, downstream_delta)
         else:
-            body_blob = None
-        self.upstream_tx.body_blob = downstream_delta.body_blob = body_blob
-
-        if not(downstream_delta):
-            return TransactionMetadata()
-
-        # we continue upstream even if we already know we're going to
-        # fail the body to get authoritative responses for mail/rcpt
-        upstream_delta = self.upstream.on_update(
-            self.upstream_tx, downstream_delta)
-        assert upstream_delta is not None
-        if data_err is not None:
-            assert upstream_delta.data_response is None
-            upstream_delta.data_response = data_err
-        assert tx.merge_from(upstream_delta) is not None
-        logging.debug('ReceivedHeaderFilter done %s', upstream_delta)
+            upstream_delta = TransactionMetadata()
+        tx.merge_from(upstream_delta)
         return upstream_delta
