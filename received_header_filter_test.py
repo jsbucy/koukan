@@ -87,8 +87,12 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
                 b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
                 b'\r\n'
                 b'hello\r\n')
-            tx.data_response = Response(203)
-            return TransactionMetadata(data_response=tx.data_response)
+            delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [],
+                data_response = Response(203))
+            tx.merge_from(delta)
+            return delta
         upstream.add_expectation(exp)
         upstream_delta = filter.on_update(tx, tx_delta=tx_delta)
         self.assertFalse(upstream.expectation)

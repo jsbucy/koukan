@@ -314,9 +314,10 @@ class RestEndpoint(SyncFilter):
             return upstream_delta
 
         err = None
-        # XXX possibly we should remember this internally? though it's
-        # definitely a bug if it gets dropped between calls...
-        if not any([r.ok() for r in tx.rcpt_response]):
+        # delta/merge bugs in the chain downstream from here have been
+        # known to drop response fields on subsequent calls so use
+        # upstream_tx, not tx here
+        if not any([r.ok() for r in self.upstream_tx.rcpt_response]):
             err = "all rcpts failed"
 
         if err is not None:

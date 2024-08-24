@@ -31,7 +31,7 @@ class Resolver:
 
 class RemoteHostFilter(SyncFilter):
     upstream : SyncFilter
-    upstream_tx : Optional[TransactionMetadata] = None
+    delta : Optional[TransactionMetadata] = None
 
     def __init__(self, upstream : SyncFilter,
                  resolver=None):
@@ -41,40 +41,39 @@ class RemoteHostFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        if self.upstream_tx is None:
-            self.upstream_tx = tx.copy()
-        else:
-            assert self.upstream_tx.merge_from(tx_delta) is not None
-
-        downstream_delta = tx_delta.copy()
-
         upstream_delta = None
-        if tx_delta.mail_from is not None:
-            err,res = self._resolve(downstream_delta)
-            if err is None and res is not None:
-                assert downstream_delta.merge_from(res) is not None
-                assert self.upstream_tx.merge_from(res) is not None
-            else:
-                upstream_delta = err
+        done = False
+        if self.delta is None and tx_delta.mail_from is not None:
+            err, self.delta = self._resolve(tx)
+            if err is not None:
+                tx.merge_from(err)
+                return err
+            done = True
 
-        if upstream_delta is None or upstream_delta.mail_response is None:
+        upstream_tx = tx.copy()
+        upstream_delta = tx_delta.copy()
+        if self.delta is not None:
+            assert upstream_tx.merge_from(self.delta)
+            if done:
+                assert upstream_delta.merge_from(self.delta)
+        if bool(upstream_delta) and self.upstream is not None:
             upstream_delta = self.upstream.on_update(
-                self.upstream_tx, downstream_delta)
+                upstream_tx, upstream_delta)
+        else:
+            upstream_delta = TransactionMetadata()
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
-    def _resolve(self, downstream_delta : TransactionMetadata
+    def _resolve(self, tx : TransactionMetadata
                  ) -> Tuple[Optional[TransactionMetadata],  # err
                             # added fields to send upstream
                             Optional[TransactionMetadata]]:
-        if (self.upstream_tx.remote_host is None or
-            not self.upstream_tx.remote_host.host):
+        if (tx.remote_host is None or
+            not tx.remote_host.host):
             return None, None
-
         ans = None
         try:
-            ans = self.resolver.resolve_address(
-                self.upstream_tx.remote_host.host)
+            ans = self.resolver.resolve_address(tx.remote_host.host)
         except _ServFailExceptions:
             return TransactionMetadata(
                 mail_response = Response(450, 'RemoteHostFilter ptr err')), None
@@ -104,8 +103,8 @@ class RemoteHostFilter(SyncFilter):
                 continue
             for a in ans:
                 logging.debug('RemoteHostFilter._resolve %s %s %s',
-                              rrtype, str(a), downstream_delta.remote_host.host)
-                if str(a) == downstream_delta.remote_host.host:
+                              rrtype, str(a), tx.remote_host.host)
+                if str(a) == tx.remote_host.host:
                     res.fcrdns = True
                     break
             if res.fcrdns:
