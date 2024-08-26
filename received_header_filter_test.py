@@ -57,19 +57,26 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             self.assertEqual(len(tx.rcpt_to), 1)
-            tx.mail_response = Response(201)
-            tx.rcpt_response = [Response(202)]
+            delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            self.assertIsNotNone(tx.merge_from(delta))
             self.assertIsNone(tx.body_blob)
-            return TransactionMetadata(
-                mail_response=tx.mail_response,
-                rcpt_response=tx.rcpt_response)
+            return delta
         upstream.add_expectation(exp)
         filter.on_update(tx, tx_delta)
 
         tx.body_blob = InlineBlob(body[0:30], len(body))
         tx_delta = TransactionMetadata(body_blob = tx.body_blob)
-        # no expectation: should not be called: only delta is incomplete body
+
+        def exp_none(tx, tx_delta):
+            logging.debug(tx)
+            logging.debug(tx_delta)
+            self.fail()
+        upstream.add_expectation(exp_none)
         filter.on_update(tx, tx_delta)
+        self.assertTrue(upstream.expectation)
+        upstream.expectation=[]
 
         tx.body_blob = tx_delta.body_blob = InlineBlob(body, len(body))
         def exp(tx, tx_delta):
@@ -164,13 +171,13 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             self.assertIsNotNone(tx.mail_from)
             self.assertEqual(len(tx.rcpt_to), 1)
             self.assertIsNone(tx.body_blob)
-            tx.mail_response = Response(201)
-            tx.rcpt_response = [Response(202)]
-            return TransactionMetadata(
+            delta = TransactionMetadata(
                 mail_response = Response(201),
-                rcpt_response = [Response(202)] )
+                rcpt_response = [Response(202)])
+            tx.merge_from(delta)
+            return delta
         upstream.add_expectation(exp)
-        filter.on_update(tx, tx)
+        filter.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 550)
