@@ -66,6 +66,33 @@ class MessageBuilderFilterTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
         self.assertEqual(upstream_delta.data_response.code, 203)
 
+    def test_noop(self):
+        upstream = FakeSyncFilter()
+        message_builder = MessageBuilderFilter(self.storage, upstream)
+
+        body_blob = InlineBlob(b'hello, world!')
+        tx = TransactionMetadata(
+            remote_host=HostPort('example.com', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body_blob=body_blob)
+
+        def exp(tx, delta):
+            self.assertEqual(tx.mail_from.mailbox, 'alice')
+            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
+            self.assertEqual(tx.body_blob, body_blob)
+            self.assertEqual(delta.body_blob, body_blob)
+            upstream_delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        upstream.add_expectation(exp)
+        upstream_delta = message_builder.on_update(tx, tx.copy())
+        self.assertEqual(upstream_delta.mail_response.code, 201)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        self.assertEqual(upstream_delta.data_response.code, 203)
 
 if __name__ == '__main__':
     unittest.main()

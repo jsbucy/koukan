@@ -21,6 +21,7 @@ class ReceivedHeaderFilter(SyncFilter):
     received_hostname : Optional[str] = None
     max_received_headers : int
     body_blob : Optional[Blob] = None
+    data_err : Optional[Response] = None
 
     def __init__(self, upstream : Optional[SyncFilter] = None,
                  received_hostname : Optional[str] = None,
@@ -101,7 +102,7 @@ class ReceivedHeaderFilter(SyncFilter):
         return received
 
     def _check_max_received_headers(self, body_blob : Blob):
-        body = body_blob.read(0, int(pow(2, 16)))
+        body = body_blob.read(0, 65536)
         parser = BytesHeaderParser(policy=policy.SMTP)
         parsed = parser.parsebytes(body)
         received_count = 0
@@ -126,28 +127,31 @@ class ReceivedHeaderFilter(SyncFilter):
             # effectively buffering it all like this. However something
             # else in the chain is likely to do that anyway so it's
             # probably moot.
-            data_err : Optional[Response] = None
-            data_err = self._check_max_received_headers(tx.body_blob)
-            if data_err is not None:
-                delta = TransactionMetadata(data_response = data_err)
-                tx.merge_from(delta)
-                return delta
-
-            self.body_blob = CompositeBlob()
-            received = InlineBlob(self._format_received(tx).encode('ascii'))
-            self.body_blob.append(received, 0, received.len())
-            self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+            self.data_err = self._check_max_received_headers(tx.body_blob)
+            # don't return data_err immediately in case e.g. we don't
+            # already have rcpt_response to get an authoritative
+            # result from upstream
+            if self.data_err is None:
+                self.body_blob = CompositeBlob()
+                received = InlineBlob(self._format_received(tx).encode('ascii'))
+                self.body_blob.append(received, 0, received.len())
+                self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
             built = True
+
+        assert not(self.data_err and self.body_blob)
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
         downstream_tx.body_blob = self.body_blob
-        if built:
-            downstream_delta.body_blob = self.body_blob
+        downstream_delta.body_blob = self.body_blob if built else None
         if bool(downstream_delta):
             upstream_delta = self.upstream.on_update(
                 downstream_tx, downstream_delta)
         else:
             upstream_delta = TransactionMetadata()
-        tx.merge_from(upstream_delta)
+        if self.data_err:
+            assert (upstream_delta is not None and
+                    upstream_delta.data_response is None)
+            upstream_delta.data_response = self.data_err
+        assert tx.merge_from(upstream_delta) is not None
         return upstream_delta

@@ -42,6 +42,7 @@ class DkimEndpointTest(unittest.TestCase):
             b'hello\r\n')
 
         def exp(tx, delta):
+            logging.debug(delta.body_blob.read(0))
             self.assertTrue(delta.body_blob.read(0).startswith(
                 b'DKIM-Signature:'))
 

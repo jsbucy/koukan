@@ -34,12 +34,12 @@ class DkimEndpoint(SyncFilter):
             sig = InlineBlob(self.sign(tx.body_blob))
             self.body_blob.append(sig, 0, sig.len())
             self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+            built = True
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
         downstream_tx.body_blob = self.body_blob
-        if built:
-            downstream_delta.body_blob = self.body_blob
+        downstream_delta.body_blob = self.body_blob if built else None
 
         if bool(downstream_delta):
             upstream_delta = self.upstream.on_update(
