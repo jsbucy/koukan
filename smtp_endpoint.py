@@ -167,7 +167,10 @@ class SmtpEndpoint(SyncFilter):
                 self.good_rcpt = True
             upstream_delta.rcpt_response.append(resp)
 
-        if tx_delta.body_blob is not None and (
+        if tx_delta.message_builder is not None:
+            upstream_delta.data_response = Response(
+                500, 'BUG: message_builder in SmtpEndpoint')
+        elif tx_delta.body_blob is not None and (
                 tx_delta.body_blob.len() ==
                 tx_delta.body_blob.content_length()):
             logging.info('SmtpEndpoint %s append_data len=%d',
