@@ -1,10 +1,12 @@
 from typing import List, Optional
 import logging
 
-from dns_wrapper import Resolver, NotFoundExceptions
+from dns.resolver import NoNameservers
+from dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
 from filter import HostPort, Resolution, SyncFilter, TransactionMetadata
+from response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
 # than per-lookup?
@@ -13,11 +15,12 @@ def resolve(resolver, hostport : HostPort):
         answers = resolver.resolve(hostport.host, 'MX')
         answers = sorted(answers, key=lambda x: x.preference)
         mxen = [ mx.exchange for mx in answers]
-    except NotFoundExceptions:  # XXX ServFailExceptions? (and below)
+    except ServFailExceptions:
+        return []
+    except NotFoundExceptions:
         mxen = [host]
 
     # TODO null mx rfc7505
-
     seen = []
     # It seems like the ordering gets randomized somewhere upstream so
     # we don't need to?
@@ -27,7 +30,7 @@ def resolve(resolver, hostport : HostPort):
         for rrtype in ['a', 'aaaa']:
             try:
                 a = resolver.resolve(mx, rrtype)
-            except NotFoundExceptions:
+            except ServFailExceptions + NotFoundExceptions:
                 continue
             for aa in a:
                 aaa = str(aa)
@@ -64,11 +67,13 @@ class DnsResolutionFilter(SyncFilter):
         except ValueError:
             return False
 
-    def _needs_resolution(self, res) -> bool:
+    def _needs_resolution_host(self, host : HostPort):
+        return not self._valid_ip(host.host) and self._match(host.host)
+
+    def _needs_resolution(self, res : Optional[Resolution]) -> bool:
         if res is None:
             return False
-        return any([not self._valid_ip(h.host) and self._match(h.host)
-                    for h in res.hosts])
+        return any([self._needs_resolution_host(h) for h in res.hosts])
 
     def _match(self, h):
         if self.literal is not None and self.literal.lower() == h.lower():
@@ -81,29 +86,47 @@ class DnsResolutionFilter(SyncFilter):
     def _resolve(self, res : Resolution) -> List[HostPort]:
         hosts_out = []
         for h in res.hosts:
-            if not self._match(h.host):
+            if not self._needs_resolution_host(h):
                 hosts_out.append(h)
                 continue
             if self.static_resolution is not None:
-                hosts_out.extend(self.static_resolution.hosts)
-                continue
-            dns_hosts = resolve(self.resolver, h)
-            hosts_out.extend([HostPort(hh, h.port) for hh in dns_hosts])
+                hp_out = self.static_resolution.hosts
+            else:
+                dns_hosts = resolve(self.resolver, h)
+                hp_out = [ HostPort(hh, h.port) for hh in dns_hosts ]
+
+            # A router policy could end up returning multiple hosts
+            # that resolve to overlapping sets of IPs so drop any
+            # duplicates here.
+            for hp in hp_out:
+                if hp in hosts_out:
+                    logging.info('DnsResolutionFilter._resolver dropping '
+                                 'duplicate host %s', hp)
+                    continue
+                hosts_out.append(hp)
         return hosts_out
 
     def on_update(self,
                   tx : TransactionMetadata, tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.debug('mx resolution tx %s', tx)
-        logging.debug('mx resolution delta %s', tx_delta)
-        resolution = None
         if (self.resolution is None and
-            self._needs_resolution(tx_delta.resolution)):
-            resolution = Resolution(self._resolve(tx_delta.resolution))
-            self.resolution = resolution
-
-        if self.resolution is None:
+            not self._needs_resolution(tx_delta.resolution)):
             return self.upstream.on_update(tx, tx_delta)
+
+        resolution = None
+        if self.resolution is None:
+            resolution = Resolution(self._resolve(tx_delta.resolution))
+            # NOTE _resolve() passes through verbatim hosts that
+            # didn't _match() so this won't fail unless there were
+            # none of those
+            if not resolution.hosts:
+                err = TransactionMetadata()
+                tx.fill_inflight_responses(
+                    Response(450, 'DnsResolverFilter empty result'), err)
+                tx.merge_from(err)
+                return err
+
+            self.resolution = resolution
 
         downstream_tx = tx.copy()
         downstream_tx.resolution = self.resolution

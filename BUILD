@@ -241,7 +241,8 @@ pytype_library(name='fake_dns_wrapper',
 pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'],
                deps=[':filter',
-                     ':dns_wrapper'])
+                     ':dns_wrapper',
+                     ':response'])
 
 py_test(name='mx_resolution_test',
         srcs=['mx_resolution_test.py'],

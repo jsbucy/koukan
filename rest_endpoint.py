@@ -101,7 +101,6 @@ class RestEndpoint(SyncFilter):
         hosts = resolution.hosts if resolution is not None else [None]
         for remote_host in hosts:
             # TODO return last remote_host in tx "upstream_remote_host" etc
-            # none if no resolution (above)
             if remote_host is not None:
                 tx.remote_host = remote_host
                 self.remote_host = remote_host
