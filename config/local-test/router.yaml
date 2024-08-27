@@ -47,10 +47,22 @@ endpoint:
   - filter: router
     policy:
       name: hello
+  # send my own domains directly to my ingress
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - d
+      - dd
+      destination:
+        endpoint: https://localhost:8000
+        http_host: mx-out
+  # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       endpoint: https://localhost:8001
+      http_host: outbound  # matches gw
   - filter: router
     policy:
       name: address_list
@@ -68,7 +80,6 @@ endpoint:
     overwrite: true
   - filter: rest_output
     verify: localhost.crt
-    http_host: outbound
     rcpt_timeout: 5
     data_timeout: 5
 

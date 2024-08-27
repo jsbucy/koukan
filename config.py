@@ -151,7 +151,7 @@ class Config:
         data_timeout = 300
         return RestEndpoint(
             static_base_url = yaml.get('static_endpoint', None),
-            http_host = yaml['http_host'],
+            static_http_host = yaml.get('http_host', None),
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
             verify=yaml.get('verify', True))
@@ -168,6 +168,7 @@ class Config:
             hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
         return Destination(
             rest_endpoint = dest.get('endpoint', None),
+            http_host = dest.get('http_host', None),
             options = dest.get('options', None),
             remote_host = hosts)
 

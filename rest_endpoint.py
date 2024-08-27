@@ -55,6 +55,9 @@ class RestEndpoint(SyncFilter):
     upstream_tx : Optional[TransactionMetadata] = None
     sent_data_last : bool = False
 
+    static_http_host : Optional[str] = None
+    http_host : Optional[str] = None
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -63,7 +66,7 @@ class RestEndpoint(SyncFilter):
     # pass base_url/http_host or transaction_url
     def __init__(self,
                  static_base_url=None,
-                 http_host=None,
+                 static_http_host=None,
                  transaction_url=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
@@ -72,7 +75,7 @@ class RestEndpoint(SyncFilter):
                  chunk_size=1048576,
                  verify=True):
         self.base_url = static_base_url
-        self.http_host = http_host
+        self.static_http_host = static_http_host
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
@@ -94,8 +97,10 @@ class RestEndpoint(SyncFilter):
                tx : TransactionMetadata,
                deadline : Deadline) -> Optional[HttpResponse]:
         logging.debug('RestEndpoint._start %s %s', resolution, tx)
+
         hosts = resolution.hosts if resolution is not None else [None]
         for remote_host in hosts:
+            # TODO return last remote_host in tx "upstream_remote_host" etc
             # none if no resolution (above)
             if remote_host is not None:
                 tx.remote_host = remote_host
@@ -118,15 +123,17 @@ class RestEndpoint(SyncFilter):
                     timeout=deadline_left)
             except RequestError:
                 logging.exception('RestEndpoint._start')
-                return None
-            logging.info('RestEndpoint._start resp %s', rest_resp)
+                continue
+            logging.info('RestEndpoint._start req_headers %s resp %s',
+                         req_headers, rest_resp)
             if rest_resp.status_code != 201:
-                return rest_resp
+                continue
             self.transaction_path = rest_resp.headers['location']
             self.transaction_url = self._maybe_qualify_url(
                 rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
+        return None
 
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
@@ -206,6 +213,13 @@ class RestEndpoint(SyncFilter):
             return self._cancel()
         elif tx.cancelled:
             return TransactionMetadata()
+
+        if self.http_host is None and self.transaction_url is None:
+            if tx.upstream_http_host:
+                self.http_host = tx.upstream_http_host
+            elif self.static_http_host:
+                self.http_host = self.static_http_host
+
 
         # xxx envelope vs data timeout
         if timeout is None:

@@ -10,9 +10,10 @@ class FakeResolver(Resolver):
     def __init__(self):
         self.answers = []
     def resolve_address(self, addr):
-        if isinstance(self.addr_ans, Exception):
-            raise self.addr_ans
-        return self.addr_ans
+        next = self.answers.pop(0)
+        if isinstance(next, Exception):
+            raise next
+        return next
     def resolve(self, host, rrtype):
         next = self.answers.pop(0)
         if isinstance(next, Exception):

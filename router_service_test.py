@@ -232,7 +232,7 @@ class RouterServiceTest(unittest.TestCase):
 
             rest_endpoint = RestEndpoint(
                 static_base_url=self.router_url,
-                http_host='submission',
+                static_http_host='submission',
                 timeout_start=1, timeout_data=1)
             tx = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i))
@@ -290,7 +290,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_smoke(self):
         logging.debug('RouterServiceTest.test_rest_smoke')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
@@ -331,7 +331,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
@@ -379,7 +379,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_reuse_body(self):
         logging.debug('RouterServiceTest.test_reuse_body')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         body_utf8 = body.encode('utf-8')
@@ -414,7 +414,7 @@ class RouterServiceTest(unittest.TestCase):
         tx_url = rest_endpoint.transaction_path
 
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -447,7 +447,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_exploder_multi_rcpt(self):
         logging.info('RouterServiceTest.test_exploder_multi_rcpt')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='smtp-msa',
+            static_base_url=self.router_url, static_http_host='smtp-msa',
             timeout_start=5, timeout_data=5)
 
         logging.info('testExploderMultiRcpt start tx')
@@ -534,7 +534,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_notification_retry_timeout(self):
         logging.info('RouterServiceTest.test_notification_retry_timeout')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='smtp-msa')
+            static_base_url=self.router_url, static_http_host='smtp-msa')
 
         def exp(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
@@ -613,7 +613,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_notification_fast_perm(self):
         logging.info('RouterServiceTest.test_notification_fast_perm')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='smtp-msa')
+            static_base_url=self.router_url, static_http_host='smtp-msa')
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
@@ -698,7 +698,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_message_builder(self):
         logging.info('RouterServiceTest.test_message_builder')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission')
+            static_base_url=self.router_url, static_http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
@@ -773,7 +773,7 @@ class RouterServiceTest(unittest.TestCase):
             message_builder=message_builder_spec)
 
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='submission')
+            static_base_url=self.router_url, static_http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
@@ -806,7 +806,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_receive_parsing(self):
         logging.info('RouterServiceTest.test_receive_parsing')
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, http_host='smtp-in',
+            static_base_url=self.router_url, static_http_host='smtp-in',
             timeout_start=5, timeout_data=5)
         with open('testdata/multipart.msg', 'rb') as f:
             body = f.read()

@@ -14,7 +14,7 @@ import werkzeug.http
 
 from deadline import Deadline
 from rest_endpoint import RestEndpoint
-from filter import HostPort, Mailbox, TransactionMetadata
+from filter import HostPort, Mailbox, Resolution, TransactionMetadata
 from blob import CompositeBlob, InlineBlob
 from response import Response as MailResponse
 
@@ -160,7 +160,8 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '201 created',
             resp_json={},
             location='/transactions/123'))
-        rest_resp = rest_endpoint._start(tx, Deadline())
+        rest_resp = rest_endpoint._start(
+            resolution=None, tx=tx, deadline=Deadline())
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions')
@@ -786,20 +787,23 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202, 203])
 
 
-    def disco(self, h):
-        yield HostPort('mx.example.com', 25)
 
     def test_discovery(self):
+        resolution = Resolution([
+            HostPort('first', 25),
+            HostPort('second', 25)])
         rest_endpoint = RestEndpoint(
             static_base_url=self.static_base_url,
-            min_poll=0.1,
-            remote_host_resolution = lambda h: self.disco(h))
-
+            min_poll=0.1)
         # POST
+        self.responses.append(Response(
+            http_resp = '500 timeout',
+            location = '/transactions/123'))
+
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
-                'remote_host': ['mx.example.com', 25],
+                'remote_host': ['second', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
             location = '/transactions/123'))
@@ -808,7 +812,7 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={
-                'remote_host': ['mx.example.com', 25],
+                'remote_host': ['second', 25],
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
@@ -818,10 +822,28 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(
             remote_host = HostPort('example.com', 25),
             mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob')])
+            rcpt_to = [Mailbox('bob')],
+            resolution=resolution)
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
+
+    def test_discovery_fail(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1)
+        resolution = Resolution([
+            HostPort('first', 25)])
+        self.responses.append(Response(
+            http_resp = '500 timeout',
+            location = '/transactions/123'))
+        tx = TransactionMetadata(
+            remote_host = HostPort('example.com', 25),
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')],
+            resolution=resolution)
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 450)
 
     def test_bad_post_resp(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,

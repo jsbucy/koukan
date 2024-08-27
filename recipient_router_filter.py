@@ -12,13 +12,16 @@ from filter import (
 
 class Destination:
     rest_endpoint : Optional[str] = None
+    http_host : Optional[str] = None
     remote_host : Optional[List[HostPort]] = None
     options : dict
 
     def __init__(self, rest_endpoint : Optional[str] = None,
+                 http_host : Optional[str] = None,
                  remote_host : Optional[List[HostPort]] = None,
                  options : Optional[dict] = None):
         self.rest_endpoint = rest_endpoint
+        self.http_host = http_host
         self.remote_host = remote_host
         self.options = options if options else {}
 
@@ -68,6 +71,8 @@ class RecipientRouterFilter(SyncFilter):
         dest_delta.rest_endpoint = dest.rest_endpoint
         if dest.remote_host is not None:
             dest_delta.resolution = Resolution(dest.remote_host)
+        if dest.http_host is not None:
+            dest_delta.upstream_http_host = dest.http_host
         dest_delta.options = dest.options
         logging.debug('RecipientRouterFilter._route() dest_delta %s',
                       dest_delta)

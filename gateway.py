@@ -70,7 +70,7 @@ class SmtpGateway(EndpointFactory):
         logging.debug('rest_factory %s', yaml)
         return RestEndpoint(
             yaml['endpoint'],
-            http_host=yaml['host'],
+            static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
             verify=yaml.get('verify', True))
@@ -85,7 +85,15 @@ class SmtpGateway(EndpointFactory):
     def create(self, host):
         rest_yaml = self.config.root_yaml['rest_listener']
 
-        if host == 'outbound':  # xxx config??
+        # TODO possibly the http host for requests to the gw could
+        # control which source_address to pass to smtplib.SMTP? or
+        # select one of multiple smtp_output stanzas that specify ehlo
+        # host, etc? Related: remote_host should be able to specify
+        # use of smtps vs starttls?
+        if host == 'outbound':
+            # TODO no need to wire this down, could come from the
+            # request? Possibly the only thing that would go here is
+            # client cert?
             endpoint = self.smtp_factory.new(
                 ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
 

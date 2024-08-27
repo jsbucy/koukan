@@ -16,7 +16,8 @@ class SuccessPolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
             Optional[Destination], Optional[Response]]:
         return Destination(
-            'http://gateway', HostPort('example.com', 1234)), None
+            'http://localhost:8001', 'gateway',
+            [HostPort('example.com', 1234)]), None
 
 class FailurePolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
@@ -33,8 +34,10 @@ class RecipientRouterFilterTest(unittest.TestCase):
         router = RecipientRouterFilter(SuccessPolicy(), upstream)
 
         def exp(tx, delta):
-            self.assertEqual(tx.rest_endpoint, 'http://gateway')
-            self.assertEqual(tx.remote_host, HostPort('example.com', 1234))
+            self.assertEqual(tx.rest_endpoint, 'http://localhost:8001')
+            self.assertEqual(tx.upstream_http_host, 'gateway')
+            self.assertEqual(tx.resolution.hosts,
+                             [HostPort('example.com', 1234)])
 
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),

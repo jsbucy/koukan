@@ -34,7 +34,7 @@ class HostPort:
         return self.host == h.host and self.port == h.port
 
 class Resolution:
-    hosts : List[HostPort]
+    hosts : Optional[List[HostPort]] = None
     def __init__(self, hosts : Optional[List[HostPort]] = None):
         self.hosts = hosts
 
@@ -175,6 +175,7 @@ class TxField:
         return self.json_field + '_list_offset'
 
 _tx_fields = [
+    # downstream http host
     TxField('host',
             validity = set([WhichJson.DB])),
     TxField('remote_host',
@@ -261,6 +262,7 @@ _tx_fields = [
     TxField('parsed_json', validity=None),
 
     TxField('rest_endpoint', validity=None),
+    TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
 ]
@@ -272,7 +274,6 @@ tx_json_fields = { f.json_field : f for f in _tx_fields }
 # contains only "add" operations.
 class TransactionMetadata:
     host : Optional[str] = None
-    rest_endpoint : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
@@ -312,6 +313,8 @@ class TransactionMetadata:
     parsed_blobs : Optional[List[Blob]] = None
     parsed_json : Optional[dict] = None
 
+    rest_endpoint : Optional[str] = None
+    upstream_http_host : Optional[str] = None
     options : Optional[dict] = None
 
     resolution : Optional[Resolution] = None
@@ -332,7 +335,8 @@ class TransactionMetadata:
                  smtp_meta : Optional[dict] = None,
                  message_builder : Optional[dict] = None,
                  inline_body : Optional[str] = None,
-                 cancelled : Optional[bool] = None):
+                 cancelled : Optional[bool] = None,
+                 resolution : Optional[Resolution] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -349,6 +353,7 @@ class TransactionMetadata:
         self.message_builder = message_builder
         self.inline_body = inline_body
         self.cancelled = cancelled
+        self.resolution = resolution
 
     def __repr__(self):
         out = ''
@@ -362,6 +367,8 @@ class TransactionMetadata:
         out += 'data_response=%s ' % self.data_response
         if self.rest_endpoint:
             out += 'rest_endpoint=%s ' % self.rest_endpoint
+        if self.upstream_http_host:
+            out += 'upstream_http_host=%s ' % self.upstream_http_host
         if self.remote_host:
             out += 'remote_host=%s ' % self.remote_host
         if self.cancelled is not None:
