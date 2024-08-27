@@ -99,6 +99,10 @@ class RestEndpoint(SyncFilter):
         logging.debug('RestEndpoint._start %s %s', resolution, tx)
 
         hosts = resolution.hosts if resolution is not None else [None]
+        # TODO probably tx.rest_endpoint should also be repeated.  But
+        # we probably don't want the cross product of endpoints and
+        # remote hosts?  Iterate endpoint on http err, remote host on
+        # tx err?
         for remote_host in hosts:
             # TODO return last remote_host in tx "upstream_remote_host" etc
             if remote_host is not None:
