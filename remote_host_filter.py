@@ -7,34 +7,14 @@ from filter import (
     TransactionMetadata )
 from response import Response
 
-_NotFoundExceptions = (
-    dns.resolver.NoAnswer,  # name exists but not that rrtype
-    dns.resolver.NXDOMAIN   # name doesn't exist at all
-)
-_ServFailExceptions = (
-    dns.resolver.NoNameservers,   # All nameservers failed to answer the query.
-    dns.resolver.LifetimeTimeout  # timed out
-)
-
-# dns.exception.DNSException is the base class of dns exceptions, many
-# of those are effectively "invalid argument" i.e. a bug in this
-# code/unexpected
-
-# TODO merge with dns_wrapper
-class Resolver:
-    def __init__(self):
-        pass
-    def resolve_address(self, addr):
-        return dns.resolver.resolve_address(addr)
-    def resolve(self, host, rrtype):
-        return dns.resolver.resolve(host, rrtype)
+from dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 
 class RemoteHostFilter(SyncFilter):
     upstream : SyncFilter
     delta : Optional[TransactionMetadata] = None
 
     def __init__(self, upstream : SyncFilter,
-                 resolver=None):
+                 resolver : Optional[Resolver] = None):
         self.upstream = upstream
         self.resolver = resolver if resolver else Resolver()
 
@@ -74,10 +54,10 @@ class RemoteHostFilter(SyncFilter):
         ans = None
         try:
             ans = self.resolver.resolve_address(tx.remote_host.host)
-        except _ServFailExceptions:
+        except ServFailExceptions:
             return TransactionMetadata(
                 mail_response = Response(450, 'RemoteHostFilter ptr err')), None
-        except _NotFoundExceptions:
+        except NotFoundExceptions:
             pass
 
         res = TransactionMetadata()
@@ -94,9 +74,9 @@ class RemoteHostFilter(SyncFilter):
                 ans = self.resolver.resolve(
                     res.remote_hostname, rrtype)
                 all_failed = False
-            except _ServFailExceptions:
+            except ServFailExceptions:
                 pass
-            except _NotFoundExceptions:
+            except NotFoundExceptions:
                 all_failed = False
 
             if ans is None:

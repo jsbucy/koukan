@@ -1,3 +1,4 @@
+from typing import List, Union
 import unittest
 import logging
 
@@ -17,20 +18,7 @@ from remote_host_filter import (
     RemoteHostFilter,
     Resolver )
 from fake_endpoints import FakeSyncFilter
-
-
-class FakeResolver(Resolver):
-    def __init__(self, addr_ans, resolve_ans):
-        self.addr_ans = addr_ans
-        self.resolve_ans = resolve_ans
-    def resolve_address(self, addr):
-        if isinstance(self.addr_ans, Exception):
-            raise self.addr_ans
-        return self.addr_ans
-    def resolve(self, host, rrtype):
-        if isinstance(self.resolve_ans, Exception):
-            raise self.resolve_ans
-        return self.resolve_ans
+from fake_dns_wrapper import FakeResolver
 
 ptr_message_text = """id 1234
 opcode QUERY
@@ -116,10 +104,10 @@ class RemoteHostFilterTest(unittest.TestCase):
 
 
     def _test(self, addr,
-              ptr_ans, fwd_ans,
+              answers : List[Union[Answer, Exception]],
               exp_hostname, exp_fcrdns, exp_resp=201):
 
-        resolver = FakeResolver(ptr_ans, fwd_ans)
+        resolver = FakeResolver(answers)
 
         upstream = FakeSyncFilter()
         def exp(tx, tx_delta):
@@ -146,34 +134,38 @@ class RemoteHostFilterTest(unittest.TestCase):
     def test_success_ipv4(self):
         self._test(
             '1.2.3.4',
-            ptr_answer, a_answer,
+            [ptr_answer, a_answer],
             'tachygraph.gloop.org.', True)
 
     def test_success_ipv6(self):
         self._test(
             '0123:4567:89ab:cdef:0123:4567:89ab:cdef',
-            ptr6_answer, aaaa_answer,
+            [ptr6_answer, aaaa_answer],
             'tachygraph.gloop.org.', True)
 
     def test_nx_ptr(self):
         self._test('1.2.3.4',
-                   dns.resolver.NXDOMAIN(), None,
+                   [dns.resolver.NXDOMAIN()],
                    '', False)
 
     def test_nx_fwd(self):
         self._test('1.2.3.4',
-                   ptr_answer, dns.resolver.NXDOMAIN(),
+                   [ptr_answer,
+                    dns.resolver.NXDOMAIN(),   # A
+                    dns.resolver.NXDOMAIN()],  # AAAA
                    'tachygraph.gloop.org.', False)
 
     def test_servfail_ptr(self):
         self._test('1.2.3.4',
-                   dns.resolver.NoNameservers(), None,
+                   [dns.resolver.NoNameservers()],
                    None, None,
                    exp_resp=450)
 
     def test_servfail_fwd(self):
         self._test('1.2.3.4',
-                   ptr_answer, dns.resolver.NoNameservers(),
+                   [ptr_answer,
+                    dns.resolver.NoNameservers(),   # A
+                    dns.resolver.NoNameservers()],  # AAAA
                    'tachygraph.gloop.org.', False,
                    exp_resp=450)
 
