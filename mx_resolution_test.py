@@ -124,6 +124,29 @@ class DnsResolutionFilterTest(unittest.TestCase):
         tx.resolution = Resolution([HostPort('example.CoM', 25)])
         upstream_delta = filter.on_update(tx, tx.copy())
 
+    def test_no_mx(self):
+        upstream = FakeSyncFilter()
+        resolver = FakeResolver([
+            dns.resolver.NoAnswer(),
+            a_answer,
+            dns.resolver.NoAnswer()])  # AAAA
+
+        filter = DnsResolutionFilter(
+            upstream,
+            suffix='',
+            resolver=resolver)
+
+        def exp(tx, delta):
+            self.assertEqual([h.host for h in tx.resolution.hosts],
+                             ['1.2.3.4'])
+            return TransactionMetadata()
+
+        upstream.add_expectation(exp)
+
+        tx = TransactionMetadata()
+        tx.resolution = Resolution([HostPort('mx.example.com', 25)])
+        upstream_delta = filter.on_update(tx, tx.copy())
+
     def test_ipv6(self):
         upstream = FakeSyncFilter()
         resolver = FakeResolver([

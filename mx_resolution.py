@@ -18,7 +18,7 @@ def resolve(resolver, hostport : HostPort):
     except ServFailExceptions:
         return []
     except NotFoundExceptions:
-        mxen = [host]
+        mxen = [hostport.host]
 
     # TODO null mx rfc7505
     seen = []
