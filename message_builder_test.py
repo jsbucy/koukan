@@ -46,6 +46,9 @@ class MessageBuilderTest(unittest.TestCase):
 
             logging.debug(msg)
 
+            headers = builder.build_headers_for_notification()
+            logging.debug(headers)
+
     def test_get_blobs(self):
         json = { 'text_body': [ { 'content_uri': '/blob/xyz' } ] }
         reuse = MessageBuilder.get_blobs(

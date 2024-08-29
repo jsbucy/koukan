@@ -265,6 +265,7 @@ _tx_fields = [
     TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
+    TxField('final_attempt_reason', validity=[WhichJson.REST_READ])
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -318,6 +319,7 @@ class TransactionMetadata:
     options : Optional[dict] = None
 
     resolution : Optional[Resolution] = None
+    final_attempt_reason : Optional[str] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,

@@ -2,7 +2,7 @@ global:
   dequeue: true
   executor:
     max_inflight: 100
-    watchdog_timeout: 10
+    watchdog_timeout: 20
   # needs to authenticate!
   mailer_daemon_mailbox: mailer-daemon@d
   rest_id_entropy: 4

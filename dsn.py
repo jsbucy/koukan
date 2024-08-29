@@ -45,6 +45,8 @@ def _cleanup_part(part : Message):
 # domain for msgid
 # header-from for mailer-daemon
 def generate_dsn(mailer_daemon_mailbox, return_path, orig_to,
+                 # one would expect bytes for this
+                 # cf headers.set_content() below
                  orig_headers : str,
                  received_date : int,
                  now : int,

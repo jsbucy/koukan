@@ -18,6 +18,8 @@ from dsn import read_headers, generate_dsn
 from blob import InlineBlob
 from rest_schema import BlobUri
 
+from message_builder import MessageBuilder
+
 def default_notification_factory():
     raise NotImplementedError()
 
@@ -171,6 +173,7 @@ class OutputHandler:
                         self.rest_id)
                     # version cache can raise
                     # VersionConflictException again here \o/
+                    # TODO cursor.load() should just handle this
                     try:
                         self.cursor.load()
                     except VersionConflictException:
@@ -219,9 +222,11 @@ class OutputHandler:
                     notification_done=notification_done)
                 break
             except VersionConflictException:
-                # XXX VersionConflictException?
-                self.cursor.load()
-
+                # cf above
+                try:
+                    self.cursor.load()
+                except VersionConflictException:
+                    pass
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
@@ -314,8 +319,8 @@ class OutputHandler:
         last_attempt = final_attempt_reason is not None
 
         logging.debug('OutputHandler._maybe_send_notification '
-                      '%s last %s notify %s', self.rest_id, last_attempt,
-                      self.cursor.tx.notification)
+                      '%s last %s notify %s tx %s', self.rest_id, last_attempt,
+                      self.cursor.tx.notification, self.cursor.tx)
 
         if resp.ok():
             return
@@ -326,13 +331,11 @@ class OutputHandler:
         if mail_from.mailbox == '':
             return
 
-        orig_headers = b'\r\n\r\n'
+        orig_headers : str
         if self.cursor.tx.message_builder:
-            # TODO save MessageBuilder-rendered headers
-            msgid = self.cursor.tx.message_builder.get(
-                'headers', {}).get('message-id', None)
-            if msgid:
-                orig_headers = b'Message-ID: <' + msgid + b'>\r\n\r\n'
+            builder = MessageBuilder(self.cursor.tx.message_builder)
+            orig_headers = builder.build_headers_for_notification().decode(
+                'utf-8')
         elif self.cursor.tx.body is not None:
             blob_reader = self.cursor.parent.get_blob_for_read(
                 BlobUri(tx_id = self.cursor.rest_id, tx_body=True))

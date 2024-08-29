@@ -495,6 +495,7 @@ class TransactionCursor:
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
             return None
+        self.tx.final_attempt_reason = self.final_attempt_reason
 
         sel_body = select(self.parent.tx_blobref_table.c.blob_id).where(
             self.parent.tx_blobref_table.c.transaction_id == self.id,
@@ -525,6 +526,7 @@ class TransactionCursor:
                     resp_json, WhichJson.DB_ATTEMPT)
                 assert self.tx is not None  # set above
                 assert self.tx.merge_from(responses)
+                self.tx.attempt_count = row[0]
 
         logging.debug('TransactionCursor._load_db %d %s version=%d %s %s %s',
                       self.id, self.rest_id, self.version,
