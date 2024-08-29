@@ -110,8 +110,9 @@ class Config:
             self.load_user_modules(modules_yaml)
 
     def load_yaml(self, filename):
-        root_yaml = load(open(filename, 'r'), Loader=Loader)
-        self.inject_yaml(root_yaml)
+        with open(filename, 'r') as yaml_file:
+            root_yaml = load(yaml_file, Loader=Loader)
+            self.inject_yaml(root_yaml)
 
     def exploder(self, yaml, next):
         assert next is None

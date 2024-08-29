@@ -96,7 +96,7 @@ class SmtpHandler:
         return '250 {}'.format(server.hostname)
 
     def _cancel(self):
-        if self.endpoint is None or self.tx is None:
+        if self.endpoint is None and self.tx is None:
             return
         if self.tx is not None:
             fut = self.executor.submit(
@@ -109,7 +109,8 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_QUIT %s', self.cx_id)
         self._cancel()
         self.quit = True
-        return b'250 ok'
+        # smtplib throws if the quit response isn't exactly 221
+        return b'221 ok'
 
     async def handle_RSET(self, server, session, envelope):
         logging.info('SmtpHandler.handle_RSET %s', self.cx_id)

@@ -4,36 +4,55 @@ from urllib.parse import urljoin
 import time
 import secrets
 import socket
+import copy
+import json
 
 import time
 import requests
 import copy
 from sys import argv
+from contextlib import nullcontext
 
 base_url = 'https://localhost:8000'
 
 session = requests.Session()
 session.verify = 'localhost.crt'
 
-# -> uri
+# -> url path (for reuse)
 def send_part(tx_url,
               blob_id : str,
               inline : Optional[str] = None,
               filename : Optional[str] = None) -> Optional[str]:
     assert inline or filename
 
-    if inline:
-        content = inline.encode('utf-8')
-    elif filename:
-        with open(filename, 'rb') as f:
-            content = f.read()
-    uri = tx_url + '/blob/' + blob_id
+    path = tx_url + '/blob/' + blob_id
+    uri = base_url + path
     logging.info('PUT %s', uri)
-    resp = session.put(base_url + uri, content)
+
+    def put(content):
+        return session.put(uri, data=content)
+
+    if inline:
+        resp = put(inline.encode('utf-8'))
+    elif filename:
+        with open(filename, 'rb') as file:
+            resp = put(file)
+
     logging.info('PUT %s %s', uri, resp)
     if resp.status_code >= 300:
         return None
-    return uri
+    return path
+
+def strip_filenames(json):
+    for multi in ['text_body', 'related_attachments', 'file_attachments']:
+        if not (multipart := json.get(multi, [])):
+            continue
+        for part in multipart:
+            if 'file_content' in part:
+                del part['file_content']
+            if 'put_content' in part:
+                del part['put_content']
+    return json
 
 
 def send_body(tx_url, json):
@@ -46,6 +65,8 @@ def send_body(tx_url, json):
                 continue
             inline = part.get('put_content', None)
             filename = part.get('file_content', None)
+            if filename:
+                del part['file_content']
             if not inline and not filename:
                 continue
 
@@ -82,15 +103,21 @@ message_builder = {
     ]
 }
 
-blobs_done = False
+
+
+message_builder_blobs = None
 def main(mail_from, rcpt_to):
-    global blobs_done
+    global message_builder_blobs
     logging.debug('main from=%s to=%s', mail_from, rcpt_to)
 
-    json={
+    tx_json={
         'mail_from': {'m': mail_from},
         'rcpt_to': [{'m': rcpt_to}],
         'message_builder': message_builder }
+    if message_builder_blobs is None:
+        tx_json['message_builder'] = strip_filenames(
+            copy.deepcopy(message_builder))
+    logging.debug(json.dumps(tx_json, indent=2))
 
     logging.debug('POST /transactions')
     start = time.monotonic()
@@ -98,7 +125,7 @@ def main(mail_from, rcpt_to):
         base_url + '/transactions',
         headers={'host': 'msa-output',
                  'request-timeout': '5'},
-        json=json)
+        json=tx_json)
     logging.debug('POST /transactions %s', rest_resp)
     if rest_resp.status_code != 201:
         return
@@ -119,12 +146,12 @@ def main(mail_from, rcpt_to):
                          resp_field, rest_resp, rest_resp.json())
             return
 
-    if not blobs_done:
+    if message_builder_blobs is None:
         if not send_body(tx_path, message_builder):
             return
         logging.info('main message_builder spec %s', message_builder)
         get_tx_resp = session.get(tx_url)
-        blobs_done = True
+        message_builder_blobs = message_builder
         rest_resp = None
 
     done = False
@@ -174,6 +201,12 @@ def main(mail_from, rcpt_to):
             time.sleep(dt)
         tx_json = None
 
+# read json
+# walk json for blobs (or mime body)
+# send 1st rcpt
+# send blobs
+# decorate json w/blobs
+# send remaining rcpt
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

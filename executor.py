@@ -91,17 +91,18 @@ class Executor:
         with self.lock:
             self.inflight[current_thread()] = time.monotonic()
 
-    def shutdown(self, timeout=None) -> bool:
+    def shutdown(self, timeout : Optional[int] = None) -> bool:
         ex = self.executor
         self.executor = None  # stop new work coming in
-        with self.lock:
+        if timeout:
             for i in range(0, int(timeout)):
                 logging.debug('Executor.shutdown waiting on %d',
                               len(self.inflight))
-                self._check_watchdog_locked(timeout)
-                if self.cv.wait_for(lambda: len(self.inflight) == 0,
-                                    timeout=1):
-                    break
+                with self.lock:
+                    self._check_watchdog_locked(timeout)
+                    if self.cv.wait_for(lambda: len(self.inflight) == 0,
+                                        timeout=1):
+                        break
 
         ex.shutdown(wait=False, cancel_futures=True)
         if self.debug_futures:

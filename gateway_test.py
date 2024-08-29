@@ -46,7 +46,7 @@ class GatewayTest(unittest.TestCase):
 
         self.fake_smtpd_port = self.find_unused_port()
 
-        self.fake_smtpd = FakeSmtpd(self.fake_smtpd_port)
+        self.fake_smtpd = FakeSmtpd("localhost", self.fake_smtpd_port)
         self.fake_smtpd.start()
 
         self.service_thread = Thread(

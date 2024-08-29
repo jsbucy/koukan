@@ -28,7 +28,8 @@ class SmtpGateway(EndpointFactory):
     executor : Executor
     lock : Lock
     rest_id_factory : Optional[Callable[[], str]]
-    hypercorn_shutdown : Optional[List[asyncio.Future]] = None
+    hypercorn_shutdown : Optional[asyncio.Event] = None
+    smtp_services : List[object]
 
     def __init__(self, config):
         self.config = config
@@ -55,16 +56,27 @@ class SmtpGateway(EndpointFactory):
         rest_yaml = self.config.root_yaml['rest_listener']
         self.rest_id_factory = lambda: secrets.token_urlsafe(
             rest_yaml.get('rest_id_entropy', 16))
+        self.smtp_services = []
 
     def shutdown(self):
+        logging.info("SmtpGateway.shutdown()")
+        for service in self.smtp_services:
+            service.stop()
+
         if self.hypercorn_shutdown:
             logging.debug('SmtpGateway hypercorn shutdown')
-            self.hypercorn_shutdown[0].set_result(True)
+            try:
+                self.hypercorn_shutdown.set()
+            except:
+                pass
 
         if self.gc_thread:
             self.shutdown_gc = True
             self.gc_thread.join()
             self.gc_thread = None
+
+        logging.info("SmtpGateway.shutdown() done")
+
 
     def rest_factory(self, yaml):
         logging.debug('rest_factory %s', yaml)
@@ -147,7 +159,7 @@ class SmtpGateway(EndpointFactory):
             self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600),
                               rest_yaml.get('gc_done_ttl', 10))
 
-    def main(self):
+    def main(self, alive=None):
         for service_yaml in self.config.root_yaml['smtp_listener']['services']:
             factory = None
             msa = False
@@ -162,13 +174,13 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=40
 
             addr = service_yaml['addr']
-            smtp_service(
+            self.smtp_services.append(smtp_service(
                 factory, hostname=addr[0], port=addr[1],
                 cert=service_yaml.get('cert', None),
                 key=service_yaml.get('key', None),
                 auth_secrets_path=service_yaml.get('auth_secrets', None),
                 rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
-                data_timeout=service_yaml.get('data_timeout', data_timeout))
+                data_timeout=service_yaml.get('data_timeout', data_timeout)))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,
@@ -183,12 +195,14 @@ class SmtpGateway(EndpointFactory):
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)
 
-        self.hypercorn_shutdown = []
+        self.hypercorn_shutdown = asyncio.Event()
         hypercorn_main.run(
             [rest_listener_yaml['addr']],
             cert=cert, key=key,
             app=app,
-            shutdown=self.hypercorn_shutdown)
+            shutdown=self.hypercorn_shutdown,
+            alive=alive)
+        logging.debug('SmtpGateway.main() done')
 
 
 if __name__ == '__main__':

@@ -460,8 +460,19 @@ pytype_library(name='gateway',
                      ':hypercorn_main',
                      ':config'])
 
+pytype_library(name='hello_policy',
+               srcs=['hello_policy.py'],
+               deps=[':recipient_router_filter'])
+
+pytype_library(name='hello_filter',
+               srcs=['hello_filter.py'],
+               deps=[':filter'])
+
 pytype_library(name='fake_smtpd',
                srcs=['fake_smtpd.py'])
+
+pytype_library(name='ssmtp',
+               srcs=['ssmtp.py'])
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],
@@ -470,6 +481,19 @@ py_test(name='gateway_test',
               ':fake_smtpd',
               ':blob',
               ':config'])
+
+py_test(name='end2end_test',
+        srcs=['end2end_test.py'],
+        data=['config/local-test/router.yaml',
+              'config/local-test/gateway.yaml'],
+        deps=[':router_service',
+              ':gateway',
+              ':config',
+              ':executor',
+              ':hello_policy',
+              ':hello_filter',
+              ':ssmtp',
+              ':fake_smtpd'])
 
 test_suite(
     name='pytype_tests',

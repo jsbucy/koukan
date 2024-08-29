@@ -46,7 +46,7 @@ class ExecutorTest(unittest.TestCase):
         with self.assertRaises(Exception):
             ex.check_watchdog()
         with self.assertRaises(Exception):
-            ex.shutdown()
+            ex.shutdown(1)
 
 
 if __name__ == '__main__':

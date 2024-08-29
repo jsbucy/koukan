@@ -86,6 +86,16 @@ class RestEndpoint(SyncFilter):
 
         self.client = Client(http2=True, verify=verify)
 
+    def __del__(self):
+        if self.client:
+            logging.debug('RestEndpoint.__del__() client')
+            # close keepalive connections, setting Client(limits=)
+            # doesn't seem to work? keepalive connections cause
+            # hypercorn to take a long time to shut down which is a
+            # problem in tests
+            self.client.close()
+            self.client = None
+
     def _maybe_qualify_url(self, url):
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc:

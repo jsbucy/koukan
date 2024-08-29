@@ -57,7 +57,7 @@ class Service:
     # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
-    hypercorn_shutdown : Optional[List[asyncio.Future]] = None
+    hypercorn_shutdown : Optional[asyncio.Event] = None
 
     def __init__(self, config=None):
         self.lock = Lock()
@@ -79,16 +79,16 @@ class Service:
             self.cv.wait_for(lambda: self._shutdown, timeout)
 
     def shutdown(self):
-        if self._shutdown:
-            return
         logging.info("router_service shutdown()")
         with self.lock:
+            if self._shutdown:
+                return
             self._shutdown = True
 
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
             try:
-                self.hypercorn_shutdown[0].set_result(True)
+                self.hypercorn_shutdown.set()
             except:
                 pass
 
@@ -100,6 +100,7 @@ class Service:
             assert(self.executor.shutdown(timeout=10))
 
         self.storage._del_session()
+        logging.info("router_service shutdown() done")
 
     def wait_started(self, timeout=None):
         with self.lock:
@@ -184,7 +185,7 @@ class Service:
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)
-        self.hypercorn_shutdown = []
+        self.hypercorn_shutdown = asyncio.Event()
         try:
             hypercorn_main.run(
                 [listener_yaml['addr']],
@@ -196,7 +197,9 @@ class Service:
         except:
             logging.exception('router service main: hypercorn_main exception')
             pass
+        logging.debug('router_service.Service.main() hypercorn_main done')
         self.shutdown()
+        logging.debug('router_service.Service.main() done')
 
     def start_main(self):
         self.daemon_executor.submit(
