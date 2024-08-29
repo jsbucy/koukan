@@ -103,21 +103,26 @@ message_builder = {
     ]
 }
 
-
-
 message_builder_blobs = None
-def main(mail_from, rcpt_to):
+def main(mail_from, rcpt_to, max_wait=30):
     global message_builder_blobs
     logging.debug('main from=%s to=%s', mail_from, rcpt_to)
 
     tx_json={
         'mail_from': {'m': mail_from},
         'rcpt_to': [{'m': rcpt_to}],
-        'message_builder': message_builder }
+        'message_builder': message_builder,
+        'retry': {},         # use system defaults for retries
+        # msa-output won't have default_notification so explicitly
+        # request to send it the same way we send the original message.
+        'notification': {'host': 'msa-output' }
+    }
     if message_builder_blobs is None:
         tx_json['message_builder'] = strip_filenames(
             copy.deepcopy(message_builder))
     logging.debug(json.dumps(tx_json, indent=2))
+
+    tx_start = time.monotonic()
 
     logging.debug('POST /transactions')
     start = time.monotonic()
@@ -156,7 +161,8 @@ def main(mail_from, rcpt_to):
 
     done = False
     etag = None
-    while not done:
+    result = 'still inflight'
+    while not done and ((time.monotonic() - tx_start) < max_wait):
         spin = False
         if rest_resp is None:
             spin = True
@@ -187,10 +193,13 @@ def main(mail_from, rcpt_to):
             if not (code := resp_json.get('code', None)):
                 continue
             logging.info('%s %s', resp, code)
-            if code >= 500:
-                break
             if (resp == 'data_response') and (code < 300):
+                result = 'succeess'
                 done = True
+            if code >= 500 or tx_json.get('final_attempt_reason', None):
+                result = 'failure'
+                done = True
+                break
         rest_resp = None
         if done:
             break
@@ -201,12 +210,7 @@ def main(mail_from, rcpt_to):
             time.sleep(dt)
         tx_json = None
 
-# read json
-# walk json for blobs (or mime body)
-# send 1st rcpt
-# send blobs
-# decorate json w/blobs
-# send remaining rcpt
+    logging.info('recipient %s result %s', rcpt_to, result)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

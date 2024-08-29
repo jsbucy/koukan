@@ -2,6 +2,7 @@ from typing import Callable, List, Optional, Tuple
 
 import logging
 import datetime
+import io
 
 from email.message import EmailMessage, MIMEPart
 from email.generator import BytesGenerator
@@ -15,7 +16,7 @@ BlobFactory = Callable[[str],Blob]
 class MessageBuilder:
     blob_factory : Optional[BlobFactory]
 
-    def __init__(self, json, blob_factory : Optional[BlobFactory]):
+    def __init__(self, json, blob_factory : Optional[BlobFactory] = None):
         self.json = json
         self.header_json = self.json.get('headers', {})
 
@@ -151,3 +152,11 @@ class MessageBuilder:
         gen.flatten(builder)
 
 
+    def build_headers_for_notification(self) -> bytes:
+        builder = EmailMessage()
+        self._add_headers(builder)
+        out = io.BytesIO()
+        gen = BytesGenerator(out, policy=policy.SMTP)
+        gen.flatten(builder)
+        out.seek(0)
+        return out.read()
