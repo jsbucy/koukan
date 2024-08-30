@@ -102,6 +102,15 @@ class OutputHandler:
             assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
             assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
 
+            # XXX drop some fields from upstream_tx:
+            # notification, retry
+            # these have REST_CREATE/... validity but we are handling it here
+            for field in ['notification', 'retry']:
+                for obj in [last_tx, upstream_tx, delta]:
+                    if hasattr(obj, field):
+                        delattr(obj, field)
+
+
             have_body = (self.cursor.input_done and
                          ((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
@@ -293,6 +302,9 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
+    # XXX rest could send everything in the first post and request notification
+    # but then we failed at rcpt -> !input_done
+    # so shouldn't notify then?
     def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
         resp : Optional[Response] = None
         tx = self.cursor.tx
@@ -340,6 +352,10 @@ class OutputHandler:
             blob_reader = self.cursor.parent.get_blob_for_read(
                 BlobUri(tx_id = self.cursor.rest_id, tx_body=True))
             orig_headers = read_headers(blob_reader)
+        else:
+            logging.warning('OutputHandler._maybe_send_notification '
+                            'no source for orig_headers %s', self.rest_id)
+            orig_headers = ''
 
         assert bool(self.cursor.tx.rcpt_to)
         rcpt_to = self.cursor.tx.rcpt_to[0]

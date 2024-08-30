@@ -146,7 +146,7 @@ class RestEndpoint(SyncFilter):
                 rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
-        return None
+        return rest_resp
 
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
@@ -272,9 +272,11 @@ class RestEndpoint(SyncFilter):
             rest_resp = self._start(tx.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
+                err = TransactionMetadata()
                 tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream err creating tx'))
-                return
+                    Response(450, 'RestEndpoint upstream err creating tx'), err)
+                tx.merge_from(err)
+                return err
             tx_update = True
         elif downstream_delta:
             rest_resp = self._update(downstream_delta, deadline)

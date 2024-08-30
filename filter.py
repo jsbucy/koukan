@@ -242,6 +242,7 @@ _tx_fields = [
                           WhichJson.REST_READ ])),
     TxField('notification',
             validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_READ,
                           WhichJson.DB])),
     TxField('retry',
             validity=set([WhichJson.REST_CREATE,
@@ -375,10 +376,14 @@ class TransactionMetadata:
             out += 'remote_host=%s ' % self.remote_host
         if self.cancelled is not None:
             out += 'cancelled=%s ' % self.cancelled
-        if self.options:
+        if self.options is not None:
             out += 'options=%s ' % self.options
         if self.resolution:
             out += 'resolution=%s ' % self.resolution
+        if self.notification is not None:
+            out += 'notification=%s ' % self.notification
+        if self.retry is not None:
+            out += 'retry=%s ' % self.retry
         return out
 
     def empty(self, which_js : WhichJson):
@@ -591,9 +596,9 @@ class TransactionMetadata:
                 (old_v is not None and new_v is None)):
                 continue
             if (old_v is not None) and (new_v is None):
-                logging.debug('tx.delta invalid del %s', f)
-                #raise ValueError()
-                return None  # invalid
+               logging.debug('tx.delta invalid del %s', f)
+               #raise ValueError()
+               return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue

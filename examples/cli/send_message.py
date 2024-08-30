@@ -192,14 +192,20 @@ def main(mail_from, rcpt_to, max_wait=30):
                 resp_json = resp_json[0]
             if not (code := resp_json.get('code', None)):
                 continue
-            logging.info('%s %s', resp, code)
-            if (resp == 'data_response') and (code < 300):
-                result = 'succeess'
-                done = True
-            if code >= 500 or tx_json.get('final_attempt_reason', None):
+            logging.info('recipient %s resp field %s code %s',
+                         rcpt_to, resp, code)
+            if code >= 500:
                 result = 'failure'
                 done = True
                 break
+            if (resp == 'data_response') and (code < 300):
+                result = 'success'
+                done = True
+                break
+
+        if tx_json.get('final_attempt_reason', None):
+            done = True
+
         rest_resp = None
         if done:
             break

@@ -175,6 +175,14 @@ class SyncFilterAdapter(AsyncFilter):
                tx_delta : TransactionMetadata,
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
+        if tx.retry is not None or tx.notification is not None:
+            err = TransactionMetadata()
+            tx.fill_inflight_responses(
+                MailResponse(500, 'internal err/invalid transaction fields'),
+                err)
+            tx.merge_from(err)
+            return err
+
         with self.mu:
             txx = self.tx.merge(tx_delta)
 
@@ -354,9 +362,8 @@ class RestHandler(Handler):
         body = tx.body
 
         upstream = self.async_filter.update(tx, tx.copy())
-        if upstream is None:
+        if upstream is None or tx.rest_id is None:
             return self.response(request, code=400, msg='bad request')
-        assert tx.rest_id is not None
         self._tx_rest_id = tx.rest_id
 
         tx.body = body

@@ -255,6 +255,7 @@ class Service:
         finally:
             if storage_tx.in_attempt:
                 logging.error('handle_tx OutputHandler returned open tx')
+                # TODO set next_attempt_time so we don't spin here?
                 storage_tx.write_envelope(TransactionMetadata(),
                                           finalize_attempt=True)
 
