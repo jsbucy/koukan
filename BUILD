@@ -493,7 +493,9 @@ py_test(name='end2end_test',
               ':hello_policy',
               ':hello_filter',
               ':ssmtp',
-              ':fake_smtpd'])
+              ':fake_smtpd',
+              '//examples/cli:send_message',
+              '//examples/receiver:receiver'])
 
 test_suite(
     name='pytype_tests',

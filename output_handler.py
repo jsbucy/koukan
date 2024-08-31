@@ -105,9 +105,9 @@ class OutputHandler:
             # XXX drop some fields from upstream_tx:
             # notification, retry
             # these have REST_CREATE/... validity but we are handling it here
-            for field in ['notification', 'retry']:
+            for field in ['notification', 'retry', 'final_attempt_reason']:
                 for obj in [last_tx, upstream_tx, delta]:
-                    if hasattr(obj, field):
+                    if getattr(obj, field) is not None:
                         delattr(obj, field)
 
 
@@ -170,6 +170,12 @@ class OutputHandler:
                                 self.rest_id, upstream_delta)
                 return None  # internal error
             assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
+
+            # if we're short-circuiting to ourselves, these fields will clash
+            for field in ['final_attempt_reason', 'attempt_count']:
+                for t in [upstream_tx, upstream_delta]:
+                    if getattr(t, field) is not None:
+                        delattr(t, field)
 
             while True:
                 try:
@@ -351,7 +357,8 @@ class OutputHandler:
         elif self.cursor.tx.body is not None:
             blob_reader = self.cursor.parent.get_blob_for_read(
                 BlobUri(tx_id = self.cursor.rest_id, tx_body=True))
-            orig_headers = read_headers(blob_reader)
+            h = read_headers(blob_reader)
+            orig_headers = h if h is not None else ''
         else:
             logging.warning('OutputHandler._maybe_send_notification '
                             'no source for orig_headers %s', self.rest_id)

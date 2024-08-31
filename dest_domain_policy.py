@@ -1,13 +1,19 @@
 from typing import Optional, Tuple
+import copy
 
 from address import domain_from_address
 from response import Response
 from recipient_router_filter import Destination, RoutingPolicy
 from filter import HostPort
 
+# sets Destination.remote_host to rhs of rcpt addr
+
 class DestDomainPolicy(RoutingPolicy):
-    def __init__(self, rest_endpoint, dest_port=25):
-        self.rest_endpoint = rest_endpoint
+    dest : Destination
+    dest_port : int
+
+    def __init__(self, dest : Destination, dest_port = 25):
+        self.dest = dest
         self.dest_port = dest_port
 
     # called on the first recipient in the transaction
@@ -16,5 +22,6 @@ class DestDomainPolicy(RoutingPolicy):
         domain = domain_from_address(rcpt)
         if domain is None:
             return None, None
-        return Destination(self.rest_endpoint,
-                           remote_host=[HostPort(domain, self.dest_port)]), None
+        dest = copy.copy(self.dest)
+        dest.remote_host = [HostPort(domain, self.dest_port)]
+        return dest, None

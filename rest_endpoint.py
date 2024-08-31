@@ -113,6 +113,7 @@ class RestEndpoint(SyncFilter):
         # we probably don't want the cross product of endpoints and
         # remote hosts?  Iterate endpoint on http err, remote host on
         # tx err?
+        rest_resp = None
         for remote_host in hosts:
             # TODO return last remote_host in tx "upstream_remote_host" etc
             if remote_host is not None:
@@ -137,8 +138,8 @@ class RestEndpoint(SyncFilter):
             except RequestError:
                 logging.exception('RestEndpoint._start')
                 continue
-            logging.info('RestEndpoint._start req_headers %s resp %s',
-                         req_headers, rest_resp)
+            logging.info('RestEndpoint._start req_headers %s resp %s %s',
+                         req_headers, rest_resp, rest_resp.text)
             if rest_resp.status_code != 201:
                 continue
             self.transaction_path = rest_resp.headers['location']

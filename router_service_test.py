@@ -326,6 +326,7 @@ class RouterServiceTest(unittest.TestCase):
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
+            'final_attempt_reason': 'upstream response success'
         })
 
     def test_rest_body(self):
@@ -373,6 +374,7 @@ class RouterServiceTest(unittest.TestCase):
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
+            'final_attempt_reason': 'upstream response success'
         })
 
 
@@ -526,6 +528,7 @@ class RouterServiceTest(unittest.TestCase):
             body_blob=InlineBlob(b'Hello, World!'))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         rest_endpoint.on_update(tx, tx_delta)
+        logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(tx.data_response.code, 205)
         self.assertEqual(tx.data_response.message,
                          'exploder same status: upstream data 0')

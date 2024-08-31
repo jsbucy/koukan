@@ -253,11 +253,22 @@ class Service:
                 retry_params = output_yaml.get('retry_params', {}))
             handler.handle()
         finally:
-            if storage_tx.in_attempt:
-                logging.error('handle_tx OutputHandler returned open tx')
+            assert not storage_tx.in_attempt
+
                 # TODO set next_attempt_time so we don't spin here?
-                storage_tx.write_envelope(TransactionMetadata(),
-                                          finalize_attempt=True)
+                # but don't catch this in tests so they fail with the
+                # uncaught exception
+
+                # On reflection, it seems more likely than not that
+                # getting to this point means something in the tx
+                # tickled a bug in the code and will deterministically
+                # do so again if we retry it. This makes me think we
+                # should put the db tx into some kind of "quarantine"
+                # state pending intervention. And actually assert not
+                # in_attempt if there wasn't already an exception so the
+                # tests will fail
+               # storage_tx.write_envelope(TransactionMetadata(),
+               #                           finalize_attempt=True)
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         try:

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from tempfile import TemporaryFile
 import json
+from io import IOBase
 
 from flask import (
     Flask,
@@ -24,10 +25,10 @@ class Transaction:
     CHUNK_SIZE=1048576
 
     tx_json : dict
-    file : Optional[TemporaryFile] = None
+    file : Optional[IOBase] = None
     message_json : Optional[dict] = None
 
-    blobs : Dict[str, TemporaryFile]
+    blobs : Dict[str, IOBase]
 
     def __init__(self, tx_json):
         self.blobs = {}
@@ -88,6 +89,7 @@ class Transaction:
             if self.file is not None:
                 return None  # bad
             file = TemporaryFile('w+b')
+            assert isinstance(file, IOBase)
             self.file = file
         else:
             logging.debug('create_tx_body %s %s', self.blobs, blob_id)
@@ -164,11 +166,14 @@ class Receiver:
         return tx_id, tx.get_json()
 
     def get_tx(self, tx_rest_id : str):
-        return self.transactions.get(tx_rest_id, None).get_json()
+        tx = self.transactions.get(tx_rest_id, None)
+        assert tx is not None
+        return tx.get_json()
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
-        return self.transactions.get(tx_rest_id, None).update_message_builder(
-            message_json)
+        tx = self.transactions.get(tx_rest_id, None)
+        assert tx is not None
+        return tx.update_message_builder(message_json)
 
     def create_tx_body(self, tx_rest_id : str,
                        upload_chunked : bool,
@@ -197,10 +202,11 @@ class Receiver:
     def cancel_tx(self, tx_rest_id : str):
         return self.transactions[tx_rest_id].cancel()
 
-def create_app():
+def create_app(receiver = None):
     app = Flask(__name__)
 
-    receiver = Receiver()
+    if receiver is None:
+        receiver = Receiver()
 
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')

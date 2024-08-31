@@ -266,7 +266,7 @@ _tx_fields = [
     TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
-    TxField('final_attempt_reason', validity=[WhichJson.REST_READ])
+    TxField('final_attempt_reason', validity=set([WhichJson.REST_READ]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 

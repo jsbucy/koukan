@@ -158,7 +158,8 @@ class Config:
             verify=yaml.get('verify', True))
 
     def router_policy_dest_domain(self, policy_yaml):
-        return DestDomainPolicy(policy_yaml['endpoint'])
+        return DestDomainPolicy(self._route_destination(policy_yaml),
+                                policy_yaml.get('dest_port', 25))
 
     def _route_destination(self, yaml):
         dest = yaml.get('destination', None)

@@ -495,7 +495,9 @@ class TransactionCursor:
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
             return None
-        self.tx.final_attempt_reason = self.final_attempt_reason
+        # XXX causes conflicts
+        if self.final_attempt_reason != 'oneshot':
+            self.tx.final_attempt_reason = self.final_attempt_reason
 
         sel_body = select(self.parent.tx_blobref_table.c.blob_id).where(
             self.parent.tx_blobref_table.c.transaction_id == self.id,

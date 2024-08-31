@@ -61,8 +61,9 @@ endpoint:
   - filter: router
     policy:
       name: dest_domain
-      endpoint: https://localhost:8001
-      http_host: outbound  # matches gw
+      destination:
+        endpoint: https://localhost:8001
+        http_host: outbound  # currently hard-coded in gw
   - filter: router
     policy:
       name: address_list
@@ -77,7 +78,6 @@ endpoint:
     static_hosts:
       - host: 127.0.0.1
         port: 3025
-    overwrite: true
   - filter: rest_output
     verify: localhost.crt
     rcpt_timeout: 5
@@ -115,7 +115,7 @@ endpoint:
       name: address_list
       domains:
       - d
-      delimiter: '+'
+      #delimiter: '+'
       #prefixes:
       #- base: alice
       destination:

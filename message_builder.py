@@ -115,7 +115,11 @@ class MessageBuilder:
             field_json['unix_secs'], tz=tz)
 
     def _add_headers(self, builder):
-        for k,v in self.header_json:
+        for header in self.header_json:
+            if len(header) != 2:
+                logging.debug('_add_headers bad header %s', header)
+                continue
+            k,v = header
             if adder := self._header_adders.get(k, None):
                 adder(self, k, v, builder)
             else:
