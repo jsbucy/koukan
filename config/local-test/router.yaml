@@ -120,6 +120,7 @@ endpoint:
       #- base: alice
       destination:
         endpoint: https://localhost:8001
+        http_host: outbound
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -147,9 +148,7 @@ endpoint:
         port: 3025
     overwrite: true
   - filter: rest_output
-    #static_endpoint: http://localhost:8002
     verify: localhost.crt
-    http_host: outbound
     rcpt_timeout: 5
     data_timeout: 5
 
