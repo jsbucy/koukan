@@ -22,6 +22,14 @@ from examples.cli.send_message import Sender
 
 from examples.receiver.receiver import Receiver, create_app
 from hypercorn_main import run
+import postgres_test_utils
+
+def setUpModule():
+    postgres_test_utils.setUpModule()
+
+def tearDownModule():
+    postgres_test_utils.tearDownModule()
+
 
 class End2EndTest(unittest.TestCase):
     def _find_free_port(self):
@@ -87,6 +95,7 @@ class End2EndTest(unittest.TestCase):
         router_listener_yaml['addr'] = ['localhost', self.router_rest_port]
         del router_listener_yaml['cert']
         del router_listener_yaml['key']
+        self.pg = postgres_test_utils.setup_postgres(router_yaml['storage'])
 
         self.fake_smtpd_port = self._find_free_port()
 

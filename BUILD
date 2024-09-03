@@ -80,7 +80,8 @@ py_test(name='storage_test_sqlite',
         srcs=['storage_test.py'],
         deps=[':storage',
               ':rest_schema',
-              ':version_cache'])
+              ':version_cache',
+              ':postgres_test_utils'])
 
 py_test(name='storage_test_sqlite_inmemory',
         args=['StorageTestSqliteInMemory'],
@@ -88,7 +89,8 @@ py_test(name='storage_test_sqlite_inmemory',
         srcs=['storage_test.py'],
         deps=[':storage',
               ':rest_schema',
-              ':version_cache'])
+              ':version_cache',
+              ':postgres_test_utils'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
@@ -96,7 +98,8 @@ py_test(name='storage_test_postgres',
         srcs=['storage_test.py'],
         deps=[':storage',
               ':rest_schema',
-              ':version_cache'])
+              ':version_cache',
+              ':postgres_test_utils'])
 
 pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
@@ -389,7 +392,8 @@ py_test(name='router_service_test_flask',
               ':blob',
               ':config',
               ':fake_endpoints',
-              ':filter'],
+              ':filter',
+              ':postgres_test_utils'],
         data=['testdata/multipart.msg'])
 
 py_test(name='router_service_test_fastapi',
@@ -402,7 +406,8 @@ py_test(name='router_service_test_fastapi',
               ':blob',
               ':config',
               ':fake_endpoints',
-              ':filter'],
+              ':filter',
+              ':postgres_test_utils'],
         data=['testdata/multipart.msg'])
 
 pytype_library(name='smtp_auth',
@@ -482,6 +487,9 @@ py_test(name='gateway_test',
               ':blob',
               ':config'])
 
+pytype_library(name='postgres_test_utils',
+               srcs=['postgres_test_utils.py'])
+
 py_test(name='end2end_test',
         srcs=['end2end_test.py'],
         data=['config/local-test/router.yaml',
@@ -494,6 +502,7 @@ py_test(name='end2end_test',
               ':hello_filter',
               ':ssmtp',
               ':fake_smtpd',
+              ':postgres_test_utils',
               '//examples/cli:send_message',
               '//examples/receiver:receiver'])
 

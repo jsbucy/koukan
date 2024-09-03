@@ -1,3 +1,5 @@
+from typing import Optional
+
 from threading import Thread
 import time
 import unittest
@@ -20,14 +22,14 @@ from rest_schema import BlobUri
 
 from version_cache import IdVersionMap
 
-def setUpModule():
-    global pg_factory
-    pg_factory = testing.postgresql.PostgresqlFactory(cache_initialized_db=True)
+import postgres_test_utils
 
+
+def setUpModule():
+    postgres_test_utils.setUpModule()
 
 def tearDownModule():
-    global pg_factory
-    pg_factory.clear_cache()
+    postgres_test_utils.tearDownModule()
 
 
 class StorageTestBase(unittest.TestCase):
@@ -276,6 +278,7 @@ class StorageTestBase(unittest.TestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
+        old_session._del_session()
         old_session.engine = None
         try:
             del old_session
@@ -493,48 +496,25 @@ class StorageTestSqliteInMemory(StorageTestBase):
 
 
 class StorageTestPostgres(StorageTestBase):
-    def postgres_url(self, unix_socket_dir, port, db):
-        url = 'postgresql://postgres@/' + db + '?'
-        url += ('host=' + unix_socket_dir)
-        url += ('&port=%d' % port)
-        return url
+    pg : Optional[object] = None
+    storage_yaml : Optional[dict] = None
 
     def setUp(self):
         super().setUp()
 
-        global pg_factory
-        self.pg = pg_factory()
-        self.unix_socket_dir = self.pg.base_dir + '/tmp'
-        self.port = self.pg.dsn()['port']
-        self.url = self.postgres_url(self.unix_socket_dir, self.port, 'postgres')
-        logging.info('StorageTest setup_postgres %s', self.url)
-
-        with psycopg.connect(self.url) as conn:
-            conn.autocommit = True
-            with conn.cursor() as cursor:
-                try:
-                    cursor.execute('drop database storage_test;')
-                except psycopg.errors.InvalidCatalogName:
-                    pass
-                cursor.execute('create database storage_test;')
-                conn.commit()
-
-        self.url = self.postgres_url(self.unix_socket_dir, self.port, 'storage_test')
-        with psycopg.connect(self.url) as conn:
-            with open('init_storage_postgres.sql', 'r') as f:
-                with conn.cursor() as cursor:
-                    cursor.execute(f.read())
-
-        self.s = Storage.connect_postgres(
-            self.version_cache,
-            db_user='postgres', db_name='storage_test',
-            unix_socket_dir=self.unix_socket_dir, port=self.port)
+        self.s = self._connect()
 
     def _connect(self):
+        if self.pg is None:
+            self.storage_yaml = {}
+            self.pg = postgres_test_utils.setup_postgres(self.storage_yaml)
+
         return Storage.connect_postgres(
             self.version_cache,
-            db_user='postgres', db_name='storage_test',
-            unix_socket_dir=self.unix_socket_dir, port=self.port)
+            db_user='postgres',
+            db_name='storage_test',
+            unix_socket_dir=self.storage_yaml['unix_socket_dir'],
+            port=self.storage_yaml['port'])
 
 
 if __name__ == '__main__':
