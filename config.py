@@ -214,6 +214,7 @@ class Config:
         if host_list:
             static_resolution = Resolution(
                 [HostPort.from_yaml(h) for h in host_list])
+        # TODO add option for mx resolution (vs just A)
         return DnsResolutionFilter(
             next,
             static_resolution=static_resolution,
