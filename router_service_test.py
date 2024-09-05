@@ -34,6 +34,8 @@ root_yaml = {
     'global': {
         'tx_idle_timeout': 5,
         'gc_interval': None,
+        # XXX only the notification tests still micromanage this, it
+        # should be enabled for the rest
         'dequeue': False,
         'mailer_daemon_mailbox': 'mailer-daemon@d',
         'rest_id_entropy': 2

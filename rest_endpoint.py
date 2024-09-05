@@ -468,13 +468,14 @@ class RestEndpoint(SyncFilter):
                     entity = None
 
                 logging.info('RestEndpoint._put_blob_chunk POST %s', endpoint)
-                rest_resp = self.client.post(
+                method, exp_code = (self.client.put, 200) if non_body_blob else (self.client.post, 201)
+                rest_resp = method(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
                 logging.info('RestEndpoint._put_blob_chunk POST %s %s %s',
                              endpoint,
                              rest_resp, rest_resp.headers)
-                if rest_resp.status_code != 201:
+                if rest_resp.status_code != exp_code:
                     return None, None
                 if blob_rest_id is None and non_body_blob:
                     self.blob_path = rest_resp.headers.get('location', None)

@@ -914,9 +914,9 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '200 ok'))
 
-        # POST /transactions/123/blob/blob_id
+        # PUT /transactions/123/blob/blob_id
         self.responses.append(Response(
-            http_resp = '201 created'))
+            http_resp = '200 ok'))
 
         # POST /transactions/123/body
         self.responses.append(Response(

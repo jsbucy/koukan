@@ -329,6 +329,18 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertIsNotNone(blob_reader)
         self.assertEqual(blob_reader.read(0), b.encode('utf-8'))
 
+    def test_create_leased(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'inline',
+            create_leased=True)
+
+        tx = TransactionMetadata(
+            host = 'outbound-gw',
+            mail_from=Mailbox('alice'))
+        filter.update(tx, tx.copy())
+
+        self.assertIsNone(self.storage.load_one())
 
 if __name__ == '__main__':
     unittest.main()

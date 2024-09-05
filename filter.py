@@ -384,6 +384,10 @@ class TransactionMetadata:
             out += 'notification=%s ' % self.notification
         if self.retry is not None:
             out += 'retry=%s ' % self.retry
+        if self.parsed_json is not None:
+            out += 'parsed_json=%s ' % self.parsed_json
+        if self.parsed_blobs is not None:
+            out += 'parsed_blobs=%s ' % self.parsed_blobs
         return out
 
     def empty(self, which_js : WhichJson):

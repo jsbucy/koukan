@@ -59,5 +59,29 @@ class DkimEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
         self.assertEqual(upstream_delta.data_response.code, 203)
 
+
+    def test_bad(self):
+        upstream = FakeSyncFilter()
+        dkim_endpoint = DkimEndpoint('example.com', 'selector123',
+                                     self.privkey, upstream)
+
+        tx = TransactionMetadata(
+            remote_host=HostPort('example.com', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob@domain')])
+        tx.body_blob = InlineBlob(
+            b'definitely not valid rfc822\r\n')
+        upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.data_response.code, 500)
+        self.assertEqual(upstream_delta.data_response.code, 500)
+
+        def exp(tx, delta):
+            self.assertTrue(tx.cancelled)
+            return TransactionMetadata()
+        upstream.add_expectation(exp)
+        cancel = TransactionMetadata(cancelled=True)
+        tx.merge_from(cancel)
+        upstream_delta = dkim_endpoint.on_update(tx, cancel)
+
 if __name__ == '__main__':
     unittest.main()

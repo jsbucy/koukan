@@ -18,7 +18,7 @@ class MessageParserFilterTest(unittest.TestCase):
             b = f.read()
         tx=TransactionMetadata(
             body_blob=InlineBlob(b, len(b)))
-        tx.options = {'receive_parsing': {}}
+        tx.options = {'receive_parsing': None}
 
         upstream = FakeSyncFilter()
         def exp(tx, delta):

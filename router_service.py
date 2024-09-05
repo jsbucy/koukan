@@ -225,13 +225,21 @@ class Service:
 
     def _handle_new_tx(self, writer : StorageWriterFilter):
         tx_rest_id = writer.get_rest_id()
+        if tx_rest_id is None:
+            logging.info('RouterService._handle_new_tx writer %s, '
+                         'rest_id is None, downstream error?', writer)
+            return
         logging.debug('RouterService._handle_new_tx %s', tx_rest_id)
         while True:
             try:
                 tx_cursor = self.storage.get_transaction_cursor()
                 tx_cursor.load(rest_id=tx_rest_id, start_attempt=True)
                 break
+            # xxx cursor.load() should handle this, this may leave an
+            # open attempt, etc
             except VersionConflictException:
+                logging.info('_handle_new_tx VersionConflictException %s',
+                             tx_rest_id)
                 pass
         endpoint, endpoint_yaml = self.config.get_endpoint(tx_cursor.tx.host)
         self.handle_tx(tx_cursor, endpoint, endpoint_yaml)

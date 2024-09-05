@@ -40,6 +40,7 @@ class StorageWriterFilter(AsyncFilter):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
+        self.create_leased = create_leased
         self.mu = Lock()
         self.cv = Condition(self.mu)
 
@@ -53,7 +54,11 @@ class StorageWriterFilter(AsyncFilter):
 
     def get_rest_id(self):
         with self.mu:
-            self.cv.wait_for(lambda: self.rest_id is not None)
+            # XXX if the downstream side threw before it created the
+            # db tx, this will time out. Maybe better to just take a
+            # callable to start the upstream after that has succeeded.
+            if not self.cv.wait_for(lambda: self.rest_id is not None, 30):
+                return None
             return self.rest_id
 
     def version(self) -> Optional[int]:

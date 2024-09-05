@@ -39,13 +39,15 @@ class MessageParserFilter(SyncFilter):
         if (not self.parsed and
             (tx.options and 'receive_parsing' in tx.options) and
             tx.body_blob is not None and tx.body_blob.finalized()):
+            parse_options = tx.options.get('receive_parsing', {})
+            parse_options = parse_options if parse_options else {}
             file = TemporaryFile('w+b')
             file.write(tx.body_blob.read(0))
             file.flush()
             file.seek(0)
             parser = MessageParser(
                 self._blob_factory,
-                max_inline=tx.options.get('receive_parsing_max_inline', 65536))
+                max_inline=parse_options.get('max_inline', 65536))
             parsed_message = parser.parse(file)
             file.close()
             parsed = self.parsed = True

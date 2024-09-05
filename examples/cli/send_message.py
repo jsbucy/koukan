@@ -21,14 +21,20 @@ class Sender:
     message_builder : dict
     # has blobs uris referencing first first recipient transaction
     message_builder_blobs : Optional[dict] = None
+    body_filename : Optional[str] = None
+    body_path : Optional[str] = None
 
-    def __init__(self, mail_from : str, message_builder : dict,
+    def __init__(self, mail_from : str,
+                 message_builder : Optional[dict] = None,
+                 body_filename : Optional[str] = None,
                  base_url = 'https://localhost:8000'):
         self.session = requests.Session()
         self.session.verify = 'localhost.crt'
         self.mail_from = mail_from
         self.message_builder = message_builder
-        self.fixup_headers()
+        self.body_filename = body_filename
+        if self.message_builder:
+            self.fixup_headers()
         self.base_url = base_url
 
     # -> url path (for reuse)
@@ -107,7 +113,11 @@ class Sender:
             # request to send it the same way we send the original message.
             'notification': {'host': 'msa-output' }
         }
-        if self.message_builder_blobs is None:
+        if self.body_path is not None:
+            tx_json['body'] = self.body_path
+        elif self.body_filename is not None:
+            pass
+        elif self.message_builder_blobs is None:
             tx_json['message_builder'] = self.strip_filenames(
                 copy.deepcopy(self.message_builder))
         else:
@@ -124,7 +134,7 @@ class Sender:
             headers={'host': 'msa-output',
                      'request-timeout': '5'},
             json=tx_json)
-        logging.debug('POST /transactions %s', rest_resp)
+        logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
 
@@ -144,7 +154,17 @@ class Sender:
                              resp_field, rest_resp, rest_resp.json())
                 return
 
-        if self.message_builder_blobs is None:
+        if self.body_filename is not None and self.body_path is None:
+            with open(self.body_filename, 'rb') as body_file:
+                body_path = tx_path + '/body'
+                resp = self.session.post(
+                    urljoin(self.base_url, body_path),
+                    data=body_file)
+                logging.debug('POST %s %s %s', body_path, resp, resp.text)
+                if resp.status_code == 201:
+                    self.body_path = body_path
+        elif (self.message_builder is not None and
+              self.message_builder_blobs is None):
             if not self.send_body(tx_path, self.message_builder):
                 return
             logging.info('main message_builder spec %s',
@@ -177,6 +197,7 @@ class Sender:
                     logging.debug('etag %s', etag)
                 else:
                     etag = None
+            # xxx rest_resp.status_code?
             tx_json = rest_resp.json()
 
             for resp in ['mail_response', 'rcpt_response', 'data_response']:
@@ -252,6 +273,8 @@ if __name__ == '__main__':
 
     logging.debug(args.rcpt_to)
 
-    sender = Sender(args.mail_from, message_builder=message_builder)
+    sender = Sender(args.mail_from,
+                    message_builder=message_builder,
+                    body_filename=args.rfc822_filename)
     for rcpt in args.rcpt_to:
         sender.send(rcpt)

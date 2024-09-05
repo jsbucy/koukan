@@ -14,6 +14,7 @@ class DkimEndpoint(SyncFilter):
     data : bytes = None
     upstream : SyncFilter
     body_blob : Optional[Blob] = None
+    err = False
 
     def __init__(self, domain : str, selector : str, privkey,
                  upstream : SyncFilter):
@@ -28,11 +29,19 @@ class DkimEndpoint(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         built = False
         if (self.body_blob is None and
+            not self.err and
             tx.body_blob is not None
             and tx.body_blob.finalized()):
             self.body_blob = CompositeBlob()
-            sig = InlineBlob(self.sign(tx.body_blob))
-            self.body_blob.append(sig, 0, sig.len())
+            sig = self.sign(tx.body_blob)
+            if sig is None:
+                self.err = True
+                err = TransactionMetadata(data_response=Response(
+                    500, 'signing failed (DkimEndpoint'))
+                tx.merge_from(err)
+                return err
+            sig_blob = InlineBlob(sig)
+            self.body_blob.append(sig_blob, 0, sig_blob.len())
             self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
             built = True
 
@@ -49,7 +58,7 @@ class DkimEndpoint(SyncFilter):
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
-    def sign(self, blob : Blob):
+    def sign(self, blob : Blob) -> Optional[bytes]:
         data = blob.read(0)
         # TODO dkimpy wants to get the entire message as a single
         # bytes value, a better interface for this would be to push
@@ -60,10 +69,12 @@ class DkimEndpoint(SyncFilter):
         # length=False, logger=None, linesep='\r\n', tlsrpt=False)
 
         # TODO need to handle IDN here?
-        sig = dkim.sign(data, self.selector.encode('us-ascii'),
-                        self.domain.encode('us-ascii'),
-                        self.privkey,
-                        include_headers=[b'From', b'Date', b'Message-ID'])
-        return sig
 
-
+        try:
+            return dkim.sign(data, self.selector.encode('us-ascii'),
+                             self.domain.encode('us-ascii'),
+                             self.privkey,
+                             include_headers=[b'From', b'Date', b'Message-ID'])
+        except dkim.DKIMException as e:
+            logging.info('failed to sign %s', e)
+            return None

@@ -126,7 +126,7 @@ class MessageParser:
         if part.get_content_maintype() == 'text' and (
                 self.inline + len(part.get_content()) < self.max_inline):
             utf8_len = len(part.get_content().encode('utf-8'))
-            if self.inline + utf8_len < self.max_inline:
+            if (self.inline + utf8_len) < self.max_inline:
                 out['content'] = part.get_content()
                 self.inline += utf8_len
                 return
