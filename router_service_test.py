@@ -272,22 +272,25 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(tx, tx.copy())
 
-        tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_rest_smoke create %s',
-                      tx_json)
-        if 'attempt_count' in tx_json:
-            del tx_json['attempt_count']
-        self.assertEqual(tx_json, {
-            #'attempt_count': 1,
-            #'retry': {},
-            'mail_from': {},
-            'rcpt_to': [{}],
-            'body': {},
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_response': [{'code': 202, 'message': 'ok'}],
-            'data_response': {'code': 203, 'message': 'ok'},
-            'final_attempt_reason': 'upstream response success'
-        })
+        for i in range(0,5):
+            tx_json = rest_endpoint.get_json(timeout=2)
+            logging.debug('RouterServiceTest.test_rest_smoke create %s',
+                          tx_json)
+            if 'attempt_count' in tx_json:
+                del tx_json['attempt_count']
+            if tx_json == {
+                #'attempt_count': 1,
+                #'retry': {},
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'},
+                'final_attempt_reason': 'upstream response success'}:
+                break
+        else:
+            self.fail('didn\'t get expected transaction %s' % tx_json)
 
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')

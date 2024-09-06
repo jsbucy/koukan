@@ -304,6 +304,11 @@ class TransactionCursor:
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
 
+        if tx_delta.cancelled and (
+                self.final_attempt_reason is not None and
+                self.final_attempt_reason != 'oneshot'):
+            return
+
         assert (self.final_attempt_reason == 'oneshot' or
                 self.final_attempt_reason is None or
                 final_attempt_reason is None)

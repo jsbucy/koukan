@@ -80,6 +80,27 @@ class StorageWriterFilterTest(unittest.TestCase):
         cursor.load(rest_id='tx_rest_id')
         self.assertEqual(cursor.final_attempt_reason, 'downstream cancelled')
 
+    def test_cancel_noop(self):
+        orig_tx_cursor = self.storage.get_transaction_cursor()
+        orig_tx = TransactionMetadata(
+            host = 'outbound-gw',
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')])
+        orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
+        orig_tx_cursor.load(start_attempt=True)
+        orig_tx_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(550)),
+            finalize_attempt=True,
+            final_attempt_reason='upstream permfail')
+
+        filter = StorageWriterFilter(self.storage, rest_id='tx_rest_id')
+        filter.get()
+        cancel = TransactionMetadata(cancelled=True)
+        filter.update(cancel, cancel.copy())
+
+        orig_tx_cursor.load()
+        self.assertIsNone(orig_tx_cursor.tx.cancelled)
+
     # representative of Exploder which writes body_blob=BlobReader
     def test_body_blob_reader(self):
         orig_tx_cursor = self.storage.get_transaction_cursor()
