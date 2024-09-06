@@ -219,8 +219,11 @@ class OutputHandler:
                     notification_done=notification_done)
                 break
             except VersionConflictException:
-                # XXX VersionConflictException?
-                self.cursor.load()
+                # cf above
+                try:
+                    self.cursor.load()
+                except VersionConflictException:
+                    pass
 
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
