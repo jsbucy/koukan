@@ -45,49 +45,58 @@ class StorageTestBase(unittest.TestCase):
         self.s._del_session()
         self.s.engine.dispose()
 
-    def test_basic(self):
-        tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'),
-                         create_leased=True)
+    def test_basic_lifecycle(self):
+        downstream = self.s.get_transaction_cursor()
+        downstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host'),
+            create_leased=True)
 
-        tx_writer.write_envelope(TransactionMetadata(
+        downstream.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
 
-        tx_reader = self.s.get_transaction_cursor()
-        tx_reader.load(tx_writer.id, start_attempt=True)
-        tx_reader.write_envelope(TransactionMetadata(
+        upstream = downstream
+        del downstream
+
+        buggy = self.s.get_transaction_cursor()
+        with self.assertRaises(VersionConflictException):
+            buggy.load(rest_id='tx_rest_id', start_attempt=True)
+
+        upstream.load(start_attempt=True)
+        upstream.write_envelope(TransactionMetadata(
             mail_response=Response(450)))
 
-        tx_writer.load()  # pick up version
-        tx_writer.write_envelope(TransactionMetadata(
+        downstream = self.s.get_transaction_cursor()
+        downstream.load(rest_id='tx_rest_id')
+        downstream.write_envelope(TransactionMetadata(
             rcpt_to=[Mailbox('bob')]))
-        self.assertEqual(tx_writer.tx.remote_host.host, 'remote_host')
-        self.assertEqual(tx_writer.tx.host, 'host')
-        self.assertEqual(tx_writer.tx.mail_from.mailbox, 'alice')
-        self.assertEqual(tx_writer.tx.mail_response.code, 450)
-        self.assertEqual(tx_writer.tx.rcpt_to[0].mailbox, 'bob')
+        self.assertEqual(downstream.tx.remote_host.host, 'remote_host')
+        self.assertEqual(downstream.tx.host, 'host')
+        self.assertEqual(downstream.tx.mail_from.mailbox, 'alice')
+        self.assertEqual(downstream.tx.mail_response.code, 450)
+        self.assertEqual(downstream.tx.rcpt_to[0].mailbox, 'bob')
 
         with self.s.begin_transaction() as db_tx:
-            self.assertTrue(tx_writer.check_input_done(db_tx))
+            self.assertTrue(downstream.check_input_done(db_tx))
 
         blob_writer = self.s.create_blob(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
 
         with self.s.begin_transaction() as db_tx:
-            self.assertFalse(tx_writer.check_input_done(db_tx))
+            self.assertFalse(downstream.check_input_done(db_tx))
 
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
 
-        tx_writer.load()
-        tx_version = tx_writer.version
+        downstream.load()
+        tx_version = downstream.version
         blob_writer.append_data(3, d=b'xyz', content_length=9)
         self.assertFalse(blob_writer.last)
 
         # blob write should ping tx version
-        tx_writer.load()
-        self.assertNotEqual(tx_version, tx_writer.version)
+        downstream.load()
+        self.assertNotEqual(tx_version, downstream.version)
 
         blob_writer = self.s.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
@@ -95,19 +104,19 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(blob_writer.last)
         del blob_writer
 
-        tx_writer.load()
-        tx_writer.write_envelope(
+        downstream.load()
+        downstream.write_envelope(
             TransactionMetadata(
                 retry={'max_attempts': 100}))
         logging.info('test_basic check tx input done')
-        self.assertTrue(tx_writer.input_done)
+        self.assertTrue(downstream.input_done)
 
-        tx_reader.load()
-        self.assertEqual(tx_reader.tx.retry['max_attempts'], 100)
-        tx_reader.write_envelope(TransactionMetadata(
+        upstream.load()
+        self.assertEqual(upstream.tx.retry['max_attempts'], 100)
+        upstream.write_envelope(TransactionMetadata(
             rcpt_response=[Response(456)]))
 
-        tx_reader.write_envelope(TransactionMetadata(),
+        upstream.write_envelope(TransactionMetadata(),
                                  finalize_attempt = True)
 
         blob_reader = self.s.get_blob_for_read(
@@ -119,31 +128,31 @@ class StorageTestBase(unittest.TestCase):
         b = blob_reader.read(4, 3)
         self.assertEqual(b'yzu', b)
 
-        tx_reader = self.s.load_one()
-        self.assertFalse(tx_reader.no_final_notification)
-        tx_reader.write_envelope(TransactionMetadata(), finalize_attempt=True)
+        upstream = self.s.load_one()
+        self.assertFalse(upstream.no_final_notification)
+        upstream.write_envelope(TransactionMetadata(), finalize_attempt=True)
 
-        tx_reader = self.s.load_one()
-        self.assertIsNotNone(tx_reader)
-        self.assertEqual(tx_reader.id, tx_writer.id)
-        self.assertIsNone(tx_reader.tx.mail_response)
-        self.assertEqual(tx_reader.tx.rcpt_response, [])
-        self.assertIsNone(tx_reader.tx.data_response)
+        upstream = self.s.load_one()
+        self.assertIsNotNone(upstream)
+        self.assertEqual(upstream.id, downstream.id)
+        self.assertIsNone(upstream.tx.mail_response)
+        self.assertEqual(upstream.tx.rcpt_response, [])
+        self.assertIsNone(upstream.tx.data_response)
 
-        tx_reader.write_envelope(
+        upstream.write_envelope(
             TransactionMetadata(),
             final_attempt_reason = 'retry max attempts',
             finalize_attempt = True)
         self.assertIsNone(self.s.load_one())
 
         self.assertTrue(self.s._refresh_session())
-        tx_writer.load()
-        tx_writer.write_envelope(
+        downstream.load()
+        downstream.write_envelope(
             TransactionMetadata(notification={'yes': True}))
-        tx_reader = self.s.load_one()
-        self.assertIsNotNone(tx_reader)
-        self.assertTrue(tx_reader.no_final_notification)
-        tx_reader.write_envelope(TransactionMetadata(), notification_done=True)
+        upstream = self.s.load_one()
+        self.assertIsNotNone(upstream)
+        self.assertTrue(upstream.no_final_notification)
+        upstream.write_envelope(TransactionMetadata(), notification_done=True)
         self.assertIsNone(self.s.load_one())
 
         logging.debug(self.s.debug_dump())

@@ -27,6 +27,8 @@ class StorageWriterFilter(AsyncFilter):
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
     create_leased : bool = False
+    # none if still inflight, true if success, false if err/uncaught exception
+    created : Optional[bool] = None
 
     mu : Lock
     cv : Condition
@@ -52,14 +54,17 @@ class StorageWriterFilter(AsyncFilter):
     async def wait_async(self, timeout):
         return await self.tx_cursor.wait_async(timeout)
 
-    def get_rest_id(self):
+    def release_transaction_cursor(self) -> Optional[TransactionCursor]:
         with self.mu:
-            # XXX if the downstream side threw before it created the
-            # db tx, this will time out. Maybe better to just take a
-            # callable to start the upstream after that has succeeded.
-            if not self.cv.wait_for(lambda: self.rest_id is not None, 30):
+            if not self.cv.wait_for(lambda: self.created is not None, 30):
+                logging.warning(
+                    'StorageWriterFilter.get_transaction_cursor timeout')
                 return None
-            return self.rest_id
+            elif not self.created:
+                return None
+            cursor = self.tx_cursor
+            self.tx_cursor = None
+            return cursor
 
     def version(self) -> Optional[int]:
         if self.tx_cursor is None:
@@ -191,6 +196,20 @@ class StorageWriterFilter(AsyncFilter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        needs_create = self.rest_id is None
+        try:
+            return self._update(tx, tx_delta)
+        finally:
+            if needs_create and self.created is None:
+                # i.e. uncaught exception
+                with self.mu:
+                    self.created = False
+                    self.cv.notify_all()
+
+    def _update(self,
+               tx : TransactionMetadata,
+               tx_delta : TransactionMetadata
+               ) -> Optional[TransactionMetadata]:
         logging.debug('StorageWriterFilter.update tx %s %s',
                       self.rest_id, tx)
         logging.debug('StorageWriterFilter.update tx_delta %s %s',
@@ -288,6 +307,11 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter.update %s result %s '
                       'input tx %s',
                       self.rest_id, self.tx_cursor.tx, tx)
+
+        if created:
+            with self.mu:
+                self.created = True
+                self.cv.notify_all()
 
         # TODO even though this no longer does inflight waiting on the
         # upstream, it's possible one of the version conflict paths

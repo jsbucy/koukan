@@ -61,6 +61,9 @@ class TransactionCursor:
 
     in_attempt : bool = False
 
+    # this TransactionCursor object created this tx db row
+    created : bool = False
+
     def __init__(self, storage,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
@@ -128,6 +131,7 @@ class TransactionCursor:
             self.tx.rest_id = rest_id
 
         self._update_version_cache()
+        self.created = True
 
     def _reuse_blob(self, db_tx, blob_rest_id : List[BlobUri]
                     ) -> List[Tuple[int, str, bool]]:
@@ -551,21 +555,21 @@ class TransactionCursor:
         self._load_db(db_tx, db_id=db_id)
         assert self.tx is not None
         new_version = version + 1
-        # XXX this is error-prone
-        # TODO the session_id == our session id case is the common
-        # case for cutthrough where it's created in the downstream
-        # flow with create_leased=True but then ~synchronously loaded in
-        # the output flow with start_attempt=True
+
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
-                      self.parent.tx_table.c.version == version,
-                      or_(self.parent.tx_table.c.inflight_session_id ==
-                            self.parent.session_id,
-                          self.parent.tx_table.c.inflight_session_id.is_(None)))
+                      self.parent.tx_table.c.version == version)
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id,
                        inflight_session_live = True)
                .returning(self.parent.tx_table.c.version))
+
+        if self.created:
+            upd = upd.where(self.parent.tx_table.c.inflight_session_id ==
+                            self.parent.session_id)
+        else:
+            upd = upd.where(
+                self.parent.tx_table.c.inflight_session_id.is_(None))
 
         # tx without retries enabled can only be loaded once
         if self.tx.retry is None:

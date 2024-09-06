@@ -84,7 +84,7 @@ class OutputHandler:
 
         while True:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
-                         self.rest_id, self.cursor.tx, self.cursor.input_done)
+                          self.rest_id, self.cursor.tx, self.cursor.input_done)
 
             if not self.cursor.input_done and self.cursor.tx.message_builder:
                 del self.cursor.tx.message_builder
