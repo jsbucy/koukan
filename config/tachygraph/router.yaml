@@ -2,9 +2,16 @@ global:
   dequeue: true
   gc_interval: 5
   tx_idle_timeout: 60
+  executor:
+    max_inflight: 100
+    watchdog_timeout: 3600
+  # needs to authenticate!
+  mailer_daemon_mailbox: mailer-daemon@tachygraph.gloop.org
 
 rest_listener:
-  use_gunicorn: false
+  use_hypercorn: true
+  use_fastapi: true
+
   addr: ["127.0.0.1", 8000]
   # cert:
   # key:
@@ -12,28 +19,41 @@ rest_listener:
 endpoint:
 - name: outbound-gw
   msa: true
+  output_handler:
+    downstream_env_timeout: 60
+    downstream_data_timeout: 300
   chain:
+  - filter: relay_auth
+    smtp_auth: true
   - filter: exploder
     output_chain: msa-output
     msa: true
-    max_attempts: 100
     rcpt_timeout: 40
     data_timeout: 70
+    default_notifications:
+      host: msa-output
 
 - name: msa-output
   msa: true
   chain:
+  - filter: remote_host
+  # message_builder must be chained before anything that wants to
+  # access/modify the message: received_header, dkim
+  - filter: message_builder
+  - filter: received_header
+    received_hostname: tachygraph.gloop.org
+  # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
+      destination:
+        endpoint: http://localhost:8001
+        http_host: outbound
   - filter: dkim
     key: dkim.key
     domain: sandbox.gloop.org
     selector: tachygraph20230720
   - filter: rest_output
-    static_endpoint: http://localhost:8001
-    http_host: outbound
-    remote_host_discovery: mx
     rcpt_timeout: 30
     data_timeout: 60
 
@@ -46,26 +66,53 @@ endpoint:
     max_attempts: 3
     rcpt_timeout: 40
     data_timeout: 70
+    default_notifications:
+      host: msa-output
 
 - name: mx-out
   msa: false
+  output_handler:
+    downstream_env_timeout: 60
+    downstream_data_timeout: 300
   chain:
+  - filter: remote_host
+  # message_builder must be chained before anything that wants to
+  # access/modify the message: received_header, dkim
+  - filter: message_builder
+  - filter: received_header
+    received_hostname: tachygraph.gloop.org
   - filter: router
     policy:
-      name: local_domain
+      name: address_list
+      delimiter: '+'
+      prefixes:
+      - bucy
       domains:
-      - name: sandbox.gloop.org
+      - sandbox.gloop.org
+      destination:
+        endpoint: http://localhost:8001
+        http_host: outbound
+        host_list:
+          - host: aspmx.l.google.com
+            port: 25
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest -> reject all
+  - filter: dns_resolution
+    suffix: ''  # match everything
   - filter: rest_output
-    static_endpoint: http://localhost:8001
-    http_host: outbound
-    static_remote_host:
-      host: aspmx.l.google.com
-      port: 25
     rcpt_timeout: 30
     data_timeout: 60
 
 
 storage:
-  db_filename: storage.sqlite3
+#  db_filename: storage.sqlite3
+  engine: postgres
+  postgres_db_name: pykk
+  unix_socket_dir: /var/run/postgresql
+  postgres_user: rangifer
 
 
+  gc_interval: 300
+  gc_ttl: 604800  # 7 days
