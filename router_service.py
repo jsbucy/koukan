@@ -57,7 +57,7 @@ class Service:
     # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
-    hypercorn_shutdown : Optional[List[asyncio.Future]] = None
+    hypercorn_shutdown : Optional[asyncio.Event] = None
 
     def __init__(self, config=None):
         self.lock = Lock()
@@ -79,16 +79,16 @@ class Service:
             self.cv.wait_for(lambda: self._shutdown, timeout)
 
     def shutdown(self):
-        if self._shutdown:
-            return
         logging.info("router_service shutdown()")
         with self.lock:
+            if self._shutdown:
+                return
             self._shutdown = True
 
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
             try:
-                self.hypercorn_shutdown[0].set_result(True)
+                self.hypercorn_shutdown.set()
             except:
                 pass
 
@@ -100,6 +100,7 @@ class Service:
             assert(self.executor.shutdown(timeout=10))
 
         self.storage._del_session()
+        logging.info("router_service shutdown() done")
 
     def wait_started(self, timeout=None):
         with self.lock:
@@ -184,7 +185,7 @@ class Service:
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)
-        self.hypercorn_shutdown = []
+        self.hypercorn_shutdown = asyncio.Event()
         try:
             hypercorn_main.run(
                 [listener_yaml['addr']],
@@ -196,7 +197,9 @@ class Service:
         except:
             logging.exception('router service main: hypercorn_main exception')
             pass
+        logging.debug('router_service.Service.main() hypercorn_main done')
         self.shutdown()
+        logging.debug('router_service.Service.main() done')
 
     def start_main(self):
         self.daemon_executor.submit(
@@ -221,39 +224,47 @@ class Service:
             rest_id_factory=self.config.rest_id_factory())
 
     def _handle_new_tx(self, writer : StorageWriterFilter):
-        tx_rest_id = writer.get_rest_id()
-        logging.debug('RouterService._handle_new_tx %s', tx_rest_id)
-        while True:
-            try:
-                tx_cursor = self.storage.get_transaction_cursor()
-                tx_cursor.load(rest_id=tx_rest_id, start_attempt=True)
-                break
-            except VersionConflictException:
-                pass
+        tx_cursor = writer.release_transaction_cursor()
+        if tx_cursor is None:
+            logging.info('RouterService._handle_new_tx writer %s, '
+                         'rest_id is None, downstream error?', writer)
+            return
+        tx_cursor.load(start_attempt=True)
+        logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         endpoint, endpoint_yaml = self.config.get_endpoint(tx_cursor.tx.host)
         self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,
                   endpoint_yaml):
-        try:
-            output_yaml = endpoint_yaml.get('output_handler', {})
-            handler = OutputHandler(
-                storage_tx, endpoint,
-                downstream_env_timeout =
-                    output_yaml.get('downstream_env_timeout', 30),
-                downstream_data_timeout =
-                    output_yaml.get('downstream_data_timeout', 60),
-                notification_factory=self.config.notification_endpoint,
-                mailer_daemon_mailbox=self.config.root_yaml['global'].get(
-                    'mailer_daemon_mailbox', None),
-                retry_params = output_yaml.get('retry_params', {}))
-            handler.handle()
-        finally:
-            if storage_tx.in_attempt:
-                logging.error('handle_tx OutputHandler returned open tx')
-                storage_tx.write_envelope(TransactionMetadata(),
-                                          finalize_attempt=True)
+        output_yaml = endpoint_yaml.get('output_handler', {})
+        handler = OutputHandler(
+            storage_tx, endpoint,
+            downstream_env_timeout =
+            output_yaml.get('downstream_env_timeout', 30),
+            downstream_data_timeout =
+            output_yaml.get('downstream_data_timeout', 60),
+            notification_factory=self.config.notification_endpoint,
+            mailer_daemon_mailbox=self.config.root_yaml['global'].get(
+                'mailer_daemon_mailbox', None),
+            retry_params = output_yaml.get('retry_params', {}))
+        handler.handle()
+        assert not storage_tx.in_attempt
+
+        # we tried
+        # finally:
+        #   storage_tx.write_envelope(TransactionMetadata(),
+        #                             finalize_attempt=True)
+        # here but it seems more likely than not that exiting
+        # OututHandler with an open tx attempt or exception means
+        # something in the tx tickled a bug in the code and will
+        # deterministically do so again if we retry it.
+
+        # TODO set next_attempt_time so we don't crashloop?  but don't
+        # catch this in tests so they fail with the uncaught
+        # exception. Probably we need an explicit "quarantine" state
+        # for the db tx that prevents recovery/loading but is
+        # queryable for visibility.
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         try:

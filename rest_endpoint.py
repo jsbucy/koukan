@@ -86,6 +86,16 @@ class RestEndpoint(SyncFilter):
 
         self.client = Client(http2=True, verify=verify)
 
+    def __del__(self):
+        if self.client:
+            logging.debug('RestEndpoint.__del__() client')
+            # close keepalive connections, setting Client(limits=)
+            # doesn't seem to work? keepalive connections cause
+            # hypercorn to take a long time to shut down which is a
+            # problem in tests
+            self.client.close()
+            self.client = None
+
     def _maybe_qualify_url(self, url):
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc:
@@ -103,6 +113,7 @@ class RestEndpoint(SyncFilter):
         # we probably don't want the cross product of endpoints and
         # remote hosts?  Iterate endpoint on http err, remote host on
         # tx err?
+        rest_resp = None
         for remote_host in hosts:
             # TODO return last remote_host in tx "upstream_remote_host" etc
             if remote_host is not None:
@@ -127,8 +138,8 @@ class RestEndpoint(SyncFilter):
             except RequestError:
                 logging.exception('RestEndpoint._start')
                 continue
-            logging.info('RestEndpoint._start req_headers %s resp %s',
-                         req_headers, rest_resp)
+            logging.info('RestEndpoint._start req_headers %s resp %s %s',
+                         req_headers, rest_resp, rest_resp.text)
             if rest_resp.status_code != 201:
                 continue
             self.transaction_path = rest_resp.headers['location']
@@ -136,7 +147,7 @@ class RestEndpoint(SyncFilter):
                 rest_resp.headers['location'])
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
-        return None
+        return rest_resp
 
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
@@ -262,9 +273,11 @@ class RestEndpoint(SyncFilter):
             rest_resp = self._start(tx.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
+                err = TransactionMetadata()
                 tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream err creating tx'))
-                return
+                    Response(450, 'RestEndpoint upstream err creating tx'), err)
+                tx.merge_from(err)
+                return err
             tx_update = True
         elif downstream_delta:
             rest_resp = self._update(downstream_delta, deadline)
@@ -455,13 +468,14 @@ class RestEndpoint(SyncFilter):
                     entity = None
 
                 logging.info('RestEndpoint._put_blob_chunk POST %s', endpoint)
-                rest_resp = self.client.post(
+                method, exp_code = (self.client.put, 200) if non_body_blob else (self.client.post, 201)
+                rest_resp = method(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
                 logging.info('RestEndpoint._put_blob_chunk POST %s %s %s',
                              endpoint,
                              rest_resp, rest_resp.headers)
-                if rest_resp.status_code != 201:
+                if rest_resp.status_code != exp_code:
                     return None, None
                 if blob_rest_id is None and non_body_blob:
                     self.blob_path = rest_resp.headers.get('location', None)

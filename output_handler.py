@@ -18,6 +18,8 @@ from dsn import read_headers, generate_dsn
 from blob import InlineBlob
 from rest_schema import BlobUri
 
+from message_builder import MessageBuilder
+
 def default_notification_factory():
     raise NotImplementedError()
 
@@ -82,7 +84,7 @@ class OutputHandler:
 
         while True:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
-                         self.rest_id, self.cursor.tx, self.cursor.input_done)
+                          self.rest_id, self.cursor.tx, self.cursor.input_done)
 
             if not self.cursor.input_done and self.cursor.tx.message_builder:
                 del self.cursor.tx.message_builder
@@ -99,6 +101,15 @@ class OutputHandler:
 
             assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
             assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
+
+            # XXX drop some fields from upstream_tx:
+            # notification, retry
+            # these have REST_CREATE/... validity but we are handling it here
+            for field in ['notification', 'retry', 'final_attempt_reason']:
+                for obj in [last_tx, upstream_tx, delta]:
+                    if getattr(obj, field) is not None:
+                        delattr(obj, field)
+
 
             have_body = (self.cursor.input_done and
                          ((self.cursor.tx.body is not None) or
@@ -160,6 +171,12 @@ class OutputHandler:
                 return None  # internal error
             assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
 
+            # if we're short-circuiting to ourselves, these fields will clash
+            for field in ['final_attempt_reason', 'attempt_count']:
+                for t in [upstream_tx, upstream_delta]:
+                    if getattr(t, field) is not None:
+                        delattr(t, field)
+
             while True:
                 try:
                     self.cursor.write_envelope(upstream_delta)
@@ -171,6 +188,7 @@ class OutputHandler:
                         self.rest_id)
                     # version cache can raise
                     # VersionConflictException again here \o/
+                    # TODO cursor.load() should just handle this
                     try:
                         self.cursor.load()
                     except VersionConflictException:
@@ -224,7 +242,6 @@ class OutputHandler:
                     self.cursor.load()
                 except VersionConflictException:
                     pass
-
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
@@ -291,6 +308,9 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
+    # XXX rest could send everything in the first post and request notification
+    # but then we failed at rcpt -> !input_done
+    # so shouldn't notify then?
     def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
         resp : Optional[Response] = None
         tx = self.cursor.tx
@@ -317,8 +337,8 @@ class OutputHandler:
         last_attempt = final_attempt_reason is not None
 
         logging.debug('OutputHandler._maybe_send_notification '
-                      '%s last %s notify %s', self.rest_id, last_attempt,
-                      self.cursor.tx.notification)
+                      '%s last %s notify %s tx %s', self.rest_id, last_attempt,
+                      self.cursor.tx.notification, self.cursor.tx)
 
         if resp.ok():
             return
@@ -329,17 +349,20 @@ class OutputHandler:
         if mail_from.mailbox == '':
             return
 
-        orig_headers = b'\r\n\r\n'
+        orig_headers : str
         if self.cursor.tx.message_builder:
-            # TODO save MessageBuilder-rendered headers
-            msgid = self.cursor.tx.message_builder.get(
-                'headers', {}).get('message-id', None)
-            if msgid:
-                orig_headers = b'Message-ID: <' + msgid + b'>\r\n\r\n'
+            builder = MessageBuilder(self.cursor.tx.message_builder)
+            orig_headers = builder.build_headers_for_notification().decode(
+                'utf-8')
         elif self.cursor.tx.body is not None:
             blob_reader = self.cursor.parent.get_blob_for_read(
                 BlobUri(tx_id = self.cursor.rest_id, tx_body=True))
-            orig_headers = read_headers(blob_reader)
+            h = read_headers(blob_reader)
+            orig_headers = h if h is not None else ''
+        else:
+            logging.warning('OutputHandler._maybe_send_notification '
+                            'no source for orig_headers %s', self.rest_id)
+            orig_headers = ''
 
         assert bool(self.cursor.tx.rcpt_to)
         rcpt_to = self.cursor.tx.rcpt_to[0]

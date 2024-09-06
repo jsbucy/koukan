@@ -8,10 +8,7 @@ from functools import partial
 
 from requests.exceptions import ConnectionError
 
-import psycopg
-import psycopg.errors
-import testing.postgresql
-
+import postgres_test_utils
 from router_service import Service
 from rest_endpoint import RestEndpoint
 from response import Response
@@ -26,21 +23,19 @@ from filter import (
     WhichJson )
 from executor import Executor
 
-
 def setUpModule():
-    global pg_factory
-    pg_factory = testing.postgresql.PostgresqlFactory(cache_initialized_db=True)
-
+    postgres_test_utils.setUpModule()
 
 def tearDownModule():
-    global pg_factory
-    pg_factory.clear_cache()
+    postgres_test_utils.tearDownModule()
 
 
 root_yaml = {
     'global': {
         'tx_idle_timeout': 5,
         'gc_interval': None,
+        # XXX only the notification tests still micromanage this, it
+        # should be enabled for the rest
         'dequeue': False,
         'mailer_daemon_mailbox': 'mailer-daemon@d',
         'rest_id_entropy': 2
@@ -128,7 +123,6 @@ root_yaml = {
     ],
     'storage': {
         'engine': 'postgres',  #'sqlite_memory'
-        'postgres_db_name': 'storage_test',
         'session_refresh_interval': 1,
     },
     'executor': {
@@ -154,40 +148,6 @@ class RouterServiceTest(unittest.TestCase):
             self.endpoints.append(endpoint)
             self.cv.notify_all()
 
-    def postgres_url(self, unix_socket_dir, port, db):
-        url = 'postgresql://postgres@/' + db + '?'
-        url += ('host=' + unix_socket_dir)
-        url += ('&port=%d' % port)
-        return url
-
-    def setupPostgres(self):
-        global pg_factory
-        self.pg = pg_factory()
-        unix_socket_dir = self.pg.base_dir + '/tmp'
-        port = self.pg.dsn()['port']
-        root_yaml['storage']['unix_socket_dir'] = unix_socket_dir
-        root_yaml['storage']['port'] = port
-        root_yaml['storage']['postgres_user'] = 'postgres'
-        url = self.postgres_url(unix_socket_dir, port, 'postgres')
-        logging.info('StorageTest setup_postgres %s', url)
-
-        with psycopg.connect(url) as conn:
-            conn.autocommit = True
-            with conn.cursor() as cursor:
-                try:
-                    cursor.execute('drop database storage_test;')
-                except psycopg.errors.InvalidCatalogName:
-                    pass
-                cursor.execute('create database storage_test;')
-                conn.commit()
-
-        url = self.postgres_url(unix_socket_dir, port, 'storage_test')
-        with psycopg.connect(url) as conn:
-            with open('init_storage_postgres.sql', 'r') as f:
-                with conn.cursor() as cursor:
-                    cursor.execute(f.read())
-
-
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(thread)d] %(message)s')
@@ -195,7 +155,7 @@ class RouterServiceTest(unittest.TestCase):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        self.setupPostgres()
+        self.pg = postgres_test_utils.setup_postgres(root_yaml['storage'])
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -312,21 +272,25 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(tx, tx.copy())
 
-        tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_rest_smoke create %s',
-                      tx_json)
-        if 'attempt_count' in tx_json:
-            del tx_json['attempt_count']
-        self.assertEqual(tx_json, {
-            #'attempt_count': 1,
-            #'retry': {},
-            'mail_from': {},
-            'rcpt_to': [{}],
-            'body': {},
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_response': [{'code': 202, 'message': 'ok'}],
-            'data_response': {'code': 203, 'message': 'ok'},
-        })
+        for i in range(0,5):
+            tx_json = rest_endpoint.get_json(timeout=2)
+            logging.debug('RouterServiceTest.test_rest_smoke create %s',
+                          tx_json)
+            if 'attempt_count' in tx_json:
+                del tx_json['attempt_count']
+            if tx_json == {
+                #'attempt_count': 1,
+                #'retry': {},
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'},
+                'final_attempt_reason': 'upstream response success'}:
+                break
+        else:
+            self.fail('didn\'t get expected transaction %s' % tx_json)
 
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
@@ -373,6 +337,7 @@ class RouterServiceTest(unittest.TestCase):
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
+            'final_attempt_reason': 'upstream response success'
         })
 
 
@@ -526,6 +491,7 @@ class RouterServiceTest(unittest.TestCase):
             body_blob=InlineBlob(b'Hello, World!'))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         rest_endpoint.on_update(tx, tx_delta)
+        logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(tx.data_response.code, 205)
         self.assertEqual(tx.data_response.message,
                          'exploder same status: upstream data 0')

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from tempfile import TemporaryFile
 import json
+from io import IOBase
 
 from flask import (
     Flask,
@@ -24,10 +25,10 @@ class Transaction:
     CHUNK_SIZE=1048576
 
     tx_json : dict
-    file : Optional[TemporaryFile] = None
+    file : Optional[IOBase] = None
     message_json : Optional[dict] = None
 
-    blobs : Dict[str, TemporaryFile]
+    blobs : Dict[str, IOBase]
 
     def __init__(self, tx_json):
         self.blobs = {}
@@ -50,33 +51,33 @@ class Transaction:
         logging.debug('Tx.get %s', json_out)
         return json_out
 
-    # def _parse_blob_id(self, blob_id : str) -> Optional[int]:
-    #     off = blob_id.find('/blob/')
-    #     if off < 0:
-    #         return None
-    #     try:
-    #         return int(blob_id[off+6])
-    #     except ValueError:
-    #         return None
-
-    # returns True if there are no missing blobs, False otherwise
     def _check_blobs(self, part_json) -> bool:
         logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
-            if 'blob_id' not in part_json:
+            if 'blob_rest_id' not in part_json:
                 return
-            blob_id = part_json['blob_id']
+            blob_id = part_json['blob_rest_id']
+            if blob_id.startswith('/'):
+                return False  # this doesn't support reuse
             logging.debug('check_blobs %s', blob_id)
-            self.blobs[blob_id] = None
-            return
+            if not self.create_tx_body(
+                    upload_chunked=True,
+                    tx_body=False,
+                    blob_id=blob_id):
+                return False
+            return True
 
         for part_i in part_json['parts']:
-            self._check_blobs(part_i)
+            if not self._check_blobs(part_i):
+                return False
+        return True
+
 
     def update_message_builder(self, message_json):
         logging.debug('Tx.update_message_json %s', message_json)
         self.message_json = message_json
-        self._check_blobs(self.message_json['parts'])
+        if not self._check_blobs(self.message_json['parts']):
+            return FlaskResponse(400, 'bad blob in message builder json')
 
     def create_tx_body(self, upload_chunked : bool,
                        tx_body : bool = False,
@@ -88,10 +89,11 @@ class Transaction:
             if self.file is not None:
                 return None  # bad
             file = TemporaryFile('w+b')
+            assert isinstance(file, IOBase)
             self.file = file
         else:
             logging.debug('create_tx_body %s %s', self.blobs, blob_id)
-            if blob_id not in self.blobs or self.blobs[blob_id] != None:
+            if blob_id in self.blobs:
                 return None  # bad
             file = TemporaryFile('w+b')
             self.blobs[blob_id] = file
@@ -148,7 +150,7 @@ class Transaction:
             logging.debug('received blob %s %s', blob_id, file.read())
 
     def cancel(self):
-        pass
+        return FlaskResponse()
 
 
 class Receiver:
@@ -164,11 +166,14 @@ class Receiver:
         return tx_id, tx.get_json()
 
     def get_tx(self, tx_rest_id : str):
-        return self.transactions.get(tx_rest_id, None).get_json()
+        tx = self.transactions.get(tx_rest_id, None)
+        assert tx is not None
+        return tx.get_json()
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
-        return self.transactions.get(tx_rest_id, None).update_message_builder(
-            message_json)
+        tx = self.transactions.get(tx_rest_id, None)
+        assert tx is not None
+        return tx.update_message_builder(message_json)
 
     def create_tx_body(self, tx_rest_id : str,
                        upload_chunked : bool,
@@ -197,10 +202,11 @@ class Receiver:
     def cancel_tx(self, tx_rest_id : str):
         return self.transactions[tx_rest_id].cancel()
 
-def create_app():
+def create_app(receiver = None):
     app = Flask(__name__)
 
-    receiver = Receiver()
+    if receiver is None:
+        receiver = Receiver()
 
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(message)s')
@@ -238,27 +244,13 @@ def create_app():
             request.headers.get('content-range'))
         return receiver.put_tx_body(tx_rest_id, range, request.stream)
 
-    @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['POST'])
-    def create_tx_blob(tx_rest_id, blob_id) -> FlaskResponse:
-        logging.debug('create_tx_blob %s', blob_id)
-        blob_id = receiver.create_tx_body(
-            tx_rest_id,
-            request.args.get('upload', None),
-            tx_body=False,
-            blob_id = blob_id,
-            stream=request.stream)
-        if blob_id is None:
-            resp = FlaskResponse(status=400)
-            resp.content = 'bad blob id'
-            return resp
-        headers = {'location':
-                   '/transactions/' + tx_rest_id + '/blob/' + blob_id}
-        return FlaskResponse(status=201, headers=headers)
-
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
+        if range is None:
+            content_length = int(request.headers.get('content-length'))
+            range = ContentRange('bytes', 0, content_length, content_length)
         return receiver.put_blob(tx_rest_id, blob_id, range, request.stream)
 
 

@@ -61,6 +61,9 @@ class TransactionCursor:
 
     in_attempt : bool = False
 
+    # this TransactionCursor object created this tx db row
+    created : bool = False
+
     def __init__(self, storage,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
@@ -128,6 +131,7 @@ class TransactionCursor:
             self.tx.rest_id = rest_id
 
         self._update_version_cache()
+        self.created = True
 
     def _reuse_blob(self, db_tx, blob_rest_id : List[BlobUri]
                     ) -> List[Tuple[int, str, bool]]:
@@ -300,6 +304,11 @@ class TransactionCursor:
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
 
+        if tx_delta.cancelled and (
+                self.final_attempt_reason is not None and
+                self.final_attempt_reason != 'oneshot'):
+            return
+
         assert (self.final_attempt_reason == 'oneshot' or
                 self.final_attempt_reason is None or
                 final_attempt_reason is None)
@@ -443,6 +452,7 @@ class TransactionCursor:
             if start_attempt:
                 self._start_attempt_db(db_tx, self.id, self.version)
                 started = True
+        # XXX leaves an open attempt if update_version_cache throws
         if res is not None:
             self._update_version_cache()
         return res
@@ -495,6 +505,9 @@ class TransactionCursor:
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
             return None
+        # XXX causes conflicts
+        if self.final_attempt_reason != 'oneshot':
+            self.tx.final_attempt_reason = self.final_attempt_reason
 
         sel_body = select(self.parent.tx_blobref_table.c.blob_id).where(
             self.parent.tx_blobref_table.c.transaction_id == self.id,
@@ -510,6 +523,7 @@ class TransactionCursor:
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
         self.tx.rest_id = self.rest_id
 
+        # XXX if in_attempt, query on attempt_id?? (cf assert below)
         sel = (select(self.parent.attempt_table.c.attempt_id,
                       self.parent.attempt_table.c.responses)
                .where(self.parent.attempt_table.c.transaction_id == self.id)
@@ -518,40 +532,49 @@ class TransactionCursor:
         res = db_tx.execute(sel)
         row = res.fetchone()
         resp_json = None
+        attempt_id = None
         if row is not None:
+            attempt_id = row[0]
             resp_json = row[1]
             if resp_json is not None:
                 responses = TransactionMetadata.from_json(
                     resp_json, WhichJson.DB_ATTEMPT)
                 assert self.tx is not None  # set above
                 assert self.tx.merge_from(responses)
+                self.tx.attempt_count = row[0]
 
-        logging.debug('TransactionCursor._load_db %d %s version=%d %s %s %s',
+        logging.debug('TransactionCursor._load_db %d %s version=%d tx %s '
+                      'attempt %s %s',
                       self.id, self.rest_id, self.version,
-                      row, trans_json, resp_json)
+                      trans_json, attempt_id, resp_json)
 
+        if self.in_attempt:
+            assert attempt_id == self.attempt_id
 
         return self.tx
 
+    # xxx this is called on an empty cursor from Storage.load_one()
     def _start_attempt_db(self, db_tx, db_id, version):
+        logging.debug('TxCursor._start_attempt_db %d', db_id)
         assert self.parent.session_id is not None
         self._load_db(db_tx, db_id=db_id)
         assert self.tx is not None
         new_version = version + 1
-        # TODO the session_id == our session id case is the common
-        # case for cutthrough where it's created in the downstream
-        # flow with create_leased=True but then ~synchronously loaded in
-        # the output flow with start_attempt=True
+
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == db_id,
-                      self.parent.tx_table.c.version == version,
-                      or_(self.parent.tx_table.c.inflight_session_id ==
-                            self.parent.session_id,
-                          self.parent.tx_table.c.inflight_session_id.is_(None)))
+                      self.parent.tx_table.c.version == version)
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id,
                        inflight_session_live = True)
                .returning(self.parent.tx_table.c.version))
+
+        if self.created:
+            upd = upd.where(self.parent.tx_table.c.inflight_session_id ==
+                            self.parent.session_id)
+        else:
+            upd = upd.where(
+                self.parent.tx_table.c.inflight_session_id.is_(None))
 
         # tx without retries enabled can only be loaded once
         if self.tx.retry is None:
@@ -585,6 +608,8 @@ class TransactionCursor:
             assert (row := res.fetchone())
             self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
+        # xxx VersionConflictException
+        # will leave an open attempt
         self._update_version_cache()
         self.in_attempt = True
 
@@ -1029,7 +1054,6 @@ class Storage():
             # "handoff" from the input side to the output side,
             # otherwise another process/instance might steal it?
 
-            # TODO this should not recover newly-inserted/cutthrough
             now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
@@ -1056,7 +1080,8 @@ class Storage():
             row = res.fetchone()
             if not row:
                 return None
-            db_id,version = row
+            db_id = row[0]
+            version = row[1]
 
             tx = self.get_transaction_cursor()
             tx._start_attempt_db(db_tx, db_id, version)

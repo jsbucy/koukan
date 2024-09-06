@@ -110,8 +110,9 @@ class Config:
             self.load_user_modules(modules_yaml)
 
     def load_yaml(self, filename):
-        root_yaml = load(open(filename, 'r'), Loader=Loader)
-        self.inject_yaml(root_yaml)
+        with open(filename, 'r') as yaml_file:
+            root_yaml = load(yaml_file, Loader=Loader)
+            self.inject_yaml(root_yaml)
 
     def exploder(self, yaml, next):
         assert next is None
@@ -157,7 +158,8 @@ class Config:
             verify=yaml.get('verify', True))
 
     def router_policy_dest_domain(self, policy_yaml):
-        return DestDomainPolicy(policy_yaml['endpoint'])
+        return DestDomainPolicy(self._route_destination(policy_yaml),
+                                policy_yaml.get('dest_port', 25))
 
     def _route_destination(self, yaml):
         dest = yaml.get('destination', None)
@@ -212,6 +214,7 @@ class Config:
         if host_list:
             static_resolution = Resolution(
                 [HostPort.from_yaml(h) for h in host_list])
+        # TODO add option for mx resolution (vs just A)
         return DnsResolutionFilter(
             next,
             static_resolution=static_resolution,

@@ -242,6 +242,7 @@ _tx_fields = [
                           WhichJson.REST_READ ])),
     TxField('notification',
             validity=set([WhichJson.REST_CREATE,
+                          WhichJson.REST_READ,
                           WhichJson.DB])),
     TxField('retry',
             validity=set([WhichJson.REST_CREATE,
@@ -265,6 +266,7 @@ _tx_fields = [
     TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
+    TxField('final_attempt_reason', validity=set([WhichJson.REST_READ]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -318,6 +320,7 @@ class TransactionMetadata:
     options : Optional[dict] = None
 
     resolution : Optional[Resolution] = None
+    final_attempt_reason : Optional[str] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -373,10 +376,18 @@ class TransactionMetadata:
             out += 'remote_host=%s ' % self.remote_host
         if self.cancelled is not None:
             out += 'cancelled=%s ' % self.cancelled
-        if self.options:
+        if self.options is not None:
             out += 'options=%s ' % self.options
         if self.resolution:
             out += 'resolution=%s ' % self.resolution
+        if self.notification is not None:
+            out += 'notification=%s ' % self.notification
+        if self.retry is not None:
+            out += 'retry=%s ' % self.retry
+        if self.parsed_json is not None:
+            out += 'parsed_json=%s ' % self.parsed_json
+        if self.parsed_blobs is not None:
+            out += 'parsed_blobs=%s ' % self.parsed_blobs
         return out
 
     def empty(self, which_js : WhichJson):
@@ -589,9 +600,9 @@ class TransactionMetadata:
                 (old_v is not None and new_v is None)):
                 continue
             if (old_v is not None) and (new_v is None):
-                logging.debug('tx.delta invalid del %s', f)
-                #raise ValueError()
-                return None  # invalid
+               logging.debug('tx.delta invalid del %s', f)
+               #raise ValueError()
+               return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue
