@@ -373,9 +373,6 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNone(self.s.get_blob_for_read(
             BlobUri(tx_id='xyz', tx_body=True)))
 
-        # TODO fix preconditions and write test to ensure second
-        # cursor cannot start attempt on leased tx.
-
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz', TransactionMetadata(

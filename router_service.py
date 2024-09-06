@@ -237,36 +237,34 @@ class Service:
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,
                   endpoint_yaml):
-        try:
-            output_yaml = endpoint_yaml.get('output_handler', {})
-            handler = OutputHandler(
-                storage_tx, endpoint,
-                downstream_env_timeout =
-                    output_yaml.get('downstream_env_timeout', 30),
-                downstream_data_timeout =
-                    output_yaml.get('downstream_data_timeout', 60),
-                notification_factory=self.config.notification_endpoint,
-                mailer_daemon_mailbox=self.config.root_yaml['global'].get(
-                    'mailer_daemon_mailbox', None),
-                retry_params = output_yaml.get('retry_params', {}))
-            handler.handle()
-        finally:
-            assert not storage_tx.in_attempt
+        output_yaml = endpoint_yaml.get('output_handler', {})
+        handler = OutputHandler(
+            storage_tx, endpoint,
+            downstream_env_timeout =
+            output_yaml.get('downstream_env_timeout', 30),
+            downstream_data_timeout =
+            output_yaml.get('downstream_data_timeout', 60),
+            notification_factory=self.config.notification_endpoint,
+            mailer_daemon_mailbox=self.config.root_yaml['global'].get(
+                'mailer_daemon_mailbox', None),
+            retry_params = output_yaml.get('retry_params', {}))
+        handler.handle()
+        assert not storage_tx.in_attempt
 
-                # TODO set next_attempt_time so we don't spin here?
-                # but don't catch this in tests so they fail with the
-                # uncaught exception
+        # we tried
+        # finally:
+        #   storage_tx.write_envelope(TransactionMetadata(),
+        #                             finalize_attempt=True)
+        # here but it seems more likely than not that exiting
+        # OututHandler with an open tx attempt or exception means
+        # something in the tx tickled a bug in the code and will
+        # deterministically do so again if we retry it.
 
-                # On reflection, it seems more likely than not that
-                # getting to this point means something in the tx
-                # tickled a bug in the code and will deterministically
-                # do so again if we retry it. This makes me think we
-                # should put the db tx into some kind of "quarantine"
-                # state pending intervention. And actually assert not
-                # in_attempt if there wasn't already an exception so the
-                # tests will fail
-               # storage_tx.write_envelope(TransactionMetadata(),
-               #                           finalize_attempt=True)
+        # TODO set next_attempt_time so we don't crashloop?  but don't
+        # catch this in tests so they fail with the uncaught
+        # exception. Probably we need an explicit "quarantine" state
+        # for the db tx that prevents recovery/loading but is
+        # queryable for visibility.
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         try:

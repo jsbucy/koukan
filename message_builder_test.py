@@ -48,6 +48,14 @@ class MessageBuilderTest(unittest.TestCase):
 
             headers = builder.build_headers_for_notification()
             logging.debug(headers)
+            self.assertIn(b'from: alice a <alice@example.com>', headers)
+            self.assertIn(b'to: bob@example.com', headers)
+            self.assertIn(b'subject: hello', headers)
+            self.assertIn(b'date: Wed, 06 Mar 2024 10:42:31 -0800', headers)
+            self.assertIn(b'message-id: <abc@xyz>', headers)
+            self.assertIn(b'in-reply-to: <abd@xyz>', headers)
+            self.assertIn(b'references: <abd@xyz> <abe@xyz>', headers)
+
 
     def test_get_blobs(self):
         json = { 'text_body': [ { 'content_uri': '/blob/xyz' } ] }
