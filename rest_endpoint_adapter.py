@@ -72,11 +72,11 @@ class SyncFilterAdapter(AsyncFilter):
     inflight : bool = False
     rest_id : str
     _last_update : float
-    _version = 0
     body_blob : Optional[BlobWriter] = None
     # transaction has reached a final status: data response or cancelled
     done : bool = False
     id_version : IdVersion
+    # from last get/update
     sampled_version : Optional[int] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
@@ -89,7 +89,7 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
-        self.id_version = IdVersion(1, '1', self._version)
+        self.id_version = IdVersion(db_id=1, rest_id='1', version=1)
 
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
@@ -99,7 +99,7 @@ class SyncFilterAdapter(AsyncFilter):
             return (now - self._last_update) > t
 
     def version(self):
-        self.sampled_version = self._version
+        assert self.sampled_version is not None
         return self.sampled_version
 
     def wait(self, timeout) -> bool:
@@ -158,9 +158,10 @@ class SyncFilterAdapter(AsyncFilter):
                       self.tx)
         with self.mu:
             self.done = self.tx.cancelled or self.tx.data_response is not None
-            self._version += 1
+            version = self.id_version.get()
+            version += 1
             self.cv.notify_all()
-            self.id_version.update(version=self._version)
+            self.id_version.update(version=version)
             self._last_update = time.monotonic()
         return True
 
@@ -172,8 +173,7 @@ class SyncFilterAdapter(AsyncFilter):
 
     def update(self,
                tx : TransactionMetadata,
-               tx_delta : TransactionMetadata,
-               timeout : Optional[float] = None
+               tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         if tx.retry is not None or tx.notification is not None:
             err = TransactionMetadata()
@@ -186,15 +186,15 @@ class SyncFilterAdapter(AsyncFilter):
         with self.mu:
             txx = self.tx.merge(tx_delta)
 
-            # if downstream tx body blob grew
-            #   append to self.tx.body_blob
-
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
 
             if txx is None:
                 return None
             self.tx = txx
-            self._version += 1
+            version = self.id_version.get()
+            version += 1
+            self.id_version.update(version)
+            self.sampled_version = version
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update())
@@ -202,17 +202,15 @@ class SyncFilterAdapter(AsyncFilter):
                 # throwing here will -> http 500
                 assert fut is not None
                 self.inflight = True
-            self._get_locked(self.tx, timeout)
-            upstream_delta = tx.delta(self.tx)
-            assert tx.merge_from(upstream_delta) is not None  # XXX
-            return upstream_delta
+            # no longer waits for inflight
+            delta = TransactionMetadata(rest_id=self.rest_id)
+            tx.merge_from(delta)
+            return delta
 
     # TODO it looks like this effectively returns an empty tx on timeout
-    def get(self, timeout : Optional[float] = None
-            ) -> Optional[TransactionMetadata]:
+    def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
-            if timeout:
-                self._get_locked(self.tx.copy(), timeout)
+            self.sampled_version = self.id_version.get()
             return self.tx.copy()
 
 
@@ -230,7 +228,7 @@ class SyncFilterAdapter(AsyncFilter):
 
     def blob_wakeup(self):
         logging.debug('SyncFilterAdapter.blob_wakeup %s', self.body_blob)
-        tx = self.get(0)
+        tx = self.get()
         assert tx is not None
         tx_delta = TransactionMetadata()
         if not tx.body_blob:
@@ -351,6 +349,8 @@ class RestHandler(Handler):
         # TODO only accept smtp_meta from trusted peer i.e. the
         # well-known address of the gateway
         logging.debug('RestHandler.create_tx %s %s', request, req_json)
+
+        # no inflight waiting -> no timeout logic
 
         if self.async_filter is None:
             return self.response(

@@ -218,8 +218,13 @@ class StorageWriterFilter(AsyncFilter):
         reuse_blob_rest_id : Optional[List[BlobUri]] = None
 
         if tx_delta.cancelled:
-            self.tx_cursor.write_envelope(
-                tx_delta, final_attempt_reason='downstream cancelled')
+            while True:
+                try:
+                    self.tx_cursor.write_envelope(
+                        tx_delta, final_attempt_reason='downstream cancelled')
+                    break
+                except VersionConflictException:
+                    self.tx_cursor.load()
             return TransactionMetadata()
 
         downstream_tx = tx.copy()

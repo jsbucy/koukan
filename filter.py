@@ -339,7 +339,8 @@ class TransactionMetadata:
                  message_builder : Optional[dict] = None,
                  inline_body : Optional[str] = None,
                  cancelled : Optional[bool] = None,
-                 resolution : Optional[Resolution] = None):
+                 resolution : Optional[Resolution] = None,
+                 rest_id : Optional[str] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -357,6 +358,7 @@ class TransactionMetadata:
         self.inline_body = inline_body
         self.cancelled = cancelled
         self.resolution = resolution
+        self.rest_id = rest_id
 
     def __repr__(self):
         out = ''

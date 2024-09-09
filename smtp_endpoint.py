@@ -3,6 +3,7 @@ from smtplib import SMTP, SMTPException
 import logging
 import psutil
 import time
+import ipaddress
 
 from blob import Blob
 from response import Response, Esmtp
@@ -16,18 +17,21 @@ class Factory:
     def __init__(self):
         pass
 
-    def new(self, ehlo_hostname):
-        return SmtpEndpoint(ehlo_hostname)
+    def new(self, ehlo_hostname, timeout):
+        return SmtpEndpoint(ehlo_hostname, timeout)
 
 class SmtpEndpoint(SyncFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
+    timeout : int = 30
 
-    def __init__(self, ehlo_hostname):
+    def __init__(self, ehlo_hostname, timeout : Optional[int] = None):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
+        if timeout is not None:
+            self.timeout = timeout
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -49,7 +53,14 @@ class SmtpEndpoint(SyncFilter):
             return Response(
                 400, 'SmtpEndpoint: bad request: no remote_host')
 
-        self.smtp = SMTP()
+        try:
+            ipaddress.ip_address(tx.remote_host.host)
+        except ValueError:
+            return Response(
+                400, 'SmtpEndpoint: bad request: '
+                'remote_host.host is not a valid IP address')
+
+        self.smtp = SMTP(timeout=self.timeout)
         try:
             # TODO workaround bug in smtplib py<3.11
             # https://stackoverflow.com/questions/51768041/python3-smtp-valueerror-server-hostname-cannot-be-an-empty-string-or-start-with

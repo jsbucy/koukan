@@ -63,7 +63,7 @@ class GatewayTest(unittest.TestCase):
                     static_base_url=self.gw_rest_url,
                     static_http_host='outbound')
                 tx = TransactionMetadata(
-                    remote_host=HostPort('localhost', self.fake_smtpd_port))
+                    remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
                 tx.mail_from = Mailbox('probe-from%d' % i)
                 tx.rcpt_to = [Mailbox('probe-to%d' % i)]
                 upstream_delta = rest_endpoint.on_update(tx, tx.copy())
@@ -91,9 +91,9 @@ class GatewayTest(unittest.TestCase):
     def test_rest_to_smtp_basic(self):
         rest_endpoint = RestEndpoint(
             static_base_url=self.gw_rest_url,
-            static_http_host='outbound')
+            static_http_host='outbound', timeout_start=10, timeout_data=10)
         tx=TransactionMetadata(
-            remote_host=HostPort('localhost', self.fake_smtpd_port))
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
         tx.mail_from = Mailbox('alice')
         tx.rcpt_to = [Mailbox('bob')]
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
@@ -112,7 +112,7 @@ class GatewayTest(unittest.TestCase):
             static_base_url=self.gw_rest_url,
             static_http_host='outbound')
         tx=TransactionMetadata(
-            remote_host=HostPort('localhost', self.fake_smtpd_port))
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
         tx.mail_from = Mailbox('alice')
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 250)
@@ -129,6 +129,6 @@ class GatewayTest(unittest.TestCase):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] %(message)s')
 
     unittest.main()

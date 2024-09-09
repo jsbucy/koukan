@@ -30,6 +30,10 @@ class IdVersion:
 
         self.async_waiters = []
 
+    def get(self):
+        with self.lock:
+            return self.version
+
     def wait(self, version, timeout):
         with self.lock:
             logging.debug('IdVersion.wait %d %d %d %d',

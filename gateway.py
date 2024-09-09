@@ -47,7 +47,7 @@ class SmtpGateway(EndpointFactory):
 
         self.executor = Executor(
             executor_yaml.get('max_inflight', 10),
-            executor_yaml.get('watchdog_timeout', 30))
+            executor_yaml.get('watchdog_timeout', 3600))
 
         self.gc_thread = Thread(target = lambda: self.gc_inflight(),
                                 daemon=True)
@@ -106,8 +106,11 @@ class SmtpGateway(EndpointFactory):
             # TODO no need to wire this down, could come from the
             # request? Possibly the only thing that would go here is
             # client cert?
+            smtp_yaml = self.config.root_yaml['smtp_output']
             endpoint = self.smtp_factory.new(
-                ehlo_hostname=self.config.root_yaml['smtp_output']['ehlo_host'])
+                ehlo_hostname=smtp_yaml['ehlo_host'],
+                # 1h (default watchdog timeout) - 5min
+                timeout=smtp_yaml.get('timeout', 55*60))
 
             with self.lock:
                 rest_id = self.rest_id_factory()

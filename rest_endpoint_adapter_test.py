@@ -44,8 +44,11 @@ class SyncFilterAdapterTest(unittest.TestCase):
         upstream.add_expectation(exp_mail)
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        sync_filter_adapter.update(tx, tx.copy(), 1)
-        self.assertEqual(tx.mail_response.code, 201)
+        sync_filter_adapter.update(tx, tx.copy())
+        sync_filter_adapter.version()
+        sync_filter_adapter.wait(1)
+        upstream_tx = sync_filter_adapter.get()
+        self.assertEqual(upstream_tx.mail_response.code, 201)
 
         def exp_rcpt(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
@@ -58,12 +61,11 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
-        sync_filter_adapter.update(tx, delta, 1)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-
-        tx = sync_filter_adapter.get(1)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        sync_filter_adapter.update(tx, delta)
+        sync_filter_adapter.version()
+        sync_filter_adapter.wait(1)
+        upstream_tx = sync_filter_adapter.get()
+        self.assertEqual([r.code for r in upstream_tx.rcpt_response], [202])
         self.assertFalse(sync_filter_adapter.done)
 
         body = b'hello, world!'
@@ -78,7 +80,9 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         delta = TransactionMetadata(body_blob=InlineBlob(body))
         tx.merge_from(delta)
-        sync_filter_adapter.update(tx, delta, 1)
+        sync_filter_adapter.update(tx, delta)
+        sync_filter_adapter.version()
+        sync_filter_adapter.wait(1)
         self.assertTrue(sync_filter_adapter.done)
 
 class RestHandlerTest(unittest.TestCase):
