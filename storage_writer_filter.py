@@ -27,8 +27,9 @@ class StorageWriterFilter(AsyncFilter):
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
     create_leased : bool = False
-    # none if still inflight, true if success, false if err/uncaught exception
-    created : Optional[bool] = None
+    # leased cursor for cutthrough
+    upstream_cursor : Optional[TransactionCursor] = None
+    create_err : bool = False
 
     mu : Lock
     cv : Condition
@@ -48,6 +49,7 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def wait(self, version, timeout) -> bool:
+        self._load()
         if self.tx_cursor.version != version:
             return True
         return self.tx_cursor.wait(timeout)
@@ -60,21 +62,21 @@ class StorageWriterFilter(AsyncFilter):
 
     def release_transaction_cursor(self) -> Optional[TransactionCursor]:
         with self.mu:
-            if not self.cv.wait_for(lambda: self.created is not None, 30):
+            if not self.cv.wait_for(
+                    lambda: self.upstream_cursor is not None or
+                    self.create_err, 30):
                 logging.warning(
                     'StorageWriterFilter.get_transaction_cursor timeout')
                 return None
-            elif not self.created:
+            elif self.upstream_cursor is None:
                 return None
             logging.debug('StorageWriterFilter.release_transaction_cursor')
-            cursor = self.tx_cursor
-            self.tx_cursor = None
+            cursor = self.upstream_cursor
+            self.upstream_cursor = None
             return cursor
 
     def version(self) -> Optional[int]:
-        if self.tx_cursor is None:
-            self.tx_cursor = self.storage.get_transaction_cursor(
-                rest_id=self.rest_id)
+        self._load()
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata,
@@ -107,12 +109,10 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
-        # xxx races with release_transaction_cursor()
-        with self.mu:
-            self._load()
-            tx = self.tx_cursor.tx.copy()
-            tx.version = self.tx_cursor.version
-            return tx
+        self._load()
+        tx = self.tx_cursor.tx.copy()
+        tx.version = self.tx_cursor.version
+        return tx
 
     def _get_body_blob_uri(self, tx) -> Optional[BlobUri]:
         logging.debug('_get_body_blob_uri')
@@ -205,17 +205,17 @@ class StorageWriterFilter(AsyncFilter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        needs_create = self.rest_id is None
+        needs_create = self.rest_id is None and self.create_leased
         try:
             upstream_delta = self._update(tx, tx_delta)
             if self.tx_cursor is not None:
                 upstream_delta.version = tx.version = self.tx_cursor.version
             return upstream_delta
         finally:
-            if needs_create and self.created is None:
+            if needs_create and self.upstream_cursor is None:
                 # i.e. uncaught exception
                 with self.mu:
-                    self.created = False
+                    self.created_err = True
                     self.cv.notify_all()
 
     def _update(self,
@@ -237,7 +237,9 @@ class StorageWriterFilter(AsyncFilter):
                     break
                 except VersionConflictException:
                     self.tx_cursor.load()
-            return TransactionMetadata()
+            version = TransactionMetadata(version=self.tx_cursor.version)
+            tx.merge_from(version)
+            return version
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
@@ -325,15 +327,19 @@ class StorageWriterFilter(AsyncFilter):
                       'input tx %s',
                       self.rest_id, self.tx_cursor.tx, tx)
 
-        if created:
+        version = TransactionMetadata(version=self.tx_cursor.version)
+
+        if created and self.create_leased:
             with self.mu:
-                self.created = True
+                self.upstream_cursor = self.tx_cursor
+                self.tx_cursor = None
                 self.cv.notify_all()
 
         # TODO even though this no longer does inflight waiting on the
         # upstream, it's possible one of the version conflict paths
         # yielded upstream responses?
-        return TransactionMetadata()
+        tx.merge_from(version)
+        return version
 
     def get_blob_writer(self,
                         create : bool,

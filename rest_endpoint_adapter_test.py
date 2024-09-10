@@ -87,6 +87,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             sync_filter_adapter.wait(tx.version, 1)
             if sync_filter_adapter.done:
                 break
+            tx = sync_filter_adapter.get()
         else:
             self.fail('expected done')
 

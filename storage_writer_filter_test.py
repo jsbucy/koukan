@@ -45,7 +45,8 @@ class StorageWriterFilterTest(unittest.TestCase):
     def test_create(self):
         filter = StorageWriterFilter(
             self.storage,
-            rest_id_factory = lambda: 'tx_rest_id')
+            rest_id_factory = lambda: 'tx_rest_id',
+            create_leased = True)
         tx = TransactionMetadata(
             host='submission',
             mail_from=Mailbox('alice'))

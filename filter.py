@@ -342,7 +342,8 @@ class TransactionMetadata:
                  inline_body : Optional[str] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 version : Optional[int] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -361,6 +362,7 @@ class TransactionMetadata:
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
+        self.version = version
 
     def __repr__(self):
         out = ''
