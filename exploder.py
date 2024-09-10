@@ -110,6 +110,8 @@ class Recipient:
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
         upstream_delta = update_wait_inflight(
             self.upstream, self.tx, self.tx.copy(), deadline)
+        del upstream_delta.version
+        del self.tx.version
 
         logging.debug('exploder.Recipient._on_rcpt() %s', upstream_delta)
 
@@ -190,6 +192,8 @@ class Recipient:
             data_resp = Response(450, 'exploder upstream timeout DATA')
         else:
             data_resp = upstream_delta.data_response
+        del upstream_delta.version
+        del self.tx.version
 
         if self.msa and data_resp is not None and data_resp.temp():
             self.store_and_forward = True

@@ -45,8 +45,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         sync_filter_adapter.update(tx, tx.copy())
-        sync_filter_adapter.version()
-        sync_filter_adapter.wait(1)
+        sync_filter_adapter.wait(tx.version, 1)
         upstream_tx = sync_filter_adapter.get()
         self.assertEqual(upstream_tx.mail_response.code, 201)
 
@@ -62,11 +61,14 @@ class SyncFilterAdapterTest(unittest.TestCase):
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
         sync_filter_adapter.update(tx, delta)
-        sync_filter_adapter.version()
-        sync_filter_adapter.wait(1)
-        upstream_tx = sync_filter_adapter.get()
-        self.assertEqual([r.code for r in upstream_tx.rcpt_response], [202])
-        self.assertFalse(sync_filter_adapter.done)
+        for i in range(0,3):
+            sync_filter_adapter.wait(tx.version, 1)
+            tx = sync_filter_adapter.get()
+            if [r.code for r in tx.rcpt_response] == [202]:
+                break
+            self.assertFalse(sync_filter_adapter.done)
+        else:
+            self.fail('expected rcpt_response')
 
         body = b'hello, world!'
 
@@ -81,9 +83,12 @@ class SyncFilterAdapterTest(unittest.TestCase):
         delta = TransactionMetadata(body_blob=InlineBlob(body))
         tx.merge_from(delta)
         sync_filter_adapter.update(tx, delta)
-        sync_filter_adapter.version()
-        sync_filter_adapter.wait(1)
-        self.assertTrue(sync_filter_adapter.done)
+        for i in range(0,3):
+            sync_filter_adapter.wait(tx.version, 1)
+            if sync_filter_adapter.done:
+                break
+        else:
+            self.fail('expected done')
 
 class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):
@@ -102,7 +107,7 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
 
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                                          http_host='msa')
+                                  http_host='msa')
             resp = handler.patch_tx(
                 FlaskRequest.from_values(
                     headers={'if-match': resp.headers['etag'],

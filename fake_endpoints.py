@@ -44,14 +44,16 @@ class FakeAsyncEndpoint(AsyncFilter):
             upstream_delta = tx.delta(self.tx)
             assert upstream_delta is not None
             tx.replace_from(self.tx)
+            upstream_delta.version = tx.version = self._version
             return upstream_delta
 
     # AsyncFilter
     def get(self, timeout : Optional[float] = None
             ) -> Optional[TransactionMetadata]:
         with self.mu:
-            return self.tx.copy()
-
+            tx = self.tx.copy()
+            tx.version = self._version
+            return tx
 
     def get_blob_writer(self,
                         create : bool,
@@ -64,10 +66,9 @@ class FakeAsyncEndpoint(AsyncFilter):
     def version(self):
         return self._version
 
-    # TODO version() samples version and this waits for that?
-    def wait(self, timeout) -> bool:
+    def wait(self, version, timeout) -> bool:
         with self.mu:
-            return self.cv.wait(timeout)
+            return self.cv.wait_for(lambda: self._version != version, timeout)
 
     async def wait_async(self, timeout) -> bool:
         raise NotImplementedError()
@@ -114,10 +115,10 @@ class MockAsyncFilter(AsyncFilter):
     def version(self) -> Optional[int]:
         pass
 
-    def wait(self, timeout) -> bool:
+    def wait(self, version, timeout) -> bool:
         return bool(self.get_expectation)
 
-    async def wait_async(self, timeout) -> bool:
+    async def wait_async(self, version, timeout) -> bool:
         return bool(self.get_expectation)
 
 

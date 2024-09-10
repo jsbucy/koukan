@@ -266,7 +266,8 @@ _tx_fields = [
     TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
-    TxField('final_attempt_reason', validity=set([WhichJson.REST_READ]))
+    TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
+    TxField('version', validity=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -321,6 +322,7 @@ class TransactionMetadata:
 
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
+    version : Optional[int] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -453,6 +455,7 @@ class TransactionMetadata:
 
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
+    # xxx cancelled?
     def req_inflight(self, tx : Optional['TransactionMetadata'] = None) -> bool:
         if tx is None:
             tx = self
@@ -729,21 +732,22 @@ class AsyncFilter(ABC):
     ) -> Optional[WritableBlob]:
         pass
 
-    # returns a "cached" value from the last get/update if any
-    # if none, returns the version from IdVersionMap
-    # else None
+    # returns the current version for comparing to an etag;
+    # if this doesn't match the etag, it's definitely stale
     @abstractmethod
     def version(self) -> Optional[int]:
         pass
 
+    # true -> version changed, false -> timeout
+
     @abstractmethod
-    def wait(self, timeout) -> bool:
+    def wait(self, version, timeout) -> bool:
         pass
 
     # wait until version() would return a different value from the
     # previous call
     @abstractmethod
-    async def wait_async(self, timeout) -> bool:
+    async def wait_async(self, version, timeout) -> bool:
         pass
 
 
@@ -766,7 +770,9 @@ def update_wait_inflight(async_filter : AsyncFilter,
     upstream_tx = tx.copy()
     upstream_delta = async_filter.update(upstream_tx, tx_delta)
     while deadline.remaining() and upstream_tx.req_inflight():
-        if not async_filter.wait(deadline.deadline_left()):
+        logging.debug('update_wait_inflight version %s', upstream_tx.version)
+        if not async_filter.wait(upstream_tx.version,
+                                 deadline.deadline_left()):
             break
         upstream_tx = async_filter.get()
 
@@ -785,6 +791,7 @@ def update_wait_inflight(async_filter : AsyncFilter,
     # so only do this if tx_orig.body_blob?
     if upstream_tx.body:
         del upstream_tx.body
+    del upstream_delta.version
     upstream_delta = tx_orig.delta(upstream_tx)
     # TODO one would expect merge_from()?
     tx.replace_from(upstream_tx)

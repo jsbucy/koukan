@@ -47,11 +47,15 @@ class StorageWriterFilter(AsyncFilter):
         self.cv = Condition(self.mu)
 
     # AsyncFilter
-    def wait(self, timeout) -> bool:
+    def wait(self, version, timeout) -> bool:
+        if self.tx_cursor.version != version:
+            return True
         return self.tx_cursor.wait(timeout)
 
     # AsyncFilter
-    async def wait_async(self, timeout):
+    async def wait_async(self, version, timeout):
+        if self.tx_cursor.version != version:
+            return True
         return await self.tx_cursor.wait_async(timeout)
 
     def release_transaction_cursor(self) -> Optional[TransactionCursor]:
@@ -62,6 +66,7 @@ class StorageWriterFilter(AsyncFilter):
                 return None
             elif not self.created:
                 return None
+            logging.debug('StorageWriterFilter.release_transaction_cursor')
             cursor = self.tx_cursor
             self.tx_cursor = None
             return cursor
@@ -102,8 +107,12 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
-        self._load()
-        return self.tx_cursor.tx.copy()
+        # xxx races with release_transaction_cursor()
+        with self.mu:
+            self._load()
+            tx = self.tx_cursor.tx.copy()
+            tx.version = self.tx_cursor.version
+            return tx
 
     def _get_body_blob_uri(self, tx) -> Optional[BlobUri]:
         logging.debug('_get_body_blob_uri')
@@ -198,7 +207,10 @@ class StorageWriterFilter(AsyncFilter):
                ) -> Optional[TransactionMetadata]:
         needs_create = self.rest_id is None
         try:
-            return self._update(tx, tx_delta)
+            upstream_delta = self._update(tx, tx_delta)
+            if self.tx_cursor is not None:
+                upstream_delta.version = tx.version = self.tx_cursor.version
+            return upstream_delta
         finally:
             if needs_create and self.created is None:
                 # i.e. uncaught exception

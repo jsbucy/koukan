@@ -74,10 +74,10 @@ class SyncFilterAdapter(AsyncFilter):
     _last_update : float
     body_blob : Optional[BlobWriter] = None
     # transaction has reached a final status: data response or cancelled
+    # (used for gc)
     done : bool = False
     id_version : IdVersion
     # from last get/update
-    sampled_version : Optional[int] = None
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -99,18 +99,15 @@ class SyncFilterAdapter(AsyncFilter):
             return (now - self._last_update) > t
 
     def version(self):
-        assert self.sampled_version is not None
-        return self.sampled_version
+        return self.id_version.get()
 
-    def wait(self, timeout) -> bool:
-        assert self.sampled_version is not None
+    def wait(self, version, timeout) -> bool:
         return self.id_version.wait(
-            version=self.sampled_version, timeout=timeout)
+            version=version, timeout=timeout)
 
-    async def wait_async(self, timeout) -> bool:
-        assert self.sampled_version is not None
+    async def wait_async(self, version, timeout) -> bool:
         return await self.id_version.wait_async(
-            version=self.sampled_version, timeout=timeout)
+            version=version, timeout=timeout)
 
     # for use in ttl/gc idle calcuation
     # returns now if there is an update inflight i.e. do not gc
@@ -157,6 +154,7 @@ class SyncFilterAdapter(AsyncFilter):
         logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
                       self.tx)
         with self.mu:
+            # xxx or err?
             self.done = self.tx.cancelled or self.tx.data_response is not None
             version = self.id_version.get()
             version += 1
@@ -164,12 +162,6 @@ class SyncFilterAdapter(AsyncFilter):
             self.id_version.update(version=version)
             self._last_update = time.monotonic()
         return True
-
-    def _tx_done_locked(self, tx : TransactionMetadata):
-        return not tx.req_inflight(self.tx)
-
-    def _get_locked(self, tx, timeout) -> bool:
-        return self.cv.wait_for(lambda: self._tx_done_locked(tx), timeout)
 
     def update(self,
                tx : TransactionMetadata,
@@ -189,12 +181,11 @@ class SyncFilterAdapter(AsyncFilter):
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
 
             if txx is None:
-                return None
+                return None  # bad delta
             self.tx = txx
             version = self.id_version.get()
             version += 1
             self.id_version.update(version)
-            self.sampled_version = version
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update())
@@ -204,15 +195,17 @@ class SyncFilterAdapter(AsyncFilter):
                 self.inflight = True
             # no longer waits for inflight
             delta = TransactionMetadata(rest_id=self.rest_id)
+            delta.version = version
             tx.merge_from(delta)
+            assert delta.version is not None
             return delta
 
     # TODO it looks like this effectively returns an empty tx on timeout
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
-            self.sampled_version = self.id_version.get()
-            return self.tx.copy()
-
+            tx = self.tx.copy()
+            tx.version = self.id_version.get()
+            return tx
 
     def get_blob_writer(self,
                         create : bool,
@@ -364,6 +357,7 @@ class RestHandler(Handler):
         upstream = self.async_filter.update(tx, tx.copy())
         if upstream is None or tx.rest_id is None:
             return self.response(request, code=400, msg='bad request')
+        assert upstream.version is not None
         self._tx_rest_id = tx.rest_id
 
         tx.body = body
@@ -372,7 +366,7 @@ class RestHandler(Handler):
             request, code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', make_tx_uri(tx.rest_id))],
-            etag=self._etag(self.async_filter.version()))
+            etag=self._etag(upstream.version))
         logging.debug('RestHandler._create %s', resp)
         return resp
 
@@ -388,7 +382,8 @@ class RestHandler(Handler):
 
         version = self._get_tx_req(request)
         if version is not None:
-            wait_result = self.async_filter.wait(deadline.deadline_left())
+            wait_result = self.async_filter.wait(
+                version, deadline.deadline_left())
             if not wait_result:
                 return self.response(request, code=304, msg='unchanged',
                                      headers=[('etag', self._etag(version))])
@@ -412,7 +407,7 @@ class RestHandler(Handler):
     def _get_tx_resp(self, request, tx):
         return self.response(
             request,
-            etag=self._etag(self.async_filter.version()),
+            etag=self._etag(tx.version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
     def _get_tx_req(self, request):
@@ -447,7 +442,7 @@ class RestHandler(Handler):
         logging.debug('RestHandler._get_tx_async version %s', version)
         if version is not None:
             wait_result = await self.async_filter.wait_async(
-                deadline.deadline_left())
+                version, deadline.deadline_left())
             if not wait_result:
                 return self.response(request, code=304, msg='unchanged',
                                      headers=[('etag', self._etag(version))])
@@ -504,9 +499,12 @@ class RestHandler(Handler):
                 request, code=400,
                 msg='RestHandler.patch_tx merge failed')
 
-        if req_etag != self._etag(self.async_filter.version()):
+        version = tx.version
+        del tx.version
+
+        if req_etag != self._etag(version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
-                          req_etag, self._etag(self.async_filter.version()))
+                          req_etag, self._etag(version))
             return self.response(request, code=412, msg='update conflict')
         upstream_delta = self.async_filter.update(tx, downstream_delta)
         if upstream_delta is None:
@@ -517,7 +515,7 @@ class RestHandler(Handler):
         tx.body = body
         del tx.body_blob
         return self.response(
-            request, etag=self._etag(self.async_filter.version()),
+            request, etag=self._etag(upstream_delta.version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 
