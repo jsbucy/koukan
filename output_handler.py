@@ -61,19 +61,15 @@ class OutputHandler:
             timeout = self.data_timeout
             msg = 'body'
 
-        while True:
-            try:
-                if not self.cursor.wait(self.env_timeout):
-                    logging.debug(
-                        'OutputHandler._output() %s timeout %s=%d',
-                        self.rest_id, msg, timeout)
-                    return None, Response(
-                        400, 'OutputHandler downstream timeout (%s=%d)' % (
-                            msg, timeout))
-                self.cursor.load()
-                return True, None
-            except VersionConflictException:
-                pass
+        if not self.cursor.wait(self.env_timeout):
+            logging.debug(
+                'OutputHandler._output() %s timeout %s=%d',
+                self.rest_id, msg, timeout)
+            return None, Response(
+                400, 'OutputHandler downstream timeout (%s=%d)' % (
+                    msg, timeout))
+        self.cursor.load()
+        return True, None
 
     def _output(self) -> Optional[Response]:
         ok_rcpt = False
@@ -186,13 +182,7 @@ class OutputHandler:
                     logging.info(
                         'OutputHandler._output() VersionConflictException %s ',
                         self.rest_id)
-                    # version cache can raise
-                    # VersionConflictException again here \o/
-                    # TODO cursor.load() should just handle this
-                    try:
-                        self.cursor.load()
-                    except VersionConflictException:
-                        pass
+                    self.cursor.load()
 
             if (upstream_delta.mail_response is not None and
                 upstream_delta.mail_response.err()):
@@ -237,11 +227,7 @@ class OutputHandler:
                     notification_done=notification_done)
                 break
             except VersionConflictException:
-                # cf above
-                try:
-                    self.cursor.load()
-                except VersionConflictException:
-                    pass
+                self.cursor.load()
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)

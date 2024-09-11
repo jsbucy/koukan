@@ -60,7 +60,7 @@ class StorageTestBase(unittest.TestCase):
         del downstream
 
         buggy = self.s.get_transaction_cursor()
-        with self.assertRaises(VersionConflictException):
+        with self.assertRaises(AssertionError):
             buggy.load(rest_id='tx_rest_id', start_attempt=True)
 
         upstream.load(start_attempt=True)

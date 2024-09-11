@@ -267,10 +267,7 @@ class Service:
         # queryable for visibility.
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
-        try:
-            storage_tx = self.storage.load_one()
-        except VersionConflictException:
-            return False
+        storage_tx = self.storage.load_one()
         if deq is not None:
             with self.lock:
                 deq[0] = storage_tx is not None

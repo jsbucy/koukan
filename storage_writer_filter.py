@@ -93,19 +93,11 @@ class StorageWriterFilter(AsyncFilter):
             self.rest_id = rest_id
             self.cv.notify_all()
 
-    def _load_tx(self):
-        while True:
-            try:
-                self.tx_cursor.load()
-                break
-            except VersionConflictException:
-                pass
-
     def _load(self):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-        self._load_tx()
+        self.tx_cursor.load()
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
@@ -231,6 +223,7 @@ class StorageWriterFilter(AsyncFilter):
 
         if tx_delta.cancelled:
             while True:
+                assert self.tx_cursor is not None
                 try:
                     # storage has special-case logic to noop if
                     # tx has final_attempt_reason

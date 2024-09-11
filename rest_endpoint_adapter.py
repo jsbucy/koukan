@@ -507,7 +507,7 @@ class RestHandler(Handler):
         # TODO should these 412s set the etag?
         if req_etag != self._etag(tx.version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
-                          req_etag, self._etag(version))
+                          req_etag, self._etag(tx.version))
             return self.response(request, code=412, msg='update conflict')
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)

@@ -439,20 +439,37 @@ class TransactionCursor:
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None,
              start_attempt : bool = False) -> Optional[TransactionMetadata]:
+        while True:
+            try:
+                return self._load(db_id, rest_id, start_attempt)
+            # update_version_cache() throws if an update got in
+            # between the db read and cache update
+            except VersionConflictException:
+                pass
+
+    def _load(self, db_id : Optional[int] = None,
+              rest_id : Optional[str] = None,
+              start_attempt : bool = False) -> Optional[TransactionMetadata]:
+        assert db_id is None or self.id is None or db_id == self.id
+        assert rest_id is None or self.rest_id is None or rest_id == self.rest_id
         assert not (self.in_attempt and start_attempt)
         if self.id is not None or self.rest_id is not None:
-            assert(db_id is None and rest_id is None)
             db_id = self.id
             rest_id = self.rest_id
         else:
-            assert(db_id is not None or rest_id is not None)
-        started = False
+            assert db_id is not None or rest_id is not None
         with self.parent.begin_transaction() as db_tx:
-            res = self._load_db(db_tx, db_id, rest_id)
-            if start_attempt:
-                self._start_attempt_db(db_tx, self.id, self.version)
-                started = True
-        # XXX leaves an open attempt if update_version_cache throws
+            return self._load_and_start_attempt_db(
+                db_tx, db_id, rest_id, start_attempt)
+
+    def _load_and_start_attempt_db(
+            self, db_tx,
+            db_id : Optional[int] = None,
+            rest_id : Optional[str] = None,
+            start_attempt : bool = False):
+        res = self._load_db(db_tx, db_id, rest_id)
+        if start_attempt:
+            self._start_attempt_db(db_tx, self.id, self.version)
         if res is not None:
             self._update_version_cache()
         return res
@@ -553,11 +570,9 @@ class TransactionCursor:
 
         return self.tx
 
-    # xxx this is called on an empty cursor from Storage.load_one()
     def _start_attempt_db(self, db_tx, db_id, version):
         logging.debug('TxCursor._start_attempt_db %d', db_id)
         assert self.parent.session_id is not None
-        self._load_db(db_tx, db_id=db_id)
         assert self.tx is not None
         new_version = version + 1
 
@@ -583,8 +598,10 @@ class TransactionCursor:
 
         res = db_tx.execute(upd)
         row = res.fetchone()
-        if row is None or row[0] != new_version:
-            raise VersionConflictException
+
+        # this should only be called in a db tx that already read the
+        # row unleased
+        assert row and row[0] == new_version
 
         # This is a sort of pseudo-attempt for re-entering the
         # notification logic if it was enabled after the transaction
@@ -1037,7 +1054,13 @@ class Storage():
                                ) -> TransactionCursor:
         return TransactionCursor(self, db_id, rest_id)
 
-    def load_one(self):
+    def load_one(self) -> Optional[TransactionCursor]:
+        try:
+            return self._load_one()
+        except VersionConflictException:
+            return None
+
+    def _load_one(self) -> Optional[TransactionCursor]:
         with self.begin_transaction() as db_tx:
             # TODO this is currently a scan, index on/ORDER BY
             # next_attempt_time?
@@ -1084,7 +1107,8 @@ class Storage():
             version = row[1]
 
             tx = self.get_transaction_cursor()
-            tx._start_attempt_db(db_tx, db_id, version)
+            tx._load_and_start_attempt_db(
+                db_tx, db_id=db_id, start_attempt=True)
 
             # TODO: if the last n consecutive attempts weren't
             # finalized, this transaction may be crashing the system
