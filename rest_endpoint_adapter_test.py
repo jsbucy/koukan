@@ -2,7 +2,6 @@ from typing import List, Tuple
 import unittest
 import logging
 import io
-from threading import Thread
 import json
 
 from flask import (
@@ -17,7 +16,7 @@ from fastapi import (
 
 from blob import InlineBlob
 from rest_endpoint_adapter import RestHandler, SyncFilterAdapter
-from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
+from fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from executor import Executor
 from filter import Mailbox, TransactionMetadata, WhichJson
 from response import Response
@@ -95,18 +94,35 @@ class SyncFilterAdapterTest(unittest.TestCase):
 class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):
         app = Flask(__name__)
-        endpoint = FakeAsyncEndpoint(rest_id='rest_id')
+        endpoint = MockAsyncFilter()
         tx = TransactionMetadata()
-        #tx.rest_id = 'rest_id'
-        #endpoint.merge(tx)
 
         with app.test_request_context():
+            def exp(tx, tx_delta):
+                self.assertIsNotNone(tx.host)
+                delta = TransactionMetadata(rest_id='rest_id',
+                                            version=1)
+                tx.merge_from(delta)
+                return delta
+            endpoint.expect_update(exp)
             handler = RestHandler(async_filter=endpoint, http_host='msa')
             resp = handler.create_tx(FlaskRequest.from_values(),
                                      req_json={})
             self.assertEqual(resp.status, '201 CREATED')
             self.assertEqual(resp.json, {})
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
+
+
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                version=1))
+            def exp_mail(tx, tx_delta):
+                self.assertIsNotNone(tx.mail_from)
+                upstream_delta = TransactionMetadata(
+                    version=2)
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+            endpoint.expect_update(exp_mail)
 
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                   http_host='msa')
@@ -117,15 +133,32 @@ class RestHandlerTest(unittest.TestCase):
                 req_json={"mail_from": {"m": "alice"}})
             self.assertEqual(resp.status, '200 OK')
 
-            endpoint.merge(
-                TransactionMetadata(mail_response=Response(201)))
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                version=3))
             resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
+
+
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                version=3))
+            def exp_rcpt(tx, tx_delta):
+                self.assertEqual(1, len(tx.rcpt_to))
+                upstream_delta = TransactionMetadata(
+                    version=4)
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+            endpoint.expect_update(exp_rcpt)
 
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                           http_host='msa')
@@ -142,8 +175,13 @@ class RestHandlerTest(unittest.TestCase):
                 'rcpt_to': [{}]
             })
 
-            endpoint.merge(TransactionMetadata(rcpt_response=[Response(202)]))
-
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                rcpt_to=[Mailbox('bob')],
+                rcpt_response=[Response(202)],
+                version=4))
             resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
@@ -152,6 +190,21 @@ class RestHandlerTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]
             })
 
+
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                rcpt_to=[Mailbox('bob')],
+                rcpt_response=[Response(202)],
+                version=4))
+            def exp_rcpt2(tx, tx_delta):
+                self.assertEqual(2, len(tx.rcpt_to))
+                upstream_delta = TransactionMetadata(
+                    version=5)
+                assert tx.merge_from(upstream_delta) is not None
+                return upstream_delta
+            endpoint.expect_update(exp_rcpt2)
 
             handler = RestHandler(
                 async_filter=endpoint, tx_rest_id='rest_id', http_host='msa')
@@ -169,13 +222,14 @@ class RestHandlerTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]
             })
 
-            tx = TransactionMetadata.from_json(resp.json, WhichJson.REST_READ)
-            updated = tx.copy()
-            updated.rcpt_response.append(Response(203))
-            delta = tx.delta(updated)
-            tx = updated
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+                rcpt_response=[Response(202), Response(203)],
+                version=6))
 
-            endpoint.merge(delta)
             resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
@@ -185,6 +239,7 @@ class RestHandlerTest(unittest.TestCase):
                                   {'code': 203, 'message': 'ok'}]
             })
             tx_etag = resp.headers['etag']
+
 
             body = b'hello, world!'
             endpoint.body_blob = InlineBlob(b'')
@@ -201,9 +256,15 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(endpoint.body_blob.d, body)
             self.assertEqual(endpoint.body_blob.content_length(), len(body))
 
-            endpoint.merge(TransactionMetadata(
-                body_blob=endpoint.body_blob,  # XXX
-                data_response=Response(204)))
+
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+                rcpt_response=[Response(202), Response(203)],
+                body='',  # placeholder
+                version=7))
             resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.json, {
                 'mail_from': {},
@@ -212,14 +273,21 @@ class RestHandlerTest(unittest.TestCase):
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'},
                                   {'code': 203, 'message': 'ok'}],
-                'data_response': {'code': 204, 'message': 'ok'},
             })
             tx_etag = resp.headers['etag']
 
-            # XXX why the second GET here?
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                mail_response=Response(201),
+                rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+                rcpt_response=[Response(202), Response(203)],
+                body='',  # placeholder
+                data_response=Response(204),
+                version=8))
+
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                                   http_host='msa')
-            endpoint.merge(TransactionMetadata(data_response=Response(204)))
             resp = handler.get_tx(FlaskRequest.from_values())
             self.assertEqual(resp.status, '200 OK')
             logging.debug('RestHandlerTest get %s', resp.json)
@@ -240,7 +308,7 @@ class RestHandlerTest(unittest.TestCase):
         self.assertEqual(r1.length, r2.length)
 
     def test_blob_chunking(self):
-        endpoint = FakeAsyncEndpoint(rest_id='rest-id')
+        endpoint = MockAsyncFilter() 
         app = Flask(__name__)
 
         with app.test_request_context():
@@ -269,7 +337,7 @@ class RestHandlerTest(unittest.TestCase):
                 req_upload='chunked')
             self.assertEqual(resp.status, '400 BAD REQUEST')
 
-            endpoint.body_blob = InlineBlob(b'')
+            endpoint.blob['blob-rest-id'] = InlineBlob(b'')
             handler = RestHandler(
                 async_filter=endpoint,
                 http_host='msa',
@@ -283,7 +351,8 @@ class RestHandlerTest(unittest.TestCase):
             self.assertNotIn('content-range', resp.headers)
 
             handler = RestHandler(
-                async_filter=endpoint, blob_rest_id='blob-rest-id',
+                async_filter=endpoint,
+                blob_rest_id='blob-rest-id',
                 http_host='msa',
                 rest_id_factory = lambda: 'rest-id',
                 tx_rest_id='tx_rest_id')
@@ -293,7 +362,7 @@ class RestHandlerTest(unittest.TestCase):
                 FlaskRequest.from_values(
                     data=b,  # for content-length
                     headers={'content-range': range}),
-                b)  # actually read from here
+                'blob-rest-id')
             self.assertEqual(resp.status, '200 OK')
             self.assert_eq_content_range(
                 resp.content_range,
@@ -311,7 +380,7 @@ class RestHandlerTest(unittest.TestCase):
                 FlaskRequest.from_values(
                     data=b2,  # for content-length
                     headers={'content-range': range}),
-                b2)  # actually read from here
+                'blob-rest-id')
             self.assertEqual(resp.status, '200 OK')
             self.assert_eq_content_range(resp.content_range,
                                          ContentRange('bytes', 0, 13, 13))
@@ -327,8 +396,16 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_tx(self):
         app = Flask(__name__)
-        endpoint = FakeAsyncEndpoint(rest_id='rest_id')
+        endpoint = MockAsyncFilter()
         tx = TransactionMetadata()
+
+        def exp(tx, tx_delta):
+            self.assertIsNotNone(tx.host)
+            delta = TransactionMetadata(rest_id='rest_id',
+                                        version=1)
+            tx.merge_from(delta)
+            return delta
+        endpoint.expect_update(exp)
 
         handler = RestHandler(async_filter=endpoint, http_host='msa',
                               executor=self.executor)
@@ -342,6 +419,17 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.headers['location'], '/transactions/rest_id')
         logging.debug('test_create_tx create resp %s', resp.headers)
         self.assertIsNotNone(resp.headers.get('etag', None))
+
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            version=1))
+        def exp_mail(tx, tx_delta):
+            self.assertIsNotNone(tx.mail_from)
+            upstream_delta = TransactionMetadata(version=2)
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        endpoint.expect_update(exp_mail)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
@@ -357,8 +445,12 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         logging.debug('test_create_tx patch tx resp %s', resp.body)
         self.assertEqual(resp.status_code, 200)
 
-        endpoint.merge(
-            TransactionMetadata(mail_response=Response(201)))
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            version=3))
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
                               executor=self.executor)
@@ -373,6 +465,20 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             'mail_from': {},
             'mail_response': {'code': 201, 'message': 'ok'}
         })
+
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            version=3))
+        def exp_rcpt(tx, tx_delta):
+            self.assertEqual(1, len(tx.rcpt_to))
+            upstream_delta = TransactionMetadata(
+                version=4)
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        endpoint.expect_update(exp_rcpt)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
@@ -393,9 +499,14 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_to': [{}]
         })
 
-        endpoint.merge(TransactionMetadata(rcpt_response=[Response(202)]))
 
-
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            rcpt_to=[Mailbox('bob')],
+            rcpt_response=[Response(202)],
+            version=4))
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -408,6 +519,21 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}]
         })
 
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            rcpt_to=[Mailbox('bob')],
+            rcpt_response=[Response(202)],
+            version=4))
+        def exp_rcpt2(tx, tx_delta):
+            self.assertEqual(2, len(tx.rcpt_to))
+            upstream_delta = TransactionMetadata(
+                version=5)
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        endpoint.expect_update(exp_rcpt2)
 
         handler = RestHandler(
             async_filter=endpoint, tx_rest_id='rest_id', http_host='msa',
@@ -429,14 +555,15 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}]
         })
 
-        tx = TransactionMetadata.from_json(
-            json.loads(resp.body), WhichJson.REST_READ)
-        updated = tx.copy()
-        updated.rcpt_response.append(Response(203))
-        delta = tx.delta(updated)
-        tx = updated
 
-        endpoint.merge(delta)
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+            rcpt_response=[Response(202), Response(203)],
+            version=6))
+
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -450,6 +577,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         })
         tx_etag = resp.headers['etag']
 
+
+        endpoint.body_blob = InlineBlob(b'')
         body = b'hello, world!'
         async def input():
             return {'type': 'http.request',
@@ -473,9 +602,39 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(endpoint.body_blob.d, body)
         self.assertEqual(endpoint.body_blob.content_length(), len(body))
 
-        endpoint.merge(TransactionMetadata(
-            body_blob=endpoint.body_blob,  # XXX Filter api postcondition?
-            data_response=Response(204)))
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+            rcpt_response=[Response(202), Response(203)],
+            body='',  # placeholder
+            version=7))
+
+        scope = {'type': 'http',
+                 'headers': []}
+        req = FastApiRequest(scope)
+        resp = await handler.get_tx_async(req)
+        self.assertEqual(json.loads(resp.body), {
+            'mail_from': {},
+            'rcpt_to': [{}, {}],
+            'body': {},
+            'mail_response': {'code': 201, 'message': 'ok'},
+            'rcpt_response': [{'code': 202, 'message': 'ok'},
+                              {'code': 203, 'message': 'ok'}],
+        })
+
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
+            mail_response=Response(201),
+            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
+            rcpt_response=[Response(202), Response(203)],
+            body='',  # placeholder
+            data_response=Response(204),
+            version=8))
+
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -498,7 +657,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r1.length, r2.length)
 
     async def test_blob_chunking(self):
-        endpoint = FakeAsyncEndpoint(rest_id='rest-id')
+        endpoint = MockAsyncFilter()
         app = Flask(__name__)
 
         # content-range header is not accepted in non-chunked blob post
@@ -541,7 +700,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
-            rest_id_factory = lambda: 'blob-rest-id',
+            #rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor)
         scope = {'type': 'http',
@@ -549,7 +708,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         req = FastApiRequest(scope)
 
         resp = await handler.create_blob_async(
-            req, req_upload='chunked')
+            req, tx_body=True, req_upload='chunked')
         logging.debug(resp.body)
         self.assertEqual(resp.status_code, 201)
         self.assertNotIn('content-range', resp.headers)

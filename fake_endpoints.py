@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
@@ -13,85 +13,18 @@ from filter import (
 
 from storage_schema import VersionConflictException
 
-class FakeAsyncEndpoint(AsyncFilter):
-    tx : Optional[TransactionMetadata] = None
-    mu : Lock
-    cv : Condition
-    _version : int = 0
-    rest_id : str
-    body_blob : Optional[WritableBlob] = None
-
-    def __init__(self, rest_id):
-        self.mu = Lock()
-        self.cv = Condition(self.mu)
-        self.rest_id = rest_id
-
-    def merge(self, tx):
-        with self.mu:
-            assert self.tx.merge_from(tx) is not None
-            self._version += 1
-            self.cv.notify_all()
-
-    # AsyncFilter
-    def update(self,
-               tx : TransactionMetadata,
-               delta : TransactionMetadata,
-               timeout : Optional[float] = None
-               ) -> Optional[TransactionMetadata]:
-        with self.mu:
-            if self._version > 0 and tx.version != self._version:
-                raise VersionConflictException
-            self._version += 1
-            if self.tx is None:
-                self.tx = tx.copy()
-                delta = TransactionMetadata(version = self._version,
-                                            rest_id = self.rest_id)
-                tx.merge_from(delta)
-                return delta
-
-            assert self.tx.merge_from(delta)
-
-            self.cv.notify_all()
-            upstream_delta = TransactionMetadata(version = self._version)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
-    # AsyncFilter
-    def get(self, timeout : Optional[float] = None
-            ) -> Optional[TransactionMetadata]:
-        with self.mu:
-            tx = self.tx.copy()
-            tx.version = self._version
-            return tx
-
-    def get_blob_writer(self,
-                        create : bool,
-                        blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
-                        ) -> Optional[WritableBlob]:
-        #assert not(tx_body and blob_rest_id)
-        return self.body_blob
-
-    def version(self):
-        return self._version
-
-    def wait(self, version, timeout) -> bool:
-        with self.mu:
-            return self.cv.wait_for(lambda: self._version != version, timeout)
-
-    async def wait_async(self, timeout) -> bool:
-        raise NotImplementedError()
-
-
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
                              Optional[TransactionMetadata]]
 class MockAsyncFilter(AsyncFilter):
     update_expectation : List[UpdateExpectation]
     get_expectation : List[TransactionMetadata]
+    body_blob : Optional[WritableBlob] = None
+    blob : Dict[str, WritableBlob]
 
     def __init__(self):
         self.update_expectation = []
         self.get_expectation = []
+        self.blob = {}
 
     def expect_update(self, exp : UpdateExpectation):
         self.update_expectation.append(exp)
@@ -120,7 +53,10 @@ class MockAsyncFilter(AsyncFilter):
             blob_rest_id : Optional[str] = None,
             tx_body : Optional[bool] = None
     ) -> Optional[WritableBlob]:
-        raise NotImplementedError()
+        if tx_body:
+            return self.body_blob
+        #assert blob_rest_id and blob_rest_id in self.blob
+        return self.blob[blob_rest_id]
 
     def version(self) -> Optional[int]:
         pass

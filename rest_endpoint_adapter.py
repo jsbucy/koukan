@@ -566,7 +566,8 @@ class RestHandler(Handler):
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
-        self._blob_rest_id = self.rest_id_factory()
+        if not tx_body:
+            self._blob_rest_id = self.rest_id_factory()
 
         if req_upload is not None and req_upload != 'chunked':
             return self.response(request, code=400, msg='bad param: upload=')
