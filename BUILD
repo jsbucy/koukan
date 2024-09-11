@@ -103,8 +103,9 @@ py_test(name='storage_test_postgres',
 
 pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
-               deps=['response',
-                     'filter'])
+               deps=[':response',
+                     ':filter',
+                     ':storage_schema'])
 
 pytype_library(name='dsn',
                srcs=['dsn.py'],

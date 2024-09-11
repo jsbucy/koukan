@@ -15,6 +15,8 @@ from filter import (
 from blob import Blob
 from response import Response
 
+from storage_schema import VersionConflictException
+
 # Fan-out multi-rcpt from smtp gw and fan responses back in. Convert
 # certain upstream temp errors to success for store&forward.
 
@@ -175,14 +177,34 @@ class Recipient:
         # TODO maybe storage writer filter, etc, should know that and
         # not wait?
         deadline = Deadline(0) if self.store_and_forward else deadline
-        logging.debug('exploder Recipient._append_upstream %d/%s timeout=%s',
-                      blob.len(), blob.content_length(),
-                      deadline.deadline_left())
-        body_delta = TransactionMetadata()
-        body_delta.body_blob = blob
-        self.tx.merge_from(body_delta)
-        upstream_delta = update_wait_inflight(
-            self.upstream, self.tx, body_delta, deadline)
+        body_delta = TransactionMetadata(body_blob = blob)
+        # esp. with rcpt store&forward (msa), upstream OutputHandler
+        # may update rcpt_response concurrent with downstream body
+        # append so this can conflict in practice
+        while True:
+            logging.debug(
+                'exploder Recipient._append_upstream %d/%s timeout=%s',
+                blob.len(), blob.content_length(),
+                deadline.deadline_left())
+
+            downstream_tx = self.tx.copy()
+            #assert downstream_tx.merge_from(body_delta) is not None
+            downstream_tx.body_blob = blob
+            try:
+                upstream_delta = update_wait_inflight(
+                    self.upstream, downstream_tx, body_delta, deadline)
+                #del upstream_delta.version
+                #del downstream_tx.version
+                break
+            except VersionConflictException:
+                upstream_tx = self.upstream.get()
+                #del upstream_tx.version
+                if self.tx.version is not None:
+                    del self.tx.version
+                upstream_delta = self.tx.delta(upstream_tx)
+                assert self.tx.merge_from(upstream_delta) is not None
+        self.tx = downstream_tx
+
         if upstream_delta is None:
             data_resp = Response(
                 450, 'exploder Recipient._append_upstream internal error: '
@@ -192,8 +214,8 @@ class Recipient:
             data_resp = Response(450, 'exploder upstream timeout DATA')
         else:
             data_resp = upstream_delta.data_response
-        del upstream_delta.version
-        del self.tx.version
+        #del upstream_delta.version
+        #del self.tx.version
 
         if self.msa and data_resp is not None and data_resp.temp():
             self.store_and_forward = True

@@ -11,8 +11,10 @@ from filter import (
     SyncFilter,
     TransactionMetadata )
 
+from storage_schema import VersionConflictException
+
 class FakeAsyncEndpoint(AsyncFilter):
-    tx : TransactionMetadata
+    tx : Optional[TransactionMetadata] = None
     mu : Lock
     cv : Condition
     _version : int = 0
@@ -20,7 +22,6 @@ class FakeAsyncEndpoint(AsyncFilter):
     body_blob : Optional[WritableBlob] = None
 
     def __init__(self, rest_id):
-        self.tx = TransactionMetadata()
         self.mu = Lock()
         self.cv = Condition(self.mu)
         self.rest_id = rest_id
@@ -38,13 +39,21 @@ class FakeAsyncEndpoint(AsyncFilter):
                timeout : Optional[float] = None
                ) -> Optional[TransactionMetadata]:
         with self.mu:
-            assert self.tx.merge_from(delta)
+            if self._version > 0 and tx.version != self._version:
+                raise VersionConflictException
             self._version += 1
+            if self.tx is None:
+                self.tx = tx.copy()
+                delta = TransactionMetadata(version = self._version,
+                                            rest_id = self.rest_id)
+                tx.merge_from(delta)
+                return delta
+
+            assert self.tx.merge_from(delta)
+
             self.cv.notify_all()
-            upstream_delta = tx.delta(self.tx)
-            assert upstream_delta is not None
-            tx.replace_from(self.tx)
-            upstream_delta.version = tx.version = self._version
+            upstream_delta = TransactionMetadata(version = self._version)
+            tx.merge_from(upstream_delta)
             return upstream_delta
 
     # AsyncFilter
@@ -93,6 +102,7 @@ class MockAsyncFilter(AsyncFilter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> TransactionMetadata:
+        logging.debug('MockAsyncFilter.update %s', tx)
         exp = self.update_expectation[0]
         self.update_expectation.pop(0)
         upstream_delta = exp(tx, tx_delta)

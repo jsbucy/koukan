@@ -793,7 +793,8 @@ def update_wait_inflight(async_filter : AsyncFilter,
     # so only do this if tx_orig.body_blob?
     if upstream_tx.body:
         del upstream_tx.body
-    del upstream_delta.version
+    if tx_orig.version:
+        del tx_orig.version
     upstream_delta = tx_orig.delta(upstream_tx)
     # TODO one would expect merge_from()?
     tx.replace_from(upstream_tx)

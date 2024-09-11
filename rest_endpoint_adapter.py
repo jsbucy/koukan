@@ -45,6 +45,7 @@ from executor import Executor
 
 from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
 from version_cache import IdVersion
+from storage_schema import VersionConflictException
 
 
 # runs SyncFilter on Executor with AsyncFilter interface for
@@ -176,6 +177,10 @@ class SyncFilterAdapter(AsyncFilter):
             return err
 
         with self.mu:
+            version = self.id_version.get()
+            # xxx bootstrap
+            if version > 1 and tx.version != version:
+                raise VersionConflictException
             txx = self.tx.merge(tx_delta)
 
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
@@ -499,14 +504,15 @@ class RestHandler(Handler):
                 request, code=400,
                 msg='RestHandler.patch_tx merge failed')
 
-        version = tx.version
-        del tx.version
-
-        if req_etag != self._etag(version):
+        # TODO should these 412s set the etag?
+        if req_etag != self._etag(tx.version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
                           req_etag, self._etag(version))
             return self.response(request, code=412, msg='update conflict')
-        upstream_delta = self.async_filter.update(tx, downstream_delta)
+        try:
+            upstream_delta = self.async_filter.update(tx, downstream_delta)
+        except VersionConflictException:
+            return self.response(request, code=412, msg='update conflict')
         if upstream_delta is None:
             return self.response(
                 request, code=400,

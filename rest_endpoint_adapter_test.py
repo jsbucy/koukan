@@ -60,6 +60,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
+        tx.version = sync_filter_adapter.version()
         sync_filter_adapter.update(tx, delta)
         for i in range(0,3):
             sync_filter_adapter.wait(tx.version, 1)
@@ -96,8 +97,8 @@ class RestHandlerTest(unittest.TestCase):
         app = Flask(__name__)
         endpoint = FakeAsyncEndpoint(rest_id='rest_id')
         tx = TransactionMetadata()
-        tx.rest_id = 'rest_id'
-        endpoint.merge(tx)
+        #tx.rest_id = 'rest_id'
+        #endpoint.merge(tx)
 
         with app.test_request_context():
             handler = RestHandler(async_filter=endpoint, http_host='msa')
@@ -328,8 +329,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         app = Flask(__name__)
         endpoint = FakeAsyncEndpoint(rest_id='rest_id')
         tx = TransactionMetadata()
-        tx.rest_id = 'rest_id'
-        endpoint.merge(tx)
 
         handler = RestHandler(async_filter=endpoint, http_host='msa',
                               executor=self.executor)

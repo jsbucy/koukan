@@ -232,6 +232,8 @@ class StorageWriterFilter(AsyncFilter):
         if tx_delta.cancelled:
             while True:
                 try:
+                    # storage has special-case logic to noop if
+                    # tx has final_attempt_reason
                     self.tx_cursor.write_envelope(
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
@@ -312,16 +314,9 @@ class StorageWriterFilter(AsyncFilter):
         if not created or reuse_blob_rest_id:
             if self.tx_cursor is None:
                 self._load()
-
-            while True:
-                try:
-                    self.tx_cursor.write_envelope(
-                        downstream_delta, reuse_blob_rest_id=reuse_blob_rest_id)
-                    break
-                except VersionConflictException:
-                    self.tx_cursor.load()
-                    logging.debug('StorageWriterFilter.update conflict %s',
-                                  self.tx_cursor.tx)
+            # caller handles VersionConflictException
+            self.tx_cursor.write_envelope(
+                downstream_delta, reuse_blob_rest_id=reuse_blob_rest_id)
 
         logging.debug('StorageWriterFilter.update %s result %s '
                       'input tx %s',

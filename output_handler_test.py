@@ -10,7 +10,7 @@ from storage import Storage, TransactionCursor
 from storage_schema import VersionConflictException
 from response import Response
 from output_handler import OutputHandler
-from fake_endpoints import FakeAsyncEndpoint, FakeSyncFilter
+from fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from filter import Mailbox, TransactionMetadata
 from rest_schema import BlobUri
 
@@ -393,12 +393,22 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp)
 
-        notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
-        notification_endpoint.merge(
-            TransactionMetadata(
+        notification_endpoint = MockAsyncFilter()
+
+        def exp_notification(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, '')
+            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            dsn = tx.body_blob.read(0).decode('utf-8')
+            logging.debug(dsn)
+            self.assertIn('subject: Delivery Status Notification', dsn)
+
+            upstream_delta = TransactionMetadata(
                 mail_response=Response(),
                 rcpt_response=[Response()],
-                data_response=Response()))
+                data_response=Response())
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        notification_endpoint.expect_update(exp_notification)
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -415,12 +425,6 @@ class OutputHandlerTest(unittest.TestCase):
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
 
-        self.assertEqual(notification_endpoint.tx.mail_from.mailbox, '')
-        self.assertEqual(notification_endpoint.tx.rcpt_to[0].mailbox, 'alice')
-
-        dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
-        logging.debug(dsn)
-        self.assertIn('subject: Delivery Status Notification', dsn)
 
     def test_notification_message_builder(self):
         tx = TransactionMetadata(
@@ -459,12 +463,35 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp)
 
-        notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
-        notification_endpoint.merge(
-            TransactionMetadata(
+        notification_endpoint = MockAsyncFilter()
+
+        def exp_notification(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, '')
+            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            dsn = tx.body_blob.read(0).decode('utf-8')
+            logging.debug(dsn)
+            self.assertIn('subject: Delivery Status Notification', dsn)
+            orig_headers = [
+                'from: alice a <alice@example.com>',
+                'to: bob@example.com',
+                'subject: hello',
+                'date: Wed, 06 Mar 2024 10:42:31 -0800',
+                'message-id: <abc@xyz>']
+            dsn = tx.body_blob.read(0).decode('utf-8')
+            logging.debug(dsn)
+            self.assertIn('subject: Delivery Status Notification', dsn)
+
+            for h in orig_headers:
+                self.assertIn(h, dsn)
+
+            upstream_delta = TransactionMetadata(
                 mail_response=Response(),
                 rcpt_response=[Response()],
-                data_response=Response()))
+                data_response=Response())
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        notification_endpoint.expect_update(exp_notification)
+
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -481,20 +508,6 @@ class OutputHandlerTest(unittest.TestCase):
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
 
-        self.assertEqual(notification_endpoint.tx.mail_from.mailbox, '')
-        self.assertEqual(notification_endpoint.tx.rcpt_to[0].mailbox, 'alice')
-
-        dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
-        logging.debug(dsn)
-        self.assertIn('subject: Delivery Status Notification', dsn)
-        orig_headers = [
-            'from: alice a <alice@example.com>',
-            'to: bob@example.com',
-            'subject: hello',
-            'date: Wed, 06 Mar 2024 10:42:31 -0800',
-            'message-id: <abc@xyz>']
-        for h in orig_headers:
-            self.assertIn(h, dsn)
 
     # 2: handle w/o notification that permfails, recover, handle -> dsn
     def test_notification_post_facto(self):
@@ -546,12 +559,23 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor.write_envelope(TransactionMetadata(
             notification={'host': 'smtp-out'}))
 
-        notification_endpoint = FakeAsyncEndpoint(rest_id='rest-id')
-        notification_endpoint.merge(
-            TransactionMetadata(
+
+        notification_endpoint = MockAsyncFilter()
+
+        def exp_notification(tx, tx_delta):
+            self.assertEqual(tx.mail_from.mailbox, '')
+            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            dsn = tx.body_blob.read(0).decode('utf-8')
+            logging.debug(dsn)
+            self.assertIn('subject: Delivery Status Notification', dsn)
+            upstream_delta = TransactionMetadata(
                 mail_response=Response(),
                 rcpt_response=[Response()],
-                data_response=Response()))
+                data_response=Response())
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        notification_endpoint.expect_update(exp_notification)
+
 
         tx_cursor = self.storage.load_one()
         self.assertIsNotNone(tx_cursor)
@@ -564,12 +588,6 @@ class OutputHandlerTest(unittest.TestCase):
 
         handler.handle()
 
-        self.assertEqual(notification_endpoint.tx.mail_from.mailbox, '')
-        self.assertEqual(notification_endpoint.tx.rcpt_to[0].mailbox, 'alice')
-
-        dsn = notification_endpoint.tx.body_blob.read(0).decode('utf-8')
-        logging.debug(dsn)
-        self.assertIn('subject: Delivery Status Notification', dsn)
 
 
 if __name__ == '__main__':
