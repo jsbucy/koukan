@@ -2,7 +2,6 @@ from typing import List, Optional
 
 import unittest
 import logging
-from threading import Condition, Lock
 import time
 from functools import partial
 
@@ -369,16 +368,12 @@ vec_msa = [
 ]
 
 class ExploderTest(unittest.TestCase):
-    mu : Lock
-    cv : Condition
     executor : Executor
 
     def setUp(self):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
                                  debug_futures=True)
 
-        self.mu = Lock()
-        self.cv = Condition(self.mu)
         self.storage = Storage.get_sqlite_inmemory_for_test()
         self.upstream_endpoints = []
 
@@ -391,15 +386,11 @@ class ExploderTest(unittest.TestCase):
 
     def add_endpoint(self):
         endpoint = MockAsyncFilter()
-        with self.mu:
-            self.upstream_endpoints.append(endpoint)
-            self.cv.notify_all()
+        self.upstream_endpoints.append(endpoint)
         return endpoint
 
     def factory(self):
-        with self.mu:
-            self.cv.wait_for(lambda: self.upstream_endpoints)
-            return self.upstream_endpoints.pop(0)
+        return self.upstream_endpoints.pop(0)
 
     # xxx all tests validate response message
 
@@ -527,10 +518,7 @@ class ExploderTest(unittest.TestCase):
         for endpoint in self.upstream_endpoints:
             self.assertEqual(endpoint.body_blob.read(0), b'hello, world!')
 
-        #self.assertIsNone(up0.tx.retry)
-        #self.assertIsNone(up0.tx.notification)
-        #self.assertIsNone(up1.tx.retry)
-        #self.assertIsNone(up1.tx.notification)
+        # don't expect an additional update to enable retry/notification
 
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', lambda: self.factory(),
@@ -575,12 +563,9 @@ class ExploderTest(unittest.TestCase):
         tx.merge_from(tx_delta)
         exploder.on_update(tx, tx_delta)
         self.assertEqual(tx.data_response.code, 202)
+        # don't expect an additional update to enable retry/notification:
         # first rcpt succeeded -> no retry
         # second failed at rcpt -> wasn't accepted -> no retry
-        #self.assertIsNone(up0.tx.retry)
-        #self.assertIsNone(up0.tx.notification)
-        #self.assertIsNone(up1.tx.retry)
-        #self.assertIsNone(up1.tx.notification)
 
 
 class ExploderRecipientTest(unittest.TestCase):

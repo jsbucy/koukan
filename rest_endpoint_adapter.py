@@ -78,7 +78,6 @@ class SyncFilterAdapter(AsyncFilter):
     # (used for gc)
     done : bool = False
     id_version : IdVersion
-    # from last get/update
 
     def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
         self.executor = executor
@@ -155,7 +154,8 @@ class SyncFilterAdapter(AsyncFilter):
         logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
                       self.tx)
         with self.mu:
-            # xxx or err?
+            # TODO closer to req_inflight() logic i.e. tx has reached
+            # a final state due to an error
             self.done = self.tx.cancelled or self.tx.data_response is not None
             version = self.id_version.get()
             version += 1
