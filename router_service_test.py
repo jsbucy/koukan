@@ -217,7 +217,7 @@ class RouterServiceTest(unittest.TestCase):
     def tearDown(self):
         # TODO this should verify that there are no open tx attempts in storage
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
-        self.service.shutdown()
+        self.assertTrue(self.service.shutdown())
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:

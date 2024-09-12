@@ -78,7 +78,7 @@ class Service:
         with self.lock:
             self.cv.wait_for(lambda: self._shutdown, timeout)
 
-    def shutdown(self):
+    def shutdown(self) -> bool:
         logging.info("router_service shutdown()")
         with self.lock:
             if self._shutdown:
@@ -93,14 +93,18 @@ class Service:
                 pass
 
         # tests schedule main() on daemon executor
+        success = True
         if self.daemon_executor is not None:
-            assert(self.daemon_executor.shutdown(timeout=10))
+            if not self.daemon_executor.shutdown(timeout=10):
+                success = False
 
         if self.executor is not None:
-            assert(self.executor.shutdown(timeout=10))
+            if not self.executor.shutdown(timeout=10):
+                success = False
 
         self.storage._del_session()
         logging.info("router_service shutdown() done")
+        return success
 
     def wait_started(self, timeout=None):
         with self.lock:
@@ -193,7 +197,7 @@ class Service:
                 listener_yaml.get('key', None),
                 app,
                 self.hypercorn_shutdown,
-                alive=alive)
+                alive=alive if alive else self.heartbeat)
         except:
             logging.exception('router service main: hypercorn_main exception')
             pass
@@ -204,6 +208,13 @@ class Service:
     def start_main(self):
         self.daemon_executor.submit(
             partial(self.main, alive=self.daemon_executor.ping_watchdog))
+
+    def heartbeat(self):
+        if (self.executor.check_watchdog() and
+            self.daemon_executor.check_watchdog()):
+            return True
+        self.hypercorn_shutdown.set()
+        return False
 
     def create_storage_writer(self, http_host : str
                               ) -> Optional[StorageWriterFilter]:

@@ -163,11 +163,11 @@ class End2EndTest(unittest.TestCase):
 
     def tearDown(self):
         logging.debug('End2EndTest.tearDown')
-        self.router.shutdown()
-        self.gateway.shutdown()
+        self.assertTrue(self.router.shutdown())
+        self.assertTrue(self.gateway.shutdown())
         self.fake_smtpd.stop()
         self.hypercorn_shutdown.set()
-        self.executor.shutdown(timeout=60)
+        self.assertTrue(self.executor.shutdown(timeout=60))
         if self.dkim_tempdir:
             self.dkim_tempdir.cleanup()
         logging.debug('End2EndTest.tearDown done')

@@ -18,15 +18,12 @@ def run(bind : List[Tuple[str,int]], cert, key, app,
         config.certfile = cert
         config.keyfile = key
     async def _ping_alive():
-        while True:
-            logging.debug('hypercorn_main._ping_alive() shutdown %s', shutdown)
-            alive()
+        while alive():
             try:
                 await asyncio.wait_for(asyncio.shield(shutdown.wait()), 1)
                 break
             except TimeoutError:
                 pass
-        logging.debug('hypercorn_main._ping_alive() done')
 
     loop = asyncio.new_event_loop()
     logging.debug('hypercorn_main._run shutdown %s', shutdown)

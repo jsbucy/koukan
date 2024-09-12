@@ -58,7 +58,7 @@ class SmtpGateway(EndpointFactory):
             rest_yaml.get('rest_id_entropy', 16))
         self.smtp_services = []
 
-    def shutdown(self):
+    def shutdown(self) -> bool:
         logging.info("SmtpGateway.shutdown()")
         for service in self.smtp_services:
             service.stop()
@@ -75,8 +75,10 @@ class SmtpGateway(EndpointFactory):
             self.gc_thread.join()
             self.gc_thread = None
 
-        logging.info("SmtpGateway.shutdown() done")
+        success = self.executor.shutdown(timeout=10)
 
+        logging.info("SmtpGateway.shutdown() done")
+        return success
 
     def rest_factory(self, yaml):
         logging.debug('rest_factory %s', yaml)
@@ -204,9 +206,14 @@ class SmtpGateway(EndpointFactory):
             cert=cert, key=key,
             app=app,
             shutdown=self.hypercorn_shutdown,
-            alive=alive)
+            alive=alive if alive else self.heartbeat)
         logging.debug('SmtpGateway.main() done')
 
+    def heartbeat(self):
+        if self.executor.check_watchdog():
+            return True
+        self.hypercorn_shutdown.set()
+        return False
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

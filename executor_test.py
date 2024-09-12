@@ -26,7 +26,7 @@ class ExecutorTest(unittest.TestCase):
             ex.shutdown()
 
     def testNonBlocking(self):
-        ex = Executor(1, 10)
+        ex = Executor(2, 10)
         sem = Semaphore(0)
         fut = ex.submit(lambda: sem.acquire())
         fut2 = ex.submit(lambda: sem.acquire())
@@ -38,15 +38,11 @@ class ExecutorTest(unittest.TestCase):
         fut.result()
 
     def testWatchdogTimeout(self):
-        ex = Executor(1, watchdog_timeout=1)
+        ex = Executor(inflight_limit=1, watchdog_timeout=1)
         ex.submit(lambda: time.sleep(5))
         time.sleep(1)
-        with self.assertRaises(Exception):
-            ex.submit(lambda: None)
-        with self.assertRaises(Exception):
-            ex.check_watchdog()
-        with self.assertRaises(Exception):
-            ex.shutdown(1)
+        self.assertFalse(ex.check_watchdog())
+        self.assertFalse(ex.shutdown(1))
 
 
 if __name__ == '__main__':

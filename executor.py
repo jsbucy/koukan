@@ -3,43 +3,38 @@ import logging
 import time
 import faulthandler
 import sys
+from functools import partial
 
 from threading import (
-    Lock,
+    BoundedSemaphore,
     Condition,
+    Lock,
     Thread,
-    current_thread,
-    BoundedSemaphore )
-from concurrent.futures import Future, ThreadPoolExecutor
+    current_thread )
+from concurrent.futures import Future
 
-# wrapper for ThreadPoolExecutor
-# - blocks instead of unbounded queueing if pool is full
-# - adds watchdog timer
-# - test mode to save futures and check them all at shutdown to
-# propagate uncaught excptions
 class Executor:
     inflight_sem : BoundedSemaphore
     inflight : Dict[Thread, int]  # start time
     lock : Lock
     cv : Condition
-    executor : ThreadPoolExecutor
     watchdog_timeout : Optional[int] = None
     debug_futures : Optional[List[Future]] = None
+    _shutdown : bool = False
 
     def __init__(self, inflight_limit,
                  watchdog_timeout : Optional[int] = None,
                  debug_futures=False):
         self.inflight = {}
-        self.inflight_sem = BoundedSemaphore(2*inflight_limit)
+        self.inflight_sem = BoundedSemaphore(inflight_limit)
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
-        self.executor = ThreadPoolExecutor(inflight_limit)
         self.watchdog_timeout = watchdog_timeout
         if debug_futures:
             self.debug_futures = []
 
-    def _check_watchdog_locked(self, timeout = None):
+    def _check_watchdog_locked(self, timeout = None) -> bool:
         if timeout is None:
             timeout = self.watchdog_timeout
         if timeout is None:
@@ -53,59 +48,71 @@ class Executor:
                     'tid %d %d 0x%x runtime %d',
                     thread.native_id, thread.ident, thread.ident, runtime)
                 faulthandler.dump_traceback()
-                assert False
+                return False
+        return True
 
-    def check_watchdog(self):
+    def check_watchdog(self) -> bool:
         with self.lock:
-            self._check_watchdog_locked()
+            return self._check_watchdog_locked()
 
     def submit(self, fn, timeout=None) -> Optional[Future]:
         with self.lock:
+            if self._shutdown:
+                return None
             start = time.monotonic()
-            self._check_watchdog_locked()
             if not self.inflight_sem.acquire(
                     blocking=(timeout is None or timeout > 0),
                     timeout=(None if timeout == 0 else timeout)):
                 return None
 
-            fut = self.executor.submit(lambda: self._run(fn))
+            fut = Future()
+            t = Thread(target = partial(self._run, fut, fn),
+                       daemon=True)
+            t.start()
+
             if fut and (self.debug_futures is not None):
                 self.debug_futures.append(fut)
             return fut
 
-    def _run(self, fn):
+    def _run(self, fut, fn):
         this_thread = current_thread()
         self.inflight[this_thread] = int(time.monotonic())
         try:
-            return fn()
-        except Exception:
+            return fut.set_result(fn())
+        except Exception as e:
             logging.exception('Executor._run() exception')
-            raise
+            fut.set_exception(e)
         finally:
             with self.lock:
                 self.inflight_sem.release(1)
                 del self.inflight[this_thread]
                 self.cv.notify_all()
 
+
     def ping_watchdog(self):
         with self.lock:
             self.inflight[current_thread()] = time.monotonic()
+        return True
 
     def shutdown(self, timeout : Optional[int] = None) -> bool:
-        ex = self.executor
-        self.executor = None  # stop new work coming in
+        with self.lock:
+            # stop new work coming in
+            self._shutdown = True
+
+        watchdog_result = True
         if timeout:
             for i in range(0, int(timeout)):
                 logging.debug('Executor.shutdown waiting on %d',
                               len(self.inflight))
                 with self.lock:
-                    self._check_watchdog_locked(timeout)
+                    watchdog_result = self._check_watchdog_locked(timeout)
+                    if not watchdog_result:
+                        break
                     if self.cv.wait_for(lambda: len(self.inflight) == 0,
                                         timeout=1):
                         break
 
-        ex.shutdown(wait=False, cancel_futures=True)
         if self.debug_futures:
             for fut in self.debug_futures:
                 fut.result()  # propagate exceptions
-        return True
+        return watchdog_result
