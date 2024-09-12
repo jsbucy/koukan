@@ -30,3 +30,12 @@ rest_output:
     verify: localhost.crt
 
 
+logging:
+  version: 1
+  loggers:
+    hpack:
+      level: INFO
+    mail.log:
+      # aiosmtpd logs all downstream data from the client at DEBUG
+      # both commands and message contents :/
+      level: INFO

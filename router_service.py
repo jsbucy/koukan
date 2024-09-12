@@ -118,6 +118,10 @@ class Service:
             config.load_yaml(config_filename)
             self.config = config
 
+        logging_yaml = self.config.root_yaml.get('logging', None)
+        if logging_yaml:
+            logging.config.dictConfig(logging_yaml)
+
         global_yaml = self.config.root_yaml.get('global', {})
 
         if self.executor is None:

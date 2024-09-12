@@ -155,7 +155,6 @@ class SmtpGateway(EndpointFactory):
         while not self.shutdown_gc:
             rest_yaml = self.config.root_yaml['rest_listener']
             now = time.monotonic()
-            logging.debug('SmtpGateway.gc_inflight %f', now)
             delta = now - last_gc
             gc_interval = rest_yaml.get('gc_interval', 5)
             if delta < gc_interval:
@@ -216,11 +215,16 @@ class SmtpGateway(EndpointFactory):
         return False
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] %(message)s')
-    logging.getLogger('hpack').setLevel(logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(process)d] [%(thread)d] '
+        '%(filename)s:%(lineno)d %(message)s')
 
     config = Config()
     config.load_yaml(sys.argv[1])
+    logging_yaml = config.root_yaml.get('logging', None)
+    if logging_yaml:
+        logging.config.dictConfig(logging_yaml)
+
     gw = SmtpGateway(config)
     gw.main()
