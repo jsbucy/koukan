@@ -116,3 +116,9 @@ storage:
 
   gc_interval: 300
   gc_ttl: 604800  # 7 days
+
+logging:
+  version: 1
+  loggers:
+    hpack:
+      level: INFO

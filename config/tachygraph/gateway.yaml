@@ -12,7 +12,8 @@ rest_listener:
   tx_idle_timeout: 60
 
 smtp_output:
-  ehlo_host: tachygraph.gloop.org
+  outbound:
+    ehlo_host: tachygraph.gloop.org
 
 # smtp -> rest
 smtp_listener:
@@ -36,3 +37,12 @@ rest_output:
     endpoint: http://localhost:8000/
 
 
+logging:
+  version: 1
+  loggers:
+    hpack:
+      level: INFO
+    mail.log:
+      # aiosmtpd logs all downstream data from the client at DEBUG
+      # both commands and message contents :/
+      level: INFO
