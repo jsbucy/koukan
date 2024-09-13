@@ -30,7 +30,7 @@ endpoint:
     msa: true
     rcpt_timeout: 40
     data_timeout: 70
-    default_notifications:
+    default_notification:
       host: msa-output
 
 - name: msa-output
@@ -53,6 +53,8 @@ endpoint:
     key: dkim.key
     domain: sandbox.gloop.org
     selector: tachygraph20230720
+  - filter: dns_resolution
+    suffix: ''  # match everything
   - filter: rest_output
     rcpt_timeout: 30
     data_timeout: 60
@@ -66,7 +68,7 @@ endpoint:
     max_attempts: 3
     rcpt_timeout: 40
     data_timeout: 70
-    default_notifications:
+    default_notification:
       host: msa-output
 
 - name: mx-out
