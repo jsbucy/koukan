@@ -12,7 +12,7 @@ rest_listener:
   addr: ["127.0.0.1", 8000]
   cert: localhost.crt
   key: localhost.key
-    
+
 endpoint:
 - name: outbound-gw
   msa: true
@@ -63,7 +63,7 @@ endpoint:
       name: dest_domain
       destination:
         endpoint: https://localhost:8001
-        http_host: outbound  # currently hard-coded in gw
+        http_host: outbound
   - filter: router
     policy:
       name: address_list

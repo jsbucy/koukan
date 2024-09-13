@@ -99,32 +99,28 @@ class SmtpGateway(EndpointFactory):
     def create(self, host):
         rest_yaml = self.config.root_yaml['rest_listener']
 
-        # TODO possibly the http host for requests to the gw could
-        # control which source_address to pass to smtplib.SMTP? or
-        # select one of multiple smtp_output stanzas that specify ehlo
-        # host, etc? Related: remote_host should be able to specify
-        # use of smtps vs starttls?
-        if host == 'outbound':
-            # TODO no need to wire this down, could come from the
-            # request? Possibly the only thing that would go here is
-            # client cert?
-            smtp_yaml = self.config.root_yaml['smtp_output']
-            endpoint = self.smtp_factory.new(
-                ehlo_hostname=smtp_yaml['ehlo_host'],
-                # 1h (default watchdog timeout) - 5min
-                timeout=smtp_yaml.get('timeout', 55*60))
+        smtp_yaml = self.config.root_yaml['smtp_output']
+        if not(host_yaml := smtp_yaml.get(host, None)):
+            return None
 
-            with self.lock:
-                rest_id = self.rest_id_factory()
-                if rest_id in self.inflight:
-                    return None
+        # The ehlo_host comes from the yaml and not the request
+        # because it typically needs to align to the source IP
+        # rdns. This stanza could select among multiple IPs in the
+        # future, etc.
+        endpoint = self.smtp_factory.new(
+            ehlo_hostname=host_yaml['ehlo_host'],
+            # 1h (default watchdog timeout) - 5min
+            timeout=smtp_yaml.get('timeout', 55*60))
 
-                executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
-                self.inflight[rest_id] = executor
+        with self.lock:
+            rest_id = self.rest_id_factory()
+            if rest_id in self.inflight:
+                return None
+
+            executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
+            self.inflight[rest_id] = executor
 
             return executor
-        else:
-            return None
 
     # EndpointFactory
     def get(self, rest_id):

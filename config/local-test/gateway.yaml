@@ -9,7 +9,8 @@ rest_listener:
   gc_tx_ttl: 5
 
 smtp_output:
-  ehlo_host: frylock
+  outbound:
+    ehlo_host: frylock
 
 # smtp -> rest
 smtp_listener:
