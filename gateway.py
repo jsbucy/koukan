@@ -23,7 +23,7 @@ from executor import Executor
 
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SyncFilterAdapter]
-    config = None
+    config : Optional[Config] = None
     shutdown_gc = False
     executor : Executor
     lock : Lock
@@ -31,10 +31,8 @@ class SmtpGateway(EndpointFactory):
     hypercorn_shutdown : Optional[asyncio.Event] = None
     smtp_services : List[object]
 
-    def __init__(self, config):
+    def __init__(self, config : Optional[Config] = None):
         self.config = config
-
-        rest_output  = config.root_yaml.get('rest_output', None)
 
         self.smtp_factory = SmtpFactory()
 
@@ -42,20 +40,6 @@ class SmtpGateway(EndpointFactory):
 
         self.lock = Lock()
 
-        global_yaml = self.config.root_yaml.get('global', {})
-        executor_yaml = global_yaml.get('executor', {})
-
-        self.executor = Executor(
-            executor_yaml.get('max_inflight', 10),
-            executor_yaml.get('watchdog_timeout', 3600))
-
-        self.gc_thread = Thread(target = lambda: self.gc_inflight(),
-                                daemon=True)
-        self.gc_thread.start()
-
-        rest_yaml = self.config.root_yaml['rest_listener']
-        self.rest_id_factory = lambda: secrets.token_urlsafe(
-            rest_yaml.get('rest_id_entropy', 16))
         self.smtp_services = []
 
     def shutdown(self) -> bool:
@@ -160,7 +144,31 @@ class SmtpGateway(EndpointFactory):
                               rest_yaml.get('gc_done_ttl', 10))
 
     def main(self, alive=None):
-        for service_yaml in self.config.root_yaml['smtp_listener']['services']:
+        if self.config is None:
+            self.config = Config()
+            self.config.load_yaml(sys.argv[1])
+
+        global_yaml = self.config.root_yaml.get('global', {})
+        executor_yaml = global_yaml.get('executor', {})
+
+        self.executor = Executor(
+            executor_yaml.get('max_inflight', 10),
+            executor_yaml.get('watchdog_timeout', 3600))
+
+        self.gc_thread = Thread(target = lambda: self.gc_inflight(),
+                                daemon=True)
+        self.gc_thread.start()
+
+        rest_yaml = self.config.root_yaml['rest_listener']
+        self.rest_id_factory = lambda: secrets.token_urlsafe(
+            rest_yaml.get('rest_id_entropy', 16))
+
+        root_yaml = self.config.root_yaml
+        logging_yaml = root_yaml.get('logging', None)
+        if logging_yaml:
+            logging.config.dictConfig(logging_yaml)
+
+        for service_yaml in root_yaml['smtp_listener']['services']:
             factory = None
             msa = False
             endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
@@ -186,7 +194,7 @@ class SmtpGateway(EndpointFactory):
             self.executor, endpoint_factory=self,
             rest_id_factory=self.rest_id_factory)
 
-        rest_listener_yaml = self.config.root_yaml['rest_listener']
+        rest_listener_yaml = root_yaml['rest_listener']
         if rest_listener_yaml.get('use_fastapi', False):
             app = fastapi_service.create_app(self.adapter_factory)
         else:
@@ -210,17 +218,3 @@ class SmtpGateway(EndpointFactory):
         self.hypercorn_shutdown.set()
         return False
 
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s [%(process)d] [%(thread)d] '
-        '%(filename)s:%(lineno)d %(message)s')
-
-    config = Config()
-    config.load_yaml(sys.argv[1])
-    logging_yaml = config.root_yaml.get('logging', None)
-    if logging_yaml:
-        logging.config.dictConfig(logging_yaml)
-
-    gw = SmtpGateway(config)
-    gw.main()
