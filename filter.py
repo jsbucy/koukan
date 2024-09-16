@@ -707,17 +707,15 @@ class SyncFilter(ABC):
 
 # interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
-    # may return None for reqs on timeout/still inflight
-    # may continue after this
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> TransactionMetadata:
+               ) -> Optional[TransactionMetadata]:
         pass
 
     @abstractmethod
-    def get(self) -> TransactionMetadata:
+    def get(self) -> Optional[TransactionMetadata]:
         pass
 
     # TODO this should encapsulate WritableBlob?

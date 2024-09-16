@@ -23,7 +23,9 @@ root_yaml = {
         'gc_blob_ttl': 1,
     },
     'smtp_output': {
-        'ehlo_host': 'gateway_test',
+        'outbound': {
+            'ehlo_host': 'gateway_test',
+        }
     },
     'smtp_listener': {
         'services': []
@@ -56,7 +58,7 @@ class GatewayTest(unittest.TestCase):
 
         self.gw_rest_url = 'http://localhost:%d' % rest_port
 
-        for i in range(0,2):
+        for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')
             try:
                 rest_endpoint = RestEndpoint(

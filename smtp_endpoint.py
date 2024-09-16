@@ -1,7 +1,6 @@
 from typing import Dict, List, Optional, Tuple
 from smtplib import SMTP, SMTPException
 import logging
-import psutil
 import time
 import ipaddress
 

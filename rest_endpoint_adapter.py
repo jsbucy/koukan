@@ -186,7 +186,9 @@ class SyncFilterAdapter(AsyncFilter):
             logging.debug('SyncFilterAdapter.updated merged %s', txx)
 
             if txx is None:
-                return None  # bad delta
+                # bad delta, xxx this should throw an exception distinct
+                # from VersionConflictException, cannot make forward progress
+                return None
             self.tx = txx
             version = self.id_version.get()
             version += 1
@@ -468,6 +470,8 @@ class RestHandler(Handler):
             return self.response(request, code=500,
                                  msg='get tx async read fut done')
         tx = afut.result()
+        if tx is None:
+            return self.response(request, code=404, msg='unknown transaction')
         return self._get_tx_resp(request, tx)
 
 

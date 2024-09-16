@@ -294,12 +294,30 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
-    # XXX rest could send everything in the first post and request notification
-    # but then we failed at rcpt -> !input_done
-    # so shouldn't notify then?
     def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
         resp : Optional[Response] = None
         tx = self.cursor.tx
+        # Note: this is not contingent on self.cursor.input_done. Thus
+        # if the rest client enables notifications in the initial
+        # POST, we will send a bounce if it permfailed at
+        # RCPT. Exploder only enables notifications at the end and
+        # will return an error downstream per its business logic if it
+        # failed prior. If the rest client doesn't want notifications
+        # for rcpt errors, don't enable it until after sending the
+        # data, etc.
+
+        # This does expose one shortcoming that appending body/blob
+        # data will probably not fail even if the upstream transaction
+        # has permfailed since:
+        # - Exploder doesn't check for upstream errors after it it has
+        # decided to store&forward
+        # - OutputHandler buffers the entire body before sending it
+        # upstream
+        # - downstream StorageWriterFilter/RestHandler stack doesn't
+        # have the logic to fail the PUT in that case
+        # RestHandler should probably always fail body/blob PUT after
+        # upstream perm error; it should do it after temp errors unless
+        # retries are enabled?
         if tx.mail_response is None:
             pass
         elif tx.mail_response.err():

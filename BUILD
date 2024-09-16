@@ -184,8 +184,7 @@ pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
                deps=[':message_parser',
                      ':blob',
-                     ':filter'],
-        data=['testdata/multipart.msg'])
+                     ':filter'])
 
 py_test(name='message_parser_filter_test',
         srcs=['message_parser_filter_test.py'],
@@ -193,7 +192,8 @@ py_test(name='message_parser_filter_test',
               ':blob',
               ':fake_endpoints',
               ':filter',
-              ':response'])
+              ':response'],
+        data=['testdata/multipart.msg'])
 
 pytype_library(name='address',
                srcs=['address.py'])
@@ -455,7 +455,7 @@ pytype_library(name='smtp_endpoint',
                deps=[])
 
 
-pytype_library(name='gateway',
+pytype_library(name='gateway_lib',
                srcs=['gateway.py'],
                deps=[':rest_endpoint_adapter',
                      ':smtp_endpoint',
@@ -482,7 +482,7 @@ pytype_library(name='ssmtp',
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],
-        deps=[':gateway',
+        deps=[':gateway_lib',
               ':rest_endpoint',
               ':fake_smtpd',
               ':blob',
@@ -497,7 +497,7 @@ py_test(name='end2end_test',
               'config/local-test/gateway.yaml',
               'testdata/trivial.msg'],
         deps=[':router_service',
-              ':gateway',
+              ':gateway_lib',
               ':config',
               ':executor',
               ':hello_policy',
@@ -507,6 +507,16 @@ py_test(name='end2end_test',
               ':postgres_test_utils',
               '//examples/cli:send_message',
               '//examples/receiver:receiver'])
+
+py_binary(name='router',
+          main='router_service_main.py',
+          srcs=['router_service_main.py'],
+          deps=[':router_service'])
+        
+py_binary(name='gateway',
+          main='gateway_main.py',
+          srcs=['gateway_main.py'],
+          deps=[':gateway_lib'])
 
 test_suite(
     name='pytype_tests',

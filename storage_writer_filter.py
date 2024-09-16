@@ -80,7 +80,7 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata,
-                reuse_blob_rest_id : Optional[List[str]] = None,
+                reuse_blob_rest_id : Optional[List[BlobUri]] = None,
                 message_builder_blobs_done=False):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
@@ -102,6 +102,8 @@ class StorageWriterFilter(AsyncFilter):
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
         self._load()
+        if self.tx_cursor.tx is None:
+            return None
         tx = self.tx_cursor.tx.copy()
         tx.version = self.tx_cursor.version
         return tx

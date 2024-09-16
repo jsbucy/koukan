@@ -11,7 +11,7 @@ from email.headerregistry import Address
 def main(host, port, ehlo, mail_from, rcpt_to, data):
     with smtplib.SMTP(host=host, port=int(port), local_hostname=ehlo) as s:
         s.ehlo(ehlo)
-        print(s.esmtp_features)
+        logging.info('remote server esmtp %s', s.esmtp_features)
 
         m = email.message.EmailMessage(policy=policy.SMTP)
         m['from'] = Address(addr_spec=mail_from)
