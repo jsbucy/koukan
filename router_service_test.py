@@ -124,6 +124,9 @@ root_yaml = {
     'storage': {
         'engine': 'postgres',  #'sqlite_memory'
         'session_refresh_interval': 1,
+
+        'gc_ttl': 0,
+        'gc_interval': None,  # don't start, we'll invoke in the tests
     },
     'executor': {
         'max_inflight': 10,
@@ -171,7 +174,7 @@ class RouterServiceTest(unittest.TestCase):
         self.service = Service(config=self.config)
         self.service.start_main()
 
-        self.assertTrue(self.service.wait_started(1))
+        self.assertTrue(self.service.wait_started(5))
 
         # probe for startup
         def exp(tx, tx_delta):
@@ -291,6 +294,16 @@ class RouterServiceTest(unittest.TestCase):
                 break
         else:
             self.fail('didn\'t get expected transaction %s' % tx_json)
+
+        self.service.daemon_executor.submit(
+            partial(self.service.gc, self.service.daemon_executor))
+
+        for i in range(0,5):
+            if rest_endpoint.get_json(timeout=2) is None:
+                break
+            time.sleep(1)
+        else:
+            self.fail('expected 404 after gc')
 
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')

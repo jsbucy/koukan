@@ -84,6 +84,7 @@ class Service:
             if self._shutdown:
                 return
             self._shutdown = True
+            self.cv.notify_all()
 
         if self.hypercorn_shutdown:
             logging.debug('router service hypercorn shutdown')
@@ -320,7 +321,7 @@ class Service:
         storage_yaml = self.config.root_yaml['storage']
         ttl = storage_yaml.get('gc_ttl', 86400)
         interval = storage_yaml.get('gc_interval', 300)
-        while not self.shutdown:
+        while not self._shutdown:
             executor.ping_watchdog()
             self._gc(ttl)
             self.wait_shutdown(interval)

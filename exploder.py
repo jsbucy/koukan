@@ -474,8 +474,11 @@ class Exploder(SyncFilter):
 
             recipient.tx.merge_from(retry_delta)
             assert not recipient.tx.body
-            recipient.upstream.update(
-                recipient.tx, retry_delta)
-
+            while True:
+                try:
+                    recipient.upstream.update(recipient.tx, retry_delta)
+                    break
+                except VersionConflictException:
+                    pass
         return Response(250, 'accepted (exploder store&forward DATA)')
 
