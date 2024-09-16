@@ -472,13 +472,13 @@ class Exploder(SyncFilter):
                 # XXX this will blackhole if unset!
                 notification=self.default_notification)
 
-            recipient.tx.merge_from(retry_delta)
             assert not recipient.tx.body
             while True:
                 try:
-                    recipient.upstream.update(recipient.tx, retry_delta)
+                    recipient.upstream.update(
+                        recipient.tx.merge(retry_delta), retry_delta)
                     break
                 except VersionConflictException:
-                    pass
+                    recipient.tx = recipient.upstream.get()
         return Response(250, 'accepted (exploder store&forward DATA)')
 
