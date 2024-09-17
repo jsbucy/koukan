@@ -2,12 +2,12 @@ from typing import Optional, Tuple
 import dns.resolver
 import logging
 
-from filter import (
+from koukan.filter import (
     SyncFilter,
     TransactionMetadata )
-from response import Response
+from koukan.response import Response
 
-from dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
+from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 
 class RemoteHostFilter(SyncFilter):
     upstream : SyncFilter

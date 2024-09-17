@@ -1,7 +1,7 @@
 import unittest
 import logging
 
-from rest_schema import make_blob_uri, parse_blob_uri
+from koukan.rest_schema import make_blob_uri, parse_blob_uri
 
 class RestSchemaTest(unittest.TestCase):
     def setUp(self):

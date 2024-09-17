@@ -154,9 +154,9 @@ endpoint:
 
 modules:
   sync_filter:
-    hello: hello_filter
+    hello: koukan.hello_filter
   recipient_router_policy:
-    hello: hello_policy
+    hello: koukan.hello_policy
 
 storage:
   # engine: sqlite_memory

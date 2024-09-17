@@ -15,7 +15,7 @@ from email.headerregistry import (
 import email.policy
 import email.contentmanager
 
-from blob import (
+from koukan.blob import (
     Blob,
     WritableBlob )
 

@@ -14,15 +14,16 @@ import testing.postgresql
 import sqlite3
 import psycopg
 import psycopg.errors
-from storage import BlobCursor, Storage, TransactionCursor
-from storage_schema import InvalidActionException, VersionConflictException
-from response import Response
-from filter import HostPort, Mailbox, TransactionMetadata
-from rest_schema import BlobUri
+from koukan.storage import BlobCursor, Storage, TransactionCursor
+from koukan.storage_schema import (
+    InvalidActionException, VersionConflictException )
+from koukan.response import Response
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.rest_schema import BlobUri
 
-from version_cache import IdVersionMap
+from koukan.version_cache import IdVersionMap
 
-import postgres_test_utils
+import koukan.postgres_test_utils as postgres_test_utils
 
 
 def setUpModule():
@@ -486,7 +487,7 @@ class StorageTestSqlite(StorageTestBase):
         self.filename = tempdir.name + '/db'
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
-        with open("init_storage.sql", "r") as f:
+        with open("koukan/init_storage.sql", "r") as f:
             cursor.executescript(f.read())
 
         self.s = Storage.connect_sqlite(self.version_cache, self.filename)

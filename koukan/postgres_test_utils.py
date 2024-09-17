@@ -42,7 +42,7 @@ def setup_postgres(storage_yaml):
 
     url = postgres_url(unix_socket_dir, port, 'storage_test')
     with psycopg.connect(url) as conn:
-        with open('init_storage_postgres.sql', 'r') as f:
+        with open('koukan/init_storage_postgres.sql', 'r') as f:
             with conn.cursor() as cursor:
                 cursor.execute(f.read())
     return pg

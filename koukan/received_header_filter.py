@@ -6,14 +6,14 @@ import logging
 from email.parser import BytesHeaderParser
 from email import policy
 
-from blob import Blob, InlineBlob, CompositeBlob
-from filter import (
+from koukan.blob import Blob, InlineBlob, CompositeBlob
+from koukan.filter import (
     HostPort,
     Mailbox,
     SyncFilter,
     TransactionMetadata,
     get_esmtp_param )
-from response import Response
+from koukan.response import Response
 
 class ReceivedHeaderFilter(SyncFilter):
     upstream : Optional[SyncFilter]

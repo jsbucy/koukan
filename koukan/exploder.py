@@ -4,18 +4,18 @@ from threading import Thread
 import time
 from functools import partial
 
-from deadline import Deadline
-from executor import Executor
-from filter import (
+from koukan.deadline import Deadline
+from koukan.executor import Executor
+from koukan.filter import (
     AsyncFilter,
     Mailbox,
     SyncFilter,
     TransactionMetadata,
     update_wait_inflight )
-from blob import Blob
-from response import Response
+from koukan.blob import Blob
+from koukan.response import Response
 
-from storage_schema import VersionConflictException
+from koukan.storage_schema import VersionConflictException
 
 # Fan-out multi-rcpt from smtp gw and fan responses back in. Convert
 # certain upstream temp errors to success for store&forward.

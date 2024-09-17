@@ -1,7 +1,7 @@
 from typing import Optional
 import logging
 
-from filter import (
+from koukan.filter import (
     AsyncFilter,
     SyncFilter,
     TransactionMetadata )

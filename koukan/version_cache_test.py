@@ -2,8 +2,8 @@ import unittest
 import logging
 import time
 
-from executor import Executor
-from version_cache import IdVersionMap
+from koukan.executor import Executor
+from koukan.version_cache import IdVersionMap
 
 class VersionCacheTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

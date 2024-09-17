@@ -12,13 +12,13 @@ import dns.flags
 from dns.rdtypes.ANY.PTR import PTR
 import dns.name
 
-from filter import HostPort, Mailbox, TransactionMetadata
-from response import Response
-from remote_host_filter import (
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.response import Response
+from koukan.remote_host_filter import (
     RemoteHostFilter,
     Resolver )
-from fake_endpoints import FakeSyncFilter
-from fake_dns_wrapper import FakeResolver
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.fake_dns_wrapper import FakeResolver
 
 ptr_message_text = """id 1234
 opcode QUERY

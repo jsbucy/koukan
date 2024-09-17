@@ -6,20 +6,20 @@ import time
 from functools import partial
 from threading import Lock, Condition
 
-from storage import Storage, TransactionCursor, BlobCursor
-from storage_schema import InvalidActionException, VersionConflictException
-from response import Response
-from filter import (
+from koukan.storage import Storage, TransactionCursor, BlobCursor
+from koukan.storage_schema import InvalidActionException, VersionConflictException
+from koukan.response import Response
+from koukan.filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
     SyncFilter,
     TransactionMetadata )
-from blob import Blob, InlineBlob, WritableBlob
-from deadline import Deadline
-from message_builder import MessageBuilder
+from koukan.blob import Blob, InlineBlob, WritableBlob
+from koukan.deadline import Deadline
+from koukan.message_builder import MessageBuilder
 
-from rest_schema import BlobUri, parse_blob_uri
+from koukan.rest_schema import BlobUri, parse_blob_uri
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage

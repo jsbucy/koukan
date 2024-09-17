@@ -1,5 +1,5 @@
 import logging
-from gateway import SmtpGateway
+from koukan.gateway import SmtpGateway
 
 if __name__ == '__main__':
     logging.basicConfig(

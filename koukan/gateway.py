@@ -7,18 +7,18 @@ import secrets
 from threading import Lock
 import asyncio
 
-from rest_endpoint import RestEndpoint
-from smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
-from smtp_service import service as smtp_service
-import rest_service
-import fastapi_service
-from rest_endpoint_adapter import (
+from koukan.rest_endpoint import RestEndpoint
+from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
+from koukan.smtp_service import service as smtp_service
+import koukan.rest_service as rest_service
+import koukan.fastapi_service as fastapi_service
+from koukan.rest_endpoint_adapter import (
     SyncFilterAdapter,
     EndpointFactory,
     RestHandlerFactory )
-import hypercorn_main
-from config import Config
-from executor import Executor
+import koukan.hypercorn_main as hypercorn_main
+from koukan.config import Config
+from koukan.executor import Executor
 
 
 class SmtpGateway(EndpointFactory):

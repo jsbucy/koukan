@@ -6,7 +6,7 @@ from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
-from rest_service_handler import (
+from koukan.rest_service_handler import (
     Handler,
     HandlerFactory )
 

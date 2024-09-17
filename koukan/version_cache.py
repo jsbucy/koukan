@@ -8,7 +8,7 @@ from weakref import WeakValueDictionary
 
 import asyncio
 from functools import partial
-from storage_schema import VersionConflictException
+from koukan.storage_schema import VersionConflictException
 
 class IdVersion:
     id : int

@@ -11,16 +11,16 @@ from threading import Lock
 from aiosmtpd.smtp import SMTP
 from aiosmtpd.controller import Controller
 
-from blob import Blob, InlineBlob
-from response import ok_resp, to_smtp_resp, Response
-from smtp_auth import Authenticator
-from filter import (
+from koukan.blob import Blob, InlineBlob
+from koukan.response import ok_resp, to_smtp_resp, Response
+from koukan.smtp_auth import Authenticator
+from koukan.filter import (
     EsmtpParam,
     HostPort,
     Mailbox,
     SyncFilter,
     TransactionMetadata )
-from executor import Executor
+from koukan.executor import Executor
 
 _next_cx = 0
 _next_cx_mu = Lock()

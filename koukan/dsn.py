@@ -21,7 +21,7 @@ import time
 import secrets
 import logging
 
-from response import Response
+from koukan.response import Response
 
 # I couldn't see how to get BytesHeaderParser to give me back either the
 # input headers without the body and without reserializing or the byte

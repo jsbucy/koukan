@@ -4,13 +4,13 @@ from io import IOBase
 
 import logging
 
-from blob import (
+from koukan.blob import (
     FileLikeBlob,
     InlineBlob )
-from filter import (
+from koukan.filter import (
     SyncFilter,
     TransactionMetadata )
-from message_parser import (
+from koukan.message_parser import (
     MessageParser,
     ParsedMessage )
 

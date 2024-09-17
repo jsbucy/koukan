@@ -31,21 +31,21 @@ from fastapi.responses import (
 HttpRequest = Union[FlaskRequest, FastApiRequest]
 HttpResponse = Union[FlaskResponse, FastApiResponse]
 
-from deadline import Deadline
-from response import Response as MailResponse
-from blob import Blob, InlineBlob, WritableBlob
+from koukan.deadline import Deadline
+from koukan.response import Response as MailResponse
+from koukan.blob import Blob, InlineBlob, WritableBlob
 
-from rest_service_handler import Handler, HandlerFactory
-from filter import (
+from koukan.rest_service_handler import Handler, HandlerFactory
+from koukan.filter import (
     AsyncFilter,
     SyncFilter,
     TransactionMetadata,
     WhichJson )
-from executor import Executor
+from koukan.executor import Executor
 
-from rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
-from version_cache import IdVersion
-from storage_schema import VersionConflictException
+from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
+from koukan.version_cache import IdVersion
+from koukan.storage_schema import VersionConflictException
 
 
 # runs SyncFilter on Executor with AsyncFilter interface for

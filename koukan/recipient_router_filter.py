@@ -2,8 +2,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias
 from abc import ABC, abstractmethod
 import logging
 
-from response import Response, Esmtp
-from filter import (
+from koukan.response import Response, Esmtp
+from koukan.filter import (
     HostPort,
     Mailbox,
     Resolution,

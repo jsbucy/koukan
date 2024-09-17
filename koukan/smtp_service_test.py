@@ -10,10 +10,10 @@ import socketserver
 
 from aiosmtpd.controller import Controller
 
-from filter import TransactionMetadata
-from smtp_service import SmtpHandler, service
-from response import Response
-from fake_endpoints import FakeSyncFilter
+from koukan.filter import TransactionMetadata
+from koukan.smtp_service import SmtpHandler, service
+from koukan.response import Response
+from koukan.fake_endpoints import FakeSyncFilter
 
 def find_unused_port() -> int:
     with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:

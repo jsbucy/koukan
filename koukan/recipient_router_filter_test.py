@@ -2,15 +2,15 @@ from typing import Optional, Tuple
 import unittest
 import logging
 
-from blob import InlineBlob
-from recipient_router_filter import (
+from koukan.blob import InlineBlob
+from koukan.recipient_router_filter import (
     Destination,
     RecipientRouterFilter,
     RoutingPolicy )
-from filter import HostPort, Mailbox, TransactionMetadata
-from response import Response
-from fake_endpoints import FakeSyncFilter
-from response import Response
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.response import Response
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.response import Response
 
 class SuccessPolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[

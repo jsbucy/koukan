@@ -6,7 +6,7 @@ from flask import (
     Response as FlaskResponse,
     request )
 
-from rest_service_handler import (
+from koukan.rest_service_handler import (
     Handler,
     HandlerFactory )
 

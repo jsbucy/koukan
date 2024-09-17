@@ -4,10 +4,10 @@ from abc import ABC, abstractmethod
 import logging
 import copy
 
-from response import Response
+from koukan.response import Response
 
-from blob import Blob, WritableBlob
-from deadline import Deadline
+from koukan.blob import Blob, WritableBlob
+from koukan.deadline import Deadline
 
 class HostPort:
     host : str

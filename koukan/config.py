@@ -5,28 +5,28 @@ import secrets
 import importlib
 
 from yaml import load, CLoader as Loader
-from address_list_policy import AddressListPolicy
-from dest_domain_policy import DestDomainPolicy
-from recipient_router_filter import (
+from koukan.address_list_policy import AddressListPolicy
+from koukan.dest_domain_policy import DestDomainPolicy
+from koukan.recipient_router_filter import (
     Destination,
     RecipientRouterFilter )
-from rest_endpoint import RestEndpoint
-from dkim_endpoint import DkimEndpoint
-from mx_resolution import DnsResolutionFilter
-from message_builder_filter import MessageBuilderFilter
-from message_parser_filter import MessageParserFilter
-from filter import (
+from koukan.rest_endpoint import RestEndpoint
+from koukan.dkim_endpoint import DkimEndpoint
+from koukan.mx_resolution import DnsResolutionFilter
+from koukan.message_builder_filter import MessageBuilderFilter
+from koukan.message_parser_filter import MessageParserFilter
+from koukan.filter import (
     AsyncFilter,
     HostPort,
     Resolution,
     SyncFilter )
-from storage_writer_filter import StorageWriterFilter
-from exploder import Exploder
-from storage import Storage
-from remote_host_filter import RemoteHostFilter
-from received_header_filter import ReceivedHeaderFilter
-from relay_auth_filter import RelayAuthFilter
-from executor import Executor
+from koukan.storage_writer_filter import StorageWriterFilter
+from koukan.exploder import Exploder
+from koukan.storage import Storage
+from koukan.remote_host_filter import RemoteHostFilter
+from koukan.received_header_filter import ReceivedHeaderFilter
+from koukan.relay_auth_filter import RelayAuthFilter
+from koukan.executor import Executor
 
 class FilterSpec:
     def __init__(self, builder, t):
@@ -65,10 +65,10 @@ class Config:
         }
 
     def _load_user_module(self, name, mod, add_factory):
-        dot = mod.find('.')
-        if dot > 0:
-            mod_name = mod[0:dot]
-            fn_name = mod[dot+1:]
+        colon = mod.find(':')
+        if colon > 0:
+            mod_name = mod[0:colon]
+            fn_name = mod[colon+1:]
         else:
             mod_name = mod
             fn_name = 'factory'

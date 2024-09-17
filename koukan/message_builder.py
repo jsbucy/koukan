@@ -9,7 +9,7 @@ from email.generator import BytesGenerator
 from email.headerregistry import Address
 from email import policy
 
-from blob import Blob
+from koukan.blob import Blob
 
 BlobFactory = Callable[[str],Blob]
 

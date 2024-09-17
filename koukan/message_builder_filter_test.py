@@ -3,14 +3,14 @@ import logging
 from datetime import datetime, timezone
 import tempfile
 
-from blob import InlineBlob
-from filter import HostPort, Mailbox, TransactionMetadata
-from fake_endpoints import FakeSyncFilter
-from response import Response
-from storage import Storage
-from rest_schema import BlobUri
+from koukan.blob import InlineBlob
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.response import Response
+from koukan.storage import Storage
+from koukan.rest_schema import BlobUri
 
-from message_builder_filter import MessageBuilderFilter
+from koukan.message_builder_filter import MessageBuilderFilter
 
 class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):

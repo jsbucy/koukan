@@ -1,8 +1,8 @@
 import unittest
 import logging
 
-from dsn import generate_dsn
-from response import Response
+from koukan.dsn import generate_dsn
+from koukan.response import Response
 
 class DsnTest(unittest.TestCase):
     def setUp(self):

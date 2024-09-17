@@ -2,15 +2,15 @@ import unittest
 import logging
 from datetime import datetime, timezone
 
-from blob import InlineBlob
-from filter import (
+from koukan.blob import InlineBlob
+from koukan.filter import (
     EsmtpParam,
     HostPort,
     Mailbox,
     Response,
     TransactionMetadata )
-from received_header_filter import ReceivedHeaderFilter
-from fake_endpoints import FakeSyncFilter
+from koukan.received_header_filter import ReceivedHeaderFilter
+from koukan.fake_endpoints import FakeSyncFilter
 
 class ReceivedHeaderFilterTest(unittest.TestCase):
     def setUp(self):

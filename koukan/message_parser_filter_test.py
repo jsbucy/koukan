@@ -1,12 +1,12 @@
 import unittest
 import logging
 
-from message_parser_filter import MessageParserFilter
-from blob import InlineBlob
-from filter import TransactionMetadata
-from response import Response
+from koukan.message_parser_filter import MessageParserFilter
+from koukan.blob import InlineBlob
+from koukan.filter import TransactionMetadata
+from koukan.response import Response
 
-from fake_endpoints import FakeSyncFilter
+from koukan.fake_endpoints import FakeSyncFilter
 
 class MessageParserFilterTest(unittest.TestCase):
     def setUp(self):

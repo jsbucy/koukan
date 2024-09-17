@@ -8,20 +8,20 @@ from functools import partial
 
 from requests.exceptions import ConnectionError
 
-import postgres_test_utils
-from router_service import Service
-from rest_endpoint import RestEndpoint
-from response import Response
-from blob import CompositeBlob, InlineBlob
-from config import Config
-from fake_endpoints import FakeSyncFilter
-from filter import (
+import koukan.postgres_test_utils as postgres_test_utils
+from koukan.router_service import Service
+from koukan.rest_endpoint import RestEndpoint
+from koukan.response import Response
+from koukan.blob import CompositeBlob, InlineBlob
+from koukan.config import Config
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.filter import (
     HostPort,
     Mailbox,
     SyncFilter,
     TransactionMetadata,
     WhichJson )
-from executor import Executor
+from koukan.executor import Executor
 
 def setUpModule():
     postgres_test_utils.setUpModule()

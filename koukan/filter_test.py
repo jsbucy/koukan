@@ -1,17 +1,17 @@
 import unittest
 import logging
 
-from filter import (
+from koukan.filter import (
     HostPort,
     Mailbox,
     TransactionMetadata,
     WhichJson,
     update_wait_inflight )
-from response import Response
-from blob import InlineBlob
-from deadline import Deadline
+from koukan.response import Response
+from koukan.blob import InlineBlob
+from koukan.deadline import Deadline
 
-from fake_endpoints import MockAsyncFilter
+from koukan.fake_endpoints import MockAsyncFilter
 
 class FilterTest(unittest.TestCase):
 

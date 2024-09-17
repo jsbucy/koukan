@@ -4,9 +4,9 @@ import logging
 
 import dkim
 
-from response import Response, Esmtp
-from blob import Blob, InlineBlob, CompositeBlob
-from filter import (
+from koukan.response import Response, Esmtp
+from koukan.blob import Blob, InlineBlob, CompositeBlob
+from koukan.filter import (
     SyncFilter,
     TransactionMetadata )
 

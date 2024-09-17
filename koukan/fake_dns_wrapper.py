@@ -2,7 +2,7 @@ from typing import List, Optional, Union
 
 from dns.resolver import Answer
 
-from dns_wrapper import Resolver
+from koukan.dns_wrapper import Resolver
 
 class FakeResolver(Resolver):
     answers : List[Union[Answer, Exception]]

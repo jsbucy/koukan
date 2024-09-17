@@ -5,16 +5,16 @@ import logging
 import time
 from functools import partial
 
-from deadline import Deadline
-from storage import Storage, TransactionCursor
-from response import Response
-from fake_endpoints import MockAsyncFilter
-from filter import Mailbox, TransactionMetadata
-from executor import Executor
+from koukan.deadline import Deadline
+from koukan.storage import Storage, TransactionCursor
+from koukan.response import Response
+from koukan.fake_endpoints import MockAsyncFilter
+from koukan.filter import Mailbox, TransactionMetadata
+from koukan.executor import Executor
 
-from blob import CompositeBlob, InlineBlob
+from koukan.blob import CompositeBlob, InlineBlob
 
-from exploder import Exploder, Recipient
+from koukan.exploder import Exploder, Recipient
 
 class Rcpt:
     addr : str

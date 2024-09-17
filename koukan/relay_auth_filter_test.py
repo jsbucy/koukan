@@ -1,9 +1,9 @@
 import unittest
 import logging
 
-from filter import Mailbox, Response, TransactionMetadata
-from relay_auth_filter import RelayAuthFilter
-from fake_endpoints import FakeSyncFilter
+from koukan.filter import Mailbox, Response, TransactionMetadata
+from koukan.relay_auth_filter import RelayAuthFilter
+from koukan.fake_endpoints import FakeSyncFilter
 
 class RelayAuthFilterTest(unittest.TestCase):
     def setUp(self):

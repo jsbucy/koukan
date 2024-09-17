@@ -14,13 +14,13 @@ from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
-from blob import InlineBlob
-from rest_endpoint_adapter import RestHandler, SyncFilterAdapter
-from fake_endpoints import FakeSyncFilter, MockAsyncFilter
-from executor import Executor
-from filter import Mailbox, TransactionMetadata, WhichJson
-from response import Response
-from executor import Executor
+from koukan.blob import InlineBlob
+from koukan.rest_endpoint_adapter import RestHandler, SyncFilterAdapter
+from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
+from koukan.executor import Executor
+from koukan.filter import Mailbox, TransactionMetadata, WhichJson
+from koukan.response import Response
+from koukan.executor import Executor
 
 class SyncFilterAdapterTest(unittest.TestCase):
     def setUp(self):

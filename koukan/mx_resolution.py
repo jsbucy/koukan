@@ -2,11 +2,11 @@ from typing import List, Optional
 import logging
 
 from dns.resolver import NoNameservers
-from dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
+from koukan.dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
-from filter import HostPort, Resolution, SyncFilter, TransactionMetadata
-from response import Response
+from koukan.filter import HostPort, Resolution, SyncFilter, TransactionMetadata
+from koukan.response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
 # than per-lookup?

@@ -3,8 +3,9 @@ import unittest
 import logging
 import time
 
-from executor import Executor
 from threading import Semaphore
+
+from koukan.executor import Executor
 
 def raise_exception():
     raise Exception()

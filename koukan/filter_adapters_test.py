@@ -1,8 +1,8 @@
 import unittest
 import logging
 
-from filter import Mailbox, TransactionMetadata
-from response import Response
+from koukan.filter import Mailbox, TransactionMetadata
+from koukan.response import Response
 
 class FilterAdaptersTest(unittest.TestCase):
     def setUp(self):

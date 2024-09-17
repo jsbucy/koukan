@@ -21,16 +21,16 @@ from sqlalchemy import (
     delete, event, func, insert, join, literal, not_, or_, select,
     true as sa_true, update, union_all, values)
 
-from blob import Blob, InlineBlob, WritableBlob
-from response import Response
-from storage_schema import (
+from koukan.blob import Blob, InlineBlob, WritableBlob
+from koukan.response import Response
+from koukan.storage_schema import (
     TX_BODY,
     VersionConflictException,
     body_blob_uri )
-from filter import TransactionMetadata, WhichJson
-from rest_schema import BlobUri
+from koukan.filter import TransactionMetadata, WhichJson
+from koukan.rest_schema import BlobUri
 
-from version_cache import IdVersion, IdVersionMap
+from koukan.version_cache import IdVersion, IdVersionMap
 
 # the implementation of CursorResult.rowcount apparently involves too
 # much metaprogramming for pytype to infer correctly
@@ -857,7 +857,7 @@ class Storage():
                                pool_size=1, max_overflow=0)
         with engine.connect() as conn:
             dbapi_conn = conn.connection
-            with open("init_storage.sql", "r") as f:
+            with open("koukan/init_storage.sql", "r") as f:
                 cursor = dbapi_conn.cursor()
                 # however SA is proxying all the methods from the
                 # underlying sqlite dbapi cursor isn't visible to

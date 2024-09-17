@@ -4,7 +4,7 @@ import json
 from tempfile import TemporaryFile
 
 
-from message_builder import MessageBuilder
+from koukan.message_builder import MessageBuilder
 
 class MessageBuilderTest(unittest.TestCase):
     def setUp(self):
@@ -13,7 +13,7 @@ class MessageBuilderTest(unittest.TestCase):
 
 
     def test_basic(self):
-        with open('message_builder.json', 'r') as f:
+        with open('testdata/message_builder.json', 'r') as f:
             js = json.loads(f.read())
         builder = MessageBuilder(js, blob_factory=None)
         with TemporaryFile('w+b') as out:

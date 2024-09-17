@@ -5,14 +5,14 @@ import logging
 from threading import Thread
 import time
 
-from storage import Storage, TransactionCursor
-from response import Response
-from filter import Mailbox, TransactionMetadata
-from rest_schema import BlobUri
+from koukan.storage import Storage, TransactionCursor
+from koukan.response import Response
+from koukan.filter import Mailbox, TransactionMetadata
+from koukan.rest_schema import BlobUri
 
-from blob import InlineBlob
+from koukan.blob import InlineBlob
 
-from storage_writer_filter import StorageWriterFilter
+from koukan.storage_writer_filter import StorageWriterFilter
 
 class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):

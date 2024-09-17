@@ -9,15 +9,15 @@ from httpx import Client, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
-from deadline import Deadline
-from filter import (
+from koukan.deadline import Deadline
+from koukan.filter import (
     HostPort,
     Resolution,
     SyncFilter,
     TransactionMetadata,
     WhichJson )
-from response import Response, Esmtp
-from blob import Blob
+from koukan.response import Response, Esmtp
+from koukan.blob import Blob
 
 # these are artificially low for testing
 TIMEOUT_START=5

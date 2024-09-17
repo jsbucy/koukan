@@ -1,10 +1,10 @@
 import unittest
 import logging
 
-from mx_resolution import DnsResolutionFilter
-from filter import HostPort, Mailbox, Resolution, TransactionMetadata
-from fake_endpoints import FakeSyncFilter
-from fake_dns_wrapper import FakeResolver
+from koukan.mx_resolution import DnsResolutionFilter
+from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.fake_dns_wrapper import FakeResolver
 
 from dns.resolver import NXDOMAIN, NoNameservers
 from dns.resolver import Answer

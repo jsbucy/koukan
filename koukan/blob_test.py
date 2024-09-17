@@ -1,7 +1,7 @@
 import unittest
 import logging
 
-from blob import InlineBlob, CompositeBlob
+from koukan.blob import InlineBlob, CompositeBlob
 
 
 class BlobTest(unittest.TestCase):

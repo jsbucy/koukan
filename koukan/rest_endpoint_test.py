@@ -12,11 +12,11 @@ import wsgiref.util
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
-from deadline import Deadline
-from rest_endpoint import RestEndpoint
-from filter import HostPort, Mailbox, Resolution, TransactionMetadata
-from blob import CompositeBlob, InlineBlob
-from response import Response as MailResponse
+from koukan.deadline import Deadline
+from koukan.rest_endpoint import RestEndpoint
+from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
+from koukan.blob import CompositeBlob, InlineBlob
+from koukan.response import Response as MailResponse
 
 class Request:
     method = None

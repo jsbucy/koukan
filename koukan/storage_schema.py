@@ -1,6 +1,6 @@
 from enum import IntEnum
 from typing import Dict
-from rest_schema import BlobUri
+from koukan.rest_schema import BlobUri
 
 class InvalidActionException(Exception):
     pass

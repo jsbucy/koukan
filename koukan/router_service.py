@@ -8,25 +8,25 @@ from functools import partial
 import asyncio
 from datetime import timedelta
 
-import rest_service
-import fastapi_service
-import hypercorn_main
+import koukan.rest_service as rest_service
+import koukan.fastapi_service as fastapi_service
+import koukan.hypercorn_main as hypercorn_main
 
-from blob import InlineBlob
+from koukan.blob import InlineBlob
 
-from storage import Storage, TransactionCursor
-from rest_endpoint_adapter import (
+from koukan.storage import Storage, TransactionCursor
+from koukan.rest_endpoint_adapter import (
     EndpointFactory,
     RestHandlerFactory )
-from output_handler import OutputHandler
-from response import Response
-from executor import Executor
-from config import Config
-from filter import AsyncFilter, SyncFilter, TransactionMetadata
+from koukan.output_handler import OutputHandler
+from koukan.response import Response
+from koukan.executor import Executor
+from koukan.config import Config
+from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
 
-from storage_writer_filter import StorageWriterFilter
-from storage_schema import VersionConflictException
-from version_cache import IdVersionMap
+from koukan.storage_writer_filter import StorageWriterFilter
+from koukan.storage_schema import VersionConflictException
+from koukan.version_cache import IdVersionMap
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):

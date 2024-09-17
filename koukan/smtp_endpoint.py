@@ -4,9 +4,9 @@ import logging
 import time
 import ipaddress
 
-from blob import Blob
-from response import Response, Esmtp
-from filter import (
+from koukan.blob import Blob
+from koukan.response import Response, Esmtp
+from koukan.filter import (
     EsmtpParam,
     HostPort,
     SyncFilter,

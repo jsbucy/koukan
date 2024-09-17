@@ -1,5 +1,5 @@
 from typing import Optional
-from filter import SyncFilter, TransactionMetadata
+from koukan.filter import SyncFilter, TransactionMetadata
 import logging
 
 class HelloFilter(SyncFilter):

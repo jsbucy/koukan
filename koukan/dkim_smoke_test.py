@@ -1,6 +1,6 @@
 
-import fake_endpoints
-import dkim_endpoint
+import koukan.fake_endpoints as fake_endpoints
+import koukan.dkim_endpoint as dkim_endpoint
 
 p = fake_endpoints.PrintEndpoint()
 d = dkim_endpoint.DkimEndpoint(b'example.com', b'selector', 'dk.key', p)

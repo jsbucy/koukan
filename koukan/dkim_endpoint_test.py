@@ -5,11 +5,11 @@ import tempfile
 
 from dkim import dknewkey
 
-from blob import InlineBlob
-from dkim_endpoint import DkimEndpoint
-from filter import HostPort, Mailbox, TransactionMetadata
-from fake_endpoints import FakeSyncFilter
-from response import Response
+from koukan.blob import InlineBlob
+from koukan.dkim_endpoint import DkimEndpoint
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.fake_endpoints import FakeSyncFilter
+from koukan.response import Response
 
 class DkimEndpointTest(unittest.TestCase):
     def setUp(self):

@@ -1,8 +1,8 @@
 import unittest
 import logging
 
-from address_list_policy import AddressListPolicy
-from recipient_router_filter import Destination
+from koukan.address_list_policy import AddressListPolicy
+from koukan.recipient_router_filter import Destination
 
 class AddressListPolicyTest(unittest.TestCase):
     def setUp(self):

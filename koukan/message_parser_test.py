@@ -4,8 +4,8 @@ import logging
 
 import json
 
-from message_parser import MessageParser, ParsedMessage
-from blob import InlineBlob
+from koukan.message_parser import MessageParser, ParsedMessage
+from koukan.blob import InlineBlob
 
 class MessageParserTest(unittest.TestCase):
     _blob_id : int = 0

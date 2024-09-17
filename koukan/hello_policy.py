@@ -1,6 +1,6 @@
 import logging
 
-from recipient_router_filter import Destination, RoutingPolicy
+from koukan.recipient_router_filter import Destination, RoutingPolicy
 
 class HelloPolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt):

@@ -1,6 +1,6 @@
 import spf
 
-from response import Response
+from koukan.response import Response
 
 from typing import List
 

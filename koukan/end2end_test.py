@@ -8,23 +8,23 @@ import asyncio
 from dkim import dknewkey
 import tempfile
 
-from config import Config
+from koukan.config import Config
 
-from gateway import SmtpGateway
+from koukan.gateway import SmtpGateway
 
-from router_service import Service
+from koukan.router_service import Service
 
-from fake_smtpd import FakeSmtpd
+from koukan.fake_smtpd import FakeSmtpd
 
-from ssmtp import main as send_smtp
+from koukan.ssmtp import main as send_smtp
 
-from executor import Executor
+from koukan.executor import Executor
 
 from examples.cli.send_message import Sender
 
 from examples.receiver.receiver import Receiver, create_app
-from hypercorn_main import run
-import postgres_test_utils
+from koukan.hypercorn_main import run
+import koukan.postgres_test_utils as postgres_test_utils
 
 def setUpModule():
     postgres_test_utils.setUpModule()

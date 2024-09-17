@@ -1,4 +1,4 @@
-from router_service import Service
+from koukan.router_service import Service
 import sys
 
 import logging

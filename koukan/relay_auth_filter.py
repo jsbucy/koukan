@@ -1,8 +1,8 @@
 from typing import Optional
-from filter import (
+from koukan.filter import (
     SyncFilter,
     TransactionMetadata )
-from response import Response
+from koukan.response import Response
 
 # Filter that fails MAIL in the absence of a positive signal to
 # authorize relaying.

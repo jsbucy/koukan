@@ -5,12 +5,12 @@ from threading import Thread
 import time
 from parameterized import parameterized_class
 
-from config import Config
-from gateway import SmtpGateway
-from fake_smtpd import FakeSmtpd
-from blob import InlineBlob
-from rest_endpoint import RestEndpoint
-from filter import HostPort, Mailbox, TransactionMetadata
+from koukan.config import Config
+from koukan.gateway import SmtpGateway
+from koukan.fake_smtpd import FakeSmtpd
+from koukan.blob import InlineBlob
+from koukan.rest_endpoint import RestEndpoint
+from koukan.filter import HostPort, Mailbox, TransactionMetadata
 
 from requests.exceptions import ConnectionError
 

@@ -3,15 +3,15 @@ from threading import Lock, Condition
 import logging
 import time
 
-from blob import Blob, WritableBlob
-from response import Response, Esmtp
-from filter import (
+from koukan.blob import Blob, WritableBlob
+from koukan.response import Response, Esmtp
+from koukan.filter import (
     AsyncFilter,
     Mailbox,
     SyncFilter,
     TransactionMetadata )
 
-from storage_schema import VersionConflictException
+from koukan.storage_schema import VersionConflictException
 
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
                              Optional[TransactionMetadata]]
