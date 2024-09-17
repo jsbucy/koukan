@@ -1,4 +1,4 @@
-load(':pytype.bzl', 'pytype_library')
+load('//:pytype.bzl', 'pytype_library')
 
 pytype_library(name='deadline',
                srcs=['deadline.py'])
@@ -143,7 +143,7 @@ pytype_library(name='message_builder',
 py_test(name='message_builder_test',
         srcs=['message_builder_test.py'],
         deps=[':message_builder'],
-        data=['message_builder.json'])
+        data=['//testdata:message_builder.json'])
 
 pytype_library(name='message_builder_filter',
                srcs=['message_builder_filter.py'],
@@ -171,14 +171,14 @@ py_test(name='message_parser_test',
         srcs=['message_parser_test.py'],
         deps=[':message_parser',
               ':blob'],
-        data=['testdata/multipart.msg',
-              'testdata/multipart.json',
-              'testdata/multipart2.msg',
-              'testdata/multipart2.json',
-              'testdata/dsn.msg',
-              'testdata/dsn-text-rfc822-headers.msg',
-              'testdata/related.msg',
-              'testdata/related.json',])
+        data=['//testdata:multipart.msg',
+              '//testdata:multipart.json',
+              '//testdata:multipart2.msg',
+              '//testdata:multipart2.json',
+              '//testdata:dsn.msg',
+              '//testdata:dsn-text-rfc822-headers.msg',
+              '//testdata:related.msg',
+              '//testdata:related.json',])
 
 pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
@@ -193,7 +193,7 @@ py_test(name='message_parser_filter_test',
               ':fake_endpoints',
               ':filter',
               ':response'],
-        data=['testdata/multipart.msg'])
+        data=['//testdata:multipart.msg'])
 
 pytype_library(name='address',
                srcs=['address.py'])
@@ -395,7 +395,7 @@ py_test(name='router_service_test_flask',
               ':fake_endpoints',
               ':filter',
               ':postgres_test_utils'],
-        data=['testdata/multipart.msg'])
+        data=['//testdata:multipart.msg'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
@@ -409,7 +409,7 @@ py_test(name='router_service_test_fastapi',
               ':fake_endpoints',
               ':filter',
               ':postgres_test_utils'],
-        data=['testdata/multipart.msg'])
+        data=['//testdata:multipart.msg'])
 
 pytype_library(name='smtp_auth',
                srcs=['smtp_auth.py'])
@@ -493,9 +493,9 @@ pytype_library(name='postgres_test_utils',
 
 py_test(name='end2end_test',
         srcs=['end2end_test.py'],
-        data=['config/local-test/router.yaml',
-              'config/local-test/gateway.yaml',
-              'testdata/trivial.msg'],
+        data=['//config/local-test:router.yaml',
+              '//config/local-test:gateway.yaml',
+              '//testdata:trivial.msg'],
         deps=[':router_service',
               ':gateway_lib',
               ':config',
