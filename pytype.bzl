@@ -16,7 +16,7 @@
 # https://bazel.build/extending/rules#validation-actions
 
 def _run_pytype(f):
-    return 'pytype -v2 -n -P. {f} || err=1'.format(f=f)
+    return 'pytype -v2 {f} || err=1'.format(f=f)
 
 def _pytype_lib_test_impl(ctx):
     srcs = ctx.files.srcs

@@ -201,7 +201,7 @@ class RestEndpoint(SyncFilter):
         rest_resp = self._post_tx(
             self.transaction_url + '/message_builder', delta.parsed_json,
             self.client.post, deadline)
-        if rest_resp.status_code != 200:
+        if rest_resp is None or rest_resp.status_code != 200:
             return Response(400, 'RestEndpoint._update_message_builder err')
         return None
 

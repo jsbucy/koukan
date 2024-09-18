@@ -15,7 +15,7 @@ class Blob(ABC):
         return None
 
     @abstractmethod
-    def read(self, offset, len=None) -> bytes:
+    def read(self, offset, len=None) -> Optional[bytes]:
         # pytype doesn't flag len() (above) but does flag this?!
         raise NotImplementedError()
 
