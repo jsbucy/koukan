@@ -62,7 +62,7 @@ py_test(name='version_cache_test',
         srcs=['version_cache_test.py'],
         deps=[':version_cache',
               ':executor'])
-        
+
 pytype_library(name='storage',
                srcs=['storage.py'],
                data=['init_storage.sql',

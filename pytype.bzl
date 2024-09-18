@@ -15,10 +15,22 @@
 # possibly via validation actions
 # https://bazel.build/extending/rules#validation-actions
 
+def _run_pytype(f):
+    return 'pytype -v2 -n -P. {f} || err=1'.format(f=f)
+
 def _pytype_lib_test_impl(ctx):
     srcs = ctx.files.srcs
+    runfiles = ctx.runfiles(files = srcs)
+    transitive_runfiles = []
+    for runfiles_attr in (
+        ctx.attr.srcs,
+        ctx.attr.deps):
+        for target in runfiles_attr:
+            transitive_runfiles.append(target[DefaultInfo].default_runfiles)
+    runfiles = runfiles.merge_all(transitive_runfiles)
 
-    cmds = [_run_pytype(f.path) for f in srcs]
+    cmds = [ _run_pytype(f.path) for f in srcs ]
+    print(cmds)
     script = "\n".join(["err=0"] + cmds + ["exit $err"])
 
     ctx.actions.write(
@@ -26,7 +38,6 @@ def _pytype_lib_test_impl(ctx):
         content = script,
     )
 
-    runfiles = ctx.runfiles(files = srcs)
     return [DefaultInfo(runfiles = runfiles)]
 
 _pytype_lib_test = rule(
@@ -67,9 +78,6 @@ def pytype_library(name, srcs, deps=None, data=None, **kwargs):
 # PyInfo.transitive_sources which is going to scale ~quadratically and
 # was already noticeably bad at the modest scale of the codebase at
 # the time I initially did this
-
-def _run_pytype(f):
-    return 'pytype {f} || err=1'.format(f=f)
 
 def _pytype_test_impl(ctx):
     srcs = []
