@@ -73,6 +73,7 @@ class MessageBuilder:
                          maintype=maintype, subtype=subtype)
         if maintype == 'text':
             # for now text/* must be utf8 or ascii
+            assert content is not None
             content.decode('utf-8')  # fail if not utf8
             part.set_param('charset', 'utf-8')
 

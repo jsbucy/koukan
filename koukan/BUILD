@@ -317,7 +317,8 @@ py_test(name='received_header_filter_test',
 
 pytype_library(name='relay_auth_filter',
                srcs=['relay_auth_filter.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':response'])
 
 py_test(name='relay_auth_filter_test',
         srcs=['relay_auth_filter_test.py'],
@@ -354,12 +355,12 @@ pytype_library(name='hypercorn_main',
                srcs=['hypercorn_main.py'])
 
 pytype_library(name='rest_service',
-               srcs=['rest_service.py',
-                     'rest_service_handler'])
+               srcs=['rest_service.py'],
+               deps=[':rest_service_handler'])
 
 pytype_library(name='fastapi_service',
-               srcs=['fastapi_service.py',
-                     'rest_service_handler'])
+               srcs=['fastapi_service.py'],
+               deps=[':rest_service_handler'])
 
 pytype_library(name='rest_schema',
                srcs=['rest_schema.py'])
