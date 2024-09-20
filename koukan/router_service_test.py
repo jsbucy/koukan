@@ -23,6 +23,8 @@ from koukan.filter import (
     WhichJson )
 from koukan.executor import Executor
 
+import koukan.sqlite_test_utils as sqlite_test_utils
+
 def setUpModule():
     postgres_test_utils.setUpModule()
 
@@ -122,7 +124,6 @@ root_yaml = {
         },
     ],
     'storage': {
-        'engine': 'postgres',  #'sqlite_memory'
         'session_refresh_interval': 1,
 
         'gc_ttl': 0,
@@ -139,6 +140,7 @@ class RouterServiceTest(unittest.TestCase):
     lock : Lock
     cv : Condition
     endpoints : List[FakeSyncFilter]
+    use_postgres = True
 
     def get_endpoint(self):
         logging.debug('RouterServiceTest.get_endpoint')
@@ -158,7 +160,13 @@ class RouterServiceTest(unittest.TestCase):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        self.pg = postgres_test_utils.setup_postgres(root_yaml['storage'])
+        if self.use_postgres:
+            root_yaml['storage']['engine'] = 'postgres'
+            self.pg = postgres_test_utils.setup_postgres(root_yaml['storage'])
+        else:
+            self.dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
+            root_yaml['storage']['engine'] = 'sqlite'
+            root_yaml['storage']['sqlite_db_filename'] = self.db_filename
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -839,10 +847,12 @@ class RouterServiceTest(unittest.TestCase):
 class RouterServiceTestFlask(RouterServiceTest):
     use_fastapi = False
 
-
 class RouterServiceTestFastApi(RouterServiceTest):
     use_fastapi = True
 
+class RouterServiceTestSqlite(RouterServiceTest):
+    use_fastapi = True
+    use_postgres = False
 
 if __name__ == '__main__':
     unittest.removeHandler()

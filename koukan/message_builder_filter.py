@@ -19,6 +19,8 @@ class MessageBuilderFilter(SyncFilter):
         self.storage = storage
         self.upstream = upstream
 
+    # TODO probably OutputHandler should just load the blobs in the tx
+    # the same as the body
     def _blob_factory(self, tx_rest_id : str, blob_id : str):
         logging.debug('message builder %s %s', tx_rest_id, blob_id)
         blob_reader = self.storage.get_blob_for_read(

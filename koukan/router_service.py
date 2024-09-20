@@ -26,7 +26,6 @@ from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
 
 from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.storage_schema import VersionConflictException
-from koukan.version_cache import IdVersionMap
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
@@ -42,7 +41,6 @@ class Service:
     lock : Lock
     cv : Condition
     storage : Optional[Storage] = None
-    version_cache : IdVersionMap
     last_gc = 0
 
     rest_handler_factory : Optional[RestHandlerFactory] = None
@@ -68,7 +66,6 @@ class Service:
         if self.config:
             self.config.storage_writer_factory = partial(
                 self.create_storage_writer, None)
-        self.version_cache = IdVersionMap()
 
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300,
@@ -138,13 +135,8 @@ class Service:
         # TODO move most/all of this to storage i.e. just pass the yaml
         storage_yaml = self.config.root_yaml['storage']
         engine = storage_yaml.get('engine', None)
-        if engine == 'sqlite_memory':
-            logging.warning("*** using in-memory/non-durable storage")
-            self.storage = Storage.get_sqlite_inmemory_for_test(
-                self.version_cache)
-        elif engine == 'sqlite':
+        if engine == 'sqlite':
             self.storage = Storage.connect_sqlite(
-                self.version_cache,
                 storage_yaml['sqlite_db_filename'])
         elif engine == 'postgres':
             args = {}
@@ -157,7 +149,7 @@ class Service:
                     args[v] = storage_yaml[k]
             if 'db_user' not in args:
                 args['db_user'] = os.getlogin()
-            self.storage = Storage.connect_postgres(self.version_cache, **args)
+            self.storage = Storage.connect_postgres(**args)
 
         self.storage.recover()
 

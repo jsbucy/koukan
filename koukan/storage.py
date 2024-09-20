@@ -841,38 +841,17 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    def __init__(self, version_cache : IdVersionMap,
+    def __init__(self, version_cache : IdVersionMap = None,
                  engine : Optional[Engine] = None):
-        self.tx_versions = version_cache
+        if version_cache is not None:
+            self.tx_versions = version_cache
+        else:
+            self.tx_versions = IdVersionMap()
         self.engine = engine
 
     @staticmethod
-    def get_sqlite_inmemory_for_test(
-            version_cache : Optional[IdVersionMap] = None):
-        if version_cache is None:
-            version_cache = IdVersionMap()
-        engine = create_engine("sqlite+pysqlite://",
-                               connect_args={'check_same_thread':False},
-                               poolclass=QueuePool,
-                               pool_size=1, max_overflow=0)
-        with engine.connect() as conn:
-            dbapi_conn = conn.connection
-            with open("koukan/init_storage.sql", "r") as f:
-                cursor = dbapi_conn.cursor()
-                # however SA is proxying all the methods from the
-                # underlying sqlite dbapi cursor isn't visible to
-                # pytype
-                # pytype: disable=attribute-error
-                cursor.executescript(f.read())
-                # pytype: enable=attribute-error
-        s = Storage(version_cache, engine)
-        s._init_session()
-        return s
-
-    @staticmethod
-    def connect_sqlite(version_cache : IdVersionMap, filename):
-        engine = create_engine("sqlite+pysqlite:///" + filename,
-                               pool_size=1, max_overflow=0)
+    def connect_sqlite(filename):
+        engine = create_engine("sqlite+pysqlite:///" + filename)
         with engine.begin() as db_tx:
             cursor = db_tx.connection.cursor()
             # should be sticky from schema but set it here anyway
@@ -884,13 +863,12 @@ class Storage():
             cursor.execute("PRAGMA synchronous=2")
             cursor.execute("PRAGMA auto_vacuum=2")
 
-        s = Storage(version_cache, engine)
+        s = Storage(engine=engine)
         s._init_session()
         return s
 
     @staticmethod
     def connect_postgres(
-            version_cache : IdVersionMap,
             db_user=None, db_name=None, host=None, port=None,
             unix_socket_dir=None):
         db_url = 'postgresql+psycopg://' + db_user + '@'
@@ -903,7 +881,7 @@ class Storage():
                 db_url += ('&port=%d' % port)
         logging.info('Storage.connect_postgres %s', db_url)
         engine = create_engine(db_url)
-        s = Storage(version_cache, engine)
+        s = Storage(engine=engine)
         s._init_session()
         return s
 

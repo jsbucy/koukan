@@ -12,11 +12,17 @@ from koukan.rest_schema import BlobUri
 
 from koukan.message_builder_filter import MessageBuilderFilter
 
+import koukan.sqlite_test_utils as sqlite_test_utils
+
 class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect_sqlite(self.db_filename)
+
+    def tearDown(self):
+        self.db_dir.cleanup()
 
     def test_basic(self):
         upstream = FakeSyncFilter()

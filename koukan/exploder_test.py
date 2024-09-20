@@ -16,6 +16,8 @@ from koukan.blob import CompositeBlob, InlineBlob
 
 from koukan.exploder import Exploder, Recipient
 
+import koukan.sqlite_test_utils as sqlite_test_utils
+
 class Rcpt:
     addr : str
     mail_resp : Optional[Response]
@@ -374,11 +376,13 @@ class ExploderTest(unittest.TestCase):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
                                  debug_futures=True)
 
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect_sqlite(self.db_filename)
         self.upstream_endpoints = []
 
     def tearDown(self):
         self.executor.shutdown(timeout=5)
+        self.db_dir.cleanup()
 
     def dump_db(self):
         for l in self.storage.db.iterdump():

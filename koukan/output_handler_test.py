@@ -13,16 +13,19 @@ from koukan.output_handler import OutputHandler
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
+import koukan.sqlite_test_utils as sqlite_test_utils
 
 class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.storage = Storage.get_sqlite_inmemory_for_test()
+        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect_sqlite(self.db_filename)
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
 
     def tearDown(self):
         self.executor.shutdown(timeout=5)
+        self.db_dir.cleanup()
 
     def dump_db(self):
         with self.storage.begin_transaction() as db_tx:

@@ -81,16 +81,8 @@ py_test(name='storage_test_sqlite',
         deps=[':storage',
               ':rest_schema',
               ':version_cache',
-              ':postgres_test_utils'])
-
-py_test(name='storage_test_sqlite_inmemory',
-        args=['StorageTestSqliteInMemory'],
-        main='storage_test.py',
-        srcs=['storage_test.py'],
-        deps=[':storage',
-              ':rest_schema',
-              ':version_cache',
-              ':postgres_test_utils'])
+              ':postgres_test_utils',
+              ':sqlite_test_utils'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
@@ -99,7 +91,8 @@ py_test(name='storage_test_postgres',
         deps=[':storage',
               ':rest_schema',
               ':version_cache',
-              ':postgres_test_utils'])
+              ':postgres_test_utils',
+              ':sqlite_test_utils'])
 
 pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
@@ -133,6 +126,7 @@ py_test(name='output_handler_test',
               ':executor',
               ':fake_endpoints',
               ':response',
+              ':sqlite_test_utils',
               ':storage',
               ':storage_schema'])
 
@@ -161,6 +155,7 @@ py_test(name='message_builder_filter_test',
               ':message_builder_filter',
               ':response',
               ':rest_schema',
+              ':sqlite_test_utils',
               ':storage'])
 
 pytype_library(name='message_parser',
@@ -274,6 +269,7 @@ py_test(name='storage_writer_filter_test',
               ':fake_endpoints',
               ':response',
               ':rest_schema',
+              ':sqlite_test_utils',
               ':storage'])
 
 pytype_library(name='exploder',
@@ -293,6 +289,7 @@ py_test(name='exploder_test',
               ':blob',
               ':filter',
               ':response',
+              ':sqlite_test_utils',
               ':storage'])
 
 pytype_library(name='remote_host_filter',
@@ -371,7 +368,6 @@ py_test(name='rest_schema_test',
 pytype_library(name='router_service',
                srcs=['router_service.py'],
                deps=[':storage',
-                     ':version_cache',
                      ':storage_schema',
                      ':output_handler',
                      ':response',
@@ -395,7 +391,8 @@ py_test(name='router_service_test_flask',
               ':config',
               ':fake_endpoints',
               ':filter',
-              ':postgres_test_utils'],
+              ':postgres_test_utils',
+              ':sqlite_test_utils'],
         data=['//testdata:multipart.msg'])
 
 py_test(name='router_service_test_fastapi',
@@ -409,7 +406,23 @@ py_test(name='router_service_test_fastapi',
               ':config',
               ':fake_endpoints',
               ':filter',
-              ':postgres_test_utils'],
+              ':postgres_test_utils',
+              ':sqlite_test_utils'],
+        data=['//testdata:multipart.msg'])
+
+py_test(name='router_service_test_sqlite',
+        srcs=['router_service_test.py'],
+        main='router_service_test.py',
+        args=['RouterServiceTestSqlite'],
+        deps=[':router_service',
+              ':rest_endpoint',
+              ':response',
+              ':blob',
+              ':config',
+              ':fake_endpoints',
+              ':filter',
+              ':postgres_test_utils',
+              ':sqlite_test_utils'],
         data=['//testdata:multipart.msg'])
 
 pytype_library(name='smtp_auth',
@@ -491,6 +504,9 @@ py_test(name='gateway_test',
 
 pytype_library(name='postgres_test_utils',
                srcs=['postgres_test_utils.py'])
+
+pytype_library(name='sqlite_test_utils',
+               srcs=['sqlite_test_utils.py'])
 
 py_test(name='end2end_test',
         srcs=['end2end_test.py'],

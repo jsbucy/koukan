@@ -21,10 +21,8 @@ from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
 
-from koukan.version_cache import IdVersionMap
-
 import koukan.postgres_test_utils as postgres_test_utils
-
+import koukan.sqlite_test_utils as sqlite_test_utils
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -35,12 +33,10 @@ def tearDownModule():
 
 class StorageTestBase(unittest.TestCase):
     sqlite : bool
-    version_cache : IdVersionMap
 
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(thread)d] %(message)s')
-        self.version_cache = IdVersionMap()
 
     def tearDown(self):
         self.s._del_session()
@@ -483,26 +479,14 @@ class StorageTestBase(unittest.TestCase):
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()
-        tempdir = tempfile.TemporaryDirectory()
-        self.filename = tempdir.name + '/db'
-        conn = sqlite3.connect(self.filename)
-        cursor = conn.cursor()
-        with open("koukan/init_storage.sql", "r") as f:
-            cursor.executescript(f.read())
+        self.dir, self.filename = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.s = Storage.connect_sqlite(self.filename)
 
-        self.s = Storage.connect_sqlite(self.version_cache, self.filename)
+    def tearDown(self):
+        self.dir.cleanup()
 
     def _connect(self):
-        return Storage(self.s.tx_versions, self.s.engine)
-
-
-class StorageTestSqliteInMemory(StorageTestBase):
-    def setUp(self):
-        super().setUp()
-        self.s = Storage.get_sqlite_inmemory_for_test()
-
-    def _connect(self):
-        return Storage(self.s.tx_versions, self.s.engine)
+        return Storage.connect_sqlite(self.filename)
 
 
 class StorageTestPostgres(StorageTestBase):
@@ -520,7 +504,6 @@ class StorageTestPostgres(StorageTestBase):
             self.pg = postgres_test_utils.setup_postgres(self.storage_yaml)
 
         return Storage.connect_postgres(
-            self.version_cache,
             db_user='postgres',
             db_name='storage_test',
             unix_socket_dir=self.storage_yaml['unix_socket_dir'],
