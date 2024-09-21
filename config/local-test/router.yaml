@@ -159,13 +159,7 @@ modules:
     hello: koukan.hello_policy
 
 storage:
-  # engine: sqlite_memory
-  # engine: sqlite
-  #sqlite_db_filename: storage.sqlite3
-  engine: postgres
-  postgres_db_name: pykk
-  unix_socket_dir: /var/run/postgresql
-  #port: 5432
+  url: postgresql+psycopg://bucy@/pykk?host=/var/run/postgresql
 
   gc_interval: 30
   gc_ttl: 3600

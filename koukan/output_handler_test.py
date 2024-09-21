@@ -2,6 +2,7 @@ import unittest
 import logging
 from koukan.executor import Executor
 import time
+from functools import partial
 
 from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
@@ -19,8 +20,8 @@ class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect_sqlite(self.db_filename)
+        self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect(self.db_url)
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
 
     def tearDown(self):
@@ -86,7 +87,9 @@ class OutputHandlerTest(unittest.TestCase):
     # multiple roundtrips ~smtp
     def test_handle_multi(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'),
+                         create_leased=True)
+        tx_id = tx_cursor.id
 
         endpoint = FakeSyncFilter()
 
@@ -122,29 +125,36 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
 
-        def run_handler():
-            tx_cursor = self.storage.load_one()
-            self.assertIsNotNone(tx_cursor)
+        def run_handler(tx_cursor):
+            tx_cursor.load(start_attempt=True)
             self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
             handler = OutputHandler(tx_cursor, endpoint,
-                                    downstream_env_timeout=1,
-                                    downstream_data_timeout=1)
+                                    downstream_env_timeout=5,
+                                    downstream_data_timeout=5)
             handler.handle()
-        fut = self.executor.submit(run_handler)
+        fut = self.executor.submit(partial(run_handler, tx_cursor))
         self.assertIsNotNone(fut)
+
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.load(db_id=tx_id)
 
         # write mail
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         #, rcpt_to=[Mailbox('bob')])
-        tx_cursor.load()
-        tx_cursor.write_envelope(tx)
+        while True:
+            tx_cursor.load()
+            try:
+                tx_cursor.write_envelope(tx)
+                break
+            except VersionConflictException:
+                pass
 
         # read mail resp
-        for i in range(0,3):
+        for i in range(0,5):
             tx_cursor.load()
             if tx_cursor.tx.mail_response is not None and tx_cursor.tx.mail_response.code == 201:
                 break
-            time.sleep(0.1)
+            time.sleep(1)
         else:
             self.fail('failed to read mail response')
 
@@ -156,16 +166,23 @@ class OutputHandlerTest(unittest.TestCase):
             updated_tx.rcpt_to.append(Mailbox(rcpt[i]))
             delta = tx.delta(updated_tx)
             tx = updated_tx
-            tx_cursor.load()
-            tx_cursor.write_envelope(delta)
+            while True:
+                tx_cursor.load()
+                try:
+                    tx_cursor.write_envelope(delta)
+                    break
+                except VersionConflictException:
+                    pass
 
             # read rcpt resp
-            for j in range(0,3):
+            for j in range(0,5):
                 tx_cursor.load()
                 if ([r.code for r in tx_cursor.tx.rcpt_response] ==
                     rcpt_resp[0:i+1]):
                     break
-                time.sleep(0.1)
+                logging.debug('test_handle_multi rcpt_response %s',
+                              tx_cursor.tx.rcpt_response)
+                time.sleep(1)
             else:
                 self.fail('failed to read ' + rcpt[i] + ' response')
 
@@ -188,11 +205,11 @@ class OutputHandlerTest(unittest.TestCase):
         endpoint.add_expectation(exp_body)
 
         # read data resp
-        for j in range(0,3):
+        for j in range(0,5):
             tx_cursor.load()
             if tx_cursor.tx.data_response and tx_cursor.tx.data_response.code == 204:
                 break
-            time.sleep(0.1)
+            time.sleep(1)
         else:
             self.fail('failed to read data response')
 

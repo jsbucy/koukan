@@ -125,7 +125,6 @@ root_yaml = {
     ],
     'storage': {
         'session_refresh_interval': 1,
-
         'gc_ttl': 0,
         'gc_interval': None,  # don't start, we'll invoke in the tests
     },
@@ -161,12 +160,11 @@ class RouterServiceTest(unittest.TestCase):
         self.cv = Condition(self.lock)
 
         if self.use_postgres:
-            root_yaml['storage']['engine'] = 'postgres'
-            self.pg = postgres_test_utils.setup_postgres(root_yaml['storage'])
+            self.pg, self.storage_url = postgres_test_utils.setup_postgres()
         else:
-            self.dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
-            root_yaml['storage']['engine'] = 'sqlite'
-            root_yaml['storage']['sqlite_db_filename'] = self.db_filename
+            self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
+
+        root_yaml['storage']['url'] = self.storage_url
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import atexit
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import CursorResult, Engine
+from sqlalchemy.engine import CursorResult, Engine, Transaction
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
 
@@ -133,7 +133,7 @@ class TransactionCursor:
         self._update_version_cache()
         self.created = True
 
-    def _reuse_blob(self, db_tx, blob_rest_id : List[BlobUri]
+    def _reuse_blob(self, db_tx : Transaction, blob_rest_id : List[BlobUri]
                     ) -> List[Tuple[int, str, bool]]:
                     # -> id, rest_id, input_done
         sel_blobrefs = (
@@ -211,7 +211,7 @@ class TransactionCursor:
 
         return out
 
-    def _ref_blob(self, db_tx, blob_id : int, blob_uri : BlobUri
+    def _ref_blob(self, db_tx : Transaction, blob_id : int, blob_uri : BlobUri
                   ) -> List[Tuple[int, str, bool]]:
         res = db_tx.execute(
             select(func.length(self.parent.blob_table.c.content),
@@ -243,7 +243,7 @@ class TransactionCursor:
         self._update_version_cache()
 
     def _write_blob(self,
-                    db_tx,
+                    db_tx : Transaction,
                     tx,
                     upd,  # sa update
                     reuse_blob_rest_id : List[BlobUri] = [],
@@ -285,7 +285,7 @@ class TransactionCursor:
         return upd, blobs_done
 
     def _write(self,
-               db_tx,
+               db_tx : Transaction,
                tx_delta : TransactionMetadata,
                reuse_blob_rest_id : List[BlobUri] = [],
                ref_blob_id : Optional[Tuple[int, BlobUri]] = None,
@@ -463,20 +463,22 @@ class TransactionCursor:
                 db_tx, db_id, rest_id, start_attempt)
 
     def _load_and_start_attempt_db(
-            self, db_tx,
+            self, db_tx : Transaction,
             db_id : Optional[int] = None,
             rest_id : Optional[str] = None,
-            start_attempt : bool = False):
-        res = self._load_db(db_tx, db_id, rest_id)
+            start_attempt : bool = False) -> Optional[TransactionMetadata]:
+        tx = self._load_db(db_tx, db_id, rest_id, start_attempt)
+        if tx is None:
+            return None
         if start_attempt:
             self._start_attempt_db(db_tx, self.id, self.version)
-        if res is not None:
-            self._update_version_cache()
-        return res
+        self._update_version_cache()
+        return tx
 
-    def _load_db(self, db_tx,
+    def _load_db(self, db_tx : Transaction,
                  db_id : Optional[int] = None,
-                 rest_id : Optional[str] = None
+                 rest_id : Optional[str] = None,
+                 start_attempt : bool = False
                  ) -> Optional[TransactionMetadata]:
         where = None
         where_id = None
@@ -491,6 +493,11 @@ class TransactionCursor:
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.message_builder,
                      self.parent.tx_table.c.no_final_notification)
+
+        if start_attempt and not self.created:
+            sel = sel.where(
+                or_(self.parent.tx_table.c.inflight_session_id.is_(None),
+                    not_(self.parent.tx_table.c.inflight_session_live)))
 
         if db_id is not None:
             sel = sel.where(self.parent.tx_table.c.id == db_id)
@@ -570,7 +577,7 @@ class TransactionCursor:
 
         return self.tx
 
-    def _start_attempt_db(self, db_tx, db_id, version):
+    def _start_attempt_db(self, db_tx : Transaction, db_id : int, version : int):
         logging.debug('TxCursor._start_attempt_db %d', db_id)
         assert self.parent.session_id is not None
         assert self.tx is not None
@@ -599,9 +606,10 @@ class TransactionCursor:
         res = db_tx.execute(upd)
         row = res.fetchone()
 
-        # this should only be called in a db tx that already read the
-        # row unleased
-        assert row and row[0] == new_version
+        # Without READ_CONSISTENT a downstream write can get in
+        # between here and cause a version mismatch
+        if row is None:
+            raise VersionConflictException()
 
         # This is a sort of pseudo-attempt for re-entering the
         # notification logic if it was enabled after the transaction
@@ -638,7 +646,7 @@ class TransactionCursor:
 
 
     # returns True if all blobs ref'd from this tx are finalized
-    def check_input_done(self, db_tx) -> bool:
+    def check_input_done(self, db_tx : Transaction) -> bool:
         j = join(self.parent.blob_table, self.parent.tx_blobref_table,
              self.parent.blob_table.c.id == self.parent.tx_blobref_table.c.blob_id,
              isouter=False)
@@ -672,7 +680,7 @@ class BlobCursor(Blob, WritableBlob):
     def content_length(self):
         return self._content_length
 
-    def _create(self, db_tx):
+    def _create(self, db_tx : Transaction):
         ins = insert(self.parent.blob_table).values(
             last_update=int(time.time()),
             content=bytes()
@@ -841,7 +849,7 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
 
-    def __init__(self, version_cache : IdVersionMap = None,
+    def __init__(self, version_cache : Optional[IdVersionMap] = None,
                  engine : Optional[Engine] = None):
         if version_cache is not None:
             self.tx_versions = version_cache
@@ -850,37 +858,20 @@ class Storage():
         self.engine = engine
 
     @staticmethod
-    def connect_sqlite(filename):
-        engine = create_engine("sqlite+pysqlite:///" + filename)
-        with engine.begin() as db_tx:
-            cursor = db_tx.connection.cursor()
-            # should be sticky from schema but set it here anyway
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA foreign_keys=ON")
-            # https://www.sqlite.org/pragma.html#pragma_synchronous
-            # FULL=2, flush WAL on every write,
-            # NORMAL=1 not durable after power loss
-            cursor.execute("PRAGMA synchronous=2")
-            cursor.execute("PRAGMA auto_vacuum=2")
+    def connect(url):
+        engine = create_engine(url)
+        if 'sqlite' in url:
+            with engine.begin() as db_tx:
+                cursor = db_tx.connection.cursor()
+                # should be sticky from schema but set it here anyway
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                # https://www.sqlite.org/pragma.html#pragma_synchronous
+                # FULL=2, flush WAL on every write,
+                # NORMAL=1 not durable after power loss
+                cursor.execute("PRAGMA synchronous=2")
+                cursor.execute("PRAGMA auto_vacuum=2")
 
-        s = Storage(engine=engine)
-        s._init_session()
-        return s
-
-    @staticmethod
-    def connect_postgres(
-            db_user=None, db_name=None, host=None, port=None,
-            unix_socket_dir=None):
-        db_url = 'postgresql+psycopg://' + db_user + '@'
-        if host:
-            db_url += '%s:%d' % (host, port)
-        db_url += '/' + db_name
-        if unix_socket_dir:
-            db_url += ('?host=' + unix_socket_dir)
-            if port:
-                db_url += ('&port=%d' % port)
-        logging.info('Storage.connect_postgres %s', db_url)
-        engine = create_engine(db_url)
         s = Storage(engine=engine)
         s._init_session()
         return s
@@ -888,7 +879,7 @@ class Storage():
     def __del__(self):
         self._del_session()
 
-    def begin_transaction(self):
+    def begin_transaction(self) -> Transaction:
         return self.engine.begin()
 
     def _del_session(self):
@@ -1094,7 +1085,7 @@ class Storage():
 
             return tx
 
-    def _gc(self, db_tx, ttl : int) -> Tuple[int, int]:
+    def _gc(self, db_tx : Transaction, ttl : int) -> Tuple[int, int]:
         # It would be fairly easy to support a staged policy like ttl
         # blobs after 1d but tx after 7d. Then there would be a
         # separate delete from TransactionBlobRefs with the shorter

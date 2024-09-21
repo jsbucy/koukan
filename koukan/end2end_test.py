@@ -112,7 +112,8 @@ class End2EndTest(unittest.TestCase):
         router_listener_yaml['addr'] = ['localhost', self.router_rest_port]
         del router_listener_yaml['cert']
         del router_listener_yaml['key']
-        self.pg = postgres_test_utils.setup_postgres(router_yaml['storage'])
+        self.pg, self.pg_url = postgres_test_utils.setup_postgres()
+        router_yaml['storage']['url'] = self.pg_url
 
         self.fake_smtpd_port = self._find_free_port()
 

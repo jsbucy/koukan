@@ -18,8 +18,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect_sqlite(self.db_filename)
+        self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect(self.db_url)
 
     def tearDown(self):
         self.db_dir.cleanup()

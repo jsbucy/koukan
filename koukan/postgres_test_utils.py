@@ -1,3 +1,4 @@
+from typing import Tuple
 import logging
 import psycopg
 import psycopg.errors
@@ -11,24 +12,21 @@ def tearDownModule():
     global pg_factory
     pg_factory.clear_cache()
 
-def postgres_url(unix_socket_dir, port, db):
-    url = 'postgresql://postgres@/' + db + '?'
+def postgres_url(unix_socket_dir, port, db, engine='postgresql'):
+    # SA URL can't seem to create this form of url with no host or
+    # password for peer auth to unix socket
+    url = engine + '://postgres@/' + db + '?'
     url += ('host=' + unix_socket_dir)
     url += ('&port=%d' % port)
     return url
 
-# mutates storage yaml
-def setup_postgres(storage_yaml):
+def setup_postgres() -> Tuple[object, str]:
     global pg_factory
     pg = pg_factory()
     unix_socket_dir = pg.base_dir + '/tmp'
     port = pg.dsn()['port']
-    storage_yaml['unix_socket_dir'] = unix_socket_dir
-    storage_yaml['port'] = port
-    storage_yaml['postgres_user'] = 'postgres'
-    storage_yaml['postgres_db_name'] = 'storage_test'
     url = postgres_url(unix_socket_dir, port, 'postgres')
-    logging.info('StorageTest setup_postgres %s', url)
+    logging.info('postgres_test_utils.setup_postgres %s', url)
 
     with psycopg.connect(url) as conn:
         conn.autocommit = True
@@ -45,4 +43,5 @@ def setup_postgres(storage_yaml):
         with open('koukan/init_storage_postgres.sql', 'r') as f:
             with conn.cursor() as cursor:
                 cursor.execute(f.read())
-    return pg
+    return pg, postgres_url(unix_socket_dir, port, 'storage_test',
+                            engine='postgresql+psycopg')

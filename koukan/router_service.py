@@ -132,24 +132,9 @@ class Service:
         # ick dependency cycle
         self.config.executor = self.executor
 
-        # TODO move most/all of this to storage i.e. just pass the yaml
         storage_yaml = self.config.root_yaml['storage']
-        engine = storage_yaml.get('engine', None)
-        if engine == 'sqlite':
-            self.storage = Storage.connect_sqlite(
-                storage_yaml['sqlite_db_filename'])
-        elif engine == 'postgres':
-            args = {}
-            arg_map = {'postgres_user': 'db_user',
-                       'postgres_db_name': 'db_name',
-                       'unix_socket_dir': 'unix_socket_dir',
-                       'port': 'port'}
-            for (k,v) in arg_map.items():
-                if k in storage_yaml:
-                    args[v] = storage_yaml[k]
-            if 'db_user' not in args:
-                args['db_user'] = os.getlogin()
-            self.storage = Storage.connect_postgres(**args)
+        if self.storage is None:
+            self.storage=Storage.connect(storage_yaml['url'])
 
         self.storage.recover()
 
@@ -222,6 +207,7 @@ class Service:
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer))
         if fut is None:
+            # XXX leaves db tx leased?
             return None
         return writer
 

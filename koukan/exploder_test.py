@@ -376,8 +376,8 @@ class ExploderTest(unittest.TestCase):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
                                  debug_futures=True)
 
-        self.db_dir, self.db_filename = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect_sqlite(self.db_filename)
+        self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.storage = Storage.connect(self.db_url)
         self.upstream_endpoints = []
 
     def tearDown(self):

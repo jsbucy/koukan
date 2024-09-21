@@ -57,15 +57,15 @@ class StorageTestBase(unittest.TestCase):
         del downstream
 
         buggy = self.s.get_transaction_cursor()
-        with self.assertRaises(AssertionError):
-            buggy.load(rest_id='tx_rest_id', start_attempt=True)
+        self.assertIsNone(
+            buggy.load(rest_id='tx_rest_id', start_attempt=True))
 
-        upstream.load(start_attempt=True)
+        self.assertIsNotNone(upstream.load(start_attempt=True))
         upstream.write_envelope(TransactionMetadata(
             mail_response=Response(450)))
 
         downstream = self.s.get_transaction_cursor()
-        downstream.load(rest_id='tx_rest_id')
+        self.assertIsNotNone(downstream.load(rest_id='tx_rest_id'))
         downstream.write_envelope(TransactionMetadata(
             rcpt_to=[Mailbox('bob')]))
         self.assertEqual(downstream.tx.remote_host.host, 'remote_host')
@@ -479,14 +479,14 @@ class StorageTestBase(unittest.TestCase):
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()
-        self.dir, self.filename = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.s = Storage.connect_sqlite(self.filename)
+        self.dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        self.s = self._connect()
 
     def tearDown(self):
         self.dir.cleanup()
 
     def _connect(self):
-        return Storage.connect_sqlite(self.filename)
+        return Storage.connect(self.db_url)
 
 
 class StorageTestPostgres(StorageTestBase):
@@ -501,13 +501,9 @@ class StorageTestPostgres(StorageTestBase):
     def _connect(self):
         if self.pg is None:
             self.storage_yaml = {}
-            self.pg = postgres_test_utils.setup_postgres(self.storage_yaml)
+            self.pg, self.pg_url = postgres_test_utils.setup_postgres()
 
-        return Storage.connect_postgres(
-            db_user='postgres',
-            db_name='storage_test',
-            unix_socket_dir=self.storage_yaml['unix_socket_dir'],
-            port=self.storage_yaml['port'])
+        return Storage.connect(self.pg_url)
 
 
 if __name__ == '__main__':

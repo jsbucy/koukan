@@ -8,4 +8,4 @@ def create_temp_sqlite_for_test() -> Tuple[TemporaryDirectory, str]:
     conn = sqlite3.connect(filename)
     with open("koukan/init_storage.sql", "r") as f:
         conn.executescript(f.read())
-    return dir, filename
+    return dir, 'sqlite+pysqlite:///' + filename
