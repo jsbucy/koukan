@@ -9,8 +9,8 @@ global:
 rest_listener:
   use_fastapi: true
   addr: ["127.0.0.1", 8000]
-  cert: localhost.crt
-  key: localhost.key
+  #cert: localhost.crt
+  #key: localhost.key
 
 endpoint:
 - name: outbound-gw
