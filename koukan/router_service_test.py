@@ -112,7 +112,7 @@ root_yaml = {
                 {'filter': 'router',
                  'policy': {
                      'name': 'address_list',
-                     'domains': ['d'],
+                     'domains': ['example.com'],
                      #endpoint: https://localhost:8001
                      'destination': {'options': { 'receive_parsing': {}}}
                      }
@@ -264,8 +264,8 @@ class RouterServiceTest(unittest.TestCase):
         body = 'hello, world!'
         tx = TransactionMetadata(
             #retry={},
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
             inline_body=body)
 
         def exp(tx, tx_delta):
@@ -319,8 +319,8 @@ class RouterServiceTest(unittest.TestCase):
         body = 'hello, world!'
         tx = TransactionMetadata(
             #retry={},
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
             body_blob=InlineBlob(body))
 
         def exp(tx, tx_delta):
@@ -368,8 +368,8 @@ class RouterServiceTest(unittest.TestCase):
         body = 'hello, world!'
         body_utf8 = body.encode('utf-8')
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
             inline_body=body)
 
         upstream_endpoint = FakeSyncFilter()
@@ -401,8 +401,8 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob2')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob2@example.com')],
             body=tx_url + '/body')
 
         upstream_endpoint = FakeSyncFilter()
@@ -436,7 +436,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('testExploderMultiRcpt start tx')
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
+            mail_from=Mailbox('alice@example.com'),
             remote_host=HostPort('1.2.3.4', 12345))
         rest_endpoint.on_update(tx, tx.copy())
 
@@ -460,7 +460,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('testExploderMultiRcpt patch rcpt1')
         updated_tx = tx.copy()
-        updated_tx.rcpt_to.append(Mailbox('bob'))
+        updated_tx.rcpt_to.append(Mailbox('bob@example.com'))
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
         rest_endpoint.on_update(tx, tx_delta)
@@ -484,7 +484,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('testExploderMultiRcpt patch rcpt2')
         updated_tx = tx.copy()
-        updated_tx.rcpt_to.append(Mailbox('bob2'))
+        updated_tx.rcpt_to.append(Mailbox('bob2@example.com'))
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
         rest_endpoint.on_update(tx, tx_delta)
@@ -522,8 +522,8 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url, static_http_host='smtp-msa')
 
         def exp(tx, tx_delta):
-            self.assertEqual(tx.mail_from.mailbox, 'alice')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
+            self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
+            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob@example.com'])
             # set upstream responses so output (retry) succeeds
             # upstream success, retry succeeds, propagates down to rest
             upstream_delta = TransactionMetadata(
@@ -542,8 +542,8 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
         rest_endpoint.on_update(tx, tx.copy(), 10)
@@ -560,8 +560,8 @@ class RouterServiceTest(unittest.TestCase):
             logging.debug('test_notification upstream tx %d', i)
             upstream_endpoint = FakeSyncFilter()
             def exp(tx, tx_delta):
-                self.assertEqual(tx.mail_from.mailbox, 'alice')
-                self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
+                self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
+                self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob@example.com'])
                 # set upstream responses so output (retry) succeeds
                 # upstream success, retry succeeds, propagates down to rest
                 upstream_delta = TransactionMetadata(
@@ -578,7 +578,7 @@ class RouterServiceTest(unittest.TestCase):
                 dsn_endpoint = FakeSyncFilter()
                 def exp_dsn(tx, tx_delta):
                     self.assertEqual(tx.mail_from.mailbox, '')
-                    self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice'])
+                    self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice@example.com'])
                     dsn = tx.body_blob.read(0)
                     logging.debug('test_notification %s', dsn)
                     self.assertIn(b'subject: Delivery Status Notification', dsn)
@@ -602,16 +602,16 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob1'),
-                     Mailbox('bob2')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob1@example.com'),
+                     Mailbox('bob2@example.com')],
             body_blob=InlineBlob(b'Hello, World!'),
             remote_host=HostPort('1.2.3.4', 12345))
 
         def exp_rcpt(tx, tx_delta):
             rcpt = tx_delta.rcpt_to[0].mailbox
-            self.assertIn(rcpt, ['bob1', 'bob2'])
-            data_resp = 550 if rcpt == 'bob2' else 250
+            self.assertIn(rcpt, ['bob1@example.com', 'bob2@example.com'])
+            data_resp = 550 if rcpt == 'bob2@example.com' else 250
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
@@ -647,7 +647,7 @@ class RouterServiceTest(unittest.TestCase):
         dsn_endpoint = FakeSyncFilter()
         def exp_dsn_env(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
-            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
+            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice@example.com')
             upstream_delta=TransactionMetadata(
                 mail_response=Response(250),
                 rcpt_response=[Response(250)])
@@ -690,8 +690,8 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob1')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob1@example.com')],
             remote_host=HostPort('1.2.3.4', 12345))
         message_builder_spec = {
             "headers": [
@@ -752,8 +752,8 @@ class RouterServiceTest(unittest.TestCase):
         # send another tx with the same spec to exercise blob reuse
         logging.info('RouterServiceTest.test_message_builder start tx #2')
         tx2 = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob2')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob2@example.com')],
             remote_host=HostPort('1.2.3.4', 12345),
             message_builder=message_builder_spec)
 
@@ -765,8 +765,8 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp2(tx, tx_delta):
             logging.debug('test_message_builder.exp2 %s', tx)
-            self.assertEqual(tx.mail_from.mailbox, 'alice')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob2'])
+            self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
+            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob2@example.com'])
             return TransactionMetadata(
                 mail_response = Response(204),
                 rcpt_response = [Response(205)])
@@ -797,8 +797,8 @@ class RouterServiceTest(unittest.TestCase):
             body = f.read()
         tx = TransactionMetadata(
             #retry={},
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@d')],
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
             inline_body=body.decode('ascii'))
 
         def exp(tx, tx_delta):

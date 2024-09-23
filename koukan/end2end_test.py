@@ -191,7 +191,7 @@ class End2EndTest(unittest.TestCase):
     # mx smtp -> smtp
     def test_smoke(self):
         send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
-                  'alice@d', ['bob@d'],
+                  'alice@example.com', ['bob@example.com'],
                   'hello, world!')
 
         for handler in self.fake_smtpd.handlers:
@@ -200,10 +200,10 @@ class End2EndTest(unittest.TestCase):
                 logging.debug('empty handler? %s', handler)
                 continue
             self.assertEqual(handler.ehlo, 'frylock')
-            self.assertEqual(handler.mail_from, 'alice@d')
+            self.assertEqual(handler.mail_from, 'alice@example.com')
             self.assertEqual(len(handler.mail_options), 1)
             self.assertTrue(handler.mail_options[0].startswith('SIZE='))
-            self.assertEqual(handler.rcpt_to, ['bob@d'])
+            self.assertEqual(handler.rcpt_to, ['bob@example.com'])
             self.assertEqual(handler.rcpt_options, [[]])
             self.assertIn(b'hello, world!', handler.data)
             break
@@ -213,11 +213,11 @@ class End2EndTest(unittest.TestCase):
     # mx smtp -> rest
     def test_rest_receiving(self):
         send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
-                  'alice@d', ['bob@dd'],
+                  'alice@example.com', ['bob@rest-application.example.com'],
                   'hello, world!\n')
         for tx_id,tx in self.receiver.transactions.items():
             logging.debug('test_rest_receiving %s', tx_id)
-            if tx.tx_json['mail_from']['m'] == 'alice@d':
+            if tx.tx_json['mail_from']['m'] == 'alice@example.com':
                 break
         else:
             self.fail('didn\'t receive message')
@@ -240,7 +240,7 @@ class End2EndTest(unittest.TestCase):
 
         self.assertIn(
             [ "from", [{ "display_name": "",
-                         "address": "alice@d"} ] ],
+                         "address": "alice@example.com"} ] ],
             parsed['parts']['headers'])
 
         self.assertEqual(
@@ -256,7 +256,7 @@ class End2EndTest(unittest.TestCase):
     # submission rest w/mime -> smtp
     # w/payload reuse
     def test_submission_mime(self):
-        sender = Sender('alice@d', base_url=self.router_base_url,
+        sender = Sender('alice@example.com', base_url=self.router_base_url,
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
         sender.send('bob2@example.com')
@@ -290,7 +290,7 @@ class End2EndTest(unittest.TestCase):
         message_builder_spec = {
             "headers": [
                 ["from", [{"display_name": "alice a",
-                           "address": "alice@d"}]],
+                           "address": "alice@example.com"}]],
                 ["to", [{"address": "bob@example.com"}]],
                 ["subject", "hello"],
                 ["date", {"unix_secs": 1709750551, "tz_offset": -28800}],
@@ -303,7 +303,7 @@ class End2EndTest(unittest.TestCase):
            }]
         }
 
-        sender = Sender('alice@d', message_builder_spec,
+        sender = Sender('alice@example.com', message_builder_spec,
                         base_url=self.router_base_url)
         sender.send('bob@example.com')
         sender.send('bob2@example.com')
@@ -326,7 +326,7 @@ class End2EndTest(unittest.TestCase):
                 continue
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler
-            self.assertIn(b'from: alice a <alice@d>', handler.data)
+            self.assertIn(b'from: alice a <alice@example.com>', handler.data)
             self.assertIn(b'DKIM-Signature:', handler.data)
             self.assertIn(b'Received:', handler.data)
             self.assertIn(encoded, handler.data)

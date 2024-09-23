@@ -3,8 +3,7 @@ global:
   executor:
     max_inflight: 100
     watchdog_timeout: 60
-  # needs to authenticate!
-  mailer_daemon_mailbox: mailer-daemon@d
+  mailer_daemon_mailbox: mailer-daemon@example.com
   rest_id_entropy: 4
 
 rest_listener:
@@ -52,8 +51,8 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - d
-      - dd
+      - example.com
+      - rest-application.example.com
       destination:
         endpoint: https://localhost:8000
         http_host: mx-out
@@ -70,7 +69,7 @@ endpoint:
       # no domains/dest -> reject all
   #- filter: dkim
   #  key: config/local-test/dkim.key
-  #  domain: d
+  #  domain: example.com
   #  selector: sel
   - filter: hello
   - filter: dns_resolution
@@ -114,7 +113,7 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - d
+      - example.com
       #delimiter: '+'
       #prefixes:
       #- base: alice
@@ -128,7 +127,7 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - dd
+      - rest-application.example.com
       delimiter: '+'
       prefixes:
       - bob
