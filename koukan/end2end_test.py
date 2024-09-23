@@ -70,16 +70,29 @@ class End2EndTest(unittest.TestCase):
 #        elif policy['name'] == 'address_list':
             self._update_address_list(policy)
 
-    def _update_dkim(self, filter):
-        if filter['filter'] != 'dkim':
-            return
+    def _update_dkim(self, chain):
+        last = 0
+        dkim = None
+        for i,f in enumerate(chain):
+            if f['filter'] == 'dkim':
+                dkim = i
+                break
+            if f['filter'] in ['message_builder', 'received_header']:
+                last = i
+        if dkim is None:
+            chain.insert(last, {'filter': 'dkim',
+                                'domain': 'd',
+                                'selector': 'sel',
+                                'key': None})
+            dkim = last
+        filter_yaml = chain[last]
         self.dkim_tempdir = tempfile.TemporaryDirectory()
         dir = self.dkim_tempdir.name
         self.dkim_privkey = dir + '/privkey'
         self.dkim_pubkey = dir + '/pubkey'
         dknewkey.GenRSAKeys(self.dkim_privkey)
         dknewkey.ExtractRSADnsPublicKey(self.dkim_privkey, self.dkim_pubkey)
-        filter['key'] = self.dkim_privkey
+        filter_yaml['key'] = self.dkim_privkey
 
     def _configure(self):
         self.gateway_mx_port = self._find_free_port()
@@ -122,9 +135,10 @@ class End2EndTest(unittest.TestCase):
             del endpoint['verify']
 
         for endpoint in router_yaml['endpoint']:
+            if endpoint['name'] == 'msa-output':
+                self._update_dkim(endpoint['chain'])
             for filter in endpoint['chain']:
                 self._update_router(filter)
-                self._update_dkim(filter)
                 if filter['filter'] == 'dns_resolution':
                     filter['static_hosts'] = [
                         {'host': '127.0.0.1', 'port': self.fake_smtpd_port}]

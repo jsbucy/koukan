@@ -68,10 +68,10 @@ endpoint:
     policy:
       name: address_list
       # no domains/dest -> reject all
-  - filter: dkim
-    key: config/local-test/dkim.key
-    domain: d
-    selector: sel
+  #- filter: dkim
+  #  key: config/local-test/dkim.key
+  #  domain: d
+  #  selector: sel
   - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
