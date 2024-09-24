@@ -23,11 +23,11 @@ smtp_listener:
 rest_output:
   - name: mx
     host: inbound-gw
-    endpoint: https://localhost:8000/
+    endpoint: http://localhost:8000/
     verify: localhost.crt
   - name: msa
     host: outbound-gw
-    endpoint: https://localhost:8000/
+    endpoint: http://localhost:8000/
     verify: localhost.crt
 
 

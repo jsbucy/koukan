@@ -38,10 +38,10 @@ for local testing, you can just run it from the top-level directory
 
 `pip install -r requirements.txt`
 
-`bash config/local-test/run\_gateway.sh`
+`bash config/local-test/run_gateway.sh`
 runs the gateway listening on 1025 (mx/receive) and 1587 (submission/send) for smtp  
 8001 for rest  
-`bash config/local-test/run\_router.sh`
+`bash config/local-test/run_router.sh`
 listens on 8000 for rest  
 ```
 PYTHONPATH=. gunicorn3 -b localhost:8002 --access-logfile - --log-level debug\ 
@@ -55,26 +55,26 @@ sink for outbound messages
 prints messages to stdout
 
 gateway 1025 → router “inbound-gw”  
-routes all addresses at domain “example.com” to fake\_smtpd via gateway  
+routes all addresses at domain “example.com” to `fake_smtpd` via gateway  
 routes bob@rest-application.example.com (and \+ extension addresses) to examples/receiver
 
 1587 → router “outbound-gw”  
-routes all addresses to fake\_smtpd via gateway
+routes all addresses to `fake_smtpd` via gateway
 
 ## Send some messages
 
 - mx receive  
-`python ./ssmtp.py localhost 1025 localhost alice@example.com bob@example.com`
+`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 
 - mx receive to rest receiver
-`python ./ssmtp.py localhost 1025 localhost alice@example.com bob@rest-application.example.com`
+`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@rest-application.example.com <<< 'hello, world!'`
 
 should print out on the `examples/receiver` console
 
 - smtp submission  
-`python ./ssmtp.py localhost 1587 localhost alice@example.com bob@example.com`
+`python koukan/ssmtp.py localhost 1587 localhost alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 
