@@ -54,22 +54,22 @@ router
 only speaks http/rest
 
 The router has 2 basic flows  
-input: rest \-\> storage  
+input: rest → storage  
 fastapi routes invoke RestHandler  
 RestHandler writes to StorageWriterFilter  
 StorageWriterFilter writes to durable storage  
-output: storage \-\> rest  
+output: storage → rest  
 OutputHandler reads from durable storage  
 OutputHandler writes to the output filter chain  
 the last of these is RestEndpoint which sends via http
 
 Except that we have to handle multi-recipient transactions from SMTP so there may be fan-out between the input side and the output side. This is implemented by the Exploder. So now we have
 
-http \-\> fastapi \-\> RestHandler \-\> StorageWriterFilter \-\> Storage  
+http → fastapi → RestHandler → StorageWriterFilter → Storage  
 writing a single storage transaction with all downstream recipients  
-Storage \-\> OutputHandler \-\> \[ Exploder \-\> StorageWriterFilter \-\> Storage \]  
+Storage → OutputHandler → \[ Exploder → StorageWriterFilter → Storage \]  
 writing a separate storage transaction for each recipient  
-Storage \-\> OutputHandler \-\> SyncFilter output chain \-\> RestEndpoint \-\> http  
+Storage → OutputHandler → SyncFilter output chain → RestEndpoint → http  
 separate instance of this flow for each recipient
 
 All data between the input and output sides flows through the Storage module. This uses SQLAlchemy Core to get to the underlying database and my intent is for it to be portable across databases and not depend on a lot of engine-specific features in particular change notifications. Instead the router uses in-process synchronization to coordinate the downstream and upstream handlers for a given transaction.

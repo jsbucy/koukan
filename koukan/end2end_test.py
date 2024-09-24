@@ -40,20 +40,16 @@ class End2EndTest(unittest.TestCase):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             return s.server_address[1]
 
-#    def _update_dest_domain(self, policy):
-#        if policy['endpoint'] == 'https://localhost:8001':
-#            policy['endpoint'] = self.gateway_base_url
-
     def _update_address_list(self, policy):
         logging.debug('_update_address_list %s', policy)
         if (dest := policy.get('destination', None)) is None:
             return
         logging.debug(dest)
-        if dest['endpoint'] == 'https://localhost:8001':
+        if dest['endpoint'] == 'http://localhost:8001':
             dest['endpoint'] = self.gateway_base_url
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif dest['endpoint'] == 'https://localhost:8000':
+        elif dest['endpoint'] == 'http://localhost:8000':
             dest['endpoint'] = self.router_base_url
         elif dest['endpoint'] == 'http://localhost:8002':
             dest['endpoint'] = self.receiver_base_url
@@ -66,8 +62,6 @@ class End2EndTest(unittest.TestCase):
         policy = filter['policy']
         logging.debug('_update_router policy %s', policy)
         if policy['name'] in ['dest_domain', 'address_list']:
-#            self._update_dest_domain(policy)
-#        elif policy['name'] == 'address_list':
             self._update_address_list(policy)
 
     def _update_dkim(self, chain):
@@ -109,8 +103,9 @@ class End2EndTest(unittest.TestCase):
         gateway_listener_yaml = gateway_yaml['rest_listener']
         gateway_listener_yaml['addr'] = ['localhost', self.gateway_rest_port]
         # TODO we might want to generate this on the fly and enable https?
-        del gateway_listener_yaml['cert']
-        del gateway_listener_yaml['key']
+        for k in ['cert', 'key']:
+            if k in gateway_listener_yaml:
+                del gateway_listener_yaml[k]
         gateway_yaml['smtp_listener']['services'][0]['addr'] = [
             'localhost', self.gateway_mx_port]
         gateway_yaml['smtp_listener']['services'][1]['addr'] = [
@@ -123,8 +118,9 @@ class End2EndTest(unittest.TestCase):
         router_yaml = self.router_config.root_yaml
         router_listener_yaml= router_yaml['rest_listener']
         router_listener_yaml['addr'] = ['localhost', self.router_rest_port]
-        del router_listener_yaml['cert']
-        del router_listener_yaml['key']
+        for k in ['cert', 'key']:
+            if k in router_listener_yaml:
+                del router_listener_yaml[k]
         self.pg, self.pg_url = postgres_test_utils.setup_postgres()
         router_yaml['storage']['url'] = self.pg_url
 
@@ -199,7 +195,7 @@ class End2EndTest(unittest.TestCase):
             if handler.ehlo is None:
                 logging.debug('empty handler? %s', handler)
                 continue
-            self.assertEqual(handler.ehlo, 'frylock')
+            self.assertEqual(handler.ehlo, 'localhost')
             self.assertEqual(handler.mail_from, 'alice@example.com')
             self.assertEqual(len(handler.mail_options), 1)
             self.assertTrue(handler.mail_options[0].startswith('SIZE='))
@@ -256,7 +252,9 @@ class End2EndTest(unittest.TestCase):
     # submission rest w/mime -> smtp
     # w/payload reuse
     def test_submission_mime(self):
-        sender = Sender('alice@example.com', base_url=self.router_base_url,
+        sender = Sender(self.router_base_url,
+                        'msa-output',
+                        'alice@example.com',
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
         sender.send('bob2@example.com')
@@ -303,8 +301,10 @@ class End2EndTest(unittest.TestCase):
            }]
         }
 
-        sender = Sender('alice@example.com', message_builder_spec,
-                        base_url=self.router_base_url)
+        sender = Sender(self.router_base_url,
+                        'msa-output',
+                        'alice@example.com',
+                        message_builder=message_builder_spec)
         sender.send('bob@example.com')
         sender.send('bob2@example.com')
 
@@ -338,6 +338,6 @@ class End2EndTest(unittest.TestCase):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] %(message)s')
+                        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
 
     unittest.main()

@@ -54,14 +54,14 @@ endpoint:
       - example.com
       - rest-application.example.com
       destination:
-        endpoint: https://localhost:8000
+        endpoint: http://localhost:8000
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: https://localhost:8001
+        endpoint: http://localhost:8001
         http_host: outbound
   - filter: router
     policy:
@@ -118,7 +118,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: https://localhost:8001
+        endpoint: http://localhost:8001
         http_host: outbound
         host_list:
           - host: 'fake_smtpd'

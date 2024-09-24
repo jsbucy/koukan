@@ -16,6 +16,8 @@ from contextlib import nullcontext
 
 class Sender:
     base_url : str
+    host : str
+    notification_host : str
     mail_from : str
 
     message_builder : dict
@@ -24,10 +26,17 @@ class Sender:
     body_filename : Optional[str] = None
     body_path : Optional[str] = None
 
-    def __init__(self, mail_from : str,
+    def __init__(self,
+                 base_url : str,
+                 # in the default configs, this is a post-exploder
+                 # chain that doesn't have default_notification...
+                 host : str,
+                 mail_from : str,
                  message_builder : Optional[dict] = None,
                  body_filename : Optional[str] = None,
-                 base_url = 'https://localhost:8000'):
+                 # ... so if you want notifications, you need to
+                 # enable it explicitly
+                 notification_host : Optional[str] = None):
         self.session = requests.Session()
         self.session.verify = 'localhost.crt'
         self.mail_from = mail_from
@@ -36,6 +45,8 @@ class Sender:
         if self.message_builder:
             self.fixup_headers()
         self.base_url = base_url
+        self.host = host
+        self.notification_host = notification_host
 
     # -> url path (for reuse)
     def send_part(self,
@@ -109,10 +120,9 @@ class Sender:
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
             'retry': {},         # use system defaults for retries
-            # msa-output won't have default_notification so explicitly
-            # request to send it the same way we send the original message.
-            'notification': {'host': 'msa-output' }
         }
+        if self.notification_host:
+            tx_json['notification'] = {'host': self.notification_host }
         if self.body_path is not None:
             tx_json['body'] = self.body_path
         elif self.body_filename is not None:
@@ -131,7 +141,7 @@ class Sender:
         start = time.monotonic()
         rest_resp = self.session.post(
             urljoin(self.base_url, '/transactions'),
-            headers={'host': 'msa-output',
+            headers={'host': self.host,
                      'request-timeout': '5'},
             json=tx_json)
         logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
@@ -186,7 +196,7 @@ class Sender:
                 if etag:
                     headers['if-none-match'] = etag
                 rest_resp = self.session.get(tx_url, headers=headers)
-                logging.info('GET /%s %d %s',
+                logging.info('GET %s %d %s',
                              tx_url, rest_resp.status_code, rest_resp.text)
                 if rest_resp.status_code in [200, 304] and (
                         'etag' in rest_resp.headers):
@@ -260,6 +270,9 @@ if __name__ == '__main__':
     parser.add_argument('--mail_from')
     parser.add_argument('--rfc822_filename')
     parser.add_argument('--message_builder_filename')
+    parser.add_argument('--base_url', default='http://localhost:8000')
+    parser.add_argument('--host', default='msa-output')
+    parser.add_argument('--notification_host', default='msa-output')
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -273,8 +286,11 @@ if __name__ == '__main__':
 
     logging.debug(args.rcpt_to)
 
-    sender = Sender(args.mail_from,
+    sender = Sender(args.base_url,
+                    args.host,
+                    args.mail_from,
                     message_builder=message_builder,
-                    body_filename=args.rfc822_filename)
+                    body_filename=args.rfc822_filename,
+                    notification_host=args.notification_host)
     for rcpt in args.rcpt_to:
         sender.send(rcpt)
