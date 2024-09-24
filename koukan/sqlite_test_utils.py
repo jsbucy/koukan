@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Tuple
 from tempfile import TemporaryDirectory
 import sqlite3

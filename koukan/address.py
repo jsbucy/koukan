@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from email import _header_value_parser
 
 

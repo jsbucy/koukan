@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Callable, List, Optional
 import logging
 from threading import Thread

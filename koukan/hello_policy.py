@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 import logging
 
 from koukan.recipient_router_filter import Destination, RoutingPolicy

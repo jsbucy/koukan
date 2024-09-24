@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from enum import IntEnum
 from typing import Dict
 from koukan.rest_schema import BlobUri

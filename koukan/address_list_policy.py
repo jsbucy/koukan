@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Any, List, Optional, Tuple
 
 from email import _header_value_parser

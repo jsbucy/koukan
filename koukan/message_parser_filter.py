@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Optional
 from tempfile import TemporaryFile
 from io import IOBase

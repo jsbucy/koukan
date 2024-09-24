@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 # reference https://datatracker.ietf.org/doc/html/rfc3464
 from typing import Optional
 
