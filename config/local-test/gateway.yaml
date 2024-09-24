@@ -19,6 +19,7 @@ smtp_listener:
       endpoint: mx
     - addr: [localhost, 1587]
       endpoint: msa
+      # auth_secrets: secrets.json
 
 rest_output:
   - name: mx

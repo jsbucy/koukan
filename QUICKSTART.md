@@ -86,7 +86,7 @@ should print out on the `fake_smtpd` console
 
 # Public Internet
 
-You will need a few things:
+## Prerequisites
 
 - a domain name you control  
 - a VM that can connect to destination SMTP servers on port 25  
@@ -100,7 +100,41 @@ letsencrypt is fine
 create with `dknewkey` from [dkimpy](https://pypi.org/project/dkimpy/) and publish the public key in dns  
 edit router.yaml to point to the .key file
 
+## SMTP Authentication
+
+In the default config, gateway smtp listener port 1025 routes to
+router inbound-gw endpoint and port 1587 routes to outbound-gw. The
+`inbound-gw` chain only accepts mail for addresses that match the
+configured address_list routing policies. The `outbound-gw` chain routes
+any address to the dns name/mx record in the rhs of the destination
+address. Without access control, this will be an open relay!
+
+At the moment, we support minimal smtp auth with a local set of
+users. Enable `auth_secrets` on the gateway `smtp_listener` and create 
+`secrets.json` which is a dict 
+from username to secret-hash
+```
+{"my-application": "9d66f38b02c08c8d8ed496032107f02370f3513957bf129325eefa9b3fdfe02e"}
+```
+
+run `python koukan/smtp_auth.py` which emits `<secret> <secret hash>`,
+configure the secret in the application and the hash in
+`secrets.json`. Enable `relay_auth` filter for the `outbound-gw`
+endpoint/chain in the router. Note that this secret storage is only
+suitable for high-entropy secrets and NOT user-provided passwords,
+please DO NOT reuse a password here!
+
+The gateway will save a single bool `auth` in the `smtp_meta` field of
+the rest transaction sent to the router if the client successfully
+authenticated. `relay_auth_filter` keys off of this.
+
+
+## Configuration
+
+The timeouts in the default config are artificially low for testing.
+
+
 Arrange for the gateway to be able to bind privileged ports (\<1024).
-On Linux, I’ve been using capsh to do this, example in
+On Linux, I’ve been using `capsh` to do this, example in
 `config/local-test/run_gateway.sh`
 

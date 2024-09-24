@@ -19,6 +19,8 @@ endpoint:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
   chain:
+  #- filter: relay_auth
+  #  smtp_auth: true
   - filter: exploder
     output_chain: msa-output
     msa: true
