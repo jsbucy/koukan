@@ -5,11 +5,11 @@
 Koukan is a email Message Transfer Agent (MTA [wikipedia](https://en.wikipedia.org/wiki/Message_transfer_agent)) with an integrated HTTP/JSON REST api.
 
 Key features include  
-\- integrated message-format handling  
+- integrated message-format handling  
 rest clients can interact via JSON and Koukan handles the rfc822/MIME  
-\- extensible via plugin api  
-\- queue storage compatible with autoscaling/k8s  
-\- opportunistic cut-through delivery  
+- extensible via plugin api  
+- queue storage compatible with autoscaling/k8s  
+- opportunistic cut-through delivery:
 report many message send errors \~synchronously instead of receiving a bounce after-the-fact
 
 ## Why did you call it Koukan?
@@ -24,13 +24,15 @@ If you are sending mail within your own organization/site, SaaS may make less se
 
 ## Am I the target audience for Koukan?
 
-Yes  
-You have have run an MTA before and have some experience with http/rest apis and are willing to get your hands dirty with Python.
+### Yes  
+- You have have run an MTA before
+- have some experience with http/rest apis
+- are willing to get your hands dirty with Python.
 
-No  
-You want to deliver mail to many local users on a timesharing system  
-You need extreme performance/scalability  
-You need robust integrated spam/phishing/antivirus out of the box
+### No  
+- You want to deliver mail to many local users on a timesharing system  
+- You need extreme performance/scalability  
+- You need robust integrated spam/phishing/antivirus out of the box
 
 ## Should I use Koukan in a high-integrity application?
 
@@ -47,18 +49,18 @@ Koukan does not deliver messages by spawning other programs or writing to files 
 ## How does Koukan work?
 
 There are 2 main components:  
-smtp gateway  
-proxies smtp \<-\> HTTP/JSON REST  
-stateless, minimal business logic  
-router  
-only speaks http/rest
+### SMTP gateway  
+- proxies smtp ↔ HTTP/JSON REST  
+- stateless, minimal business logic  
+### Router  
+- only speaks http/rest
 
 The router has 2 basic flows  
-input: rest → storage  
+### Input: rest → storage  
 fastapi routes invoke RestHandler  
 RestHandler writes to StorageWriterFilter  
 StorageWriterFilter writes to durable storage  
-output: storage → rest  
+### Output: storage → rest  
 OutputHandler reads from durable storage  
 OutputHandler writes to the output filter chain  
 the last of these is RestEndpoint which sends via http
@@ -76,14 +78,14 @@ All data between the input and output sides flows through the Storage module. Th
 
 ## Why did you use Python?
 
-1: Python has a number of high-quality implementations of core email standards, in particular the rfc822/MIME codec, SMTP and domainkeys that saved a ton of time not to write from scratch.  
-2: This is a prototype  
-3: It remains to be seen if the (perceived) performance limitations of Python will be a factor in practice for use cases that are a good fit for this. It is possible by being smart about memory and forking and with the possibility of auto-scaling on k8s that the current Python implementation can be “scalable enough” for many use cases.
+1. Python has a number of high-quality implementations of core email standards, in particular the rfc822/MIME codec, SMTP and domainkeys that saved a ton of time not to write from scratch.  
+2. This is a prototype  
+3. It remains to be seen if the (perceived) performance limitations of Python will be a factor in practice for use cases that are a good fit for this. It is possible by being smart about memory and forking and with the possibility of auto-scaling on k8s that the current Python implementation can be “scalable enough” for many use cases.
 
 ## Why don’t you use \<my favorite framework/middleware/...\>?
 
-1: I have tried to limit myself to things that I’m familiar with and am confident are a good fit for this.  
-2: I have tried to keep the dependency footprint small. I think we have all had the experience of failing to get some software working that depends on the head-of-tree version of 10 different packages.
+1. I have tried to limit myself to things that I’m familiar with and am confident are a good fit for this.  
+2. I have tried to keep the dependency footprint small. I think we have all had the experience of failing to get some software working that depends on the head-of-tree version of 10 different packages.
 
 ## Koukan supports both Flask and FastAPI?
 
