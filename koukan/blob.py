@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from abc import ABC, abstractmethod
 import os
 from io import IOBase
+import os
 
 class Blob(ABC):
     @abstractmethod
@@ -216,3 +217,32 @@ class CompositeBlob(Blob):
         return self.len()
 
 
+class BlobReader(IOBase):
+    blob : Blob
+    offset : int =  0
+
+    def __init__(self, blob : Blob):
+        self.blob = blob
+
+    def read(len : Optional[int] = None):
+        rv = self.blob.pread(self.offset, len)
+        if rv > 0:
+            self.offset += rv
+        return rv
+
+    def tell(self):
+        return self.offset
+
+    def seek(self, offset : int, whence=os.SEEK_SET):
+        if whence == os.SEEK_SET:
+            rel = 0
+        elif whence == os.SEEK_CUR:
+            rel = self.offset
+        elif whence == os.SEEK_END:
+            rel = self.blob.len()
+        else:
+            raise ValueError()
+        if rel + offset < 0 or rel + offset > self.blob.len():
+            raise ValueError()
+        self.offset = rel + offset
+        return self.offset

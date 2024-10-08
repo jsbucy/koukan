@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import unittest
 import logging
+import os
 
-from koukan.blob import InlineBlob, CompositeBlob
+from koukan.blob import BlobReader, InlineBlob, CompositeBlob
 
 
 class BlobTest(unittest.TestCase):
@@ -33,6 +34,14 @@ class BlobTest(unittest.TestCase):
         self.assertEqual(b.pread(1,2), b'bc')
         self.assertEqual(b.pread(1,4), b'bcde')
         self.assertEqual(b.pread(1,6), b'bcdefg')
+
+    def test_reader(self):
+        b = InlineBlob(b'xyz')
+        r = BlobReader(b)
+        self.assertEqual(0, r.seek(0, os.SEEK_SET))
+        self.assertEqual(0, r.seek(0, os.SEEK_CUR))
+        self.assertEqual(3, r.seek(0, os.SEEK_END))
+
 
 if __name__ == '__main__':
     unittest.main()
