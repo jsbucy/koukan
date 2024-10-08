@@ -75,7 +75,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         body = b'hello, world!'
 
         def exp_body(tx, tx_delta):
-            self.assertEqual(tx.body_blob.read(0), body)
+            self.assertEqual(tx.body_blob.pread(0), body)
             upstream_delta=TransactionMetadata(
                 data_response = [Response(203)])
             self.assertIsNotNone(tx.merge_from(upstream_delta))

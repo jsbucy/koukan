@@ -418,7 +418,7 @@ class RestEndpoint(SyncFilter):
     def _put_blob(self, blob, non_body_blob=False) -> Response:
         offset = 0
         while offset < blob.len():
-            chunk = blob.read(offset, self.chunk_size)
+            chunk = blob.pread(offset, self.chunk_size)
             chunk_last = (offset + len(chunk) >= blob.len())
             logging.debug('RestEndpoint._put_blob() '
                           'chunk_offset %d chunk len %d '

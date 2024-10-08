@@ -821,7 +821,7 @@ class BlobCursor(Blob, WritableBlob):
         return True, self.length, self._content_length
 
 
-    def read(self, offset, length=None) -> Optional[bytes]:
+    def pread(self, offset, length=None) -> Optional[bytes]:
         # TODO this should maybe have the same effect as load() if the
         # blob isn't finalized?
         l = length if length else self.length - offset

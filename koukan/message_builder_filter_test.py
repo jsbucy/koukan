@@ -57,7 +57,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         def exp(tx, delta):
             self.assertTrue(delta.body_blob.finalized())
             self.assertNotEqual(
-                delta.body_blob.read(0).find(b'MIME-Version'), -1)
+                delta.body_blob.pread(0).find(b'MIME-Version'), -1)
             self.assertIsNone(tx.message_builder)
             self.assertIsNone(delta.message_builder)
             upstream_delta = TransactionMetadata(

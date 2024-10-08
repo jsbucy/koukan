@@ -155,7 +155,7 @@ class StorageWriterFilter(AsyncFilter):
         off = 0
         while True:
             CHUNK_SIZE = 1048576
-            d = body_blob.read(0, CHUNK_SIZE)
+            d = body_blob.pread(0, CHUNK_SIZE)
             last = len(d) < CHUNK_SIZE
             content_length = off + len(d) if last else None
             logging.debug('_maybe_write_body_blob %s %d %s',

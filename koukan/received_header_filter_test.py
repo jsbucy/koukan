@@ -82,9 +82,9 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         tx.body_blob = tx_delta.body_blob = InlineBlob(body, len(body))
         def exp(tx, tx_delta):
-            logging.debug(tx_delta.body_blob.read(0).decode('us-ascii'))
+            logging.debug(tx_delta.body_blob.pread(0).decode('us-ascii'))
             self.assertEqual(
-                tx_delta.body_blob.read(0),
+                tx_delta.body_blob.pread(0),
                 b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
                 b'\tby gargantua1\r\n'
                 b'\twith ESMTPS\r\n'
@@ -132,7 +132,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             self.assertEqual(
-                tx.body_blob.read(0),
+                tx.body_blob.pread(0),
                 b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
                 b'\tby gargantua1\r\n'
                 b'\twith UTF8SMTPS;\r\n'

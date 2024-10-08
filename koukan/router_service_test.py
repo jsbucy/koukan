@@ -382,7 +382,7 @@ class RouterServiceTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_body(tx, tx_delta):
-            self.assertEqual(tx.body_blob.read(0), body_utf8)
+            self.assertEqual(tx.body_blob.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
@@ -413,7 +413,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
             data_response = Response(203))
-            self.assertEqual(tx.body_blob.read(0), body_utf8)
+            self.assertEqual(tx.body_blob.pread(0), body_utf8)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         upstream_endpoint.add_expectation(exp2)
@@ -495,7 +495,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.rcpt_response[1].message, 'upstream rcpt 2')
 
         def exp_body(i, tx, tx_delta):
-            self.assertEqual(tx.body_blob.read(0),
+            self.assertEqual(tx.body_blob.pread(0),
                              b'Hello, World!')
             updated_tx = tx.copy()
             updated_tx.data_response = Response(205 + i, 'upstream data %d' % i)
@@ -581,7 +581,7 @@ class RouterServiceTest(unittest.TestCase):
                 def exp_dsn(tx, tx_delta):
                     self.assertEqual(tx.mail_from.mailbox, '')
                     self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice@example.com'])
-                    dsn = tx.body_blob.read(0)
+                    dsn = tx.body_blob.pread(0)
                     logging.debug('test_notification %s', dsn)
                     self.assertIn(b'subject: Delivery Status Notification', dsn)
 
@@ -657,7 +657,7 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
 
         def exp_dsn_body(tx, tx_delta):
-            dsn = tx.body_blob.read(0)
+            dsn = tx.body_blob.pread(0)
             logging.debug('test_notification %s', dsn)
             self.assertIn(b'subject: Delivery Status Notification', dsn)
 
@@ -737,7 +737,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body(tx, tx_delta):
             logging.debug('test_message_builder.exp_body %s', tx)
-            body = tx.body_blob.read(0)
+            body = tx.body_blob.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
             #self.assertIn(b, body)  # base64
@@ -775,7 +775,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp2_body(tx, tx_delta):
             logging.debug('test_message_builder.exp2_body %s', tx)
-            body = tx.body_blob.read(0)
+            body = tx.body_blob.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
 
@@ -824,9 +824,9 @@ class RouterServiceTest(unittest.TestCase):
                 # leave the line endings alone
                 logging.debug('test_receive_parsing exp parsed_blobs %s',
                               tx_delta.parsed_blobs)
-                self.assertEqual(tx_delta.parsed_blobs[0].read(0),
+                self.assertEqual(tx_delta.parsed_blobs[0].pread(0),
                                  b'yolocat')
-                self.assertEqual(tx_delta.parsed_blobs[1].read(0),
+                self.assertEqual(tx_delta.parsed_blobs[1].pread(0),
                                  b'yolocat2')
                 self.assertIsNotNone(tx_delta.parsed_json)
                 self.assertIsNotNone(tx_delta.parsed_blobs)

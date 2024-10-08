@@ -29,7 +29,7 @@ class MessageParserFilterTest(unittest.TestCase):
             exp_blobs = [b'yolocat', b'yolocat2']
             self.assertEqual(len(exp_blobs), len(tx.parsed_blobs))
             for i in range(0, len(exp_blobs)):
-                self.assertEqual(tx.parsed_blobs[i].read(0), exp_blobs[i])
+                self.assertEqual(tx.parsed_blobs[i].pread(0), exp_blobs[i])
 
             self.assertEqual(
                 tx.parsed_json['parts']['content_type'],

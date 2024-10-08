@@ -192,7 +192,7 @@ class SmtpEndpoint(SyncFilter):
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
                 upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(tx_delta.body_blob.read(0)))
+                    self.smtp.data(tx_delta.body_blob.pread(0)))
             logging.info('SmtpEndpoint %s data_resp %s',
                          tx.rest_id, upstream_delta.data_response)
 

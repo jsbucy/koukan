@@ -522,7 +522,7 @@ class ExploderTest(unittest.TestCase):
         logging.debug(tx.data_response.message)
         self.assertEqual(tx.data_response.code, 250)
         for endpoint in self.upstream_endpoints:
-            self.assertEqual(endpoint.body_blob.read(0), b'hello, world!')
+            self.assertEqual(endpoint.body_blob.pread(0), b'hello, world!')
 
         # don't expect an additional update to enable retry/notification
 

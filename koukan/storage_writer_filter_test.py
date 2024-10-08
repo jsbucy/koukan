@@ -342,7 +342,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_reader = self.storage.get_blob_for_read(
             BlobUri(tx_id='reuse', tx_body=True))
         self.assertIsNotNone(blob_reader)
-        self.assertEqual(blob_reader.read(0), b.encode('utf-8'))
+        self.assertEqual(blob_reader.pread(0), b.encode('utf-8'))
 
     def test_create_leased(self):
         filter = StorageWriterFilter(

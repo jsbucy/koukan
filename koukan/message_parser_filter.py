@@ -44,7 +44,7 @@ class MessageParserFilter(SyncFilter):
             parse_options = tx.options.get('receive_parsing', {})
             parse_options = parse_options if parse_options else {}
             file = TemporaryFile('w+b')
-            file.write(tx.body_blob.read(0))
+            file.write(tx.body_blob.pread(0))
             file.flush()
             file.seek(0)
             parser = MessageParser(

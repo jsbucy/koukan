@@ -120,11 +120,11 @@ class StorageTestBase(unittest.TestCase):
 
         blob_reader = self.s.get_blob_for_read(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-        b = blob_reader.read(0, 3)
+        b = blob_reader.pread(0, 3)
         self.assertEqual(b'abc', b)
-        b = blob_reader.read(3)
+        b = blob_reader.pread(3)
         self.assertEqual(b'xyzuvw', b)
-        b = blob_reader.read(4, 3)
+        b = blob_reader.pread(4, 3)
         self.assertEqual(b'yzu', b)
 
         upstream = self.s.load_one()
@@ -168,7 +168,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(len(d), d, len(d)*2)
         blob_reader = BlobCursor(self.s)
         blob_reader.load(blob_id=blob_writer.id)
-        self.assertEqual(blob_reader.read(0), d+d)
+        self.assertEqual(blob_reader.pread(0), d+d)
 
     def test_body_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -448,7 +448,7 @@ class StorageTestBase(unittest.TestCase):
                reader.len() < reader.content_length()):
             logging.info('reader %d', len(d))
             reader.load()
-            d += reader.read(len(d))
+            d += reader.pread(len(d))
         dd[0] = d
 
     def test_blob_waiting_poll(self):

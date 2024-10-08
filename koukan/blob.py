@@ -17,7 +17,7 @@ class Blob(ABC):
         return None
 
     @abstractmethod
-    def read(self, offset, len=None) -> Optional[bytes]:
+    def pread(self, offset, len=None) -> Optional[bytes]:
         # pytype doesn't flag len() (above) but does flag this?!
         raise NotImplementedError()
 
@@ -61,7 +61,7 @@ class InlineBlob(Blob, WritableBlob):
     def rest_id(self):
         return self._rest_id
 
-    def read(self, offset, len=None):
+    def pread(self, offset, len=None):
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
@@ -111,7 +111,7 @@ class FileLikeBlob(Blob, WritableBlob):
     def rest_id(self):
         return self._rest_id
 
-    def read(self, offset, len=None) -> bytes:
+    def pread(self, offset, len=None) -> bytes:
         self.f.seek(offset)
         return self.f.read(len)
 
@@ -157,14 +157,14 @@ class Chunk:
         self.blob_offset = blob_offset
         self.length = length
 
-    def read(self, offset, length):
+    def pread(self, offset, length):
         offset -= self.offset
         offset += self.blob_offset
         if length is not None:
             length = min(length, self.length - offset + self.blob_offset)
         else:
             length = self.length
-        return self.blob.read(offset, length)
+        return self.blob.pread(offset, length)
 
 class CompositeBlob(Blob):
     chunks : List[Chunk]
@@ -187,7 +187,7 @@ class CompositeBlob(Blob):
         # TODO for bonus points, if isinstance(blob, CompositeBlob)
         # copy the chunks directly
 
-    def read(self, offset, length=None) -> bytes:
+    def pread(self, offset, length=None) -> bytes:
         out = bytes()
         for chunk in self.chunks:
             if offset > (chunk.offset + chunk.length):
@@ -195,7 +195,7 @@ class CompositeBlob(Blob):
             if length is not None and ((offset + length) < chunk.offset):
                 break
 
-            d = chunk.read(offset, length)
+            d = chunk.pread(offset, length)
             out += d
             offset += len(d)
             if length:
