@@ -318,7 +318,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
-        body = 'hello, world!'
+        body = b'hello, world!'
         tx = TransactionMetadata(
             #retry={},
             mail_from=Mailbox('alice@example.com'),
@@ -728,9 +728,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
         b = b"hello, world!"
-        blob = InlineBlob(b)
-        blob_path = rest_endpoint.transaction_path + '/blob/' + 'my_plain_body'
-        rest_endpoint.blob_url = rest_endpoint.transaction_url + '/blob/' + 'my_plain_body'
+        blob = InlineBlob(b, len(b), 'my_plain_body')
         blob_resp = rest_endpoint._put_blob(blob, non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
 
@@ -749,7 +747,7 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_body)
 
-        message_builder_spec['text_body'][0]['content_uri'] = blob_path
+        message_builder_spec['text_body'][0]['content_uri'] = rest_endpoint.blob_path
 
         # send another tx with the same spec to exercise blob reuse
         logging.info('RouterServiceTest.test_message_builder start tx #2')

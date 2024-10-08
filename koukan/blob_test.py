@@ -38,10 +38,12 @@ class BlobTest(unittest.TestCase):
     def test_reader(self):
         b = InlineBlob(b'xyz')
         r = BlobReader(b)
-        self.assertEqual(0, r.seek(0, os.SEEK_SET))
         self.assertEqual(0, r.seek(0, os.SEEK_CUR))
         self.assertEqual(3, r.seek(0, os.SEEK_END))
-
+        self.assertEqual(0, r.seek(0, os.SEEK_SET))
+        self.assertEqual(b'x', r.read(1))
+        self.assertEqual(b'yz', r.read())
+        self.assertEqual(b'', r.read())
 
 if __name__ == '__main__':
     unittest.main()

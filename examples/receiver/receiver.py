@@ -18,9 +18,6 @@ from flask import (
     make_response,
     request )
 
-from werkzeug.datastructures import ContentRange
-import werkzeug.http
-
 import secrets
 import copy
 
@@ -113,33 +110,23 @@ class Transaction:
         #logging.debug(file.read())
         return blob_id
 
-    def _put_blob(self, range : ContentRange, stream,
-                  file
-                  ) -> Tuple[int, ContentRange]:
-        if range.start != file.tell():
-            return 412, ContentRange('bytes', 0, file.tell())
+    def _put_blob(self, stream, file) -> int:
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
-        if file.tell() == range.length:
-            file.seek(0)
-            logging.debug(file.read())
-        return 200, ContentRange('bytes', 0, file.tell(), range.length)
+        file.seek(0)
+        logging.debug(file.read())
+        return 200
 
-    def put_tx_body(self, range : ContentRange, stream
-                    ) -> Tuple[int, ContentRange]:
-        logging.debug('put_tx_body %s', range)
-        resp = self._put_blob(range, stream, self.file)
-        if range.length is not None and self.file.tell() == range.length:
-            self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-            self.log()
+    def put_tx_body(self, stream) -> int:
+        logging.debug('put_tx_body')
+        resp = self._put_blob(stream, self.file)
+        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+        self.log()
         return resp
 
-    def put_blob(self, blob_id, range : ContentRange, stream
-                    ) -> Tuple[int, ContentRange]:
-        logging.debug('put_blob %s %s', blob_id, range)
-        #parsed_blob_id = self._parse_blob_id(blob_id)
-        #assert parsed_blob_id < len(self.blobs)
-        return self._put_blob(range, stream, self.blobs[blob_id])
+    def put_blob(self, blob_id, stream) -> int:
+        logging.debug('put_blob %s', blob_id)
+        return self._put_blob(stream, self.blobs[blob_id])
 
     def log(self):
         logging.debug('received tx %s', self.tx_json)
@@ -187,20 +174,13 @@ class Receiver:
         return self.transactions[tx_rest_id].create_tx_body(
             upload_chunked, tx_body, blob_id, stream)
 
-    def put_tx_body(self, tx_rest_id: str, range : ContentRange, stream):
-        status, range = self.transactions[tx_rest_id].put_tx_body(range, stream)
-        response = FlaskResponse(status=status)
-        response.headers.set('content-range', range)
-        return response
+    def put_tx_body(self, tx_rest_id: str, stream):
+        status = self.transactions[tx_rest_id].put_tx_body(stream)
+        return FlaskResponse(status=status)
 
-    def put_blob(self, tx_rest_id: str, blob_id : str,
-                 range : ContentRange, stream):
-        status, range = self.transactions[tx_rest_id].put_blob(
-            blob_id, range, stream)
-        response = FlaskResponse(status=status)
-        response.headers.set('content-range', range)
-        return response
-
+    def put_blob(self, tx_rest_id: str, blob_id : str, stream):
+        status = self.transactions[tx_rest_id].put_blob(blob_id, stream)
+        return FlaskResponse(status=status)
 
     def cancel_tx(self, tx_rest_id : str):
         return self.transactions[tx_rest_id].cancel()
@@ -243,19 +223,11 @@ def create_app(receiver = None):
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
     def put_tx_body(tx_rest_id) -> FlaskResponse:
-        range = werkzeug.http.parse_content_range_header(
-            request.headers.get('content-range'))
-        return receiver.put_tx_body(tx_rest_id, range, request.stream)
+        return receiver.put_tx_body(tx_rest_id, request.stream)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:
-        range = werkzeug.http.parse_content_range_header(
-            request.headers.get('content-range'))
-        if range is None:
-            content_length = int(request.headers.get('content-length'))
-            range = ContentRange('bytes', 0, content_length, content_length)
-        return receiver.put_blob(tx_rest_id, blob_id, range, request.stream)
-
+        return receiver.put_blob(tx_rest_id, blob_id, request.stream)
 
     @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
     def cancel_tx(tx_rest_id) -> FlaskResponse:

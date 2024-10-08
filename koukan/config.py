@@ -146,6 +146,7 @@ class Config:
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)
         assert next is None
+        chunk_size = yaml.get('chunk_size', None)
         static_remote_host_yaml = yaml.get('static_remote_host', None)
         static_remote_host = (HostPort.from_yaml(static_remote_host_yaml)
                               if static_remote_host_yaml else None)
@@ -157,7 +158,8 @@ class Config:
             static_http_host = yaml.get('http_host', None),
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
-            verify=yaml.get('verify', True))
+            verify=yaml.get('verify', True),
+            chunk_size=chunk_size)
 
     def router_policy_dest_domain(self, policy_yaml):
         return DestDomainPolicy(self._route_destination(policy_yaml),

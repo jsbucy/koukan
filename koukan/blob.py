@@ -224,10 +224,10 @@ class BlobReader(IOBase):
     def __init__(self, blob : Blob):
         self.blob = blob
 
-    def read(len : Optional[int] = None):
-        rv = self.blob.pread(self.offset, len)
-        if rv > 0:
-            self.offset += rv
+    def read(self, req_len : Optional[int] = None):
+        rv = self.blob.pread(self.offset, req_len)
+        if rv:
+            self.offset += len(rv)
         return rv
 
     def tell(self):

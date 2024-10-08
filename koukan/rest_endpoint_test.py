@@ -83,8 +83,9 @@ class RestEndpointTest(unittest.TestCase):
         super().__init__(name)
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s %(filename)s:%(lineno)d %(message)s')
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -422,6 +423,42 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.content_range.start, 10)
         self.assertEqual(req.content_range.stop, 13)
         self.assertEqual(req.content_range.length, 13)
+
+
+
+    def testPutBlobSingle(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            location='/transactions/123',
+            resp_json={
+                'mail_from': {},
+                'mail_response': {'code': 201},
+                'rcpt_to': [{}],
+                'rcpt_response': [{'code': 202}],
+            }))
+
+        # POST /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '201 created'))
+
+        b = b'hello, world!'
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')],
+                                 body_blob=InlineBlob(b))
+        rest_endpoint.on_update(tx, tx.copy())
+
+        # POST /transactions
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions')
+
+        # POST /transactions/123/body
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertIsNone(req.content_range)
+        self.assertEqual(req.body, b)
 
 
     # TODO maybe drop this test, entering _put_blob_chunk() in the middle

@@ -7,7 +7,7 @@ import time
 import json.decoder
 from urllib.parse import urljoin, urlparse
 
-from httpx import Client, RequestError, Response as HttpResponse
+from httpx import Client, Request, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
@@ -19,7 +19,7 @@ from koukan.filter import (
     TransactionMetadata,
     WhichJson )
 from koukan.response import Response, Esmtp
-from koukan.blob import Blob
+from koukan.blob import Blob, BlobReader
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -74,7 +74,7 @@ class RestEndpoint(SyncFilter):
                  timeout_data=TIMEOUT_DATA,
                  min_poll=1,
                  max_inline=1024,
-                 chunk_size=1048576,
+                 chunk_size : Optional[int] = None,
                  verify=True):
         self.base_url = static_base_url
         self.static_http_host = static_http_host
@@ -415,7 +415,43 @@ class RestEndpoint(SyncFilter):
         assert upstream_delta.merge_from(errs) is not None
         return upstream_delta
 
-    def _put_blob(self, blob, non_body_blob=False) -> Response:
+    # Send a finalized blob with a single http request.
+    def _put_blob_single(self, blob : Blob,
+                         body : bool,
+                         blob_rest_id : Optional[str] = None
+                         ) -> Response:
+        assert blob.finalized()
+        assert not(body and blob_rest_id)
+        assert body or blob_rest_id
+        method, exp_code = ('PUT', 200) if blob_rest_id else ('POST', 201)
+        if blob_rest_id is not None:
+            self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
+        elif body:
+            self.blob_path = self.transaction_path + '/body'
+        self.blob_url = self._maybe_qualify_url(self.blob_path)
+        logging.debug('_put_blob_single %d %s',
+                      blob.content_length(), self.blob_url)
+        headers = {}
+        if self.http_host:
+            headers['host'] = self.http_host
+
+        req = Request(method, self.blob_url, headers=headers,
+                      content = BlobReader(blob))
+        rest_resp = None
+        try:
+            rest_resp = self.client.send(req)
+        except RequestError as e:
+            logging.info('RestEndpoint._put_blob_single RequestError %s', e)
+        if rest_resp is None or rest_resp.status_code != exp_code:
+            return Response(450, 'RestEndpoint blob upload error')
+        logging.info('RestEndpoint._put_blob_single %s', rest_resp)
+        return Response()
+
+    def _put_blob(self, blob : Blob, non_body_blob=False) -> Response:
+        if self.chunk_size is None and blob.finalized():
+            return self._put_blob_single(
+                blob, not non_body_blob, blob.rest_id())
+
         offset = 0
         while offset < blob.len():
             chunk = blob.pread(offset, self.chunk_size)
@@ -470,13 +506,15 @@ class RestEndpoint(SyncFilter):
                     entity = None
 
                 logging.info('RestEndpoint._put_blob_chunk POST %s', endpoint)
-                method, exp_code = (self.client.put, 200) if non_body_blob else (self.client.post, 201)
+                if non_body_blob:
+                    method, exp_code = (self.client.put, 200)
+                else:
+                    method, exp_code = (self.client.post, 201)
                 rest_resp = method(
                     urljoin(self.base_url, endpoint), headers=headers,
                     content=entity, timeout=self.timeout_data)
                 logging.info('RestEndpoint._put_blob_chunk POST %s %s %s',
-                             endpoint,
-                             rest_resp, rest_resp.headers)
+                             endpoint, rest_resp, rest_resp.headers)
                 if rest_resp.status_code != exp_code:
                     return None, None
                 if blob_rest_id is None and non_body_blob:
@@ -492,7 +530,8 @@ class RestEndpoint(SyncFilter):
                 logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
                              self.blob_url, range)
                 headers['content-range'] = range.to_header()
-                logging.info('RestEndpoint._put_blob_chunk PUT %s', self.blob_url)
+                logging.info('RestEndpoint._put_blob_chunk PUT %s',
+                             self.blob_url)
                 rest_resp = self.client.put(
                     self.blob_url, headers=headers, content=d,
                     timeout=self.timeout_data)

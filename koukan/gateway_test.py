@@ -104,7 +104,7 @@ class GatewayTest(unittest.TestCase):
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
-        tx_delta = TransactionMetadata(body_blob=InlineBlob('hello'))
+        tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
