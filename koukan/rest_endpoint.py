@@ -42,7 +42,7 @@ class RestEndpoint(SyncFilter):
     remote_host : Optional[HostPort] = None
     etag : Optional[str] = None
     max_inline : int
-    chunk_size : int
+    chunk_size : Optional[int]
 
     blob_path : Optional[str] = None
     blob_url : Optional[str] = None

@@ -8,8 +8,6 @@ import socketserver
 import time
 from functools import partial
 
-from requests.exceptions import ConnectionError
-
 import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
 from koukan.rest_endpoint import RestEndpoint
@@ -155,8 +153,10 @@ class RouterServiceTest(unittest.TestCase):
             self.cv.notify_all()
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s [%(thread)d] %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
@@ -350,8 +350,6 @@ class RouterServiceTest(unittest.TestCase):
         if 'attempt_count' in tx_json:
             del tx_json['attempt_count']
         self.assertEqual(tx_json, {
-            #'attempt_count': 1,
-            #'retry': {},
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {},
@@ -360,6 +358,71 @@ class RouterServiceTest(unittest.TestCase):
             'data_response': {'code': 203, 'message': 'ok'},
             'final_attempt_reason': 'upstream response success'
         })
+
+
+    def test_rest_body_chunked(self):
+        logging.debug('RouterServiceTest.test_rest_body_chunked')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = b'hello, world!'
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')])
+            #body_blob=InlineBlob(body))
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
+
+        def data():
+            yield b'hello, '
+            yield b'world!'
+
+        resp = rest_endpoint.client.post(
+            rest_endpoint._maybe_qualify_url(
+                rest_endpoint.transaction_path + '/body'),
+            content = data())
+        logging.debug(resp)
+
+        for i in range(0,3):
+            tx_json = rest_endpoint.get_json()
+            logging.debug('RouterServiceTest.test_rest_body create %s',
+                          tx_json)
+
+            if 'attempt_count' in tx_json:
+                del tx_json['attempt_count']
+            if tx_json == {
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'},
+                'final_attempt_reason': 'upstream response success'
+            }:
+                break
+            time.sleep(1)
+        else:
+            self.fail('expected tx')
 
 
     def test_reuse_body(self):

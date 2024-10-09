@@ -23,6 +23,7 @@ from koukan.executor import Executor
 from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response
 from koukan.executor import Executor
+from koukan.storage_schema import VersionConflictException
 
 class SyncFilterAdapterTest(unittest.TestCase):
     def setUp(self):
@@ -84,7 +85,15 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         delta = TransactionMetadata(body_blob=InlineBlob(body))
         tx.merge_from(delta)
-        sync_filter_adapter.update(tx, delta)
+        for i in range(0,3):
+            try:
+                sync_filter_adapter.update(tx, delta)
+                break
+            except VersionConflictException:
+                tx = sync_filter_adapter.get()
+        else:
+            self.fail('expected done')
+
         for i in range(0,3):
             sync_filter_adapter.wait(tx.version, 1)
             if sync_filter_adapter.done:
@@ -387,7 +396,12 @@ class RestHandlerTest(unittest.TestCase):
             self.assert_eq_content_range(resp.content_range,
                                          ContentRange('bytes', 0, 13, 13))
 
-
+    # TODO if we want to continue to support flask long-term, this is
+    # missing fine-grained coverage of POST/PUT with
+    # transfer-encoding: chunked and no content-length header in this
+    # test though it has some coverage from
+    # RouterServiceTest.test_rest_body_chunked. I couldn't figure out
+    # how to exercise that with the flask test framework.
 
 class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -397,7 +411,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         return [(k.encode('ascii'), v.encode('ascii')) for k,v in d]
 
     async def test_create_tx(self):
-        app = Flask(__name__)
         endpoint = MockAsyncFilter()
         tx = TransactionMetadata()
 
@@ -660,7 +673,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_blob_chunking(self):
         endpoint = MockAsyncFilter()
-        app = Flask(__name__)
 
         # content-range header is not accepted in non-chunked blob post
         handler = RestHandler(
@@ -767,10 +779,59 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             ContentRange('bytes', 0, 13, 13))
 
 
+    # transfer-encoding: chunked
+    # i.e. no content-length header
+    async def test_chunked_blob(self):
+        endpoint = MockAsyncFilter()
 
+        endpoint.body_blob = InlineBlob(b'')
+        handler = RestHandler(
+            async_filter=endpoint,
+            http_host='msa',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+        scope = {'type': 'http',
+                 'headers': []}
+        req = FastApiRequest(scope)
 
+        resp = await handler.create_blob_async(
+            req, tx_body=True, req_upload='chunked')
+        self.assertEqual(resp.status_code, 201)
+        self.assertNotIn('content-range', resp.headers)
+
+        handler = RestHandler(
+            async_filter=endpoint, blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+
+        b = b'hello, '
+        b2 = b'world!'
+
+        range = ContentRange('bytes', 0, len(b))
+        scope = {'type': 'http',
+                 'headers': self._headers([])}
+
+        chunks = [
+            {'type': 'http.request',
+             'body': b,
+             'more_body': True},
+            {'type': 'http.request',
+             'body': b2,
+             'more_body': False}]
+        async def input():
+            return chunks.pop(0)
+
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('content-range', resp.headers)
+
+        self.assertEqual(b+b2, endpoint.body_blob.d)
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
     unittest.main()
