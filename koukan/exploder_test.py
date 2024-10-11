@@ -565,7 +565,7 @@ class ExploderTest(unittest.TestCase):
         up0.expect_update(partial(exp_data, 202))
         up1.expect_update(partial(exp_data, 400))
 
-        tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
+        tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello', last=True))
         tx.merge_from(tx_delta)
         exploder.on_update(tx, tx_delta)
         self.assertEqual(tx.data_response.code, 202)

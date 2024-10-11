@@ -115,7 +115,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx = TransactionMetadata(
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice', [EsmtpParam('smtputf8')]),
-            body_blob=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n'))
+            body_blob=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n',
+                                 last=True))
         tx.remote_hostname = 'gargantua1'
         tx.fcrdns = True
 
@@ -167,7 +168,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             b'Received: from somewhere-else.example.com with ESMTP;\r\n'
             b'\tFri, 13 Feb 2009 23:31:28 +0000\r\n'
             b'\r\n'
-            b'hello\r\n')
+            b'hello\r\n',
+            last=True)
 
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)

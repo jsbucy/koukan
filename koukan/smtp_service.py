@@ -206,7 +206,7 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_DATA %s %d bytes',
                      self.cx_id, len(envelope.content))
 
-        blob = InlineBlob(envelope.content)
+        blob = InlineBlob(envelope.content, last=True)
 
         updated_tx = self.tx.copy()
         updated_tx.body_blob = blob

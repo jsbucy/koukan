@@ -52,19 +52,40 @@ from koukan.storage_schema import VersionConflictException
 
 # runs SyncFilter on Executor with AsyncFilter interface for
 # RestHandler -> SyncFilterAdapter -> SmtpEndpoint
+
+# TODO I'm unhappy with how complicated this has become. I have
+# considered writing a memory-backed TransactionCursor and running
+# SmtpEndpoint on OutputHandler instead. In the past I didn't think
+# that would actually be simpler than this but now I'm not so sure...
 class SyncFilterAdapter(AsyncFilter):
     class BlobWriter(WritableBlob):
-        blob : InlineBlob
+        # all accessed with parent.mu
+        parent : "SyncFilterAdapter"
+        offset : int = 0
+        # queue of staged appends, these are propagated to
+        # parent.body_blob in _update_once()
+        q : List[bytes]
+        content_length : Optional[int] = None
         def __init__(self, parent):
             self.parent = parent
-            self.blob = InlineBlob(b'')
+            self.q = []
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:
-            rv = self.blob.append_data(offset, d, content_length)
-            self.parent.blob_wakeup()
-            return rv
+            with self.parent.mu:
+                assert self.content_length is None or (
+                    content_length == self.content_length)
+                if self.content_length is not None and (
+                        self.offset + len(d) > self.content_length):
+                    return False, self.offset, self.content_length
+                if offset != self.offset:
+                    return False, self.offset, None
+                self.q.append(d)
+                self.offset += len(d)
+                self.content_length = content_length
+            self.parent._blob_wakeup()
+            return True, self.offset, content_length
 
     executor : Executor
     filter : SyncFilter
@@ -75,7 +96,8 @@ class SyncFilterAdapter(AsyncFilter):
     inflight : bool = False
     rest_id : str
     _last_update : float
-    body_blob : Optional[BlobWriter] = None
+    blob_writer : Optional[BlobWriter] = None
+    body_blob : Optional[InlineBlob] = None
     # transaction has reached a final status: data response or cancelled
     # (used for gc)
     done : bool = False
@@ -111,13 +133,6 @@ class SyncFilterAdapter(AsyncFilter):
         return await self.id_version.wait_async(
             version=version, timeout=timeout)
 
-    # for use in ttl/gc idle calcuation
-    # returns now if there is an update inflight i.e. do not gc
-    def last_update(self) -> float:
-        if self.inflight:
-            return time.monotonic()
-        return self._last_update
-
     def _update(self):
         try:
             while self._update_once():
@@ -142,20 +157,35 @@ class SyncFilterAdapter(AsyncFilter):
             delta = self.prev_tx.delta(self.tx)  # new reqs
             assert delta is not None
             logging.debug('SyncFilterAdapter._update_once() '
-                          'downstream_delta %s', delta)
+                          'downstream_delta %s staged %s', delta,
+                          len(self.blob_writer.q) if self.blob_writer else None)
             self.prev_tx = self.tx.copy()
-            if not delta.req_inflight() and not delta.cancelled and (
-                    self.tx.body_blob is None or
-                    self.tx.body_blob.len() != self.tx.body_blob.content_length() or
-                    self.tx.data_response is not None):
+
+            # propagate staged appends from blob_writer to body_blob
+            if self.blob_writer is not None and self.blob_writer.q:
+                # this may be moot because we early-return
+                # if the blob isn't finalized anyway but: we haven't
+                # really spelled out whether body_blob is only in the
+                # delta the first time or every time that it grows?
+                delta.body_blob = self.body_blob
+                for b in self.blob_writer.q:
+                    self.body_blob.append_data(
+                        self.body_blob.len(), b,
+                        self.blob_writer.content_length)
+                    logging.debug('append %d %s', self.body_blob.len(),
+                                  self.body_blob.content_length())
+                self.blob_writer.q = []
+
+            if not self.tx.req_inflight() and not delta.cancelled:
                 self.inflight = False
                 return False
+            tx = self.tx.copy()
+        upstream_delta = self.filter.on_update(tx, delta)
 
-        upstream_delta = self.filter.on_update(self.tx, delta)
-
-        logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
-                      self.tx)
+        logging.debug('SyncFilterAdapter._update_once() '
+                      'tx after upstream %s', tx)
         with self.mu:
+            assert self.tx.merge_from(upstream_delta) is not None
             # TODO closer to req_inflight() logic i.e. tx has reached
             # a final state due to an error
             self.done = self.tx.cancelled or self.tx.data_response is not None
@@ -183,15 +213,16 @@ class SyncFilterAdapter(AsyncFilter):
             # xxx bootstrap
             if version > 1 and tx.version != version:
                 raise VersionConflictException
-            txx = self.tx.merge(tx_delta)
 
-            logging.debug('SyncFilterAdapter.updated merged %s', txx)
-
-            if txx is None:
+            # try this non-destructively to see if the delta is valid...
+            if self.tx.merge(tx_delta) is None:
                 # bad delta, xxx this should throw an exception distinct
                 # from VersionConflictException, cannot make forward progress
                 return None
-            self.tx = txx
+            # ... before committing to self.tx
+            self.tx.merge_from(tx_delta)
+            logging.debug('SyncFilterAdapter.updated merged %s', self.tx)
+
             version = self.id_version.get()
             version += 1
             self.id_version.update(version)
@@ -209,7 +240,6 @@ class SyncFilterAdapter(AsyncFilter):
             assert delta.version is not None
             return delta
 
-    # TODO it looks like this effectively returns an empty tx on timeout
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
             tx = self.tx.copy()
@@ -223,19 +253,23 @@ class SyncFilterAdapter(AsyncFilter):
                         ) -> Optional[WritableBlob]:
         if not tx_body:
             raise NotImplementedError()
-        if create and self.body_blob is None:
-            self.body_blob = SyncFilterAdapter.BlobWriter(self)
-        return self.body_blob
+        if create and self.blob_writer is None:
+            with self.mu:
+                assert self.body_blob is None
+                assert self.blob_writer is None
+                self.body_blob = InlineBlob(b'')
+                self.tx.body_blob = self.body_blob
+                self.blob_writer = SyncFilterAdapter.BlobWriter(self)
+        return self.blob_writer
 
 
-    def blob_wakeup(self):
-        logging.debug('SyncFilterAdapter.blob_wakeup %s', self.body_blob)
+    def _blob_wakeup(self):
+        logging.debug('SyncFilterAdapter.blob_wakeup %s', self.blob_writer.q)
         tx = self.get()
         assert tx is not None
+        # shenanigans: empty update, _update_once() will dequeue from
+        # BlobWriter.q to self.body_blob
         tx_delta = TransactionMetadata()
-        if not tx.body_blob:
-            tx_delta.body_blob = self.body_blob.blob
-        tx.merge_from(tx_delta)
         self.update(tx, tx_delta)
 
 
@@ -533,17 +567,10 @@ class RestHandler(Handler):
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
-        if 'content-length' not in request.headers:
+        if ('content-length' not in request.headers or
+            'content-range' not in request.headers):
             return None, None
         content_length = int(request.headers.get('content-length'))
-        # TODO since we added support for chunked t-e, this
-        # placeholder should no longer be necessary, the upstream code now
-        # handles range==None
-        if (range_header := request.headers.get('content-range', None)) is None:
-            return None, ContentRange(
-                'bytes', 0, content_length, content_length)
-                #request.content_length, request.content_length)
-
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)

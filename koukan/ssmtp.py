@@ -25,8 +25,11 @@ def main(host, port, ehlo, mail_from, rcpt_to, data):
             'Message-ID', '<' + secrets.token_hex(16) + '@' + ehlo + '>')
         m.set_content(data)
         logging.info('sending smtp')
-        resp = s.sendmail(mail_from, rcpt_to, m.as_bytes())
-        logging.info('done %s', resp)
+        try:
+            resp = s.sendmail(mail_from, rcpt_to, m.as_bytes())
+            logging.info('done %s', resp)
+        except:
+            logging.exception('sendmail exception')
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

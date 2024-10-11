@@ -5,6 +5,7 @@ import unittest
 import logging
 import io
 import json
+import time
 
 from flask import (
     Flask,
@@ -76,23 +77,33 @@ class SyncFilterAdapterTest(unittest.TestCase):
         body = b'hello, world!'
 
         def exp_body(tx, tx_delta):
-            self.assertEqual(tx.body_blob.pread(0), body)
+            logging.debug(tx.body_blob)
+            if not tx.body_blob.finalized():
+                return
+            self.assertEqual(body, tx.body_blob.pread(0))
             upstream_delta=TransactionMetadata(
-                data_response = [Response(203)])
+                data_response = Response(203))
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream.add_expectation(exp_body)
 
-        delta = TransactionMetadata(body_blob=InlineBlob(body))
-        tx.merge_from(delta)
+        blob_writer = sync_filter_adapter.get_blob_writer(
+            create=True, blob_rest_id=None, tx_body=True)
+        b=b'hello, '
+        b2=b'world!'
+        blob_writer.append_data(0, b, None)
+        blob_writer = sync_filter_adapter.get_blob_writer(
+            create=False, blob_rest_id=None, tx_body=True)
+        blob_writer.append_data(len(b), b2, len(b) + len(b2))
+
         for i in range(0,3):
-            try:
-                sync_filter_adapter.update(tx, delta)
+            tx = sync_filter_adapter.get()
+            logging.debug(tx)
+            if tx is not None and tx.data_response is not None and tx.data_response.code == 203:
                 break
-            except VersionConflictException:
-                tx = sync_filter_adapter.get()
+            sync_filter_adapter.wait(tx.version, 1)
         else:
-            self.fail('expected done')
+            self.fail('expected data response')
 
         for i in range(0,3):
             sync_filter_adapter.wait(tx.version, 1)
@@ -101,6 +112,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             tx = sync_filter_adapter.get()
         else:
             self.fail('expected done')
+        self.assertTrue(sync_filter_adapter.idle(time.time(), 0, 0))
 
 class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):

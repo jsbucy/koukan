@@ -101,11 +101,9 @@ class SmtpEndpoint(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.info('SmtpEndpoint.on_update %s', tx.remote_host)
-
         if tx_delta.cancelled:
             self._shutdown()
-            return
+            return TransactionMetadata()
 
         upstream_delta = self._update(tx, tx_delta)
         assert tx.merge_from(upstream_delta) is not None
@@ -161,7 +159,6 @@ class SmtpEndpoint(SyncFilter):
             if upstream_delta.mail_response.err():
                 self._shutdown()
                 return upstream_delta
-        assert self.smtp is not None
 
         for rcpt in tx_delta.rcpt_to:
             bad_ext = None
@@ -182,18 +179,16 @@ class SmtpEndpoint(SyncFilter):
         if tx_delta.message_builder is not None:
             upstream_delta.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
-        elif tx_delta.body_blob is not None and (
-                tx_delta.body_blob.len() ==
-                tx_delta.body_blob.content_length()):
+        elif not tx.data_response and tx.body_blob is not None and tx.body_blob.finalized():
             logging.info('SmtpEndpoint %s append_data len=%d',
-                         tx.rest_id, tx_delta.body_blob.len())
+                         tx.rest_id, tx.body_blob.len())
             if not self.good_rcpt:
                 upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
                 upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(tx_delta.body_blob.pread(0)))
-            logging.info('SmtpEndpoint %s data_resp %s',
+                    self.smtp.data(tx.body_blob.pread(0)))
+            logging.info('SmtpEndpoint %s data_response %s',
                          tx.rest_id, upstream_delta.data_response)
 
             self._shutdown()

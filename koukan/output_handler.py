@@ -392,7 +392,7 @@ class OutputHandler:
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
-            body_blob = InlineBlob(dsn),
+            body_blob = InlineBlob(dsn, last=True),
             retry={})
         notification_endpoint = self.notification_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream

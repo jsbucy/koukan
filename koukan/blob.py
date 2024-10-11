@@ -51,9 +51,11 @@ class InlineBlob(Blob, WritableBlob):
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 last = False):
+        assert not (last and (content_length is not None))
         self.d = d
-        self._content_length = content_length
+        self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
 
     def len(self):
@@ -66,10 +68,7 @@ class InlineBlob(Blob, WritableBlob):
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
-        # TODO this may be surprising behavior
-        if self._content_length is not None:
-            return self._content_length
-        return len(self.d)
+        return self._content_length
 
     def append(self, dd : bytes):
         self.d += dd

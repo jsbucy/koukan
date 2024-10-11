@@ -323,7 +323,7 @@ class RouterServiceTest(unittest.TestCase):
             #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
-            body_blob=InlineBlob(body))
+            body_blob=InlineBlob(body, last=True))
 
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata(
@@ -367,10 +367,8 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
-            #body_blob=InlineBlob(body))
 
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata(
@@ -572,7 +570,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.info('testExploderMultiRcpt patch body_blob')
 
         tx_delta = TransactionMetadata(
-            body_blob=InlineBlob(b'Hello, World!'))
+            body_blob=InlineBlob(b'Hello, World!', last=True))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_exploder_multi_rcpt %s', tx)
@@ -609,7 +607,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
-            body_blob=InlineBlob(b'Hello, World!'),
+            body_blob=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
         rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
@@ -670,7 +668,7 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob1@example.com'),
                      Mailbox('bob2@example.com')],
-            body_blob=InlineBlob(b'Hello, World!'),
+            body_blob=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
 
         def exp_rcpt(tx, tx_delta):
@@ -791,7 +789,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
         b = b"hello, world!"
-        blob = InlineBlob(b, len(b), 'my_plain_body')
+        blob = InlineBlob(b, rest_id='my_plain_body', last=True)
         blob_resp = rest_endpoint._put_blob(blob, non_body_blob=True)
         self.assertEqual(blob_resp.code, 200)
 
