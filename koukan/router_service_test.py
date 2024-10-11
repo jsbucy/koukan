@@ -415,8 +415,7 @@ class RouterServiceTest(unittest.TestCase):
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
-                'final_attempt_reason': 'upstream response success'
-            }:
+                'final_attempt_reason': 'upstream response success' }:
                 break
             time.sleep(1)
         else:
