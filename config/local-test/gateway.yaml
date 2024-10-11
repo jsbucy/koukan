@@ -2,15 +2,15 @@
 rest_listener:
   use_fastapi: true
   addr: ["[::0]", 8001]
-  cert: localhost.crt
-  key: localhost.key
+  #cert: localhost.crt
+  #key: localhost.key
 
   gc_interval: 5
   gc_tx_ttl: 5
 
 smtp_output:
   outbound:
-    ehlo_host: frylock
+    ehlo_host: localhost
 
 # smtp -> rest
 smtp_listener:

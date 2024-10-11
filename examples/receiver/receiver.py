@@ -1,3 +1,6 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # gunicorn3 -b localhost:8002 --access-logfile - --log-level debug
 #   'examples.receiver.receiver:create_app()'
 

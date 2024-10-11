@@ -1,2 +1,0 @@
-export PYTHONPATH=/home/bucy/pysmtpgw:/home/bucy/pysmtpgw/config/tachygraph
-exec python3 /home/bucy/pysmtpgw/router_service_main.py /home/bucy/pysmtpgw/config/tachygraph/router.yaml

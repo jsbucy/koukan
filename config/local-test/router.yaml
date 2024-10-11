@@ -3,15 +3,14 @@ global:
   executor:
     max_inflight: 100
     watchdog_timeout: 60
-  # needs to authenticate!
-  mailer_daemon_mailbox: mailer-daemon@d
+  mailer_daemon_mailbox: mailer-daemon@example.com
   rest_id_entropy: 4
 
 rest_listener:
   use_fastapi: true
   addr: ["127.0.0.1", 8000]
-  cert: localhost.crt
-  key: localhost.key
+  #cert: localhost.crt
+  #key: localhost.key
 
 endpoint:
 - name: outbound-gw
@@ -52,26 +51,26 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - d
-      - dd
+      - example.com
+      - rest-application.example.com
       destination:
-        endpoint: https://localhost:8000
+        endpoint: http://localhost:8000
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: https://localhost:8001
+        endpoint: http://localhost:8001
         http_host: outbound
   - filter: router
     policy:
       name: address_list
       # no domains/dest -> reject all
-  - filter: dkim
-    key: config/local-test/dkim.key
-    domain: d
-    selector: sel
+  #- filter: dkim
+  #  key: config/local-test/dkim.key
+  #  domain: example.com
+  #  selector: sel
   - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
@@ -114,12 +113,12 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - d
+      - example.com
       #delimiter: '+'
       #prefixes:
       #- base: alice
       destination:
-        endpoint: https://localhost:8001
+        endpoint: http://localhost:8001
         http_host: outbound
         host_list:
           - host: 'fake_smtpd'
@@ -128,7 +127,7 @@ endpoint:
     policy:
       name: address_list
       domains:
-      - dd
+      - rest-application.example.com
       delimiter: '+'
       prefixes:
       - bob
@@ -154,18 +153,12 @@ endpoint:
 
 modules:
   sync_filter:
-    hello: hello_filter
+    hello: koukan.hello_filter
   recipient_router_policy:
-    hello: hello_policy
+    hello: koukan.hello_policy
 
 storage:
-  # engine: sqlite_memory
-  # engine: sqlite
-  #sqlite_db_filename: storage.sqlite3
-  engine: postgres
-  postgres_db_name: pykk
-  unix_socket_dir: /var/run/postgresql
-  #port: 5432
+  url: postgresql+psycopg://bucy@/pykk?host=/var/run/postgresql
 
   gc_interval: 30
   gc_ttl: 3600
