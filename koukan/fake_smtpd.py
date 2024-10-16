@@ -68,6 +68,8 @@ class InMemoryHandler:
 
     async def handle_RCPT(self, server, session, envelope, address, options
                           ) -> str:
+        # aiosmtpd does not support multi-rcpt data responses for LMTP
+        # https://github.com/aio-libs/aiosmtpd/issues/517
         if self.protocol == 'lmtp' and self.rcpt_to:
             return '450 multi-rcpt unimplemented for LMTP'
         self.rcpt_to.append(address)

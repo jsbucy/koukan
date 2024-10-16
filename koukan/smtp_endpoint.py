@@ -172,6 +172,9 @@ class SmtpEndpoint(SyncFilter):
                 return upstream_delta
 
         for rcpt in tx_delta.rcpt_to:
+            # smtplib.LMTP doesn't support multi-rcpt transactions
+            # https://github.com/python/cpython/issues/76984
+            # as of this writing (2024/10) there is a PR in review to fix
             if self.protocol == 'lmtp' and self.any_rcpt:
                 upstream_delta.rcpt_response.append(
                     Response(450, 'lmtp multi-rcpt unimplemented'))

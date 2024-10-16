@@ -249,6 +249,9 @@ class ControllerTls(Controller):
             self.max_rcpt, self.rcpt_timeout,
             self.data_timeout)
         handler.loop = self.loop
+        # TODO aiosmtpd supports LMTP so we can easily add that here
+        # if needed. AFAIK the use cases for LMTP are generally for
+        # delivering mail from the mta *to* an application.
         smtp = SMTP(handler,
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
