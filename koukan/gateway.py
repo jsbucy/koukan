@@ -96,7 +96,8 @@ class SmtpGateway(EndpointFactory):
         endpoint = self.smtp_factory.new(
             ehlo_hostname=host_yaml['ehlo_host'],
             # 1h (default watchdog timeout) - 5min
-            timeout=smtp_yaml.get('timeout', 55*60))
+            timeout=smtp_yaml.get('timeout', 55*60),
+            protocol = host_yaml.get('protocol', 'smtp'))
 
         with self.lock:
             rest_id = self.rest_id_factory()

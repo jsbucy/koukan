@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP
+from aiosmtpd.lmtp import LMTP
 
 import asyncio
 import time
@@ -18,10 +19,13 @@ class InMemoryHandler:
     rcpt_to : List[str]
     rcpt_options : List[List[str]]
     data : Optional[bytes] = None
+    protocol : str
 
-    def __init__(self):
+    def __init__(self, protocol = 'smtp'):
         self.rcpt_to = []
         self.rcpt_options = []
+        assert protocol in ['smtp', 'lmtp']
+        self.protocol = protocol
 
     def __repr__(self):
         out = ''
@@ -39,11 +43,12 @@ class InMemoryHandler:
             out += 'data ' + self.data.decode('utf-8') + '\n'
         return out
 
+    # aiosmtpd wires this to HELO/EHLO or LHLO per protocol
     async def handle_EHLO(self, server, session, envelope, hostname, responses
                           ) -> list[str]:
+        logging.debug('InMemoryHandler.handle_EHLO %s', hostname)
         self.ehlo = hostname
         session.host_name = hostname
-        logging.debug('InMemoryHandler.handle_EHLO %s', hostname)
         return responses
 
     async def handle_PROXY(self, server, session, envelope, proxy_data) -> bool:
@@ -100,23 +105,33 @@ class InMemoryHandler:
         return '250 Message accepted for delivery'
 
 class FakeSmtpdController(Controller):
-    def __init__(self, host, port, handler_factory):
+    def __init__(self, host, port, handler_factory, protocol : str):
         self.handler_factory = handler_factory
+        self.protocol = protocol
         super(Controller, self).__init__(
             handler=None, hostname=host, port=port)
     def factory(self):
         handler = self.handler_factory()
-        return SMTP(handler)
-
+        if self.protocol == 'smtp':
+            return SMTP(handler)
+        elif self.protocol == 'lmtp':
+            return LMTP(handler)
+        else:
+            raise ValueError()
 
 class FakeSmtpd:
-    def __init__(self, host, port):
+    protocol : str
+    def __init__(self, host : str, port : str,
+                 protocol : str = 'smtp'):
+        assert protocol in ['smtp', 'lmtp']
+        self.protocol = protocol
         self.controller = FakeSmtpdController(
-            host=host, port=port, handler_factory=self.handler_factory)
+            host=host, port=port, handler_factory=self.handler_factory,
+            protocol=protocol)
         self.handlers = []
 
     def handler_factory(self):
-        handler = InMemoryHandler()
+        handler = InMemoryHandler(self.protocol)
         self.handlers.append(handler)
         return handler
 

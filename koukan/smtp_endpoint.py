@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Dict, List, Optional, Tuple
-from smtplib import SMTP, SMTPException
+from smtplib import LMTP, SMTP, SMTPException
 import logging
 import time
 import ipaddress
@@ -18,21 +18,25 @@ class Factory:
     def __init__(self):
         pass
 
-    def new(self, ehlo_hostname, timeout):
-        return SmtpEndpoint(ehlo_hostname, timeout)
+    def new(self, ehlo_hostname, timeout, protocol):
+        return SmtpEndpoint(ehlo_hostname, timeout, protocol)
 
 class SmtpEndpoint(SyncFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
     timeout : int = 30
+    protocol : str
 
-    def __init__(self, ehlo_hostname, timeout : Optional[int] = None):
+    def __init__(self, ehlo_hostname, timeout : Optional[int] = None,
+                 protocol : str = 'smtp'):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
         if timeout is not None:
             self.timeout = timeout
+        assert protocol in ['smtp', 'lmtp']
+        self.protocol = protocol
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -61,7 +65,13 @@ class SmtpEndpoint(SyncFilter):
                 400, 'SmtpEndpoint: bad request: '
                 'remote_host.host is not a valid IP address')
 
-        self.smtp = SMTP(timeout=self.timeout)
+        if self.protocol == 'smtp':
+            self.smtp = SMTP(timeout=self.timeout)
+        elif self.protocol == 'lmtp':
+            self.smtp = LMTP(timeout=self.timeout)
+        else:
+            raise ValueError()
+
         try:
             # TODO workaround bug in smtplib py<3.11
             # https://stackoverflow.com/questions/51768041/python3-smtp-valueerror-server-hostname-cannot-be-an-empty-string-or-start-with
@@ -76,6 +86,7 @@ class SmtpEndpoint(SyncFilter):
 
         # TODO all of these smtplib.SMTP calls on self.smtp can throw
         # e.g. on tcp reset/server hung up
+        # LMTP sends LHLO here
         resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
         if resp.err():
             self._shutdown()

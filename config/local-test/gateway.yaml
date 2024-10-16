@@ -10,7 +10,9 @@ rest_listener:
 
 smtp_output:
   outbound:
+    # protocol: lmtp
     ehlo_host: localhost
+
 
 # smtp -> rest
 smtp_listener:
