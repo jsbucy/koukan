@@ -27,7 +27,7 @@ class SmtpEndpoint(SyncFilter):
     good_rcpt : bool = False
     timeout : int = 30
     protocol : str
-
+    any_rcpt = False
     def __init__(self, ehlo_hostname, timeout : Optional[int] = None,
                  protocol : str = 'smtp'):
         # TODO this should come from the rest transaction -> start()
@@ -172,6 +172,11 @@ class SmtpEndpoint(SyncFilter):
                 return upstream_delta
 
         for rcpt in tx_delta.rcpt_to:
+            if self.protocol == 'lmtp' and self.any_rcpt:
+                upstream_delta.rcpt_response.append(
+                    Response(450, 'lmtp multi-rcpt unimplemented'))
+                continue
+            self.any_rcpt = True
             bad_ext = None
 
             if err := self._check_esmtp(rcpt.esmtp):

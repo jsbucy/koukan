@@ -68,6 +68,8 @@ class InMemoryHandler:
 
     async def handle_RCPT(self, server, session, envelope, address, options
                           ) -> str:
+        if self.protocol == 'lmtp' and self.rcpt_to:
+            return '450 multi-rcpt unimplemented for LMTP'
         self.rcpt_to.append(address)
         self.rcpt_options.append(options)
 
