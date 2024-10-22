@@ -79,7 +79,7 @@ should print out on the `examples/receiver` console
 should print out on the `fake_smtpd` console
 
 - rest submission  
-`python examples/cli/send_message.py --mail_from alice@example.com --message_builder_filename examples/cli/message_builder.json bob@example.com`
+`python examples/send_message/send_message.py --mail_from alice@example.com --message_builder_filename examples/send_message/message_builder.json bob@example.com`
 
 should print out on the `fake_smtpd` console
 

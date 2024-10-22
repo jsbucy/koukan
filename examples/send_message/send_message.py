@@ -1,7 +1,20 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Optional
+# full-featured sender
+# - message builder json or pre-formatted rfc822
+# - hanging GET track transaction status
+# - separate blob upload
+# - reuses blobs across multiple rcpts
+
+# python3 examples/send_message/send_message.py \
+#   --router_url http://localhost:8000
+#   --mail_from alice@example.com
+#   --message_builder_filename examples/cli/message_builder.json \
+#   bob@example.com carol@example.com dave@example.com
+
+
+from typing import Any, Dict, Optional
 import logging
 from urllib.parse import urljoin
 import time
@@ -17,13 +30,15 @@ import copy
 from sys import argv
 from contextlib import nullcontext
 
+# Sends a message to one or more recipients. Does hanging GET to wait
+# for upstream status. Reuses blobs across recipients.
 class Sender:
     base_url : str
     host : str
-    notification_host : str
+    notification_host : Optional[str]
     mail_from : str
 
-    message_builder : dict
+    message_builder : Optional[Dict[str, Any]]
     # has blobs uris referencing first first recipient transaction
     message_builder_blobs : Optional[dict] = None
     body_filename : Optional[str] = None
@@ -55,37 +70,26 @@ class Sender:
     def send_part(self,
                   tx_url,
                   blob_id : str,
-                  inline : Optional[str] = None,
-                  filename : Optional[str] = None) -> Optional[str]:
-        assert inline or filename
-
+                  filename : str) -> Optional[str]:
         path = tx_url + '/blob/' + blob_id
         uri = urljoin(self.base_url, path)
         logging.info('PUT %s', uri)
 
-        def put(content):
-            return self.session.put(uri, data=content)
-
-        if inline:
-            resp = put(inline.encode('utf-8'))
-        elif filename:
-            with open(filename, 'rb') as file:
-                resp = put(file)
+        with open(filename, 'rb') as file:
+            resp = self.session.put(uri, data=file)
 
         logging.info('PUT %s %s', uri, resp)
         if resp.status_code >= 300:
             return None
         return path
 
-    def strip_filenames(self, json):
+    def strip_filenames(self, json : Dict[str, Any]):
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
             if not (multipart := json.get(multi, [])):
                 continue
             for part in multipart:
                 if 'file_content' in part:
                     del part['file_content']
-                if 'put_content' in part:
-                    del part['put_content']
         return json
 
 
@@ -97,15 +101,14 @@ class Sender:
                 logging.info('send_body %s', part)
                 if part['content_uri'].startswith('/'):
                     continue
-                inline = part.get('put_content', None)
                 filename = part.get('file_content', None)
                 if filename:
                     del part['file_content']
-                if not inline and not filename:
+                if not filename:
                     continue
 
                 if (uri := self.send_part(
-                        tx_url, part['content_uri'], inline=inline,
+                        tx_url, part['content_uri'],
                         filename=filename)) is None:
                     return False
 
@@ -130,7 +133,8 @@ class Sender:
             tx_json['body'] = self.body_path
         elif self.body_filename is not None:
             pass
-        elif self.message_builder_blobs is None:
+        elif (self.message_builder_blobs is None and
+              self.message_builder is not None):
             tx_json['message_builder'] = self.strip_filenames(
                 copy.deepcopy(self.message_builder))
         else:

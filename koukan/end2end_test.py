@@ -22,7 +22,7 @@ from koukan.ssmtp import main as send_smtp
 
 from koukan.executor import Executor
 
-from examples.cli.send_message import Sender
+from examples.send_message.send_message import Sender
 
 from examples.receiver.receiver import Receiver, create_app
 from koukan.hypercorn_main import run
@@ -280,13 +280,6 @@ class End2EndTest(unittest.TestCase):
 
     # submission rest message_builder -> smtp
     def test_submission_message_builder(self):
-        b = """
-2024-09-04 15:11:39,723 [127551454058304] End2EndTest.tearDown
-2024-09-04 15:11:39,723 [127551454058304] router_service shutdown()
-2024-09-04 15:11:39,723 [127551454058304] router service hypercorn shutdown
-2024-09-04 15:11:39,724 [127551454058304] Executor.shutdown waiting on 2
-2024-09-04 15:11:39,724 [127551313794624] hypercorn_main._ping_alive() done
-        """
         message_builder_spec = {
             "headers": [
                 ["from", [{"display_name": "alice a",
@@ -299,7 +292,7 @@ class End2EndTest(unittest.TestCase):
            "text_body": [{
                "content_type": "text/plain",
                "content_uri": "my_plain_body",
-               "put_content": b
+               "file_content": "examples/send_message/body.txt"
            }]
         }
 
@@ -309,14 +302,6 @@ class End2EndTest(unittest.TestCase):
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
         sender.send('bob2@example.com')
-
-        encoded = (b'CjIwMjQtMDktMDQgMTU6MTE6MzksNzIzIFsxMjc1NTE0NTQwNTgzMDRdIEVuZDJFbmRUZXN0LnRl\r\n'
-                   b'YXJEb3duCjIwMjQtMDktMDQgMTU6MTE6MzksNzIzIFsxMjc1NTE0NTQwNTgzMDRdIHJvdXRlcl9z\r\n'
-                   b'ZXJ2aWNlIHNodXRkb3duKCkKMjAyNC0wOS0wNCAxNToxMTozOSw3MjMgWzEyNzU1MTQ1NDA1ODMw\r\n'
-                   b'NF0gcm91dGVyIHNlcnZpY2UgaHlwZXJjb3JuIHNodXRkb3duCjIwMjQtMDktMDQgMTU6MTE6Mzks\r\n'
-                   b'NzI0IFsxMjc1NTE0NTQwNTgzMDRdIEV4ZWN1dG9yLnNodXRkb3duIHdhaXRpbmcgb24gMgoyMDI0\r\n'
-                   b'LTA5LTA0IDE1OjExOjM5LDcyNCBbMTI3NTUxMzEzNzk0NjI0XSBoeXBlcmNvcm5fbWFpbi5fcGlu\r\n'
-                   b'Z19hbGl2ZSgpIGRvbmUKICAgICAgICA=\r\n')
 
         handlers = {}
         for handler in self.fake_smtpd.handlers:
@@ -331,7 +316,7 @@ class End2EndTest(unittest.TestCase):
             self.assertIn(b'from: alice a <alice@example.com>', handler.data)
             self.assertIn(b'DKIM-Signature:', handler.data)
             self.assertIn(b'Received:', handler.data)
-            self.assertIn(encoded, handler.data)
+            self.assertIn(b'aGVsbG8sIHdvcmxkIQo=', handler.data)
 
         self.assertEqual(2, len(handlers))
 
