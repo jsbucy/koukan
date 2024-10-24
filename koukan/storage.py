@@ -338,6 +338,12 @@ class TransactionCursor:
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
+        # It doesn't make sense to request reliable notifications for
+        # an ephemeral transaction: if you want "attempt once and
+        # send a notification" use retry={'max_attempts': 1}
+        # Otherwise this will interact badly with the
+        # oneshot/no_final_notification workflows.
+        assert tx_to_db.retry is not None or tx_to_db.notification is None
         logging.debug(
             'TransactionCursor._write %d %s version=%d '
             'final_attempt_reason=%s %s %s',
@@ -381,6 +387,12 @@ class TransactionCursor:
 
         # TODO possibly assert here, the first case is
         # downstream/Exploder, #2/3 are upstream/OutputHandler
+
+        # Exploder upstream transactions are started as oneshot and only if
+        # there are mixed responses and it has to store&forward, it
+        # enables notifications/retries at the end. If the upstream tx
+        # had already finished by this point, we need to clear the
+        # oneshot final_attempt_reason.
         if ((tx_to_db.retry is not None or tx_to_db.notification is not None
              ) and self.final_attempt_reason == 'oneshot'):
             self.final_attempt_reason = None

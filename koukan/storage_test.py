@@ -156,6 +156,19 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug(self.s.debug_dump())
 
+    def test_mixed_notify_retry(self):
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host'),
+            create_leased=True)
+        with self.assertRaises(AssertionError):
+            cursor.write_envelope(TransactionMetadata(
+                mail_from=Mailbox('alice'),
+                retry=None,
+                notification={'host': 'submission'}))
+
     def test_blob_8bitclean(self):
         blob_writer = BlobCursor(self.s)
         blob_writer.create()
