@@ -25,7 +25,7 @@ class Transaction:
     CHUNK_SIZE=1048576
 
     tx_json : dict
-    file : Optional[IOBase] = None
+    body_file : Optional[IOBase] = None
     message_json : Optional[dict] = None
 
     blobs : Dict[str, IOBase]
@@ -46,7 +46,7 @@ class Transaction:
             json_out['mail_from'] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
-        if self.file:
+        if self.body_file:
             json_out['body'] = {}
         logging.debug('Tx.get %s', json_out)
         return json_out
@@ -55,16 +55,15 @@ class Transaction:
         logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
             if 'blob_rest_id' not in part_json:
-                return
+                return True
             blob_id = part_json['blob_rest_id']
             if blob_id.startswith('/'):
                 return False  # this doesn't support reuse
             logging.debug('check_blobs %s', blob_id)
-            if not self.create_tx_body(
-                    upload_chunked=True,
-                    tx_body=False,
-                    blob_id=blob_id):
-                return False
+            if blob_id in self.blobs:
+                return None  # bad
+            file = TemporaryFile('w+b')
+            self.blobs[blob_id] = file
             return True
 
         for part_i in part_json['parts']:
@@ -79,52 +78,33 @@ class Transaction:
         if not self._check_blobs(self.message_json['parts']):
             return FlaskResponse(400, 'bad blob in message builder json')
 
-    def create_tx_body(self, upload_chunked : bool,
-                       tx_body : bool = False,
-                       blob_id : Optional[str] = None,
-                       stream = None
-                       ) -> Optional[str]:  # blob-id if !tx_body
-        assert upload_chunked or stream
-        if tx_body:
-            if self.file is not None:
-                return None  # bad
-            file = TemporaryFile('w+b')
-            assert isinstance(file, IOBase)
-            self.file = file
-        else:
-            logging.debug('create_tx_body %s %s', self.blobs, blob_id)
-            if blob_id in self.blobs:
-                return None  # bad
-            file = TemporaryFile('w+b')
-            self.blobs[blob_id] = file
-        if stream is None:
-            return
-        if upload_chunked:
-            return blob_id
+    def create_tx_body(self, stream : IOBase):
+        if self.body_file is not None:
+            return None  # bad
+        file = TemporaryFile('w+b')
+        assert isinstance(file, IOBase)
+        self.body_file = file
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
-        if tx_body:
-            self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-            self.log()
+        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+        self.log()
         file.seek(0)
-        #logging.debug(file.read())
-        return blob_id
 
-    def _put_blob(self, stream, file) -> int:
+    def _put_blob(self, stream : IOBase, file) -> int:
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
         file.seek(0)
         logging.debug(file.read())
         return 200
 
-    def put_tx_body(self, stream) -> int:
+    def put_tx_body(self, stream : IOBase) -> int:
         logging.debug('put_tx_body')
-        resp = self._put_blob(stream, self.file)
+        resp = self._put_blob(stream, self.body_file)
         self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
         self.log()
         return resp
 
-    def put_blob(self, blob_id, stream) -> int:
+    def put_blob(self, blob_id, stream : IOBase) -> int:
         logging.debug('put_blob %s', blob_id)
         return self._put_blob(stream, self.blobs[blob_id])
 
@@ -132,9 +112,9 @@ class Transaction:
         logging.debug('received tx %s', self.tx_json)
         logging.debug('received parsed %s',
                       self.message_json if self.message_json else None)
-        self.file.seek(0)
-        logging.debug('received body %s', self.file.read())
-        logging.debug('received blob %s', self.blobs.keys())
+        self.body_file.seek(0)
+        logging.debug('received body %s', self.body_file.read())
+        logging.debug('received blobs %s', self.blobs.keys())
         for blob_id,file in self.blobs.items():
             file.seek(0)
             logging.debug('received blob %s %s', blob_id, file.read())
@@ -165,14 +145,10 @@ class Receiver:
         assert tx is not None
         return tx.update_message_builder(message_json)
 
-    def create_tx_body(self, tx_rest_id : str,
-                       upload_chunked : bool,
-                       tx_body : bool = False,
-                       blob_id : Optional[str] = None,
-                       stream = None):
-        logging.debug('create_tx_body %s', blob_id)
-        return self.transactions[tx_rest_id].create_tx_body(
-            upload_chunked, tx_body, blob_id, stream)
+    def create_tx_body(self,
+                       tx_rest_id : str,
+                       stream : IOBase):
+        return self.transactions[tx_rest_id].create_tx_body(stream)
 
     def put_tx_body(self, tx_rest_id: str, stream):
         status = self.transactions[tx_rest_id].put_tx_body(stream)
@@ -192,7 +168,8 @@ def create_app(receiver = None):
         receiver = Receiver()
 
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] '
+                        '%(filename)s:%(lineno)d %(message)s')
 
     @app.route('/transactions', methods=['POST'])
     def create_transaction() -> FlaskResponse:
@@ -214,11 +191,7 @@ def create_app(receiver = None):
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['POST'])
     def create_tx_body(tx_rest_id) -> FlaskResponse:
-        receiver.create_tx_body(
-            tx_rest_id,
-            request.args.get('upload', None),
-            tx_body=True,
-            stream=request.stream)
+        receiver.create_tx_body(tx_rest_id, request.stream)
         return FlaskResponse(status=201)
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])

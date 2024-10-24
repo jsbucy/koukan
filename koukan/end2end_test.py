@@ -230,7 +230,7 @@ class End2EndTest(unittest.TestCase):
             self.assertNotIn(blob_id, blob_content)
             blob_content[blob_id] = content
 
-        body = tx.file.read()
+        body = tx.body_file.read()
         logging.debug('raw %s', body)
         self.assertIn(b'Received:', body)
 

@@ -119,14 +119,15 @@ class Sender:
 
         return True
 
-    def send(self, rcpt_to, max_wait=30):
+    def send(self, rcpt_to : str, retry : Dict[str, Any]={}, max_wait=30):
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json={
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
-            'retry': {},         # use system defaults for retries
         }
+        if retry is not None:
+            tx_json['retry'] = retry
         if self.notification_host:
             tx_json['notification'] = {'host': self.notification_host }
         if self.body_path is not None:
@@ -280,6 +281,8 @@ if __name__ == '__main__':
     parser.add_argument('--base_url', default='http://localhost:8000')
     parser.add_argument('--host', default='msa-output')
     parser.add_argument('--notification_host', default='msa-output')
+    # {}: use system defaults for retries
+    parser.add_argument('--retry', default='{}')
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -299,5 +302,6 @@ if __name__ == '__main__':
                     message_builder=message_builder,
                     body_filename=args.rfc822_filename,
                     notification_host=args.notification_host)
+    retry = json.loads(args.retry) if args.retry else None
     for rcpt in args.rcpt_to:
-        sender.send(rcpt)
+        sender.send(rcpt, retry)
