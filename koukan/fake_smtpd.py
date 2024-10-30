@@ -104,8 +104,7 @@ class InMemoryHandler:
 
         for ln in envelope.content.decode('utf8', errors='replace').splitlines():
             logging.debug(f'> {ln}'.strip())
-        print()
-        print('End of message')
+        logging.debug('End of message')
         return '250 Message accepted for delivery'
 
 class FakeSmtpdController(Controller):

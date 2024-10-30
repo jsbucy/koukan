@@ -23,6 +23,7 @@ import socket
 import copy
 import json
 import argparse
+import threading
 
 import time
 import requests
@@ -187,7 +188,6 @@ class Sender:
                 return
             logging.info('main message_builder spec %s',
                          json.dumps(self.message_builder, indent=2))
-            get_tx_resp = self.session.get(tx_url)
             message_builder_blobs = self.message_builder
             rest_resp = None
 
@@ -199,7 +199,7 @@ class Sender:
             if rest_resp is None:
                 spin = True
                 start = time.monotonic()
-                logging.info('GET %s', tx_url)
+                logging.info('GET %s etag=%s', tx_url, etag)
                 headers = {'request-timeout': '5'}
                 if etag:
                     headers['if-none-match'] = etag
@@ -215,7 +215,10 @@ class Sender:
                     logging.debug('etag %s', etag)
                 else:
                     etag = None
-            # xxx rest_resp.status_code?
+
+            if rest_resp.status_code == 304:
+                continue
+
             tx_json = rest_resp.json()
 
             for resp in ['mail_response', 'rcpt_response', 'data_response']:
@@ -250,7 +253,7 @@ class Sender:
             tx_json = None
 
         logging.info('recipient %s result %s', rcpt_to, result)
-
+        return result
 
     def _get_header(self, headers, name):
         for h in headers:
@@ -272,7 +275,7 @@ class Sender:
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--mail_from')
@@ -283,6 +286,8 @@ if __name__ == '__main__':
     parser.add_argument('--notification_host', default='msa-output')
     # {}: use system defaults for retries
     parser.add_argument('--retry', default='{}')
+    parser.add_argument('--iters', default='1')
+    parser.add_argument('--threads', default='1')
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -296,12 +301,33 @@ if __name__ == '__main__':
 
     logging.debug(args.rcpt_to)
 
-    sender = Sender(args.base_url,
-                    args.host,
-                    args.mail_from,
-                    message_builder=message_builder,
-                    body_filename=args.rfc822_filename,
-                    notification_host=args.notification_host)
+    results = {}
+    mu = threading.Lock()
+    def send():
+        sender = Sender(args.base_url,
+                        args.host,
+                        args.mail_from,
+                        message_builder=message_builder,
+                        body_filename=args.rfc822_filename,
+                        notification_host=args.notification_host)
+
+        for i in range(0, int(args.iters)):
+            for rcpt in args.rcpt_to:
+                result = sender.send(rcpt, retry)
+                with mu:
+                    if result not in results:
+                        results[result] = 0
+                    results[result] += 1
+
     retry = json.loads(args.retry) if args.retry else None
-    for rcpt in args.rcpt_to:
-        sender.send(rcpt, retry)
+    threads = []
+    start = time.monotonic()
+    for t in range(0, int(args.threads)):
+        t = threading.Thread(target = send)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    stop = time.monotonic()
+    logging.info('done %f', stop - start)
+    logging.info(results)

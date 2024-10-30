@@ -313,6 +313,71 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('expected 404 after gc')
 
+    # repro/regtest for spurious wakeup bug in VersionCache
+    def test_rest_hanging_get(self):
+        logging.debug('RouterServiceTest.test_rest_hanging_get')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = 'hello, world!'
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')])
+            #inline_body=body)
+
+        def exp(tx, tx_delta):
+            time.sleep(1)
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        post_resp = rest_endpoint.client.post(
+            rest_endpoint.base_url + '/transactions',
+            json = tx.to_json(WhichJson.REST_CREATE),
+            headers={'host': 'submission'})
+        self.assertEqual(201, post_resp.status_code)
+        tx_url = rest_endpoint.base_url + post_resp.headers['location']
+        logging.debug(tx_url)
+
+        post_body_resp = rest_endpoint.client.post(
+            tx_url + '/body', data=body)
+        self.assertEqual(201, post_body_resp.status_code)
+
+        # GET without if-none-match does a point read
+        logging.debug('get tx')
+        get_resp = rest_endpoint.client.get(tx_url)
+        self.assertEqual(200, get_resp.status_code)
+        self.assertNotEqual(get_resp.headers['etag'], post_resp.headers['etag'])
+        logging.debug(get_resp.json())
+
+        # GET again with previous etag, should wait for change
+        logging.debug('get tx 2')
+        get_resp2 = rest_endpoint.client.get(
+            tx_url,
+            headers={'if-none-match': get_resp.headers['etag'],
+                     'request-timeout': '5'})
+        logging.debug(get_resp2.json())
+        self.assertEqual(200, get_resp.status_code)
+        self.assertNotEqual(get_resp2.headers['etag'], get_resp.headers['etag'])
+        tx_json = get_resp2.json()
+        # depending on timing, we may get the tx before or after the
+        # OH completion that sets final_attempt_reason but we should
+        # get all the responses
+        self.assertEqual(
+            tx_json['mail_response'], {'code': 201, 'message': 'ok'})
+        self.assertEqual(
+            tx_json['rcpt_response'], [{'code': 202, 'message': 'ok'}])
+        self.assertEqual(
+            tx_json['data_response'], {'code': 203, 'message': 'ok'})
+
+
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
         rest_endpoint = RestEndpoint(

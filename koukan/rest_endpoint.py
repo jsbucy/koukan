@@ -154,8 +154,8 @@ class RestEndpoint(SyncFilter):
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
         body_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
-        if body_json == {}:
-            return HttpResponse(status_code=200)
+        # verify the not tx.empty() condition in the caller
+        assert body_json
 
         rest_resp = self._post_tx(
             self.transaction_url, body_json, self.client.patch, deadline)
@@ -281,9 +281,19 @@ class RestEndpoint(SyncFilter):
                 tx.merge_from(err)
                 return err
             tx_update = True
-        elif downstream_delta:
+        # the precondition is that the delta isn't empty but it might
+        # only contain internal fields
+        elif not downstream_delta.empty(WhichJson.REST_UPDATE):
             rest_resp = self._update(downstream_delta, deadline)
             # TODO handle 412 failed precondition
+            if rest_resp is None or rest_resp.status_code != 200:
+                err_delta = TransactionMetadata()
+                tx.fill_inflight_responses(
+                    Response(450, 'RestEndpoint upstream http err'),
+                    err_delta)
+                tx.merge_from(err_delta)
+                return err_delta
+
             tx_update = True
         elif not data_last:
             return TransactionMetadata()
@@ -305,9 +315,11 @@ class RestEndpoint(SyncFilter):
             if tx_out is None:
                 logging.debug('RestEndpoint.on_update bad resp_json %s',
                               resp_json)
+                err_delta = TransactionMetadata()
                 tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint bad resp_json'))
-                return
+                    Response(450, 'RestEndpoint bad resp_json'), err_delta)
+                tx.merge_from(err_delta)
+                return err_delta
 
             if self.upstream_tx.req_inflight(tx_out):
                 tx_out = self._get(deadline)
@@ -629,5 +641,7 @@ class RestEndpoint(SyncFilter):
             if not deadline.remaining(1):
                 break
             if (self.etag is None or self.etag == prev_etag) and (delta < 1):
-                time.sleep(1 - delta)
+                nospin = 1 - delta
+                logging.debug('nospin %s %f', self.transaction_url, nospin)
+                time.sleep(nospin)
         return tx_out

@@ -235,6 +235,7 @@ class ControllerTls(Controller):
         self.max_rcpt = max_rcpt
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
+        # TODO inject this
         self.executor = Executor(inflight_limit=100, watchdog_timeout=3600)
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of

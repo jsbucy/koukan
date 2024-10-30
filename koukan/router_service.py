@@ -169,7 +169,7 @@ class Service:
             self.cv.notify_all()
 
         listener_yaml = self.config.root_yaml['rest_listener']
-        if listener_yaml.get('use_fastapi', False):
+        if listener_yaml.get('use_fastapi', True):
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
             app = rest_service.create_app(self.rest_handler_factory)

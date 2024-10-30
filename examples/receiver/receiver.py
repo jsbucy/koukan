@@ -9,6 +9,7 @@ import logging
 from tempfile import TemporaryFile
 import json
 from io import IOBase
+import os
 
 from flask import (
     Flask,
@@ -29,8 +30,9 @@ class Transaction:
     message_json : Optional[dict] = None
 
     blobs : Dict[str, IOBase]
+    close_files : bool
 
-    def __init__(self, tx_json):
+    def __init__(self, tx_json, close_files):
         self.blobs = {}
 
         logging.debug('Tx.init %s', tx_json)
@@ -88,36 +90,34 @@ class Transaction:
             file.write(b)
         self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
         self.log()
-        file.seek(0)
 
     def _put_blob(self, stream : IOBase, file) -> int:
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
-        file.seek(0)
-        logging.debug(file.read())
         return 200
-
-    def put_tx_body(self, stream : IOBase) -> int:
-        logging.debug('put_tx_body')
-        resp = self._put_blob(stream, self.body_file)
-        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-        self.log()
-        return resp
 
     def put_blob(self, blob_id, stream : IOBase) -> int:
         logging.debug('put_blob %s', blob_id)
         return self._put_blob(stream, self.blobs[blob_id])
 
+    def _file_size(self, file):
+        file.seek(-1, os.SEEK_END)
+        return file.tell() + 1
+
     def log(self):
         logging.debug('received tx %s', self.tx_json)
         logging.debug('received parsed %s',
                       self.message_json if self.message_json else None)
-        self.body_file.seek(0)
-        logging.debug('received body %s', self.body_file.read())
+        logging.debug('received body %d bytes', self._file_size(self.body_file))
+
         logging.debug('received blobs %s', self.blobs.keys())
-        for blob_id,file in self.blobs.items():
-            file.seek(0)
-            logging.debug('received blob %s %s', blob_id, file.read())
+        for blob_id, blob_file in self.blobs.items():
+            logging.debug('received blob %s %d bytes',
+                          blob_id, self._file_size(blob_file))
+
+        if self.close_files:
+            for f in [ self.body_file ] + [f for f in self.blobs.values()]:
+                f.close()
 
     def cancel(self):
         return FlaskResponse()
@@ -125,13 +125,15 @@ class Transaction:
 
 class Receiver:
     transactions : dict[str, Transaction]
+    close_files : bool
 
-    def __init__(self):
+    def __init__(self, close_files=False):
         self.transactions = {}
+        self.close_files = close_files
 
     def create_tx(self, tx_json) -> Tuple[str,dict]:
         tx_id = secrets.token_urlsafe()
-        tx = Transaction(tx_json)
+        tx = Transaction(tx_json, self.close_files)
         self.transactions[tx_id] = tx
         return tx_id, tx.get_json()
 
@@ -149,10 +151,6 @@ class Receiver:
                        tx_rest_id : str,
                        stream : IOBase):
         return self.transactions[tx_rest_id].create_tx_body(stream)
-
-    def put_tx_body(self, tx_rest_id: str, stream):
-        status = self.transactions[tx_rest_id].put_tx_body(stream)
-        return FlaskResponse(status=status)
 
     def put_blob(self, tx_rest_id: str, blob_id : str, stream):
         status = self.transactions[tx_rest_id].put_blob(blob_id, stream)
@@ -193,10 +191,6 @@ def create_app(receiver = None):
     def create_tx_body(tx_rest_id) -> FlaskResponse:
         receiver.create_tx_body(tx_rest_id, request.stream)
         return FlaskResponse(status=201)
-
-    @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
-    def put_tx_body(tx_rest_id) -> FlaskResponse:
-        return receiver.put_tx_body(tx_rest_id, request.stream)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:

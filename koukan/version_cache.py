@@ -18,7 +18,7 @@ class IdVersion:
     lock : Lock
     cv : Condition
 
-    async_waiters : List[Tuple[object,asyncio.Future]]
+    async_waiters : List[Tuple[object,asyncio.Future,int]]
 
     version : int
 
@@ -51,6 +51,8 @@ class IdVersion:
                           id(self), self.id, self.version, version)
             if version < self.version:
                 raise VersionConflictException()
+            if version == self.version:
+                return
             self.version = version
             self.cv.notify_all()
 
@@ -60,7 +62,8 @@ class IdVersion:
                 # timed out? this is benign?
                 afut.set_result(version)
 
-            for loop,future in self.async_waiters:
+            for loop,future,waiter_version in self.async_waiters:
+                assert version > waiter_version
                 logging.debug('sched update done')
                 loop.call_soon_threadsafe(partial(done, future, version))
             self.async_waiters = []
@@ -74,15 +77,18 @@ class IdVersion:
 
         with self.lock:
             if self.version > version:
+                logging.debug('cache version %d version %d', self.version, version)
                 return True
-            self.async_waiters.append((loop, afut))
+            self.async_waiters.append((loop, afut, version))
 
         try:
-            await asyncio.wait_for(afut, timeout)
+            new_version = await asyncio.wait_for(afut, timeout)
+            logging.debug('new_version %d version %d', new_version, version)
+            assert new_version > version
             return True
         except TimeoutError:
             with self.lock:
-                for i,(loop,fut) in enumerate(self.async_waiters):
+                for i,(loop,fut,version) in enumerate(self.async_waiters):
                     if fut == afut:
                         del self.async_waiters[i]
                         break

@@ -277,7 +277,7 @@ MAX_TIMEOUT=30
 
 
 class RestHandler(Handler):
-    CHUNK_SIZE = 1048576
+    chunk_size : int
     executor : Optional[Executor] = None
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
@@ -297,13 +297,15 @@ class RestHandler(Handler):
                  tx_rest_id=None,
                  blob_rest_id=None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
-                 http_host : Optional[str] = None):
+                 http_host : Optional[str] = None,
+                 chunk_size : int = 1048576):
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
         self._blob_rest_id = blob_rest_id
         self.rest_id_factory = rest_id_factory
         self.http_host = http_host
+        self.chunk_size = chunk_size
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -453,10 +455,14 @@ class RestHandler(Handler):
             etag=self._etag(tx.version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
-    def _get_tx_req(self, request):
+    def _get_tx_req(self, request) -> Optional[int]:
         etag = request.headers.get('if-none-match', None)
+
         version = None
         if etag is not None:
+            # ugh the presence of these quotes is a difference between
+            # flask and fastapi :/
+            etag = etag.strip('"')
             cached_version = self.async_filter.version()
             logging.debug(
                 'RestHandler._get_tx_req %s etag %s cached_version %s',
@@ -469,7 +475,6 @@ class RestHandler(Handler):
         return version
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
-        logging.debug('RestHandler.get_tx_async %s', self._tx_rest_id)
         if self.async_filter is None:
             return self.response(
                 request, code=404, msg='transaction not found')
@@ -482,7 +487,8 @@ class RestHandler(Handler):
 
         version = self._get_tx_req(request)
 
-        logging.debug('RestHandler._get_tx_async version %s', version)
+        logging.debug('RestHandler.get_tx_async %s, version %s, timeout %s',
+                      self._tx_rest_id, version, timeout)
         if version is not None:
             wait_result = await self.async_filter.wait_async(
                 version, deadline.deadline_left())
@@ -591,7 +597,7 @@ class RestHandler(Handler):
 
         if req_upload is None:
             self.bytes_read = 0
-            while b := request.stream.read(self.CHUNK_SIZE):
+            while b := request.stream.read(self.chunk_size):
                 logging.debug('RestHandler.create_blob chunk %d', len(b))
                 chunk_resp = self._put_blob_chunk(request, b)
                 if chunk_resp.status_code != 200:
@@ -682,7 +688,7 @@ class RestHandler(Handler):
         if err:
             return err
         self.bytes_read = 0
-        while b := request.stream.read(self.CHUNK_SIZE):
+        while b := request.stream.read(self.chunk_size):
             logging.debug('RestHandler.put_blob chunk %d', len(b))
             resp = self._put_blob_chunk(request, b)
             if resp.status_code != 200:
@@ -732,18 +738,22 @@ class RestHandler(Handler):
         b = bytes()
         self.bytes_read = 0
         async for chunk in request.stream():
+            # copy from chunk to b until it contains chunk_size, then
+            # send upstream
             while chunk:
-                to_go = self.CHUNK_SIZE - len(b)
+                to_go = self.chunk_size - len(b)
                 count = min(to_go, len(chunk))
                 b += chunk[0:count]
-                if len(b) < self.CHUNK_SIZE:
+                if len(b) < self.chunk_size:
                     assert count == len(chunk)
                     break
                 resp = await self._put_blob_chunk_async(request, b)
-                if resp is not None:
+                if resp is not None and resp.status_code != 200:
+                    logging.debug(resp)
                     return resp
                 b = bytes()
                 chunk = chunk[count:]
+        # send any leftover
         return await self._put_blob_chunk_async(request, b, last=True)
 
     async def _put_blob_chunk_async(

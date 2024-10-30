@@ -135,7 +135,6 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(resp.json, {})
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
 
-
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
                 version=1))
@@ -270,7 +269,8 @@ class RestHandlerTest(unittest.TestCase):
                 async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
-                tx_rest_id='rest_id')
+                tx_rest_id='rest_id',
+                chunk_size=8)
             resp = handler.create_blob(
                 FlaskRequest.from_values(data=body),
                 tx_body=True)
@@ -617,7 +617,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            chunk_size=8)
 
         scope = {'type': 'http',
                  'headers': self._headers([

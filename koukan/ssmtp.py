@@ -4,6 +4,10 @@ import smtplib
 import sys
 import secrets
 import logging
+import threading
+from functools import partial
+import argparse
+import time
 
 import email.message
 import email.utils
@@ -33,12 +37,41 @@ def main(host, port, ehlo, mail_from, rcpt_to, data):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
 
-    host = sys.argv[1]
-    port = sys.argv[2]
-    ehlo = sys.argv[3]
-    mail_from = sys.argv[4]
-    rcpt_to = sys.argv[5:]
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', default='1025')
+    parser.add_argument('--ehlo', default='localhost')
 
-    main(host, port, ehlo, mail_from, rcpt_to, sys.stdin.read())
+    parser.add_argument('--mail_from')
+    #parser.add_argument('--rfc822_filename')
+    parser.add_argument('--notification_host', default='msa-output')
+    # {}: use system defaults for retries
+    parser.add_argument('--retry', default='{}')
+    parser.add_argument('--iters', default='1')
+    parser.add_argument('--threads', default='1')
+    parser.add_argument('rcpt_to', nargs='*')
+
+    args = parser.parse_args()
+    host = args.host
+    port = args.port
+    ehlo = args.ehlo
+    mail_from = args.mail_from
+    rcpt_to = args.rcpt_to
+
+    def send():
+        for i in range(0, int(args.iters)):
+            main(host, port, ehlo, mail_from, rcpt_to, msg)
+
+    msg = sys.stdin.read()
+    threads = []
+    start = time.monotonic()
+    for t in range(0, int(args.threads)):
+        t = threading.Thread(target = send)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    stop = time.monotonic()
+    logging.info('done %f', stop - start)

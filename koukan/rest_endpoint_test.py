@@ -16,7 +16,12 @@ import werkzeug.http
 
 from koukan.deadline import Deadline
 from koukan.rest_endpoint import RestEndpoint
-from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
+from koukan.filter import (
+    HostPort,
+    Mailbox,
+    Resolution,
+    TransactionMetadata,
+    WhichJson )
 from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
 
@@ -129,13 +134,6 @@ class RestEndpointTest(unittest.TestCase):
             (length := environ.get('CONTENT_LENGTH', None))):
             req.body = wsgi_input.read(int(length))
         self.requests.append(req)
-
-        if not self.responses:
-            # XXX some test uses this to exercise timeouts but we want to
-            # fastfail the rest of the time?
-            time.sleep(5)
-            start_response('500 timeout', [])
-            return ''
 
         resp = self.responses.pop(0)
         resp_headers = []
@@ -770,6 +768,32 @@ class RestEndpointTest(unittest.TestCase):
             self.assertEqual(t.mail_response.code, 201)
             self.assertEqual([r.code for r in t.rcpt_response], [202])
             self.assertEqual(t.data_response.code, 203)
+
+    def test_filter_api_internal_delta(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     min_poll=0.1)
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
+            location = '/transactions/123'))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+
+        # update with internal-only fields -> empty delta -> should
+        # not send an http request upstream
+        delta = TransactionMetadata()
+        delta.options = {}  # internal-only field
+        upstream_delta = rest_endpoint.on_update(tx, delta, 5)
+        self.assertTrue(upstream_delta.empty(WhichJson.ALL))
 
     def testFilterApiMultiRcpt(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,

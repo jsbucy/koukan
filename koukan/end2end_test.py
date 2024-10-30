@@ -160,7 +160,7 @@ class End2EndTest(unittest.TestCase):
             partial(self.router.main, alive=self.executor.ping_watchdog))
         self.fake_smtpd.start()
         self.hypercorn_shutdown = asyncio.Event()
-        self.receiver = Receiver()
+        self.receiver = Receiver(close_files=False)
         self.executor.submit(
             partial(run, [('localhost', self.receiver_rest_port)], None, None,
                     create_app(self.receiver), self.hypercorn_shutdown,
@@ -230,6 +230,7 @@ class End2EndTest(unittest.TestCase):
             self.assertNotIn(blob_id, blob_content)
             blob_content[blob_id] = content
 
+        tx.body_file.seek(0)
         body = tx.body_file.read()
         logging.debug('raw %s', body)
         self.assertIn(b'Received:', body)

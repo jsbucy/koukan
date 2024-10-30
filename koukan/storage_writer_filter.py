@@ -51,7 +51,10 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def wait(self, version, timeout) -> bool:
-        self._load()
+        # cursor can be None after first update() to create with the
+        # cutthrough/handoff workflow
+        if self.tx_cursor is None:
+            self._load()
         if self.tx_cursor.version != version:
             return True
         return self.tx_cursor.wait(timeout)
