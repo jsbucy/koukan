@@ -264,7 +264,8 @@ class SyncFilterAdapter(AsyncFilter):
 
 
     def _blob_wakeup(self):
-        logging.debug('SyncFilterAdapter.blob_wakeup %s', self.blob_writer.q)
+        logging.debug('SyncFilterAdapter.blob_wakeup %s',
+                      [len(b) for b in self.blob_writer.q])
         tx = self.get()
         assert tx is not None
         # shenanigans: empty update, _update_once() will dequeue from
