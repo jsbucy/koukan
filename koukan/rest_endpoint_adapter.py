@@ -424,22 +424,30 @@ class RestHandler(Handler):
             return self.response(
                 request, code=404, msg='transaction not found')
 
+        tx = self._get_tx()
+        if tx is None:
+            return self.response(request, code=404, msg='unknown tx'), None
+
+        etag = request.headers.get('if-none-match', None)
+
+        if (timeout is None or etag is None or
+            not self._check_etag(etag, tx.version)):
+            return self._get_tx_resp(request, tx)
+
         deadline = Deadline(timeout)
 
-        version = self._get_tx_req(request)
-        if version is not None:
-            wait_result = self.async_filter.wait(
-                version, deadline.deadline_left())
-            if not wait_result:
-                return self.response(request, code=304, msg='unchanged',
-                                     headers=[('etag', self._etag(version))])
+        wait_result = self.async_filter.wait(
+            tx.version, deadline.deadline_left())
+        if not wait_result:
+            return self.response(request, code=304, msg='unchanged',
+                                 headers=[('etag', self._etag(tx.version))])
 
         tx = self._get_tx()
         if tx is None:
             return self.response(request, code=500, msg='get tx')
         return self._get_tx_resp(request, tx)
 
-    def _get_tx(self) -> HttpResponse:
+    def _get_tx(self) -> Optional[TransactionMetadata]:
         tx = self.async_filter.get()
         if tx is None:
             return None
@@ -453,27 +461,39 @@ class RestHandler(Handler):
     def _get_tx_resp(self, request, tx):
         return self.response(
             request,
-            etag=self._etag(tx.version),
+            etag=self._etag(tx.version) if tx else None,
             resp_json=tx.to_json(WhichJson.REST_READ))
 
-    def _get_tx_req(self, request) -> Optional[int]:
-        etag = request.headers.get('if-none-match', None)
+    def _check_etag(self, etag, cached_version) -> bool:
+        # ugh the presence of these quotes is a difference between
+        # flask and fastapi :/
+        etag = etag.strip('"')
+        logging.debug(
+            'RestHandler._check_etag %s etag %s cached_version %s',
+            self._tx_rest_id, etag, cached_version)
+        return self._etag(cached_version) == etag
 
-        version = None
-        if etag is not None:
-            # ugh the presence of these quotes is a difference between
-            # flask and fastapi :/
-            etag = etag.strip('"')
-            cached_version = self.async_filter.version()
-            logging.debug(
-                'RestHandler._get_tx_req %s etag %s cached_version %s',
-                self._tx_rest_id, etag, cached_version)
-
-            if cached_version is not None and (
-                    self._etag(cached_version) == etag):
-                version = cached_version
-        # else: no waiting/point read
-        return version
+    async def _get_tx_async(
+            self, request
+    ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
+        cfut = self.executor.submit(lambda: self._get_tx())
+        if cfut is None:
+            return self.response(
+                request, code=500, msg='get tx async schedule read'), None
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(request, code=500, msg='get tx async read'), None
+        if not afut.done():
+            return self.response(request, code=500,
+                                 msg='get tx async read fut done'), None
+        if afut.result() is None:
+            return self.response(request, code=404, msg='unknown tx'), None
+        return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
         if self.async_filter is None:
@@ -484,39 +504,32 @@ class RestHandler(Handler):
         if err is not None:
             return err
 
+        etag = request.headers.get('if-none-match', None)
+        err, tx = await self._get_tx_async(request)
+        if err is not None:
+            return err
+
+        # or tx is unleased
+        # this is a behavior change, it currently waits even if
+        # it's unleased?
+        if (timeout is None or etag is None or
+            not self._check_etag(etag, tx.version)):
+            return self._get_tx_resp(request, tx)
+
+        # elif tx.sesssion != us:
+        #   return http 307 to tx.session
+
         deadline = Deadline(timeout)
 
-        version = self._get_tx_req(request)
-
-        logging.debug('RestHandler.get_tx_async %s, version %s, timeout %s',
-                      self._tx_rest_id, version, timeout)
-        if version is not None:
-            wait_result = await self.async_filter.wait_async(
-                version, deadline.deadline_left())
-            if not wait_result:
-                return self.response(request, code=304, msg='unchanged',
-                                     headers=[('etag', self._etag(version))])
-
-        cfut = self.executor.submit(lambda: self._get_tx())
-        if cfut is None:
-            return self.response(
-                request, code=500, msg='get tx async schedule read')
-        afut = asyncio.wrap_future(cfut)
-        try:
-            # wait ~forever here, this is a point read
-            # xxx fixed timeout? ignore deadline?
-            await asyncio.wait_for(afut, None)
-        except TimeoutError:
-            # unexpected
-            return self.response(request, code=500, msg='get tx async read')
-        if not afut.done():
-            return self.response(request, code=500,
-                                 msg='get tx async read fut done')
-        tx = afut.result()
-        if tx is None:
-            return self.response(request, code=404, msg='unknown transaction')
+        wait_result = await self.async_filter.wait_async(
+            tx.version, deadline.deadline_left())
+        if not wait_result:
+            return self.response(request, code=304, msg='unchanged',
+                                 headers=[('etag', self._etag(tx.version))])
+        err, tx = await self._get_tx_async(request)
+        if err is not None:
+            return err
         return self._get_tx_resp(request, tx)
-
 
     def patch_tx(self, request : HttpRequest,
                  req_json : dict,
