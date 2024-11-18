@@ -429,10 +429,12 @@ class RestHandler(Handler):
             return self.response(request, code=404, msg='unknown tx'), None
 
         etag = request.headers.get('if-none-match', None)
-
         if (timeout is None or etag is None or
             not self._check_etag(etag, tx.version)):
             return self._get_tx_resp(request, tx)
+
+        # elif tx.sesssion != us:
+        #   return self.response(request, 307, [('location', tx.session)])
 
         deadline = Deadline(timeout)
 
@@ -517,7 +519,7 @@ class RestHandler(Handler):
             return self._get_tx_resp(request, tx)
 
         # elif tx.sesssion != us:
-        #   return http 307 to tx.session
+        #   return self.response(request, 307, [('location', tx.session)])
 
         deadline = Deadline(timeout)
 
@@ -578,6 +580,9 @@ class RestHandler(Handler):
                 request, code=400,
                 msg='RestHandler.patch_tx bad request')
 
+        # if tx.session...
+        #   detach ping to that
+
         tx.body = body
         del tx.body_blob
         return self.response(
@@ -611,20 +616,17 @@ class RestHandler(Handler):
 
         if req_upload is None:
             self.bytes_read = 0
-            while b := request.stream.read(self.chunk_size):
-                logging.debug('RestHandler.create_blob chunk %d', len(b))
-                chunk_resp = self._put_blob_chunk(request, b)
-                if chunk_resp.status_code != 200:
-                    return chunk_resp
-            chunk_resp = self._put_blob_chunk(request, b'', last=True)
+            chunk_resp = self._put_blob(request)
             if chunk_resp.status_code != 200:
                 return chunk_resp
+
+        # http ping owner session if different
 
         return resp
 
     def _create_blob(self, request : HttpRequest,
-                    tx_body : bool = False,
-                    req_upload : Optional[str] = None) -> HttpResponse:
+                     tx_body : bool = False,
+                     req_upload : Optional[str] = None) -> HttpResponse:
         logging.debug('RestHandler._create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
@@ -693,25 +695,30 @@ class RestHandler(Handler):
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
+    def _put_blob(self, request):
+        while b := request.stream.read(self.chunk_size):
+            logging.debug('RestHandler._put_blob %d', len(b))
+            chunk_resp = self._put_blob_chunk(request, b)
+            if chunk_resp.status_code != 200:
+                return chunk_resp
+        return self._put_blob_chunk(request, b'', last=True)
 
     def put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> HttpResponse:
         logging.debug('RestHandler.put_blob %s', request.headers)
-        err = self._put_blob(request, blob_rest_id, tx_body)
+        err = self._get_blob_writer(request, blob_rest_id, tx_body)
         if err:
             return err
         self.bytes_read = 0
-        while b := request.stream.read(self.chunk_size):
-            logging.debug('RestHandler.put_blob chunk %d', len(b))
-            resp = self._put_blob_chunk(request, b)
-            if resp.status_code != 200:
-                return resp
-        return self._put_blob_chunk(request, b'', last=True)
+        return self._put_blob(request)
 
-    def _put_blob(self, request : HttpRequest,
-                 blob_rest_id : Optional[str] = None,
-                 tx_body : bool = False) -> HttpResponse:
+        # http ping owner session if different
+
+
+    def _get_blob_writer(self, request : HttpRequest,
+                         blob_rest_id : Optional[str] = None,
+                         tx_body : bool = False) -> HttpResponse:
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -737,7 +744,7 @@ class RestHandler(Handler):
             tx_body : bool = False,
             blob_rest_id : Optional[str] = None) -> FastApiResponse:
         cfut = self.executor.submit(
-            lambda: self._put_blob(request, blob_rest_id, tx_body), 0)
+            lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -769,6 +776,14 @@ class RestHandler(Handler):
                 chunk = chunk[count:]
         # send any leftover
         return await self._put_blob_chunk_async(request, b, last=True)
+
+        # BlobCursor.update_tx is rest_id of owner tx
+        # every append (but not create) already reads the tx to ping
+        # last_update to wake up the OH
+
+        # so all we need here is to plumb out the session uri if any
+        # to http ping here
+
 
     async def _put_blob_chunk_async(
             self, request : FastApiRequest, b : bytes, last=False

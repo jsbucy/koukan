@@ -156,18 +156,23 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
 
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                                          http_host='msa')
+                                  http_host='msa')
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                version=2))
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
                 mail_from=Mailbox('alice'),
                 mail_response=Response(201),
                 version=3))
-            resp = handler.get_tx(FlaskRequest.from_values())
+            resp = handler.get_tx(FlaskRequest.from_values(
+                headers=[('if-none-match', '2'),
+                         ('request-timeout', '1')]))
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
-
 
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
@@ -476,6 +481,10 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         endpoint.expect_get(TransactionMetadata(
             host='msa',
             mail_from=Mailbox('alice'),
+            version=2))
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
             mail_response=Response(201),
             version=3))
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
@@ -483,7 +492,9 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                               executor=self.executor)
 
         scope = {'type': 'http',
-                 'headers': []}
+                 'headers': self._headers(
+                     [('if-none-match', '2'),
+                      ('request-timeout', '1')])}
         req = FastApiRequest(scope)
 
         resp = await handler.get_tx_async(req)
