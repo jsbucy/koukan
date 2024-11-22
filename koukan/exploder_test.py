@@ -379,7 +379,7 @@ class ExploderTest(unittest.TestCase):
                                  debug_futures=True)
 
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url)
+        self.storage = Storage.connect(self.db_url, session_uri='http://exploder_test')
         self.upstream_endpoints = []
 
     def tearDown(self):
@@ -395,13 +395,13 @@ class ExploderTest(unittest.TestCase):
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
-    def factory(self):
+    def factory(self, host):
         return self.upstream_endpoints.pop(0)
 
     # xxx all tests validate response message
 
     def _test_one(self, msa, t : Test):
-        exploder = Exploder('output-chain', lambda: self.factory(),
+        exploder = Exploder('output-chain', self.factory,
                             executor=self.executor,
                             rcpt_timeout=2,
                             msa=msa,
@@ -465,7 +465,7 @@ class ExploderTest(unittest.TestCase):
     # in Exploder._on_rcpts() that is otherwise dead code until the gateway
     # implements SMTP PIPELINING
     def testSuccess(self):
-        exploder = Exploder('output-chain', lambda: self.factory(),
+        exploder = Exploder('output-chain', self.factory,
                             executor=self.executor)
 
         tx = TransactionMetadata()
@@ -527,7 +527,7 @@ class ExploderTest(unittest.TestCase):
         # don't expect an additional update to enable retry/notification
 
     def testMxRcptTemp(self):
-        exploder = Exploder('output-chain', lambda: self.factory(),
+        exploder = Exploder('output-chain', self.factory,
                             executor=self.executor,
                             rcpt_timeout=2, msa=False,
                             default_notification={'host': 'smtp-out'})

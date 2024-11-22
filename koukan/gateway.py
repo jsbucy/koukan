@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 import sys
 import logging
 from threading import Thread
@@ -14,6 +14,7 @@ from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from koukan.smtp_service import service as smtp_service
 import koukan.rest_service as rest_service
 import koukan.fastapi_service as fastapi_service
+from koukan.filter import AsyncFilter
 from koukan.rest_endpoint_adapter import (
     SyncFilterAdapter,
     EndpointFactory,
@@ -82,7 +83,7 @@ class SmtpGateway(EndpointFactory):
         return None
 
     # EndpointFactory
-    def create(self, host):
+    def create(self, host) -> Optional[Tuple[AsyncFilter, dict]]:
         rest_yaml = self.config.root_yaml['rest_listener']
 
         smtp_yaml = self.config.root_yaml['smtp_output']
@@ -107,7 +108,7 @@ class SmtpGateway(EndpointFactory):
             executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
             self.inflight[rest_id] = executor
 
-            return executor
+            return executor, {'rest_lro': False}
 
     # EndpointFactory
     def get(self, rest_id):
@@ -162,9 +163,9 @@ class SmtpGateway(EndpointFactory):
                                 daemon=True)
         self.gc_thread.start()
 
-        rest_yaml = self.config.root_yaml['rest_listener']
+        rest_listener_yaml = self.config.root_yaml['rest_listener']
         self.rest_id_factory = lambda: secrets.token_urlsafe(
-            rest_yaml.get('rest_id_entropy', 16))
+            rest_listener_yaml.get('rest_id_entropy', 16))
 
         root_yaml = self.config.root_yaml
         logging_yaml = root_yaml.get('logging', None)
@@ -195,7 +196,9 @@ class SmtpGateway(EndpointFactory):
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            session_uri=rest_listener_yaml.get('session_uri', None),
+            service_uri=rest_listener_yaml.get('service_uri', None))
 
         rest_listener_yaml = root_yaml['rest_listener']
         if rest_listener_yaml.get('use_fastapi', True):

@@ -501,7 +501,7 @@ class StorageTestSqlite(StorageTestBase):
         self.dir.cleanup()
 
     def _connect(self):
-        return Storage.connect(self.db_url)
+        return Storage.connect(self.db_url, session_uri='http://storage-test')
 
 
 class StorageTestPostgres(StorageTestBase):
@@ -518,7 +518,7 @@ class StorageTestPostgres(StorageTestBase):
             self.storage_yaml = {}
             self.pg, self.pg_url = postgres_test_utils.setup_postgres()
 
-        return Storage.connect(self.pg_url)
+        return Storage.connect(self.pg_url, session_uri='http://storage-test')
 
 
 if __name__ == '__main__':

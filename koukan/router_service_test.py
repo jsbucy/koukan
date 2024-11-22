@@ -7,6 +7,7 @@ import unittest
 import socketserver
 import time
 from functools import partial
+from urllib.parse import urljoin
 
 import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
@@ -141,6 +142,11 @@ class RouterServiceTest(unittest.TestCase):
     endpoints : List[FakeSyncFilter]
     use_postgres = True
 
+    def __init__(self, *args, **kwargs):
+        super(RouterServiceTest, self).__init__(*args, **kwargs)
+
+        self.endpoints = []
+
     def get_endpoint(self):
         logging.debug('RouterServiceTest.get_endpoint')
         with self.lock:
@@ -151,6 +157,25 @@ class RouterServiceTest(unittest.TestCase):
         with self.lock:
             self.endpoints.append(endpoint)
             self.cv.notify_all()
+
+    def _setup_router(self):
+        root_yaml['storage']['url'] = self.storage_url
+
+        # find a free port
+        with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
+            self.port = s.server_address[1]
+        root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
+        root_yaml['rest_listener']['session_uri'] = 'http://localhost:%d' % self.port
+        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
+        router_url = 'http://localhost:%d' % self.port
+        config = Config()
+        config.inject_yaml(root_yaml)
+        config.inject_filter(
+            'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)
+        service = Service(config=config)
+        service.start_main()
+        self.assertTrue(service.wait_started(5))
+        return config, router_url, service
 
     def setUp(self):
         logging.basicConfig(
@@ -169,20 +194,7 @@ class RouterServiceTest(unittest.TestCase):
         root_yaml['storage']['url'] = self.storage_url
 
         # find a free port
-        with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
-            self.port = s.server_address[1]
-        root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
-        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
-        self.router_url = 'http://localhost:%d' % self.port
-        self.endpoints = []
-        self.config = Config()
-        self.config.inject_yaml(root_yaml)
-        self.config.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)
-        self.service = Service(config=self.config)
-        self.service.start_main()
-
-        self.assertTrue(self.service.wait_started(5))
+        self.config, self.router_url, self.service = self._setup_router()
 
         # probe for startup
         def exp(tx, tx_delta):
@@ -343,7 +355,7 @@ class RouterServiceTest(unittest.TestCase):
             json = tx.to_json(WhichJson.REST_CREATE),
             headers={'host': 'submission'})
         self.assertEqual(201, post_resp.status_code)
-        tx_url = rest_endpoint.base_url + post_resp.headers['location']
+        tx_url = rest_endpoint._maybe_qualify_url(post_resp.headers['location'])[0]
         logging.debug(tx_url)
 
         post_body_resp = rest_endpoint.client.post(
@@ -363,6 +375,7 @@ class RouterServiceTest(unittest.TestCase):
             tx_url,
             headers={'if-none-match': get_resp.headers['etag'],
                      'request-timeout': '5'})
+        logging.debug(get_resp2)
         logging.debug(get_resp2.json())
         self.assertEqual(200, get_resp.status_code)
         self.assertNotEqual(get_resp2.headers['etag'], get_resp.headers['etag'])
@@ -462,7 +475,7 @@ class RouterServiceTest(unittest.TestCase):
 
         resp = rest_endpoint.client.post(
             rest_endpoint._maybe_qualify_url(
-                rest_endpoint.transaction_path + '/body'),
+                rest_endpoint.transaction_path + '/body')[0],
             content = data())
         logging.debug(resp)
 
@@ -965,6 +978,78 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertRcptCodesEqual(tx.rcpt_response, [202])
         self.assertEqual(tx.data_response.code, 203)
+
+
+    def test_multi_node(self):
+        config2, url2, service2 = self._setup_router()
+
+        # start a tx on self.service
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = b'hello, world!'
+        tx = TransactionMetadata(mail_from=Mailbox('alice@example.com'))
+
+        def exp_mail(tx, tx_delta):
+            time.sleep(1)
+            upstream_delta=TransactionMetadata(mail_response=Response(201))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp_mail)
+        self.add_endpoint(upstream_endpoint)
+
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), timeout=1)
+        logging.debug(rest_endpoint.transaction_path)
+
+        # GET the tx from service2, point read should be serivced directly
+        transaction_url=urljoin(url2, rest_endpoint.transaction_path)
+        logging.debug(transaction_url)
+        endpoint2 = RestEndpoint(
+            transaction_url=transaction_url,
+            static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        endpoint2.base_url = url2
+        endpoint2.transaction_path = rest_endpoint.transaction_path
+        tx_json = endpoint2.get_json()
+
+        # hanging GET should be redirected to self.service
+        tx_json = endpoint2._get_json(timeout = 2)
+        logging.debug(tx_json)
+
+        def exp_rcpt(tx, tx_delta):
+            time.sleep(1)
+            upstream_delta=TransactionMetadata(rcpt_response=[Response(202)])
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp_rcpt)
+
+        # PATCH the tx via service2, it does the update locally and
+        # sends ping to self.service
+        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')])
+        tx.merge_from(tx_delta)
+        endpoint2.on_update(tx, tx_delta, timeout=2)
+
+        # send the body to service2
+        def exp_body(tx, tx_delta):
+            time.sleep(1)
+            upstream_delta=TransactionMetadata(data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp_body)
+
+        tx_delta = TransactionMetadata(
+            body_blob=InlineBlob(body, last=True))
+        tx.merge_from(tx_delta)
+        upstream_delta = endpoint2.on_update(tx, tx_delta)
+        logging.debug('%s %s', tx, upstream_delta)
+
+        tx_json = endpoint2.get_json()
+        self.assertIn(('data_response', {'code': 203, 'message': 'ok'}),
+                      tx_json.items())
+
+
+        self.assertTrue(service2.shutdown())
 
 
 class RouterServiceTestFlask(RouterServiceTest):

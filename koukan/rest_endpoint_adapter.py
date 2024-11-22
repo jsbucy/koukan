@@ -15,6 +15,10 @@ import time
 from threading import Condition, Lock
 import json
 import asyncio
+from functools import partial
+
+from urllib.parse import urljoin
+import httpx
 
 from flask import (
     Request as FlaskRequest,
@@ -291,6 +295,9 @@ class RestHandler(Handler):
     range : Optional[ContentRange] = None
     blob : Optional[WritableBlob] = None
     bytes_read : Optional[int] = None
+    endpoint_yaml : Optional[dict] = None
+    session_uri : Optional[str] = None
+    service_uri : Optional[str] = None
 
     def __init__(self,
                  executor : Optional[Executor] = None,
@@ -299,7 +306,10 @@ class RestHandler(Handler):
                  blob_rest_id=None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None,
-                 chunk_size : int = 1048576):
+                 chunk_size : int = 1048576,
+                 endpoint_yaml : Optional[dict] = None,
+                 session_uri : Optional[str] = None,
+                 service_uri : Optional[str] = None):
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
@@ -307,6 +317,12 @@ class RestHandler(Handler):
         self.rest_id_factory = rest_id_factory
         self.http_host = http_host
         self.chunk_size = chunk_size
+        if endpoint_yaml:
+            self.endpoint_yaml = endpoint_yaml
+        else:
+            self.endpoint_yaml = {}
+        self.session_uri = session_uri
+        self.service_uri = service_uri
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -345,6 +361,12 @@ class RestHandler(Handler):
                 headers=headers_dict)
         return PlainTextResponse(
             status_code=code, content=msg, headers=headers_dict)
+
+    def _ping_tx(self, session_uri, tx_rest_id):
+        logging.debug('ping tx %s', self._tx_rest_id)
+
+        # TODO HEAD makes more sense but this should work for now
+        httpx.get(urljoin(session_uri, make_tx_uri(tx_rest_id)))
 
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
@@ -408,10 +430,18 @@ class RestHandler(Handler):
 
         tx.body = body
         del tx.body_blob
+        # return uri qualified to session or service per self.endpoint_yaml
+        tx_path = make_tx_uri(tx.rest_id)
+        if self.endpoint_yaml.get('rest_lro', False) is False:
+            tx_uri = urljoin(self.session_uri, tx_path)
+        elif self.service_uri is not None:
+            tx_uri = urljoin(self.service_uri, tx_path)
+        else:
+            tx_uri = tx_path
         resp = self.response(
             request, code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
-            headers=[('location', make_tx_uri(tx.rest_id))],
+            headers=[('location', tx_uri)],
             etag=self._etag(upstream.version))
         logging.debug('RestHandler._create %s', resp)
         return resp
@@ -432,9 +462,11 @@ class RestHandler(Handler):
         if (timeout is None or etag is None or
             not self._check_etag(etag, tx.version)):
             return self._get_tx_resp(request, tx)
-
-        # elif tx.sesssion != us:
-        #   return self.response(request, 307, [('location', tx.session)])
+        elif (timeout is not None and etag is not None and
+              tx.session_uri is not None):
+            return self.response(
+                request, code=307, headers=[
+                    ('location', urljoin(tx.session_uri, make_tx_uri(self._tx_rest_id)))])
 
         deadline = Deadline(timeout)
 
@@ -511,15 +543,13 @@ class RestHandler(Handler):
         if err is not None:
             return err
 
-        # or tx is unleased
-        # this is a behavior change, it currently waits even if
-        # it's unleased?
         if (timeout is None or etag is None or
             not self._check_etag(etag, tx.version)):
             return self._get_tx_resp(request, tx)
-
-        # elif tx.sesssion != us:
-        #   return self.response(request, 307, [('location', tx.session)])
+        elif (timeout is not None and etag is not None and
+              tx.session_uri is not None):
+            return self.response(
+                request, code=307, headers=[('location', urljoin(tx.session_uri, make_tx_uri(self._tx_rest_id)))])
 
         deadline = Deadline(timeout)
 
@@ -580,8 +610,9 @@ class RestHandler(Handler):
                 request, code=400,
                 msg='RestHandler.patch_tx bad request')
 
-        # if tx.session...
-        #   detach ping to that
+        if tx.session_uri is not None:
+            if self.executor.submit(partial(self._ping_tx, tx.session_uri, self._tx_rest_id)) is None:
+                return self.response(request, code=500, msg='schedule ping tx')
 
         tx.body = body
         del tx.body_blob
@@ -620,7 +651,9 @@ class RestHandler(Handler):
             if chunk_resp.status_code != 200:
                 return chunk_resp
 
-        # http ping owner session if different
+        if self.blob.session_uri() is not None:
+            if self.executor.submit(partial(self._ping_tx, self.blob.session_uri(), self._tx_rest_id)) is None:
+                return self.response(request, code=500, msg='schedule ping tx')
 
         return resp
 
@@ -713,12 +746,15 @@ class RestHandler(Handler):
         self.bytes_read = 0
         return self._put_blob(request)
 
-        # http ping owner session if different
+        if tx.session_uri() is not None:
+            if self.executor.submit(partial(self._ping_tx, self.blob.session_uri(), self._tx_rest_id)) is None:
+                return self.response(request, code=500, msg='schedule ping tx')
 
 
+    # populate self.blob or return http err
     def _get_blob_writer(self, request : HttpRequest,
                          blob_rest_id : Optional[str] = None,
-                         tx_body : bool = False) -> HttpResponse:
+                         tx_body : bool = False) -> Optional[HttpResponse]:
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -775,15 +811,15 @@ class RestHandler(Handler):
                 b = bytes()
                 chunk = chunk[count:]
         # send any leftover
-        return await self._put_blob_chunk_async(request, b, last=True)
+        resp = await self._put_blob_chunk_async(request, b, last=True)
+        if resp.status_code != 200:
+            return resp
 
-        # BlobCursor.update_tx is rest_id of owner tx
-        # every append (but not create) already reads the tx to ping
-        # last_update to wake up the OH
+        if self.blob.session_uri() is not None:
+            if self.executor.submit(partial(self._ping_tx, self.blob.session_uri(), self._tx_rest_id)) is None:
+                return self.response(request, code=500, msg='schedule ping tx')
 
-        # so all we need here is to plumb out the session uri if any
-        # to http ping here
-
+        return resp
 
     async def _put_blob_chunk_async(
             self, request : FastApiRequest, b : bytes, last=False
@@ -849,8 +885,9 @@ class RestHandler(Handler):
 
 
 class EndpointFactory(ABC):
+    # dict : endpoint yaml
     @abstractmethod
-    def create(self, http_host : str) -> Optional[AsyncFilter]:
+    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
     @abstractmethod
@@ -860,26 +897,38 @@ class EndpointFactory(ABC):
 class RestHandlerFactory(HandlerFactory):
     executor : Executor
     endpoint_factory : EndpointFactory
+    session_uri : Optional[str] = None
+    service_uri : Optional[str] = None
     rest_id_factory : Callable[[], str]
 
     def __init__(self, executor,
                  endpoint_factory,
-                 rest_id_factory : Callable[[], str]):
+                 rest_id_factory : Callable[[], str],
+                 session_uri : Optional[str] = None,
+                 service_uri : Optional[str] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
+        self.session_uri = session_uri
+        self.service_uri = service_uri
 
     def create_tx(self, http_host) -> RestHandler:
-        endpoint = self.endpoint_factory.create(http_host)
+        endpoint, yaml = self.endpoint_factory.create(http_host)
         return RestHandler(
-            self.executor,
+            executor=self.executor,
             async_filter=endpoint,
             http_host=http_host,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            endpoint_yaml = yaml,
+            session_uri = self.session_uri,
+            service_uri = self.service_uri)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
+        filter = self.endpoint_factory.get(tx_rest_id)
         return RestHandler(
-            self.executor,
-            async_filter=self.endpoint_factory.get(tx_rest_id),
+            executor=self.executor,
+            async_filter=filter,
             tx_rest_id=tx_rest_id,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            session_uri = self.session_uri,
+            service_uri = self.service_uri)

@@ -41,6 +41,7 @@ class Transaction:
             del self.tx_json['smtp_meta']
         self.tx_json['mail_response'] = {'code': 250, 'message': 'ok'}
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
+        self.close_files = close_files
 
     def get_json(self):
         json_out = copy.copy(self.tx_json)

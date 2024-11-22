@@ -104,6 +104,8 @@ class End2EndTest(unittest.TestCase):
         gateway_yaml = self.gateway_config.root_yaml
         gateway_listener_yaml = gateway_yaml['rest_listener']
         gateway_listener_yaml['addr'] = ['localhost', self.gateway_rest_port]
+        gateway_listener_yaml['session_uri'] = 'http://localhost:%d' % self.gateway_rest_port
+
         # TODO we might want to generate this on the fly and enable https?
         for k in ['cert', 'key']:
             if k in gateway_listener_yaml:
@@ -118,8 +120,10 @@ class End2EndTest(unittest.TestCase):
         self.router_config = Config()
         self.router_config.load_yaml('config/local-test/router.yaml')
         router_yaml = self.router_config.root_yaml
-        router_listener_yaml= router_yaml['rest_listener']
+        router_listener_yaml = router_yaml['rest_listener']
         router_listener_yaml['addr'] = ['localhost', self.router_rest_port]
+        router_listener_yaml['session_uri'] = (
+            'http://localhost:%d' % self.router_rest_port)
         for k in ['cert', 'key']:
             if k in router_listener_yaml:
                 del router_listener_yaml[k]

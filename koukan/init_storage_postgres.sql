@@ -3,6 +3,7 @@ CREATE TABLE Sessions (
   creation TIMESTAMP,
   live bool,  -- NOT NULL?
   last_update TIMESTAMP,
+  uri TEXT NOT NULL,
   UNIQUE(id, live)
 );
 

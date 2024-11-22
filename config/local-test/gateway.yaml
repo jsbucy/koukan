@@ -12,6 +12,7 @@ rest_listener:
 
   gc_interval: 5
   gc_tx_ttl: 5
+  session_uri: http://localhost:8001
 
 smtp_output:
   outbound:

@@ -35,21 +35,21 @@ class FilterSpec:
         self.builder = builder
         self.t = t
 
-StorageWriterFactory = Callable[[],Optional[StorageWriterFilter]]
+StorageWriterFactory = Callable[[str],Optional[StorageWriterFilter]]
 
 class Config:
     storage : Optional[Storage] = None
     endpoint_yaml : Optional[dict] = None
-    storage_writer_factory : Optional[StorageWriterFactory] = None
+    exploder_output_factory : Optional[StorageWriterFactory] = None
     executor : Optional[Executor] = None
 
     def __init__(
             self,
             executor : Optional[Executor] = None,
-            storage_writer_factory : Optional[StorageWriterFactory] = None,
+            exploder_output_factory : Optional[StorageWriterFactory] = None,
     ):
         self.executor = executor
-        self.storage_writer_factory = storage_writer_factory
+        self.exploder_output_factory = exploder_output_factory
         self.router_policies = {
             'dest_domain': self.router_policy_dest_domain,
             'address_list': self.router_policy_address_list }
@@ -126,7 +126,7 @@ class Config:
             data_timeout = 30
         return Exploder(
             yaml['output_chain'],
-            self.storage_writer_factory,
+            self.exploder_output_factory,
             self.executor,
             msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
@@ -225,8 +225,9 @@ class Config:
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
-    def get_endpoint(self, host) -> Tuple[SyncFilter, bool]:
-        endpoint_yaml = self.endpoint_yaml[host]
+    def get_endpoint(self, host) -> Optional[Tuple[SyncFilter, bool]]:
+        if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
+            return None
         next : Optional[SyncFilter] = None
         for filter_yaml in reversed(endpoint_yaml['chain']):
             filter_name = filter_yaml['filter']

@@ -86,7 +86,7 @@ class RestEndpoint(SyncFilter):
         self.max_inline = max_inline
         self.chunk_size = chunk_size
 
-        self.client = Client(http2=True, verify=verify)
+        self.client = Client(http2=True, verify=verify, follow_redirects=True)
 
     def __del__(self):
         if self.client:
@@ -98,17 +98,18 @@ class RestEndpoint(SyncFilter):
             self.client.close()
             self.client = None
 
-    def _maybe_qualify_url(self, url):
+    # -> full-url, path
+    def _maybe_qualify_url(self, url) -> Tuple[str, str]:
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc:
-            return url
-        return urljoin(self.base_url, url)
+            return url, parsed.path
+        return urljoin(self.base_url, url), url
 
-    def _start(self,
+    def _create(self,
                resolution : Resolution,
                tx : TransactionMetadata,
                deadline : Deadline) -> Optional[HttpResponse]:
-        logging.debug('RestEndpoint._start %s %s', resolution, tx)
+        logging.debug('RestEndpoint._create %s %s', resolution, tx)
 
         hosts = resolution.hosts if resolution is not None else [None]
         # TODO probably tx.rest_endpoint should also be repeated.  But
@@ -123,7 +124,7 @@ class RestEndpoint(SyncFilter):
                 self.remote_host = remote_host
 
             json=tx.to_json(WhichJson.REST_CREATE)
-            logging.debug('RestEndpoint._start remote_host %s %s %s',
+            logging.debug('RestEndpoint._create remote_host %s %s %s',
                           self.base_url, remote_host, json)
 
             req_headers = {}
@@ -138,15 +139,14 @@ class RestEndpoint(SyncFilter):
                     headers=req_headers,
                     timeout=deadline_left)
             except RequestError:
-                logging.exception('RestEndpoint._start')
+                logging.exception('RestEndpoint._create')
                 continue
-            logging.info('RestEndpoint._start req_headers %s resp %s %s',
+            logging.info('RestEndpoint._create req_headers %s resp %s %s',
                          req_headers, rest_resp, rest_resp.text)
             if rest_resp.status_code != 201:
                 continue
-            self.transaction_path = rest_resp.headers['location']
-            self.transaction_url = self._maybe_qualify_url(
-                rest_resp.headers['location'])
+            location = rest_resp.headers['location']
+            self.transaction_url, self.transaction_path = self._maybe_qualify_url(location)
             self.etag = rest_resp.headers.get('etag', None)
             return rest_resp
         return rest_resp
@@ -257,7 +257,7 @@ class RestEndpoint(SyncFilter):
             del downstream_delta.parsed_blobs
 
         # We are going to send a slightly different delta upstream per
-        # remote_host (discovery in _start()) and body_blob (below).
+        # remote_host (discovery in _create()) and body_blob (below).
         # When we look at the delta of what we got back, these fields
         # should not appear so it will merge cleanly with the original input.
         if self.upstream_tx is None:
@@ -272,7 +272,7 @@ class RestEndpoint(SyncFilter):
 
         tx_update = False
         if not self.transaction_url:
-            rest_resp = self._start(tx.resolution, self.upstream_tx, deadline)
+            rest_resp = self._create(tx.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
                 err = TransactionMetadata()
@@ -440,7 +440,7 @@ class RestEndpoint(SyncFilter):
             self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
         elif body:
             self.blob_path = self.transaction_path + '/body'
-        self.blob_url = self._maybe_qualify_url(self.blob_path)
+        self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
         logging.debug('_put_blob_single %d %s',
                       blob.content_length(), self.blob_url)
         headers = {}
@@ -507,7 +507,7 @@ class RestEndpoint(SyncFilter):
                     endpoint = self.transaction_url + '/blob/' + blob_rest_id
                 elif not non_body_blob:
                     self.blob_path = self.transaction_path + '/body'
-                    self.blob_url = self._maybe_qualify_url(self.blob_path)
+                    self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
                     endpoint = self.blob_url
                 else:
                     endpoint = self.transaction_url + '/blob'
@@ -533,7 +533,7 @@ class RestEndpoint(SyncFilter):
                     self.blob_path = rest_resp.headers.get('location', None)
                     if not self.blob_path:
                         return None, None
-                    self.blob_url = self._maybe_qualify_url(self.blob_path)
+                    self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
                 if not last:  # i.e. chunked upload
                     return Response(), 0
             else:
@@ -589,7 +589,7 @@ class RestEndpoint(SyncFilter):
             rest_resp = self.client.get(self.transaction_url,
                                         headers=req_headers,
                                         timeout=timeout)
-            logging.debug('RestEndpoint.get_json %s', rest_resp)
+            logging.debug('RestEndpoint.get_json %s %s', rest_resp, [r.headers for r in rest_resp.history])
         except RequestError as e:
             logging.debug('RestEndpoint.get_json() timeout %s',
                           self.transaction_url)

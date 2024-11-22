@@ -43,6 +43,10 @@ class WritableBlob(ABC):
     def rest_id(self) -> Optional[str]:
         return None
 
+    # returns session uri if different from this process
+    def session_uri(self) -> Optional[str]:
+        return None
+
 
 class InlineBlob(Blob, WritableBlob):
     d : bytes

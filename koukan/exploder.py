@@ -97,6 +97,8 @@ class Recipient:
         # the right thing here so we don't have to manually fix it up
         # like this
         self.tx = tx.copy()
+        if self.tx.attempt_count:
+            del self.tx.attempt_count
         if self.tx.rest_id:
             del self.tx.rest_id
         if self.tx.tx_db_id:
@@ -235,10 +237,11 @@ class Recipient:
         assert self.tx.merge_from(delta) is not None
         upstream_delta = self.upstream.update(self.tx, delta)
 
+AsyncFilterFactory = Callable[[str], Optional[AsyncFilter]]
 
 class Exploder(SyncFilter):
     output_chain : str
-    factory : Callable[[], AsyncFilter]
+    factory : AsyncFilterFactory
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
     msa : Optional[bool] = None
@@ -252,7 +255,7 @@ class Exploder(SyncFilter):
     recipients : List[Recipient]
 
     def __init__(self, output_chain : str,
-                 factory : Callable[[], AsyncFilter],
+                 factory : AsyncFilterFactory,
                  executor : Executor,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
@@ -326,7 +329,7 @@ class Exploder(SyncFilter):
         deadline = Deadline(self.rcpt_timeout)
         for i,rcpt in enumerate(downstream_delta.rcpt_to):
             recipient = Recipient(self.output_chain,
-                                  self.factory(),
+                                  self.factory(self.output_chain),
                                   self.msa,
                                   rcpt)
             self.recipients.append(recipient)

@@ -161,7 +161,7 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '201 created',
             resp_json={},
             location='/transactions/123'))
-        rest_resp = rest_endpoint._start(
+        rest_resp = rest_endpoint._create(
             resolution=None, tx=tx, deadline=Deadline())
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)

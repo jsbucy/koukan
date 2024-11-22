@@ -21,7 +21,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url)
+        self.storage = Storage.connect(
+            self.db_url, 'http://message_builder_filter_test')
 
     def tearDown(self):
         self.db_dir.cleanup()

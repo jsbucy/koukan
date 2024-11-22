@@ -7,6 +7,7 @@ CREATE TABLE Sessions (
   creation INTEGER,
   live BOOL,
   last_update INTEGER,
+  uri TEXT NOT NULL,
   UNIQUE(id, live)
 );
 

@@ -33,7 +33,7 @@ class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
 
-    def create(self, http_host : str) -> Optional[AsyncFilter]:
+    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
         return self.service.create_storage_writer(http_host)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
@@ -66,8 +66,7 @@ class Service:
         self.config = config
 
         if self.config:
-            self.config.storage_writer_factory = partial(
-                self.create_storage_writer, None)
+            self.config.exploder_output_factory = self.create_exploder_output
 
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300,
@@ -113,8 +112,7 @@ class Service:
     def main(self, config_filename=None, alive=None):
         if config_filename:
             config = Config(
-                storage_writer_factory=partial(
-                    self.create_storage_writer, None))
+                exploder_output_factory = self.create_exploder_output)
             config.load_yaml(config_filename)
             self.config = config
 
@@ -135,8 +133,11 @@ class Service:
         self.config.executor = self.executor
 
         storage_yaml = self.config.root_yaml['storage']
+        listener_yaml = self.config.root_yaml['rest_listener']
+
         if self.storage is None:
-            self.storage=Storage.connect(storage_yaml['url'])
+            self.storage=Storage.connect(
+                storage_yaml['url'], listener_yaml['session_uri'])
 
         self.storage.recover()
 
@@ -162,13 +163,14 @@ class Service:
         self.rest_handler_factory = RestHandlerFactory(
             self.executor,
             endpoint_factory = self.endpoint_factory,
-            rest_id_factory = self.config.rest_id_factory())
+            rest_id_factory = self.config.rest_id_factory(),
+            session_uri=listener_yaml.get('session_uri', None),
+            service_uri=listener_yaml.get('service_uri', None))
 
         with self.lock:
             self.started = True
             self.cv.notify_all()
 
-        listener_yaml = self.config.root_yaml['rest_listener']
         if listener_yaml.get('use_fastapi', True):
             app = fastapi_service.create_app(self.rest_handler_factory)
         else:
@@ -200,26 +202,38 @@ class Service:
         self.hypercorn_shutdown.set()
         return False
 
+    def create_exploder_output(self, http_host : str
+                               ) -> Optional[StorageWriterFilter]:
+        if (endp := self.create_storage_writer(http_host)) is None:
+            return None
+        return endp[0]
+
     def create_storage_writer(self, http_host : str
-                              ) -> Optional[StorageWriterFilter]:
+                              ) -> Optional[Tuple[StorageWriterFilter, dict]]:
+        assert http_host is not None
+        if (endp := self.config.get_endpoint(http_host)) is None:
+            return None
+        endpoint, endpoint_yaml = endp
+
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.config.rest_id_factory(),
             create_leased=True)
         fut = self.executor.submit(
-            lambda: self._handle_new_tx(writer))
+            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml))
         if fut is None:
             # XXX leaves db tx leased?
             return None
-        return writer
+        return writer, endpoint_yaml
 
-    def get_storage_writer(self, rest_id : str
-                           ) -> Optional[StorageWriterFilter]:
+    def get_storage_writer(self, rest_id : str) -> StorageWriterFilter:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.config.rest_id_factory())
 
-    def _handle_new_tx(self, writer : StorageWriterFilter):
+    def _handle_new_tx(self, writer : StorageWriterFilter,
+                       endpoint : SyncFilter,
+                       endpoint_yaml : dict):
         tx_cursor = writer.release_transaction_cursor()
         if tx_cursor is None:
             logging.info('RouterService._handle_new_tx writer %s, '
@@ -227,7 +241,6 @@ class Service:
             return
         tx_cursor.load(start_attempt=True)
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
-        endpoint, endpoint_yaml = self.config.get_endpoint(tx_cursor.tx.host)
         self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
 
     def handle_tx(self, storage_tx : TransactionCursor,

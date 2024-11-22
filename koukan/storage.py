@@ -66,6 +66,9 @@ class TransactionCursor:
     # this TransactionCursor object created this tx db row
     created : bool = False
 
+    # uri of owner session if different from this process
+    session_uri : Optional[str] = None
+
     def __init__(self, storage,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
@@ -359,20 +362,21 @@ class TransactionCursor:
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
 
-        if self.in_attempt:
-            upd = upd.where(
-                self.parent.tx_table.c.inflight_session_id ==
-                    self.parent.session_id,
-                self.parent.tx_table.c.inflight_session_live.is_(True))
-        else:
-            upd = upd.where(or_(
-                and_(
-                    self.parent.tx_table.c.inflight_session_id ==
-                        self.parent.session_id,
-                    self.parent.tx_table.c.inflight_session_live.is_(True)),
-                # NOT NULL?
-                not_(self.parent.tx_table.c.inflight_session_live.is_(True))
-            ))
+        # TODO drop all of this for multi-node, version check is enough?
+        # if self.in_attempt:
+        #     upd = upd.where(
+        #         self.parent.tx_table.c.inflight_session_id ==
+        #             self.parent.session_id,
+        #         self.parent.tx_table.c.inflight_session_live.is_(True))
+        # else:
+        #     upd = upd.where(or_(
+        #         and_(
+        #             self.parent.tx_table.c.inflight_session_id ==
+        #                 self.parent.session_id,
+        #             self.parent.tx_table.c.inflight_session_live.is_(True)),
+        #         # NOT NULL?
+        #         not_(self.parent.tx_table.c.inflight_session_live.is_(True))
+        #     ))
 
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
@@ -506,10 +510,13 @@ class TransactionCursor:
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.message_builder,
-                     self.parent.tx_table.c.no_final_notification)
+                     self.parent.tx_table.c.no_final_notification,
+                     self.parent.tx_table.c.inflight_session_id,
+                     self.parent.tx_table.c.inflight_session_live)
 
         if start_attempt and not self.created:
             sel = sel.where(
+                # TODO update for multi-node?
                 or_(self.parent.tx_table.c.inflight_session_id.is_(None),
                     not_(self.parent.tx_table.c.inflight_session_live)))
 
@@ -538,7 +545,9 @@ class TransactionCursor:
          self.input_done,
          self.final_attempt_reason,
          self.message_builder,
-         self.no_final_notification) = row
+         self.no_final_notification,
+         session_id,
+         session_live) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
@@ -588,6 +597,14 @@ class TransactionCursor:
 
         if self.in_attempt:
             assert attempt_id == self.attempt_id
+
+        if session_live and session_id != self.parent.session_id:
+            sel = select(self.parent.session_table.c.uri).where(
+                self.parent.session_table.c.id == session_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            self.session_uri = row[0]
+            self.tx.session_uri = self.session_uri
 
         return self.tx
 
@@ -682,6 +699,7 @@ class BlobCursor(Blob, WritableBlob):
     last = False
     update_tx : Optional[str] = None
     blob_uri : Optional[BlobUri] = None
+    _session_uri : Optional[str] = None
 
     def __init__(self, storage,
                  update_tx : Optional[str] = None,
@@ -693,6 +711,9 @@ class BlobCursor(Blob, WritableBlob):
         return self.length
     def content_length(self):
         return self._content_length
+
+    def session_uri(self) -> Optional[str]:
+        return self._session_uri
 
     def _create(self, db_tx : Transaction):
         ins = insert(self.parent.blob_table).values(
@@ -830,6 +851,7 @@ class BlobCursor(Blob, WritableBlob):
                 except VersionConflictException:
                     pass
             cursor._update_version_cache()
+            self._session_uri = cursor.session_uri
         return True, self.length, self._content_length
 
 
@@ -853,7 +875,7 @@ class BlobCursor(Blob, WritableBlob):
 
 
 class Storage():
-    session_id = None
+    session_id : Optional[int] = None
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
 
@@ -862,17 +884,20 @@ class Storage():
     tx_table : Optional[Table] = None
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
+    session_uri : Optional[str] = None
 
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
-                 engine : Optional[Engine] = None):
+                 engine : Optional[Engine] = None,
+                 session_uri : Optional[str] = None):
         if version_cache is not None:
             self.tx_versions = version_cache
         else:
             self.tx_versions = IdVersionMap()
         self.engine = engine
+        self.session_uri = session_uri
 
     @staticmethod
-    def connect(url):
+    def connect(url, session_uri):
         engine = create_engine(url)
         if 'sqlite' in url:
             with engine.begin() as db_tx:
@@ -886,7 +911,7 @@ class Storage():
                 cursor.execute("PRAGMA synchronous=2")
                 cursor.execute("PRAGMA auto_vacuum=2")
 
-        s = Storage(engine=engine)
+        s = Storage(engine=engine, session_uri=session_uri)
         s._init_session()
         return s
 
@@ -935,7 +960,8 @@ class Storage():
             ins = (insert(self.session_table).values(
                 creation = creation,
                 last_update = creation,
-                live = True)
+                live = True,
+                uri = self.session_uri)
                    .returning(self.session_table.c.id))
             res = db_tx.execute(ins)
             self.session_id = res.fetchone()[0]
