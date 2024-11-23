@@ -255,6 +255,8 @@ class RestEndpoint(SyncFilter):
             del downstream_delta.parsed_json
         if downstream_delta.parsed_blobs:
             del downstream_delta.parsed_blobs
+        if downstream_delta.attempt_count:
+            del downstream_delta.attempt_count
 
         # We are going to send a slightly different delta upstream per
         # remote_host (discovery in _create()) and body_blob (below).
@@ -403,6 +405,8 @@ class RestEndpoint(SyncFilter):
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
                       self.transaction_url, tx_out)
 
+        # NB this delta/merge is fragile and depends on dropping
+        # fields we aren't going to send upstream (above)
         if (tx_out is None or
             (blob_delta := self.upstream_tx.delta(
                 tx_out, WhichJson.REST_READ)) is None or
