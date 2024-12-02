@@ -139,7 +139,11 @@ class Service:
             self.storage=Storage.connect(
                 storage_yaml['url'], listener_yaml['session_uri'])
 
-        self.storage.recover()
+        session_refresh_interval = storage_yaml.get(
+            'session_refresh_interval', 30)
+        session_ttl = timedelta(seconds=(session_refresh_interval * 10))
+
+        self.storage.recover(session_ttl=session_ttl)
 
         self.config.set_storage(self.storage)
 
@@ -147,10 +151,10 @@ class Service:
             self.daemon_executor.submit(
                 partial(self.dequeue, self.daemon_executor))
 
-        refresh = storage_yaml.get('session_refresh_interval', 30)
         self.daemon_executor.submit(
             partial(self.refresh_storage_session,
-                    self.daemon_executor, refresh))
+                    self.daemon_executor,
+                    session_refresh_interval, session_ttl))
 
         if storage_yaml.get('gc_interval', None):
             self.daemon_executor.submit(partial(self.gc, self.daemon_executor))
@@ -319,14 +323,15 @@ class Service:
             self._gc(ttl)
             self.wait_shutdown(interval)
 
-    def _refresh(self, ref : List[bool], stale_timeout : int):
+    def _refresh(self, ref : List[bool], session_ttl : timedelta):
         if self.storage._refresh_session():
             with self.lock:
                 ref[0] = True
                 self.cv.notify_all()
-        self.storage._gc_session(timedelta(seconds = stale_timeout))
+        self.storage._gc_session(session_ttl)
 
-    def refresh_storage_session(self, executor, interval : int):
+    def refresh_storage_session(self, executor, interval : int,
+                                session_ttl : timedelta):
         last_refresh = time.monotonic()
         while not self._shutdown:
             delta = time.monotonic() - last_refresh
@@ -336,9 +341,8 @@ class Service:
                 return
             executor.ping_watchdog()
             ref = [False]
-            stale_timeout = 10 * interval
             if self.daemon_executor.submit(
-                    partial(self._refresh, ref, stale_timeout)) is None:
+                    partial(self._refresh, ref, session_ttl)) is None:
                 self.wait_shutdown(1)
                 continue
             with self.lock:

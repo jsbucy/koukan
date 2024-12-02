@@ -306,7 +306,7 @@ class StorageTestBase(unittest.TestCase):
         except:
             pass
 
-        self.s.recover(ttl=timedelta(hours=24))
+        self.s.recover(session_ttl=timedelta(hours=24))
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)

@@ -1005,8 +1005,8 @@ class Storage():
 
         return rows
 
-    def recover(self, ttl=timedelta(seconds=1)):
-        self._gc_session(ttl)
+    def recover(self, session_ttl=timedelta(seconds=1)):
+        self._gc_session(session_ttl)
 
     # TODO these blob methods should move into TransactionCursor?
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
