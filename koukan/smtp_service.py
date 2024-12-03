@@ -88,12 +88,13 @@ class SmtpHandler:
                            session : Session,
                            envelope : Envelope,
                            proxy_data : ProxyData) -> bool:
+        logging.info('%s proxy data %s', self.cx_id, proxy_data)
         self.proxy_protocol = True
         if proxy_data.src_addr:
-            self.remote_hostname = HostPort.from_seq(
+            self.remote_host = HostPort.from_seq(
                 (str(proxy_data.src_addr), proxy_data.src_port))
         if proxy_data.dst_addr:
-            self.local_hostname = HostPort.from_seq(
+            self.local_host = HostPort.from_seq(
                 (str(proxy_data.dst_addr), proxy_data.src_port))
         return True
 
