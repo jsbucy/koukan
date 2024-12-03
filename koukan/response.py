@@ -71,13 +71,9 @@ class Response:
             return None
         return Response(code, msg)
 
-    def to_smtp_resp(self) -> bytes:
+    def to_smtp_resp(self) -> str:
         assert(not self.internal())
-        return ('%d ' % self.code).encode('utf-8') + self.message.encode('utf-8')
-
-
-def ok_resp(resp : Tuple[int, str]):
-    return ok_smtp_code(resp[0])
-
-def to_smtp_resp(resp : Tuple[int, str]):
-    return ('%d %s' % resp).encode('ascii')
+        assert self.code >= 200 and self.code <= 599
+        # XXX I'm not sure if aiosmtpd folds this if it's longer than
+        # an smtp line
+        return str(self.code) + ' ' + self.message
