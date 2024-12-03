@@ -192,7 +192,9 @@ class SmtpGateway(EndpointFactory):
                 key=service_yaml.get('key', None),
                 auth_secrets_path=service_yaml.get('auth_secrets', None),
                 rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
-                data_timeout=service_yaml.get('data_timeout', data_timeout)))
+                data_timeout=service_yaml.get('data_timeout', data_timeout),
+                proxy_protocol_timeout=
+                  service_yaml.get('proxy_protocol_timeout', None)))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,

@@ -1,11 +1,10 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable
-
+from typing import Callable, List, Optional, Tuple
 import asyncio
 import time
 import logging
-from typing import Optional, List, Tuple
+
 from functools import partial
 import ssl
 from threading import Lock
@@ -52,6 +51,10 @@ class SmtpHandler:
     ehlo = False
     quit = False
 
+    proxy_protocol = False
+    remote_host : Optional[HostPort] = None
+    local_host : Optional[HostPort] = None
+
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
@@ -81,12 +84,17 @@ class SmtpHandler:
             logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
         self._cancel()
 
-    # dead code until we set SMTP.proxy_protocol_timeout
     async def handle_PROXY(self, server : SMTP,
                            session : Session,
                            envelope : Envelope,
                            proxy_data : ProxyData) -> bool:
-
+        self.proxy_protocol = True
+        if proxy_data.src_addr:
+            self.remote_hostname = HostPort.from_seq(
+                (str(proxy_data.src_addr), proxy_data.src_port))
+        if proxy_data.dst_addr:
+            self.local_hostname = HostPort.from_seq(
+                (str(proxy_data.dst_addr), proxy_data.src_port))
         return True
 
     def _ehlo(self, hostname, esmtp):
@@ -164,10 +172,16 @@ class SmtpHandler:
 
         logging.info('SmtpHandler.handle_MAIL %s %s %s',
                      self.cx_id, mail_from, mail_esmtp)
-        if self.peername:
-            updated_tx.remote_host = HostPort.from_seq(self.peername)
-        if self.local_socket:
-            updated_tx.local_host = HostPort.from_seq(self.local_socket)
+        if not self.proxy_protocol:
+            if self.peername:
+                self.remote_host = HostPort.from_seq(self.peername)
+            if self.local_socket:
+                self.local_host = HostPort.from_seq(self.local_socket)
+
+        if self.remote_host is not None:
+            updated_tx.remote_host = self.remote_host
+        if self.local_host is not None:
+            updated_tx.local_host = self.local_host
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
         updated_tx.mail_from = Mailbox(mail_from, params)
@@ -257,13 +271,16 @@ class SmtpHandler:
 
 class ControllerTls(Controller):
     def __init__(self, host, port, ssl_context, auth,
-                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout):
+                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
+                 proxy_protocol_timeout : Optional[int] = None):
         self.tls_controller_context = ssl_context
         self.auth = auth
         self.endpoint_factory = endpoint_factory
         self.max_rcpt = max_rcpt
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
+        self.proxy_protocol_timeout = proxy_protocol_timeout
+
         # TODO inject this
         self.executor = Executor(inflight_limit=100, watchdog_timeout=3600)
         # The aiosmtpd docs don't discuss this directly but it seems
@@ -287,14 +304,16 @@ class ControllerTls(Controller):
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
-                    authenticator=self.auth)
+                    authenticator=self.auth,
+                    proxy_protocol_timeout=self.proxy_protocol_timeout)
         handler.set_smtp(smtp)
         return smtp
 
 def service(endpoint_factory,
             hostname="localhost", port=9025, cert=None, key=None,
             auth_secrets_path=None, max_rcpt=None,
-            rcpt_timeout=None, data_timeout=None):
+            rcpt_timeout=None, data_timeout=None,
+            proxy_protocol_timeout : Optional[int] = None):
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
@@ -304,6 +323,7 @@ def service(endpoint_factory,
     controller = ControllerTls(
         hostname, port, ssl_context,
         auth,
-        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout)
+        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
+        proxy_protocol_timeout)
     controller.start()
     return controller
