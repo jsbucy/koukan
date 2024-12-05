@@ -17,8 +17,7 @@ stack local to the application.
 Key features:
 - opportunistic [cut-through delivery](https://en.wikipedia.org/wiki/Cut-through_switching#Use_in_SMTP): synchronous reporting of
 common-case errors rather than accept&bounce
-- durable "mail queue" storage more compatible with
-horizontal scaling on cluster schedulers like Kubernetes
+- compatible with horizontal scaling on multi-node/cluster/Kubernetes environments
 - extensible via plugin api inspired by [Envoy](https://www.envoyproxy.io/) [filter chains](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_routing). Koukan aspires to be "Envoy for email."
 
 Koukan is written in Python3 leveraging high-quality
