@@ -128,6 +128,10 @@ The gateway will save a single bool `auth` in the `smtp_meta` field of
 the rest transaction sent to the router if the client successfully
 authenticated. `relay_auth_filter` keys off of this.
 
+## Cluster/k8s/multi-node
+
+For both router and gateway, configure rest_listener.session_uri to point to the dns alias or ip of the individual pod/replica. For router, configure rest_listener.service_uri to the router service dns alias and set endpoint.rest_lro to false for endpoints that the gateway injects into and true to endpoints that native rest clients use.
+
 
 ## Configuration
 

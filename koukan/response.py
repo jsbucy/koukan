@@ -74,6 +74,6 @@ class Response:
     def to_smtp_resp(self) -> str:
         assert(not self.internal())
         assert self.code >= 200 and self.code <= 599
-        # XXX I'm not sure if aiosmtpd folds this if it's longer than
-        # an smtp line
+        # TODO it looks like aiosmtpd doesn't fold this if it's longer than
+        # an smtp line (~1000B)
         return str(self.code) + ' ' + self.message

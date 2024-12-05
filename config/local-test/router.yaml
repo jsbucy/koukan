@@ -12,8 +12,10 @@ rest_listener:
   #key: localhost.key
 
   # base uri of this instance/replica to redirect clients for multi-node
+  # endpoints with rest_lro: false will be qualified to this
   session_uri: http://localhost:8000
-  # e.g. k8s service alias
+  # e.g. k8s service alias, endpoints with rest_lro: true will be
+  # qualified to this
   #service_uri: http://localhost:8000
 
 endpoint:

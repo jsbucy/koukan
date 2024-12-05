@@ -362,22 +362,6 @@ class TransactionCursor:
                        last_update = now)
                .returning(self.parent.tx_table.c.version))
 
-        # TODO drop all of this for multi-node, version check is enough?
-        # if self.in_attempt:
-        #     upd = upd.where(
-        #         self.parent.tx_table.c.inflight_session_id ==
-        #             self.parent.session_id,
-        #         self.parent.tx_table.c.inflight_session_live.is_(True))
-        # else:
-        #     upd = upd.where(or_(
-        #         and_(
-        #             self.parent.tx_table.c.inflight_session_id ==
-        #                 self.parent.session_id,
-        #             self.parent.tx_table.c.inflight_session_live.is_(True)),
-        #         # NOT NULL?
-        #         not_(self.parent.tx_table.c.inflight_session_live.is_(True))
-        #     ))
-
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
                        .where(self.parent.attempt_table.c.transaction_id ==
@@ -516,7 +500,6 @@ class TransactionCursor:
 
         if start_attempt and not self.created:
             sel = sel.where(
-                # TODO update for multi-node?
                 or_(self.parent.tx_table.c.inflight_session_id.is_(None),
                     not_(self.parent.tx_table.c.inflight_session_live)))
 

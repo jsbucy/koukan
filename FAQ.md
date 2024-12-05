@@ -93,13 +93,15 @@ I started with Flask which I was already familiar with from other projects and d
 
 # Deployment
 
-## Can I run Koukan on Kubernetes k8s?
+## Can I run Koukan on Kubernetes k8s or other multi-node/cluster environment?
 
-I am not an expert on k8s but my intent from the outset has been to be compatible with k8s.
+YES! Basic support for this was added in ccff073f.
+
+All replicas share the same underlying database.
 
 The current implementation buffers data through the local filesystem but this does not need to be durable across restarts; emptyDir is fine. This is local to each router process; the router and gateway do not share data through the filesystem.
 
-With a single replica, it should just work. To support multiple replicas and especially autoscaling, there needs to be sticky http routing at the level of restmtp transactions. In other words, all http requests to a given REST /transactions/123 resource need to go to the process that currently has it leased. The minimum support needed from the Koukan router is probably to be able to http-redirect requests to the correct replica. This should be a tiny patch but didn’t make the initial release. I hope to include this in the first follow-up release \~late Oct 2024\. Please ping \<FR\> if you’re interested in this.
+Koukan may return http redirects in response to requests to endpoints with rest_lro enabled; native rest clients must be prepared to follow these. 
 
 ## Can I use Envoy as a front proxy for the Koukan SMTP Gateway?
 
@@ -112,8 +114,6 @@ Great idea\! STARTTLS is a blocker for most use cases, upvote [this bug](https:/
 spamc/clamav filters
 
 some kind of control on which “from” addresses submission clients can use
-
-get multi-node/k8s working out of the box
 
 ## Performance
 

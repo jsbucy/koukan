@@ -1,11 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import unittest
 import logging
 import io
 import json
 import time
+from threading import Condition, Lock
 
 from flask import (
     Flask,
@@ -16,6 +17,8 @@ from werkzeug.http import parse_content_range_header
 from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
+
+from httpx import Response as HttpxResponse
 
 from koukan.blob import InlineBlob
 from koukan.rest_endpoint_adapter import RestHandler, SyncFilterAdapter
@@ -853,6 +856,138 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('content-range', resp.headers)
 
         self.assertEqual(b+b2, endpoint.body_blob.d)
+
+
+    async def _test_uri_qualification(
+            self,
+            session_uri : Optional[str], service_uri : Optional[str],
+            rest_lro : bool):
+        endpoint = MockAsyncFilter()
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri=session_uri,
+            service_uri=service_uri,
+            endpoint_yaml={'rest_lro': rest_lro})
+
+        scope = {'type': 'http',
+                 'headers': self._headers([])}
+        req = FastApiRequest(scope)
+
+        def exp(tx, tx_delta):
+            delta = TransactionMetadata(rest_id='rest_id',
+                                        version=1)
+            tx.merge_from(delta)
+            return delta
+        endpoint.expect_update(exp)
+
+        resp = await handler.handle_async(
+            req, lambda: handler.create_tx(req, req_json={}))
+        logging.debug(resp.headers)
+        return resp.headers['location']
+
+    async def test_uri_qualification(self):
+        location = await self._test_uri_qualification(
+            'http://0.router', 'http://router', rest_lro=True)
+        self.assertTrue(location.startswith('http://router'))
+        location = await self._test_uri_qualification(
+            'http://0.router', 'http://router', rest_lro=False)
+        self.assertTrue(location.startswith('http://0.router'))
+        location = await self._test_uri_qualification(
+            None, None, rest_lro=False)
+        self.assertTrue(location.startswith('/transactions'))
+
+
+    async def _test_get_redirect(self, session_uri : Optional[str] = None
+                                 ) -> FastApiResponse:
+        endpoint = MockAsyncFilter()
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri='http://0.router',
+            service_uri='http://router')
+
+        scope = {'type': 'http',
+                 'headers': self._headers([('if-none-match', '1'),
+                                           ('request-timeout', '5')])}
+        req = FastApiRequest(scope)
+
+        tx = TransactionMetadata(rest_id='rest_id',
+                                 version=1)
+        tx.session_uri = session_uri
+        endpoint.expect_get(tx)
+
+        return await handler.get_tx_async(req)
+
+    async def test_get_redirect(self):
+        resp = await self._test_get_redirect()
+        self.assertEqual(304, resp.status_code)  # no change
+        self.assertNotIn('location', resp.headers)
+        resp = await self._test_get_redirect('http://1.router')
+        self.assertEqual(307, resp.status_code)
+        self.assertTrue(resp.headers['location'].startswith('http://1.router'))
+
+    async def test_ping_session(self):
+        endpoint = MockAsyncFilter()
+
+        mu = Lock()
+        cv = Condition(mu)
+
+        def client(u):
+            logging.debug(u)
+            with mu:
+                self.uri = u
+                cv.notifyAll()
+            return HttpxResponse(200)
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri='http://0.router',
+            service_uri='http://router',
+            client=client)
+
+        scope = {'type': 'http',
+                 'headers': self._headers([('if-match', '1'),
+                                           ('request-timeout', '5')])}
+        req = FastApiRequest(scope)
+
+        tx = TransactionMetadata(rest_id='rest_id',
+                                 version=1)
+        tx.session_uri = 'http://127.0.0.1:12345'
+        endpoint.expect_get(tx)
+
+        def exp(tx, tx_delta):
+            delta = TransactionMetadata(rest_id='rest_id',
+                                        version=1)
+            delta.session_uri='http://127.0.0.1:12345'
+            tx.merge_from(delta)
+            return delta
+        endpoint.expect_update(exp)
+
+        resp = await handler.handle_async(
+            req, lambda: handler.patch_tx(req, req_json={
+                'mail_from': {'m': 'alice@example.com'}}))
+
+        with mu:
+            self.assertTrue(cv.wait_for(lambda: self.uri is not None, 1))
+        logging.debug('%s %s', resp.status_code, resp.body)
+        self.assertEqual('http://127.0.0.1:12345/transactions/tx_rest_id',
+                         self.uri)
 
 if __name__ == '__main__':
     logging.basicConfig(
