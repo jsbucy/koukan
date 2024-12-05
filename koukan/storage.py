@@ -955,6 +955,7 @@ class Storage():
         with self.begin_transaction() as db_tx:
             upd = update(self.session_table).values(
                 last_update = func.current_timestamp()).where(
+                    self.session_table.c.id == self.session_id,
                     self.session_table.c.live).returning(
                         self.session_table.c.live)
             res = db_tx.execute(upd)
@@ -967,16 +968,37 @@ class Storage():
                 return False
             return True
 
+    def get_session(self, session_id):
+        with self.begin_transaction() as db_tx:
+            sel = select('*').where(self.session_table.c.id == session_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            return row
+
+
     def _gc_session(self, ttl : timedelta):
         with self.begin_transaction() as db_tx:
-            upd = (update(self.session_table).values(
-                live = False
-            ).where(
-                (func.current_timestamp() -
-                 self.session_table.c.last_update) > ttl,
-                self.session_table.c.live.is_(True)
-            ).returning(self.session_table.c.id,
-                        self.session_table.c.last_update))
+            if str(self.engine.url).find('sqlite') == -1:
+                upd = (update(self.session_table).values(
+                    live = False
+                ).where(
+                    (func.current_timestamp() -
+                     self.session_table.c.last_update) > ttl,
+                    self.session_table.c.live.is_(True)
+                ).returning(self.session_table.c.id,
+                            self.session_table.c.last_update))
+            else:
+                # sqlite doesn't have first-class timestamp types?!
+                upd = (update(self.session_table).values(
+                    live = False
+                ).where(
+                    (func.unixepoch(func.current_timestamp()) -
+                     func.unixepoch(self.session_table.c.last_update)) >
+                    ttl.seconds,
+                    self.session_table.c.live.is_(True)
+                ).returning(self.session_table.c.id,
+                            self.session_table.c.last_update))
+
             res = db_tx.execute(upd)
             if not res:
                 return None

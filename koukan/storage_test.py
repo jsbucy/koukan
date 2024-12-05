@@ -37,8 +37,10 @@ class StorageTestBase(unittest.TestCase):
     sqlite : bool
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s [%(thread)d] %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def tearDown(self):
         self.s._del_session()
@@ -284,9 +286,18 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(tx_writer.input_done)
 
     def test_sessions(self):
-        self.assertTrue(self.s._refresh_session())
+        stale_session = self.s.session_id
+        self.s = self._connect()
 
-        self.s._gc_session(timedelta(minutes=1))
+        self.assertEqual(0, self.s._gc_session(timedelta(seconds=1)))
+        for i in range(0,4):
+            logging.debug('%d', i)
+            time.sleep(0.5)
+            self.s._refresh_session()
+
+        self.assertEqual(1, self.s._gc_session(timedelta(seconds=1)))
+        self.assertFalse(self.s.get_session(stale_session)._mapping['live'])
+        self.assertTrue(self.s.get_session(self.s.session_id)._mapping['live'])
 
     def test_recovery(self):
         old_session = self._connect()
