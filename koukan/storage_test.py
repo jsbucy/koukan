@@ -296,8 +296,8 @@ class StorageTestBase(unittest.TestCase):
             self.s._refresh_session()
 
         self.assertEqual(1, self.s._gc_session(timedelta(seconds=1)))
-        self.assertFalse(self.s.get_session(stale_session)._mapping['live'])
-        self.assertTrue(self.s.get_session(self.s.session_id)._mapping['live'])
+        self.assertFalse(self.s.testonly_get_session(stale_session)['live'])
+        self.assertTrue(self.s.testonly_get_session(self.s.session_id)['live'])
 
     def test_recovery(self):
         old_session = self._connect()

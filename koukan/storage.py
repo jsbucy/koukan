@@ -968,12 +968,12 @@ class Storage():
                 return False
             return True
 
-    def get_session(self, session_id):
+    def testonly_get_session(self, session_id) -> dict:
         with self.begin_transaction() as db_tx:
             sel = select('*').where(self.session_table.c.id == session_id)
             res = db_tx.execute(sel)
             row = res.fetchone()
-            return row
+            return row._mapping
 
 
     def _gc_session(self, ttl : timedelta):
