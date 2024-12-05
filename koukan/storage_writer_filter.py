@@ -355,6 +355,6 @@ class StorageWriterFilter(AsyncFilter):
                     pass
         else:
             blob = self.storage.get_blob_for_append(
-                BlobUri(tx_id=self.rest_id, blob=blob_rest_id))
+                BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))
 
         return blob

@@ -62,6 +62,28 @@ class StorageWriterFilterTest(unittest.TestCase):
         cursor = filter.release_transaction_cursor()
         self.assertEqual(cursor.rest_id, 'tx_rest_id')
 
+    def test_body_blob(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'tx_rest_id',
+            create_leased = True)
+        tx = TransactionMetadata(
+            host='submission',
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
+        filter.update(tx, tx.copy())
+
+        blob_writer = filter.get_blob_writer(
+            create=True, tx_body=True)
+        d = b'hello, world!'
+        chunk1 = 7
+        blob_writer.append_data(0, d[0:chunk1])
+
+        blob_writer = filter.get_blob_writer(
+            create=False, tx_body=True)
+        blob_writer.append_data(chunk1, d[chunk1:], len(d))
+
+        tx = filter.get()
+        self.assertTrue(filter.tx_cursor.input_done)
 
     def test_invalid(self):
         filter = StorageWriterFilter(
