@@ -16,6 +16,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import CursorResult, Engine, Transaction
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
+from sqlalchemy import event
 
 from sqlalchemy import (
     LargeBinary, MetaData, String, Table,
@@ -880,19 +881,21 @@ class Storage():
         self.session_uri = session_uri
 
     @staticmethod
+    def _sqlite_pragma(dbapi_conn, con_record):
+        # isn't sticky from schema so set it again here
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+        # https://www.sqlite.org/pragma.html#pragma_synchronous
+        # FULL=2, flush WAL on every write,
+        # NORMAL=1 not durable after power loss
+        dbapi_conn.execute("PRAGMA synchronous=2")
+        dbapi_conn.execute("PRAGMA auto_vacuum=2")
+
+    @staticmethod
     def connect(url, session_uri):
         engine = create_engine(url)
         if 'sqlite' in url:
-            with engine.begin() as db_tx:
-                cursor = db_tx.connection.cursor()
-                # should be sticky from schema but set it here anyway
-                cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA foreign_keys=ON")
-                # https://www.sqlite.org/pragma.html#pragma_synchronous
-                # FULL=2, flush WAL on every write,
-                # NORMAL=1 not durable after power loss
-                cursor.execute("PRAGMA synchronous=2")
-                cursor.execute("PRAGMA auto_vacuum=2")
+            event.listen(engine, 'connect', Storage._sqlite_pragma)
 
         s = Storage(engine=engine, session_uri=session_uri)
         s._init_session()
