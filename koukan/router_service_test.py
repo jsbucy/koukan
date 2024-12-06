@@ -499,6 +499,86 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('expected tx')
 
+    # upstream temp during submission before input done
+    # downstream should complete uploading the body -> input_done -> reload
+    def test_submission_retry(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = b'hello, world!'
+        tx = TransactionMetadata(
+            retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')])
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(402)])
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [402])
+
+        def exp_cancel(tx, tx_delta):
+            self.assertTrue(tx.cancelled)
+            return TransactionMetadata()
+        upstream_endpoint.add_expectation(exp_cancel)
+
+        body_url = rest_endpoint._maybe_qualify_url(
+            rest_endpoint.transaction_path + '/body')[0]
+        logging.debug(body_url)
+        resp = rest_endpoint.client.post(body_url + '?upload=chunked')
+        logging.debug(resp.headers)
+        self.assertEqual(201, resp.status_code)
+
+        data = b'hello, world!\r\n'  # 15B
+        chunk1 = 7
+
+        resp = rest_endpoint.client.put(
+            body_url,
+            headers={'content-range': 'bytes 0-%d/%d' % (chunk1-1, len(data))},
+            content = data[0:chunk1])
+        logging.debug('%d %s', resp.status_code, resp.content)
+
+        time.sleep(1)
+
+        resp = rest_endpoint.client.put(
+            body_url,
+            headers={'content-range': 'bytes %d-%d/%d' % (
+                chunk1, len(data) - 1, len(data))},
+            content = data[chunk1:])
+        logging.debug('%d %s', resp.status_code, resp.content)
+        #logging.debug(self.service.storage.debug_dump())
+
+
+        def exp_body(tx, tx_delta):
+            self.assertEqual(data, tx.body_blob.pread(0))
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)],
+                data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp_body)
+        self.add_endpoint(upstream_endpoint)
+
+        self._dequeue()
+
+        logging.debug(self.service.storage.debug_dump())
+        tx_json = rest_endpoint.get_json()
+        tx = TransactionMetadata.from_json(tx_json, WhichJson.REST_READ)
+        self.assertEqual(2, tx.attempt_count)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
+        self.assertEqual('upstream response success', tx.final_attempt_reason)
 
     def test_reuse_body(self):
         logging.debug('RouterServiceTest.test_reuse_body')

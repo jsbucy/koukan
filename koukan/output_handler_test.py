@@ -21,7 +21,8 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+                            format='%(asctime)s [%(thread)d] '
+                            '%(filename)s:%(lineno)d %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
         self.storage = Storage.connect(self.db_url, 'http://output_handler_test')
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
