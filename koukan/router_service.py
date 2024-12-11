@@ -316,7 +316,7 @@ class Service:
 
     def gc(self, executor):
         storage_yaml = self.config.root_yaml['storage']
-        ttl = storage_yaml.get('gc_ttl', 86400)
+        ttl = timedelta(seconds=storage_yaml.get('gc_ttl', 86400))
         interval = storage_yaml.get('gc_interval', 300)
         while not self._shutdown:
             executor.ping_watchdog()
@@ -351,8 +351,8 @@ class Service:
                     last_refresh = time.monotonic()
             self.wait_shutdown(interval)
 
-    def _gc(self, gc_ttl=None):
-        logging.info('router_service _gc %d', gc_ttl)
+    def _gc(self, gc_ttl : timedelta):
+        logging.info('router_service _gc %s', gc_ttl)
         count = self.storage.gc(gc_ttl)
         logging.info('router_service _gc deleted %d tx %d blobs',
                      count[0], count[1])

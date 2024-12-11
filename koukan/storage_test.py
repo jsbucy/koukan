@@ -11,11 +11,6 @@ import tempfile
 import os
 from datetime import datetime, timedelta
 
-import testing.postgresql
-
-import sqlite3
-import psycopg
-import psycopg.errors
 from koukan.storage import BlobCursor, Storage, TransactionCursor
 from koukan.storage_schema import (
     InvalidActionException, VersionConflictException )
@@ -301,7 +296,6 @@ class StorageTestBase(unittest.TestCase):
 
     def test_recovery(self):
         old_session = self._connect()
-        old_session._init_session(datetime.fromtimestamp(1234567890))
         old_tx = old_session.get_transaction_cursor()
         old_tx.create('tx_rest_id', TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -310,14 +304,17 @@ class StorageTestBase(unittest.TestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
-        old_session._del_session()
-        old_session.engine = None
+        # don't cleanup the session
+        old_session.session_id = None
         try:
             del old_session
         except:
             pass
 
-        self.s.recover(session_ttl=timedelta(hours=24))
+        self.assertEqual(0, self.s.recover(session_ttl=timedelta(hours=1)))
+        time.sleep(2)
+        self.s._refresh_session()
+        self.assertEqual(1, self.s.recover(session_ttl=timedelta(seconds=1)))
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -370,16 +367,17 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_reader.id, tx_writer.id)
 
         # not expired, leased
-        count = self.s.gc(ttl=10)
+        count = self.s.gc(ttl=timedelta(seconds=10))
         self.assertEqual(count, (0, 0))
         self.assertTrue(tx_reader.load())
         blob_reader = self.s.get_blob_for_read(
             BlobUri(tx_id='xyz', tx_body=True))
         self.assertEqual(blob_reader.content_length(), len(d))
 
+        time.sleep(2)
+
         # expired, leased
-        count = self.s.gc(ttl=0)
-        self.assertEqual(count, (0, 0))
+        self.assertEqual((0, 0), self.s.gc(ttl=timedelta(seconds=1)))
         self.assertTrue(tx_reader.load())
 
         blob_reader = self.s.get_blob_for_read(
@@ -387,11 +385,13 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(blob_reader.content_length(), len(d))
 
         tx_reader.write_envelope(TransactionMetadata(),
-                              final_attempt_reason = 'upstream success',
-                              finalize_attempt = True)
+                                 final_attempt_reason = 'upstream success',
+                                 finalize_attempt = True)
+
+        time.sleep(2)
 
         # expired, unleased
-        self.assertEqual(self.s.gc(ttl=0), (1,1))
+        self.assertEqual((1,1), self.s.gc(ttl=timedelta(seconds=1)))
 
         self.assertIsNone(self.s.get_blob_for_read(
             BlobUri(tx_id='xyz', tx_body=True)))

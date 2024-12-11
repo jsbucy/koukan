@@ -1,8 +1,8 @@
 CREATE TABLE Sessions (
   id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-  creation TIMESTAMP,
-  live bool,  -- NOT NULL?
-  last_update TIMESTAMP,
+  creation INTEGER NOT NULL,
+  live bool NOT NULL,
+  last_update INTEGER NOT NULL,
   uri TEXT NOT NULL,
   UNIQUE(id, live)
 );
@@ -11,6 +11,7 @@ CREATE TABLE Blob (
   id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   -- final length declared by client in content-length header
   length INTEGER,
+  creation INTEGER NOT NULL,
   last_update INTEGER NOT NULL,
   content BYTEA
 );
@@ -81,12 +82,14 @@ CREATE TABLE TransactionBlobRefs (
   PRIMARY KEY(transaction_id, blob_id)
 );
 
--- TODO add timestamps
 CREATE TABLE TransactionAttempts (
   transaction_id INTEGER,
   attempt_id INTEGER NOT NULL,
 
   responses JSON,
+
+  creation INTEGER NOT NULL,
+  last_update INTEGER NOT NULL,
 
   PRIMARY KEY(transaction_id, attempt_id),
 

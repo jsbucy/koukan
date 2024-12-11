@@ -8,6 +8,8 @@ import socketserver
 import time
 from functools import partial
 from urllib.parse import urljoin
+from datetime import timedelta
+import copy
 
 import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
@@ -33,7 +35,7 @@ def tearDownModule():
     postgres_test_utils.tearDownModule()
 
 
-root_yaml = {
+root_yaml_template = {
     'global': {
         'tx_idle_timeout': 5,
         'gc_interval': None,
@@ -159,6 +161,7 @@ class RouterServiceTest(unittest.TestCase):
             self.cv.notify_all()
 
     def _setup_router(self):
+        root_yaml = copy.deepcopy(root_yaml_template)
         root_yaml['storage']['url'] = self.storage_url
 
         # find a free port
@@ -190,8 +193,6 @@ class RouterServiceTest(unittest.TestCase):
             self.pg, self.storage_url = postgres_test_utils.setup_postgres()
         else:
             self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
-
-        root_yaml['storage']['url'] = self.storage_url
 
         # find a free port
         self.config, self.router_url, self.service = self._setup_router()
@@ -235,7 +236,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertFalse(self.endpoints)
 
         # gc the probe request so it doesn't cause confusion later
-        self.assertTrue(self.service._gc(0))
+        self.assertTrue(self.service._gc(timedelta(seconds=0)))
 
     def tearDown(self):
         # TODO this should verify that there are no open tx attempts in storage
@@ -315,6 +316,7 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('didn\'t get expected transaction %s' % tx_json)
 
+        self.service.config.root_yaml['storage']['gc_interval'] = 1
         self.service.daemon_executor.submit(
             partial(self.service.gc, self.service.daemon_executor))
 

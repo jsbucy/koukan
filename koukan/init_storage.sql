@@ -4,9 +4,9 @@ PRAGMA auto_vacuum=2;  -- incremental
 
 CREATE TABLE Sessions (
   id INTEGER PRIMARY KEY,
-  creation INTEGER,
+  creation INTEGER NOT NULL,
   live BOOL,
-  last_update INTEGER,
+  last_update INTEGER NOT NULL,
   uri TEXT NOT NULL,
   UNIQUE(id, live)
 );
@@ -37,8 +37,8 @@ CREATE TABLE Transactions (
   inflight_session_id INTEGER,
   inflight_session_live BOOL,
 
-  creation INTEGER,
-  last_update INTEGER,
+  creation INTEGER NOT NULL,
+  last_update INTEGER NOT NULL,
   version INTEGER NOT NULL,
 
   next_attempt_time INTEGER,  -- unix secs
@@ -88,6 +88,9 @@ CREATE TABLE TransactionAttempts (
 
   responses JSON,
 
+  creation INTEGER NOT NULL,
+  last_update INTEGER NOT NULL,
+
   PRIMARY KEY(transaction_id, attempt_id),
 
   FOREIGN KEY(transaction_id) REFERENCES Transactions(id)
@@ -99,6 +102,7 @@ CREATE TABLE Blob (
   id INTEGER PRIMARY KEY,
   -- final length declared by client in content-length header
   length INTEGER,
+  creation INTEGER NOT NULL,
   last_update INTEGER NOT NULL,
   content BLOB
 );
