@@ -16,6 +16,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import CursorResult, Engine, Transaction
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
+from sqlalchemy.sql.expression import Select
+from sqlalchemy import event
 
 from sqlalchemy import (
     LargeBinary, MetaData, String, Table,
@@ -66,6 +68,9 @@ class TransactionCursor:
     # this TransactionCursor object created this tx db row
     created : bool = False
 
+    # uri of owner session if different from this process
+    session_uri : Optional[str] = None
+
     def __init__(self, storage,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
@@ -92,7 +97,6 @@ class TransactionCursor:
                create_leased : bool = False,
                message_builder_blobs_done : bool = False):
         parent = self.parent
-        self.creation = int(time.time())
         with self.parent.begin_transaction() as db_tx:
             # xxx dead?
             self.last = False
@@ -102,13 +106,14 @@ class TransactionCursor:
             logging.debug('TxCursor.create %s %s', rest_id, db_json)
             ins = insert(self.parent.tx_table).values(
                 rest_id = rest_id,
-                creation = self.creation,
-                last_update = self.creation,
+                creation = self.parent._current_timestamp_epoch(),
+                last_update = self.parent._current_timestamp_epoch(),
                 version = self.version,
                 last = self.last,
                 json = db_json,
                 creation_session_id = self.parent.session_id,
-            ).returning(self.parent.tx_table.c.id)
+            ).returning(self.parent.tx_table.c.id,
+                        self.parent.tx_table.c.creation)
 
             if create_leased:
                 ins = ins.values(
@@ -118,6 +123,7 @@ class TransactionCursor:
             res = db_tx.execute(ins)
             row = res.fetchone()
             self.id = row[0]
+            self.creation = row[1]
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
 
@@ -338,35 +344,25 @@ class TransactionCursor:
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
+        # It doesn't make sense to request reliable notifications for
+        # an ephemeral transaction: if you want "attempt once and
+        # send a notification" use retry={'max_attempts': 1}
+        # Otherwise this will interact badly with the
+        # oneshot/no_final_notification workflows.
+        assert tx_to_db.retry is not None or tx_to_db.notification is None
         logging.debug(
             'TransactionCursor._write %d %s version=%d '
             'final_attempt_reason=%s %s %s',
             self.id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
-        now = int(time.time())
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == self.id,
                       self.parent.tx_table.c.version == self.version)
                .values(json = tx_to_db_json,
                        version = new_version,
-                       last_update = now)
+                       last_update = self.parent._current_timestamp_epoch())
                .returning(self.parent.tx_table.c.version))
-
-        if self.in_attempt:
-            upd = upd.where(
-                self.parent.tx_table.c.inflight_session_id ==
-                    self.parent.session_id,
-                self.parent.tx_table.c.inflight_session_live.is_(True))
-        else:
-            upd = upd.where(or_(
-                and_(
-                    self.parent.tx_table.c.inflight_session_id ==
-                        self.parent.session_id,
-                    self.parent.tx_table.c.inflight_session_live.is_(True)),
-                # NOT NULL?
-                not_(self.parent.tx_table.c.inflight_session_live.is_(True))
-            ))
 
         if attempt_json:
             upd_att = (update(self.parent.attempt_table)
@@ -374,13 +370,20 @@ class TransactionCursor:
                                 self.id,
                               self.parent.attempt_table.c.attempt_id ==
                                 self.attempt_id)
-                       .values(responses = attempt_json))
+                       .values(responses = attempt_json,
+                               last_update = self.parent._current_timestamp_epoch()))
             res = db_tx.execute(upd_att)
 
         upd = upd.values(notification = bool(tx_to_db.notification))
 
         # TODO possibly assert here, the first case is
         # downstream/Exploder, #2/3 are upstream/OutputHandler
+
+        # Exploder upstream transactions are started as oneshot and only if
+        # there are mixed responses and it has to store&forward, it
+        # enables notifications/retries at the end. If the upstream tx
+        # had already finished by this point, we need to clear the
+        # oneshot final_attempt_reason.
         if ((tx_to_db.retry is not None or tx_to_db.notification is not None
              ) and self.final_attempt_reason == 'oneshot'):
             self.final_attempt_reason = None
@@ -494,7 +497,9 @@ class TransactionCursor:
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.message_builder,
-                     self.parent.tx_table.c.no_final_notification)
+                     self.parent.tx_table.c.no_final_notification,
+                     self.parent.tx_table.c.inflight_session_id,
+                     self.parent.tx_table.c.inflight_session_live)
 
         if start_attempt and not self.created:
             sel = sel.where(
@@ -526,7 +531,9 @@ class TransactionCursor:
          self.input_done,
          self.final_attempt_reason,
          self.message_builder,
-         self.no_final_notification) = row
+         self.no_final_notification,
+         session_id,
+         session_live) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
@@ -577,9 +584,18 @@ class TransactionCursor:
         if self.in_attempt:
             assert attempt_id == self.attempt_id
 
+        if session_live and session_id != self.parent.session_id:
+            sel = select(self.parent.session_table.c.uri).where(
+                self.parent.session_table.c.id == session_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            self.session_uri = row[0]
+            self.tx.session_uri = self.session_uri
+
         return self.tx
 
-    def _start_attempt_db(self, db_tx : Transaction, db_id : int, version : int):
+    def _start_attempt_db(self,
+                          db_tx : Transaction, db_id : int, version : int):
         logging.debug('TxCursor._start_attempt_db %d', db_id)
         assert self.parent.session_id is not None
         assert self.tx is not None
@@ -590,7 +606,8 @@ class TransactionCursor:
                       self.parent.tx_table.c.version == version)
                .values(version = new_version,
                        inflight_session_id = self.parent.session_id,
-                       inflight_session_live = True)
+                       inflight_session_live = True,
+                       last_update = self.parent._current_timestamp_epoch())
                .returning(self.parent.tx_table.c.version))
 
         if self.created:
@@ -626,10 +643,11 @@ class TransactionCursor:
                 sa_case((max_attempt_id.c.max == None, 1),
                         else_=max_attempt_id.c.max + 1)
             ).scalar_subquery()
-
             ins = (insert(self.parent.attempt_table)
                    .values(transaction_id = db_id,
-                           attempt_id = new_attempt_id)
+                           attempt_id = new_attempt_id,
+                           creation=self.parent._current_timestamp_epoch(),
+                           last_update=self.parent._current_timestamp_epoch())
                    .returning(self.parent.attempt_table.c.attempt_id))
             res = db_tx.execute(ins)
             assert (row := res.fetchone())
@@ -670,6 +688,7 @@ class BlobCursor(Blob, WritableBlob):
     last = False
     update_tx : Optional[str] = None
     blob_uri : Optional[BlobUri] = None
+    _session_uri : Optional[str] = None
 
     def __init__(self, storage,
                  update_tx : Optional[str] = None,
@@ -682,9 +701,13 @@ class BlobCursor(Blob, WritableBlob):
     def content_length(self):
         return self._content_length
 
+    def session_uri(self) -> Optional[str]:
+        return self._session_uri
+
     def _create(self, db_tx : Transaction):
         ins = insert(self.parent.blob_table).values(
-            last_update=int(time.time()),
+            creation=self.parent._current_timestamp_epoch(),
+            last_update=self.parent._current_timestamp_epoch(),
             content=bytes()
         ).returning(self.parent.blob_table.c.id)
 
@@ -769,7 +792,6 @@ class BlobCursor(Blob, WritableBlob):
                     (content_length != db_content_length)):
                 return False, db_length, db_content_length
 
-            now = int(time.time())
             upd = (update(self.parent.blob_table)
                    .where(self.parent.blob_table.c.id == self.id)
                    .where(func.length(self.parent.blob_table.c.content) ==
@@ -782,7 +804,7 @@ class BlobCursor(Blob, WritableBlob):
                            cast(self.parent.blob_table.c.content.concat(d),
                                 LargeBinary),
                            length = content_length,
-                           last_update = now)
+                           last_update = self.parent._current_timestamp_epoch())
                    .returning(func.length(self.parent.blob_table.c.content)))
 
             res = db_tx.execute(upd)
@@ -818,10 +840,11 @@ class BlobCursor(Blob, WritableBlob):
                 except VersionConflictException:
                     pass
             cursor._update_version_cache()
+            self._session_uri = cursor.session_uri
         return True, self.length, self._content_length
 
 
-    def read(self, offset, length=None) -> Optional[bytes]:
+    def pread(self, offset, length=None) -> Optional[bytes]:
         # TODO this should maybe have the same effect as load() if the
         # blob isn't finalized?
         l = length if length else self.length - offset
@@ -841,7 +864,7 @@ class BlobCursor(Blob, WritableBlob):
 
 
 class Storage():
-    session_id = None
+    session_id : Optional[int] = None
     tx_versions : IdVersionMap
     engine : Optional[Engine] = None
 
@@ -850,31 +873,36 @@ class Storage():
     tx_table : Optional[Table] = None
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
+    session_uri : Optional[str] = None
 
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
-                 engine : Optional[Engine] = None):
+                 engine : Optional[Engine] = None,
+                 session_uri : Optional[str] = None):
         if version_cache is not None:
             self.tx_versions = version_cache
         else:
             self.tx_versions = IdVersionMap()
         self.engine = engine
+        self.session_uri = session_uri
 
     @staticmethod
-    def connect(url):
+    def _sqlite_pragma(dbapi_conn, con_record):
+        # isn't sticky from schema so set it again here
+        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+        # https://www.sqlite.org/pragma.html#pragma_synchronous
+        # FULL=2, flush WAL on every write,
+        # NORMAL=1 not durable after power loss
+        dbapi_conn.execute("PRAGMA synchronous=2")
+        dbapi_conn.execute("PRAGMA auto_vacuum=2")
+
+    @staticmethod
+    def connect(url, session_uri):
         engine = create_engine(url)
         if 'sqlite' in url:
-            with engine.begin() as db_tx:
-                cursor = db_tx.connection.cursor()
-                # should be sticky from schema but set it here anyway
-                cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA foreign_keys=ON")
-                # https://www.sqlite.org/pragma.html#pragma_synchronous
-                # FULL=2, flush WAL on every write,
-                # NORMAL=1 not durable after power loss
-                cursor.execute("PRAGMA synchronous=2")
-                cursor.execute("PRAGMA auto_vacuum=2")
+            event.listen(engine, 'connect', Storage._sqlite_pragma)
 
-        s = Storage(engine=engine)
+        s = Storage(engine=engine, session_uri=session_uri)
         s._init_session()
         return s
 
@@ -890,9 +918,10 @@ class Storage():
         try:
             with self.begin_transaction() as db_tx:
                 upd = update(self.session_table).values(
-                    live = False).where(
-                        self.session_table.c.id == self.session_id).returning(
-                            self.session_table.c.id)
+                    live = False,
+                    last_update=self._current_timestamp_epoch()
+                ).where(self.session_table.c.id == self.session_id
+                ).returning(self.session_table.c.id)
                 res = db_tx.execute(upd)
                 row = res.fetchone()
                 logging.info('Storage._del_session deleted session %d',
@@ -901,7 +930,7 @@ class Storage():
         except:
             logging.exception('Storage._del_session failed to delete session')
 
-    def _init_session(self, creation : Optional[datetime] = None):
+    def _init_session(self):
         self.metadata = MetaData()
         self.metadata.reflect(bind=self.engine)
         # the tablenames seem to be lowercased for postgres, sqlite
@@ -919,21 +948,32 @@ class Storage():
             'transactionattempts', self.metadata, autoload_with=self.engine)
 
         with self.begin_transaction() as db_tx:
-            creation = creation if creation is not None else func.current_timestamp()
             ins = (insert(self.session_table).values(
-                creation = creation,
-                last_update = creation,
-                live = True)
+                creation = self._current_timestamp_epoch(),
+                last_update = self._current_timestamp_epoch(),
+                live = True,
+                uri = self.session_uri)
                    .returning(self.session_table.c.id))
             res = db_tx.execute(ins)
             self.session_id = res.fetchone()[0]
 
         atexit.register(self._del_session)
 
+    def _current_timestamp_epoch(self) -> Select:
+        if str(self.engine.url).find('sqlite') != -1:
+            return select(func.unixepoch(func.current_timestamp())
+                          ).scalar_subquery()
+        elif str(self.engine.url).find('postgres') != -1:
+            return select(func.extract('epoch', func.current_timestamp())
+                          ).scalar_subquery()
+        raise NotImplementedError()
+
     def _refresh_session(self):
         with self.begin_transaction() as db_tx:
+
             upd = update(self.session_table).values(
-                last_update = func.current_timestamp()).where(
+                last_update = self._current_timestamp_epoch()).where(
+                    self.session_table.c.id == self.session_id,
                     self.session_table.c.live).returning(
                         self.session_table.c.live)
             res = db_tx.execute(upd)
@@ -946,16 +986,29 @@ class Storage():
                 return False
             return True
 
+    def testonly_get_session(self, session_id) -> dict:
+        with self.begin_transaction() as db_tx:
+            sel = select('*').where(self.session_table.c.id == session_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            return row._mapping
+
+
     def _gc_session(self, ttl : timedelta):
         with self.begin_transaction() as db_tx:
             upd = (update(self.session_table).values(
-                live = False
+                live = False,
+                last_update = self._current_timestamp_epoch()
             ).where(
-                (func.current_timestamp() -
-                 self.session_table.c.last_update) > ttl,
+                (self._current_timestamp_epoch() -
+                 self.session_table.c.last_update) > ttl.seconds,
                 self.session_table.c.live.is_(True)
             ).returning(self.session_table.c.id,
                         self.session_table.c.last_update))
+
+            # TODO should delete old sessions eventually, maybe after
+            # all tx/blob created in that session have been gc'd?
+
             res = db_tx.execute(upd)
             if not res:
                 return None
@@ -967,8 +1020,8 @@ class Storage():
 
         return rows
 
-    def recover(self, ttl=timedelta(seconds=1)):
-        self._gc_session(ttl)
+    def recover(self, session_ttl=timedelta(seconds=1)) -> int:
+        return self._gc_session(session_ttl)
 
     # TODO these blob methods should move into TransactionCursor?
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
@@ -1048,7 +1101,6 @@ class Storage():
             # "handoff" from the input side to the output side,
             # otherwise another process/instance might steal it?
 
-            now = int(time.time())
             sel = (select(self.tx_table.c.id,
                           self.tx_table.c.version)
                    .where(self.tx_table.c.inflight_session_id.is_(None),
@@ -1058,7 +1110,7 @@ class Storage():
                                       self.tx_table.c.creation_session_id ==
                                       self.session_id),
                                   or_(self.tx_table.c.next_attempt_time.is_(None),
-                                      self.tx_table.c.next_attempt_time <= now),
+                                      self.tx_table.c.next_attempt_time <= self._current_timestamp_epoch()),
                                   self.tx_table.c.final_attempt_reason.is_(None),
                                   self.tx_table.c.json.is_not(None)),
                               and_(
@@ -1087,7 +1139,7 @@ class Storage():
 
             return tx
 
-    def _gc(self, db_tx : Transaction, ttl : int) -> Tuple[int, int]:
+    def _gc(self, db_tx : Transaction, ttl : timedelta) -> Tuple[int, int]:
         # It would be fairly easy to support a staged policy like ttl
         # blobs after 1d but tx after 7d. Then there would be a
         # separate delete from TransactionBlobRefs with the shorter
@@ -1098,7 +1150,7 @@ class Storage():
             self.tx_table.c.inflight_session_id == None,
             or_(self.tx_table.c.input_done.is_not(sa_true()),
                 self.tx_table.c.final_attempt_reason.is_not(None)),
-            (time.time() - self.tx_table.c.last_update) > ttl)
+            (self._current_timestamp_epoch() - self.tx_table.c.last_update) > ttl.seconds)
         res = db_tx.execute(del_tx)
         deleted_tx = rowcount(res)
 
@@ -1111,14 +1163,14 @@ class Storage():
         sel = (select(self.blob_table.c.id).select_from(j)
                .where(self.tx_blobref_table.c.transaction_id == None))
         del_blob = delete(self.blob_table).where(
-            (time.time() - self.blob_table.c.last_update) > ttl,
+            (self._current_timestamp_epoch() - self.blob_table.c.last_update) > ttl.seconds,
             self.blob_table.c.id.in_(sel)
         )
         res = db_tx.execute(del_blob)
         deleted_blob = rowcount(res)
         return deleted_tx, deleted_blob
 
-    def gc(self, ttl) -> Tuple[int, int]:
+    def gc(self, ttl : timedelta) -> Tuple[int, int]:
         with self.begin_transaction() as db_tx:
             deleted = self._gc(db_tx, ttl)
             return deleted

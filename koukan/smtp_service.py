@@ -1,20 +1,23 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable
-
+from typing import Callable, List, Optional, Tuple
 import asyncio
 import time
 import logging
-from typing import Optional, List, Tuple
+
 from functools import partial
 import ssl
 from threading import Lock
 
-from aiosmtpd.smtp import SMTP
+from aiosmtpd.smtp import (
+    Envelope,
+    Session,
+    SMTP,
+    ProxyData )
 from aiosmtpd.controller import Controller
 
 from koukan.blob import Blob, InlineBlob
-from koukan.response import ok_resp, to_smtp_resp, Response
+from koukan.response import Response
 from koukan.smtp_auth import Authenticator
 from koukan.filter import (
     EsmtpParam,
@@ -48,6 +51,10 @@ class SmtpHandler:
     ehlo = False
     quit = False
 
+    proxy_protocol = False
+    remote_host : Optional[HostPort] = None
+    local_host : Optional[HostPort] = None
+
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
@@ -77,6 +84,20 @@ class SmtpHandler:
             logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
         self._cancel()
 
+    async def handle_PROXY(self, server : SMTP,
+                           session : Session,
+                           envelope : Envelope,
+                           proxy_data : ProxyData) -> bool:
+        logging.info('%s proxy data %s', self.cx_id, proxy_data)
+        self.proxy_protocol = True
+        if proxy_data.src_addr:
+            self.remote_host = HostPort.from_seq(
+                (str(proxy_data.src_addr), proxy_data.src_port))
+        if proxy_data.dst_addr:
+            self.local_host = HostPort.from_seq(
+                (str(proxy_data.dst_addr), proxy_data.src_port))
+        return True
+
     def _ehlo(self, hostname, esmtp):
         self.local_socket = self.smtp.transport.get_extra_info('sockname')
         self.peername = self.smtp.transport.get_extra_info('peername')
@@ -86,13 +107,19 @@ class SmtpHandler:
                      hostname,
                      self.peername, self.local_socket)
 
-
-    async def handle_EHLO(self, server, session, envelope, hostname, responses):
+    async def handle_EHLO(self, server : SMTP,
+                          session : Session,
+                          envelope :  Envelope,
+                          hostname : str,
+                          responses : List[str]) -> List[str]:
         session.host_name = hostname
         self._ehlo(hostname, esmtp=True)
         return responses
 
-    async def handle_HELO(self, server, session, envelope, hostname):
+    async def handle_HELO(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope,
+                          hostname : str) -> str:
         session.host_name = hostname
         self._ehlo(hostname, esmtp=False)
         return '250 {}'.format(server.hostname)
@@ -107,26 +134,32 @@ class SmtpHandler:
                         TransactionMetadata(cancelled=True)), timeout=0)
         self.endpoint = self.tx = None
 
-    async def handle_QUIT(self, server, session, envelope):
+    async def handle_QUIT(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope) -> str:
         logging.info('SmtpHandler.handle_QUIT %s', self.cx_id)
         self._cancel()
         self.quit = True
-        # smtplib throws if the quit response isn't exactly 221
-        return b'221 ok'
+        # smtplib throws if the QUIT response isn't exactly 221
+        return '221 ok'
 
-    async def handle_RSET(self, server, session, envelope):
+    async def handle_RSET(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope) -> str:
         logging.info('SmtpHandler.handle_RSET %s', self.cx_id)
         self._cancel()
-        return b'250 ok'
+        return '250 ok'
 
     def _update_tx(self, cx_id, endpoint, tx, tx_delta):
         logging.debug('SmtpHandler._update_tx %s', cx_id)
         upstream_delta = endpoint.on_update(tx, tx_delta)
         logging.debug('SmtpHandler._update_tx %s done', cx_id)
 
-    async def handle_MAIL(
-            self, server, session, envelope, mail_from : str,
-            mail_esmtp : List[str]):
+    async def handle_MAIL(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope,
+                          mail_from : str,
+                          mail_esmtp : List[str]) -> str:
         self.endpoint = self.endpoint_factory()
         self.tx = TransactionMetadata()
 
@@ -140,10 +173,16 @@ class SmtpHandler:
 
         logging.info('SmtpHandler.handle_MAIL %s %s %s',
                      self.cx_id, mail_from, mail_esmtp)
-        if self.peername:
-            updated_tx.remote_host = HostPort.from_seq(self.peername)
-        if self.local_socket:
-            updated_tx.local_host = HostPort.from_seq(self.local_socket)
+        if not self.proxy_protocol:
+            if self.peername:
+                self.remote_host = HostPort.from_seq(self.peername)
+            if self.local_socket:
+                self.local_host = HostPort.from_seq(self.local_socket)
+
+        if self.remote_host is not None:
+            updated_tx.remote_host = self.remote_host
+        if self.local_host is not None:
+            updated_tx.local_host = self.local_host
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
         updated_tx.mail_from = Mailbox(mail_from, params)
@@ -153,22 +192,25 @@ class SmtpHandler:
             lambda: self._update_tx(
                 self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
-            return b'450 server busy'
+            return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_mail)
         logging.debug('handle_MAIL wait fut done')
         logging.info('SmtpHandler.handle_MAIL %s resp %s',
                      self.cx_id, self.tx.mail_response)
         if self.tx.mail_response is None:
-            return b'450 MAIL upstream timeout/internal err'
+            return '450 MAIL upstream timeout/internal err'
         if self.tx.mail_response.ok():
             # aiosmtpd expects this
             envelope.mail_from = mail_from
             envelope.mail_options.extend(mail_esmtp)
         return self.tx.mail_response.to_smtp_resp()
 
-    async def handle_RCPT(
-            self, server, session, envelope, rcpt_to, rcpt_esmtp):
+    async def handle_RCPT(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope,
+                          rcpt_to : str,
+                          rcpt_esmtp : List[str]) -> str:
         logging.info('SmtpHandler.handle_RCPT %s %s %s',
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
@@ -182,7 +224,7 @@ class SmtpHandler:
             lambda: self._update_tx(
                 self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
-            return b'450 server busy'
+            return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_rcpt)
 
@@ -191,22 +233,24 @@ class SmtpHandler:
 
         # for now without pipelining we send one rcpt upstream at a time
         if len(self.tx.rcpt_response) != len(self.tx.rcpt_to):
-            return b'450 RCPT upstream timeout/internal err'
+            return '450 RCPT upstream timeout/internal err'
         rcpt_resp = self.tx.rcpt_response[rcpt_num]
 
         if rcpt_resp is None:
-            return b'450 RCPT upstream timeout/internal err'
+            return '450 RCPT upstream timeout/internal err'
         if rcpt_resp.ok():
             # aiosmtpd expects this
             envelope.rcpt_tos.append(rcpt_to)
             envelope.rcpt_options.append(rcpt_esmtp)
         return rcpt_resp.to_smtp_resp()
 
-    async def handle_DATA(self, server, session, envelope):
+    async def handle_DATA(self, server : SMTP,
+                          session : Session,
+                          envelope : Envelope) -> str:
         logging.info('SmtpHandler.handle_DATA %s %d bytes',
                      self.cx_id, len(envelope.content))
 
-        blob = InlineBlob(envelope.content)
+        blob = InlineBlob(envelope.content, last=True)
 
         updated_tx = self.tx.copy()
         updated_tx.body_blob = blob
@@ -216,7 +260,7 @@ class SmtpHandler:
             lambda: self._update_tx(
                 self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
         if fut is None:
-            return b'450 server busy'
+            return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_data)
         logging.info('SmtpHandler.handle_DATA %s resp %s',
@@ -228,13 +272,17 @@ class SmtpHandler:
 
 class ControllerTls(Controller):
     def __init__(self, host, port, ssl_context, auth,
-                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout):
+                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
+                 proxy_protocol_timeout : Optional[int] = None):
         self.tls_controller_context = ssl_context
         self.auth = auth
         self.endpoint_factory = endpoint_factory
         self.max_rcpt = max_rcpt
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
+        self.proxy_protocol_timeout = proxy_protocol_timeout
+
+        # TODO inject this
         self.executor = Executor(inflight_limit=100, watchdog_timeout=3600)
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
@@ -249,18 +297,24 @@ class ControllerTls(Controller):
             self.max_rcpt, self.rcpt_timeout,
             self.data_timeout)
         handler.loop = self.loop
+
+        # TODO aiosmtpd supports LMTP so we could add that though it
+        # is not completely trivial due to LMTP's per-recipient data
+        # responses https://github.com/jsbucy/koukan/issues/2
         smtp = SMTP(handler,
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
-                    authenticator=self.auth)
+                    authenticator=self.auth,
+                    proxy_protocol_timeout=self.proxy_protocol_timeout)
         handler.set_smtp(smtp)
         return smtp
 
 def service(endpoint_factory,
             hostname="localhost", port=9025, cert=None, key=None,
             auth_secrets_path=None, max_rcpt=None,
-            rcpt_timeout=None, data_timeout=None):
+            rcpt_timeout=None, data_timeout=None,
+            proxy_protocol_timeout : Optional[int] = None):
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
@@ -270,6 +324,7 @@ def service(endpoint_factory,
     controller = ControllerTls(
         hostname, port, ssl_context,
         auth,
-        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout)
+        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
+        proxy_protocol_timeout)
     controller.start()
     return controller

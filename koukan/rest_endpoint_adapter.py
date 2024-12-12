@@ -15,6 +15,9 @@ import time
 from threading import Condition, Lock
 import json
 import asyncio
+from functools import partial
+
+from urllib.parse import urljoin
 
 from flask import (
     Request as FlaskRequest,
@@ -32,6 +35,8 @@ from fastapi.responses import (
 
 HttpRequest = Union[FlaskRequest, FastApiRequest]
 HttpResponse = Union[FlaskResponse, FastApiResponse]
+
+from httpx import Client, Response as HttpxResponse
 
 from koukan.deadline import Deadline
 from koukan.response import Response as MailResponse
@@ -52,19 +57,40 @@ from koukan.storage_schema import VersionConflictException
 
 # runs SyncFilter on Executor with AsyncFilter interface for
 # RestHandler -> SyncFilterAdapter -> SmtpEndpoint
+
+# TODO I'm unhappy with how complicated this has become. I have
+# considered writing a memory-backed TransactionCursor and running
+# SmtpEndpoint on OutputHandler instead. In the past I didn't think
+# that would actually be simpler than this but now I'm not so sure...
 class SyncFilterAdapter(AsyncFilter):
     class BlobWriter(WritableBlob):
-        blob : InlineBlob
+        # all accessed with parent.mu
+        parent : "SyncFilterAdapter"
+        offset : int = 0
+        # queue of staged appends, these are propagated to
+        # parent.body_blob in _update_once()
+        q : List[bytes]
+        content_length : Optional[int] = None
         def __init__(self, parent):
             self.parent = parent
-            self.blob = InlineBlob(b'')
+            self.q = []
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:
-            rv = self.blob.append_data(offset, d, content_length)
-            self.parent.blob_wakeup()
-            return rv
+            with self.parent.mu:
+                assert self.content_length is None or (
+                    content_length == self.content_length)
+                if self.content_length is not None and (
+                        self.offset + len(d) > self.content_length):
+                    return False, self.offset, self.content_length
+                if offset != self.offset:
+                    return False, self.offset, None
+                self.q.append(d)
+                self.offset += len(d)
+                self.content_length = content_length
+            self.parent._blob_wakeup()
+            return True, self.offset, content_length
 
     executor : Executor
     filter : SyncFilter
@@ -75,7 +101,8 @@ class SyncFilterAdapter(AsyncFilter):
     inflight : bool = False
     rest_id : str
     _last_update : float
-    body_blob : Optional[BlobWriter] = None
+    blob_writer : Optional[BlobWriter] = None
+    body_blob : Optional[InlineBlob] = None
     # transaction has reached a final status: data response or cancelled
     # (used for gc)
     done : bool = False
@@ -111,13 +138,6 @@ class SyncFilterAdapter(AsyncFilter):
         return await self.id_version.wait_async(
             version=version, timeout=timeout)
 
-    # for use in ttl/gc idle calcuation
-    # returns now if there is an update inflight i.e. do not gc
-    def last_update(self) -> float:
-        if self.inflight:
-            return time.monotonic()
-        return self._last_update
-
     def _update(self):
         try:
             while self._update_once():
@@ -142,20 +162,35 @@ class SyncFilterAdapter(AsyncFilter):
             delta = self.prev_tx.delta(self.tx)  # new reqs
             assert delta is not None
             logging.debug('SyncFilterAdapter._update_once() '
-                          'downstream_delta %s', delta)
+                          'downstream_delta %s staged %s', delta,
+                          len(self.blob_writer.q) if self.blob_writer else None)
             self.prev_tx = self.tx.copy()
-            if not delta.req_inflight() and not delta.cancelled and (
-                    self.tx.body_blob is None or
-                    self.tx.body_blob.len() != self.tx.body_blob.content_length() or
-                    self.tx.data_response is not None):
+
+            # propagate staged appends from blob_writer to body_blob
+            if self.blob_writer is not None and self.blob_writer.q:
+                # this may be moot because we early-return
+                # if the blob isn't finalized anyway but: we haven't
+                # really spelled out whether body_blob is only in the
+                # delta the first time or every time that it grows?
+                delta.body_blob = self.body_blob
+                for b in self.blob_writer.q:
+                    self.body_blob.append_data(
+                        self.body_blob.len(), b,
+                        self.blob_writer.content_length)
+                    logging.debug('append %d %s', self.body_blob.len(),
+                                  self.body_blob.content_length())
+                self.blob_writer.q = []
+
+            if not self.tx.req_inflight() and not delta.cancelled:
                 self.inflight = False
                 return False
+            tx = self.tx.copy()
+        upstream_delta = self.filter.on_update(tx, delta)
 
-        upstream_delta = self.filter.on_update(self.tx, delta)
-
-        logging.debug('SyncFilterAdapter._update_once() tx after upstream %s',
-                      self.tx)
+        logging.debug('SyncFilterAdapter._update_once() '
+                      'tx after upstream %s', tx)
         with self.mu:
+            assert self.tx.merge_from(upstream_delta) is not None
             # TODO closer to req_inflight() logic i.e. tx has reached
             # a final state due to an error
             self.done = self.tx.cancelled or self.tx.data_response is not None
@@ -183,15 +218,16 @@ class SyncFilterAdapter(AsyncFilter):
             # xxx bootstrap
             if version > 1 and tx.version != version:
                 raise VersionConflictException
-            txx = self.tx.merge(tx_delta)
 
-            logging.debug('SyncFilterAdapter.updated merged %s', txx)
-
-            if txx is None:
+            # try this non-destructively to see if the delta is valid...
+            if self.tx.merge(tx_delta) is None:
                 # bad delta, xxx this should throw an exception distinct
                 # from VersionConflictException, cannot make forward progress
                 return None
-            self.tx = txx
+            # ... before committing to self.tx
+            self.tx.merge_from(tx_delta)
+            logging.debug('SyncFilterAdapter.updated merged %s', self.tx)
+
             version = self.id_version.get()
             version += 1
             self.id_version.update(version)
@@ -209,7 +245,6 @@ class SyncFilterAdapter(AsyncFilter):
             assert delta.version is not None
             return delta
 
-    # TODO it looks like this effectively returns an empty tx on timeout
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
             tx = self.tx.copy()
@@ -223,19 +258,24 @@ class SyncFilterAdapter(AsyncFilter):
                         ) -> Optional[WritableBlob]:
         if not tx_body:
             raise NotImplementedError()
-        if create and self.body_blob is None:
-            self.body_blob = SyncFilterAdapter.BlobWriter(self)
-        return self.body_blob
+        if create and self.blob_writer is None:
+            with self.mu:
+                assert self.body_blob is None
+                assert self.blob_writer is None
+                self.body_blob = InlineBlob(b'')
+                self.tx.body_blob = self.body_blob
+                self.blob_writer = SyncFilterAdapter.BlobWriter(self)
+        return self.blob_writer
 
 
-    def blob_wakeup(self):
-        logging.debug('SyncFilterAdapter.blob_wakeup %s', self.body_blob)
+    def _blob_wakeup(self):
+        logging.debug('SyncFilterAdapter.blob_wakeup %s',
+                      [len(b) for b in self.blob_writer.q])
         tx = self.get()
         assert tx is not None
+        # shenanigans: empty update, _update_once() will dequeue from
+        # BlobWriter.q to self.body_blob
         tx_delta = TransactionMetadata()
-        if not tx.body_blob:
-            tx_delta.body_blob = self.body_blob.blob
-        tx.merge_from(tx_delta)
         self.update(tx, tx_delta)
 
 
@@ -243,7 +283,7 @@ MAX_TIMEOUT=30
 
 
 class RestHandler(Handler):
-    CHUNK_SIZE = 1048576
+    chunk_size : int
     executor : Optional[Executor] = None
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
@@ -256,6 +296,11 @@ class RestHandler(Handler):
     range : Optional[ContentRange] = None
     blob : Optional[WritableBlob] = None
     bytes_read : Optional[int] = None
+    endpoint_yaml : Optional[dict] = None
+    session_uri : Optional[str] = None
+    service_uri : Optional[str] = None
+    HTTP_CLIENT = Callable[[str], HttpxResponse]
+    client : HTTP_CLIENT
 
     def __init__(self,
                  executor : Optional[Executor] = None,
@@ -263,13 +308,30 @@ class RestHandler(Handler):
                  tx_rest_id=None,
                  blob_rest_id=None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
-                 http_host : Optional[str] = None):
+                 http_host : Optional[str] = None,
+                 chunk_size : int = 1048576,
+                 endpoint_yaml : Optional[dict] = None,
+                 session_uri : Optional[str] = None,
+                 service_uri : Optional[str] = None,
+                 client : Optional[HTTP_CLIENT] = None):
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
         self._blob_rest_id = blob_rest_id
         self.rest_id_factory = rest_id_factory
         self.http_host = http_host
+        self.chunk_size = chunk_size
+        if endpoint_yaml:
+            self.endpoint_yaml = endpoint_yaml
+        else:
+            self.endpoint_yaml = {}
+        self.session_uri = session_uri
+        self.service_uri = service_uri
+        if client is not None:
+            self.client = client
+        else:
+            client = Client(follow_redirects=True)
+            self.client = client.get
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -308,6 +370,29 @@ class RestHandler(Handler):
                 headers=headers_dict)
         return PlainTextResponse(
             status_code=code, content=msg, headers=headers_dict)
+
+    def _ping_tx(self, session_uri, tx_rest_id):
+        logging.debug('ping tx %s', self._tx_rest_id)
+
+        # TODO HEAD makes more sense but this should work for now
+        try:
+            uri = urljoin(session_uri, make_tx_uri(tx_rest_id))
+            resp = self.client(uri)
+            logging.debug('%s %d', uri, resp.status_code)
+        except:
+            logging.exception('_ping_tx')
+
+
+    def _maybe_schedule_ping(self, request, session_uri, tx_rest_id
+                             ) -> Optional[HttpResponse]:
+        if session_uri is None:
+            return None
+
+        if self.executor.submit(
+                partial(self._ping_tx, session_uri,
+                        self._tx_rest_id)) is None:
+            return self.response(request, code=500, msg='schedule ping tx')
+        return None
 
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
@@ -359,7 +444,7 @@ class RestHandler(Handler):
                 request, code=500, msg='internal error creating transaction')
         tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         if tx is None:
-            return self.response(request, code=400, msg='invalid request')
+            return self.response(request, code=400, msg='invalid tx json')
         tx.host = self.http_host
         body = tx.body
 
@@ -371,10 +456,18 @@ class RestHandler(Handler):
 
         tx.body = body
         del tx.body_blob
+        # return uri qualified to session or service per self.endpoint_yaml
+        tx_path = make_tx_uri(tx.rest_id)
+        if self.endpoint_yaml.get('rest_lro', False) is False:
+            tx_uri = urljoin(self.session_uri, tx_path)
+        elif self.service_uri is not None:
+            tx_uri = urljoin(self.service_uri, tx_path)
+        else:
+            tx_uri = tx_path
         resp = self.response(
             request, code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
-            headers=[('location', make_tx_uri(tx.rest_id))],
+            headers=[('location', tx_uri)],
             etag=self._etag(upstream.version))
         logging.debug('RestHandler._create %s', resp)
         return resp
@@ -387,22 +480,35 @@ class RestHandler(Handler):
             return self.response(
                 request, code=404, msg='transaction not found')
 
+        tx = self._get_tx()
+        if tx is None:
+            return self.response(request, code=404, msg='unknown tx'), None
+
+        etag = request.headers.get('if-none-match', None)
+        if (timeout is None or etag is None or
+            not self._check_etag(etag, tx.version)):
+            return self._get_tx_resp(request, tx)
+        elif (timeout is not None and etag is not None and
+              tx.session_uri is not None):
+            return self.response(
+                request, code=307, headers=[
+                    ('location', urljoin(tx.session_uri,
+                                         make_tx_uri(self._tx_rest_id)))])
+
         deadline = Deadline(timeout)
 
-        version = self._get_tx_req(request)
-        if version is not None:
-            wait_result = self.async_filter.wait(
-                version, deadline.deadline_left())
-            if not wait_result:
-                return self.response(request, code=304, msg='unchanged',
-                                     headers=[('etag', self._etag(version))])
+        wait_result = self.async_filter.wait(
+            tx.version, deadline.deadline_left())
+        if not wait_result:
+            return self.response(request, code=304, msg='unchanged',
+                                 headers=[('etag', self._etag(tx.version))])
 
         tx = self._get_tx()
         if tx is None:
             return self.response(request, code=500, msg='get tx')
         return self._get_tx_resp(request, tx)
 
-    def _get_tx(self) -> HttpResponse:
+    def _get_tx(self) -> Optional[TransactionMetadata]:
         tx = self.async_filter.get()
         if tx is None:
             return None
@@ -416,26 +522,42 @@ class RestHandler(Handler):
     def _get_tx_resp(self, request, tx):
         return self.response(
             request,
-            etag=self._etag(tx.version),
+            etag=self._etag(tx.version) if tx else None,
             resp_json=tx.to_json(WhichJson.REST_READ))
 
-    def _get_tx_req(self, request):
-        etag = request.headers.get('if-none-match', None)
-        version = None
-        if etag is not None:
-            cached_version = self.async_filter.version()
-            logging.debug(
-                'RestHandler._get_tx_req %s etag %s cached_version %s',
-                self._tx_rest_id, etag, cached_version)
+    def _check_etag(self, etag, cached_version) -> bool:
+        # ugh the presence of these quotes is a difference between
+        # flask and fastapi :/
+        etag = etag.strip('"')
+        logging.debug(
+            'RestHandler._check_etag %s etag %s cached_version %s',
+            self._tx_rest_id, etag, cached_version)
+        return self._etag(cached_version) == etag
 
-            if cached_version is not None and (
-                    self._etag(cached_version) == etag):
-                version = cached_version
-        # else: no waiting/point read
-        return version
+    async def _get_tx_async(
+            self, request
+    ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
+        cfut = self.executor.submit(lambda: self._get_tx())
+        if cfut is None:
+            return self.response(
+                request, code=500, msg='get tx async schedule read'), None
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(
+                request, code=500, msg='get tx async read'), None
+        if not afut.done():
+            return self.response(request, code=500,
+                                 msg='get tx async read fut done'), None
+        if afut.result() is None:
+            return self.response(request, code=404, msg='unknown tx'), None
+        return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
-        logging.debug('RestHandler.get_tx_async %s', self._tx_rest_id)
         if self.async_filter is None:
             return self.response(
                 request, code=404, msg='transaction not found')
@@ -444,38 +566,32 @@ class RestHandler(Handler):
         if err is not None:
             return err
 
+        etag = request.headers.get('if-none-match', None)
+        err, tx = await self._get_tx_async(request)
+
+        if err is not None:
+            return err
+        if (timeout is None or etag is None or
+            not self._check_etag(etag, tx.version)):
+            return self._get_tx_resp(request, tx)
+        elif (timeout is not None and etag is not None and
+              tx.session_uri is not None):
+            return self.response(
+                request, code=307, headers=[
+                    ('location', urljoin(tx.session_uri,
+                                         make_tx_uri(self._tx_rest_id)))])
+
         deadline = Deadline(timeout)
 
-        version = self._get_tx_req(request)
-
-        logging.debug('RestHandler._get_tx_async version %s', version)
-        if version is not None:
-            wait_result = await self.async_filter.wait_async(
-                version, deadline.deadline_left())
-            if not wait_result:
-                return self.response(request, code=304, msg='unchanged',
-                                     headers=[('etag', self._etag(version))])
-
-        cfut = self.executor.submit(lambda: self._get_tx())
-        if cfut is None:
-            return self.response(
-                request, code=500, msg='get tx async schedule read')
-        afut = asyncio.wrap_future(cfut)
-        try:
-            # wait ~forever here, this is a point read
-            # xxx fixed timeout? ignore deadline?
-            await asyncio.wait_for(afut, None)
-        except TimeoutError:
-            # unexpected
-            return self.response(request, code=500, msg='get tx async read')
-        if not afut.done():
-            return self.response(request, code=500,
-                                 msg='get tx async read fut done')
-        tx = afut.result()
-        if tx is None:
-            return self.response(request, code=404, msg='unknown transaction')
+        wait_result = await self.async_filter.wait_async(
+            tx.version, deadline.deadline_left())
+        if not wait_result:
+            return self.response(request, code=304, msg='unchanged',
+                                 headers=[('etag', self._etag(tx.version))])
+        err, tx = await self._get_tx_async(request)
+        if err is not None:
+            return err
         return self._get_tx_resp(request, tx)
-
 
     def patch_tx(self, request : HttpRequest,
                  req_json : dict,
@@ -524,6 +640,10 @@ class RestHandler(Handler):
                 request, code=400,
                 msg='RestHandler.patch_tx bad request')
 
+        if (err := self._maybe_schedule_ping(
+                request, tx.session_uri, self._tx_rest_id)):
+            return err
+
         tx.body = body
         del tx.body_blob
         return self.response(
@@ -533,12 +653,10 @@ class RestHandler(Handler):
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
+        if ('content-length' not in request.headers or
+            'content-range' not in request.headers):
+            return None, None
         content_length = int(request.headers.get('content-length'))
-        if (range_header := request.headers.get('content-range', None)) is None:
-            return None, ContentRange(
-                'bytes', 0, content_length, content_length)
-                #request.content_length, request.content_length)
-
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
@@ -559,15 +677,19 @@ class RestHandler(Handler):
 
         if req_upload is None:
             self.bytes_read = 0
-            while b := request.stream.read(self.CHUNK_SIZE):
-                logging.debug('RestHandler.create_blob chunk %d', len(b))
-                self._put_blob_chunk(request, b)
+            chunk_resp = self._put_blob(request)
+            if chunk_resp.status_code != 200:
+                return chunk_resp
+
+        if (err := self._maybe_schedule_ping(
+                request, self.blob.session_uri(), self._tx_rest_id)):
+            return err
 
         return resp
 
     def _create_blob(self, request : HttpRequest,
-                    tx_body : bool = False,
-                    req_upload : Optional[str] = None) -> HttpResponse:
+                     tx_body : bool = False,
+                     req_upload : Optional[str] = None) -> HttpResponse:
         logging.debug('RestHandler._create_blob %s %s blob %s tx %s',
                       request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
@@ -586,7 +708,7 @@ class RestHandler(Handler):
             return self.response(
                 request, code=400, msg='unimplemented metadata upload')
 
-        logging.debug('RestHandler.create_blob before create')
+        logging.debug('RestHandler._create_blob before create')
 
         if (blob := self.async_filter.get_blob_writer(
                 create=True, blob_rest_id=self._blob_rest_id,
@@ -599,7 +721,6 @@ class RestHandler(Handler):
             if range_err:
                 return range_err
             self.range = range
-            #rest_resp = self._put_blob(request, range, blob)
 
         blob_uri = make_blob_uri(
             self._tx_rest_id,
@@ -637,25 +758,36 @@ class RestHandler(Handler):
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
+    def _put_blob(self, request):
+        while b := request.stream.read(self.chunk_size):
+            logging.debug('RestHandler._put_blob %d', len(b))
+            chunk_resp = self._put_blob_chunk(request, b)
+            if chunk_resp.status_code != 200:
+                return chunk_resp
+        return self._put_blob_chunk(request, b'', last=True)
 
     def put_blob(self, request : HttpRequest,
                  blob_rest_id : Optional[str] = None,
                  tx_body : bool = False) -> HttpResponse:
         logging.debug('RestHandler.put_blob %s', request.headers)
-        err = self._put_blob(request, blob_rest_id, tx_body)
+        err = self._get_blob_writer(request, blob_rest_id, tx_body)
         if err:
             return err
         self.bytes_read = 0
-        while b := request.stream.read(self.CHUNK_SIZE):
-            logging.debug('RestHandler.put_blob chunk %d', len(b))
-            resp = self._put_blob_chunk(request, b)
-            if resp.status_code != 200:
-                return resp
+        resp = self._put_blob(request)
+        if resp.status_code != 200:
+            return resp
+
+        if (err := self._maybe_schedule_ping(
+                request, self.blob.session_uri(), self._tx_rest_id)):
+            return err
+
         return resp
 
-    def _put_blob(self, request : HttpRequest,
-                 blob_rest_id : Optional[str] = None,
-                 tx_body : bool = False) -> HttpResponse:
+    # populate self.blob or return http err
+    def _get_blob_writer(self, request : HttpRequest,
+                         blob_rest_id : Optional[str] = None,
+                         tx_body : bool = False) -> Optional[HttpResponse]:
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -681,7 +813,7 @@ class RestHandler(Handler):
             tx_body : bool = False,
             blob_rest_id : Optional[str] = None) -> FastApiResponse:
         cfut = self.executor.submit(
-            lambda: self._put_blob(request, blob_rest_id, tx_body), 0)
+            lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -696,46 +828,70 @@ class RestHandler(Handler):
         b = bytes()
         self.bytes_read = 0
         async for chunk in request.stream():
+            # copy from chunk to b until it contains chunk_size, then
+            # send upstream
             while chunk:
-                to_go = self.CHUNK_SIZE - len(b)
+                to_go = self.chunk_size - len(b)
                 count = min(to_go, len(chunk))
                 b += chunk[0:count]
-                if len(b) < self.CHUNK_SIZE:
+                if len(b) < self.chunk_size:
                     assert count == len(chunk)
                     break
                 resp = await self._put_blob_chunk_async(request, b)
-                if resp is not None:
+                if resp is not None and resp.status_code != 200:
+                    logging.debug(resp)
                     return resp
                 b = bytes()
                 chunk = chunk[count:]
-        if b:
-            return await self._put_blob_chunk_async(request, b)
+        # send any leftover
+        resp = await self._put_blob_chunk_async(request, b, last=True)
+        if resp.status_code != 200:
+            return resp
+
+        if (err := self._maybe_schedule_ping(
+                request, self.blob.session_uri(), self._tx_rest_id)):
+            return err
+
+        return resp
 
     async def _put_blob_chunk_async(
-            self, request : FastApiRequest, b : bytes
+            self, request : FastApiRequest, b : bytes, last=False
     ) -> Optional[FastApiResponse]:
         cfut = self.executor.submit(
-            lambda: self._put_blob_chunk(request, b), 0)
+            lambda: self._put_blob_chunk(request, b, last), 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         return fut.result()
 
-    def _put_blob_chunk(self, request : HttpRequest, b : bytes) -> HttpResponse:
+    def _put_blob_chunk(self, request : HttpRequest, b : bytes,
+                        last=False) -> HttpResponse:
         logging.debug('RestHandler._put_blob_chunk %s content-range: %s %d',
                       self._blob_rest_id, self.range, len(b))
 
         content_length = result_len = None
 
+        start = 0
+        if self.range is not None:
+            start = self.range.start
+            length = self.range.length
+        elif last:
+            length = self.bytes_read + len(b)
+        else:
+            length = None
+
         appended, result_len, content_length = self.blob.append_data(
-            self.range.start + self.bytes_read, b, self.range.length)
+            start + self.bytes_read, b, length)
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
 
-        headers=[('content-range',
-                  ContentRange('bytes', 0, result_len, content_length))]
+        headers = []
+        if self.range is not None:
+            headers.append(
+                ('content-range',
+                 ContentRange('bytes', 0, result_len, content_length)))
 
         if not appended:
             return self.response(
@@ -762,8 +918,9 @@ class RestHandler(Handler):
 
 
 class EndpointFactory(ABC):
+    # dict : endpoint yaml
     @abstractmethod
-    def create(self, http_host : str) -> Optional[AsyncFilter]:
+    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
     @abstractmethod
@@ -773,26 +930,38 @@ class EndpointFactory(ABC):
 class RestHandlerFactory(HandlerFactory):
     executor : Executor
     endpoint_factory : EndpointFactory
+    session_uri : Optional[str] = None
+    service_uri : Optional[str] = None
     rest_id_factory : Callable[[], str]
 
     def __init__(self, executor,
                  endpoint_factory,
-                 rest_id_factory : Callable[[], str]):
+                 rest_id_factory : Callable[[], str],
+                 session_uri : Optional[str] = None,
+                 service_uri : Optional[str] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
+        self.session_uri = session_uri
+        self.service_uri = service_uri
 
     def create_tx(self, http_host) -> RestHandler:
-        endpoint = self.endpoint_factory.create(http_host)
+        endpoint, yaml = self.endpoint_factory.create(http_host)
         return RestHandler(
-            self.executor,
+            executor=self.executor,
             async_filter=endpoint,
             http_host=http_host,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            endpoint_yaml = yaml,
+            session_uri = self.session_uri,
+            service_uri = self.service_uri)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
+        filter = self.endpoint_factory.get(tx_rest_id)
         return RestHandler(
-            self.executor,
-            async_filter=self.endpoint_factory.get(tx_rest_id),
+            executor=self.executor,
+            async_filter=filter,
             tx_rest_id=tx_rest_id,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            session_uri = self.session_uri,
+            service_uri = self.service_uri)

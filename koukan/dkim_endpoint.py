@@ -61,7 +61,7 @@ class DkimEndpoint(SyncFilter):
         return upstream_delta
 
     def sign(self, blob : Blob) -> Optional[bytes]:
-        data = blob.read(0)
+        data = blob.pread(0)
         # TODO dkimpy wants to get the entire message as a single
         # bytes value, a better interface for this would be to push
         # chunks into it, I don't think that would be a huge change

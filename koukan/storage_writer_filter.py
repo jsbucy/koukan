@@ -51,7 +51,10 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def wait(self, version, timeout) -> bool:
-        self._load()
+        # cursor can be None after first update() to create with the
+        # cutthrough/handoff workflow
+        if self.tx_cursor is None:
+            self._load()
         if self.tx_cursor.version != version:
             return True
         return self.tx_cursor.wait(timeout)
@@ -155,7 +158,7 @@ class StorageWriterFilter(AsyncFilter):
         off = 0
         while True:
             CHUNK_SIZE = 1048576
-            d = body_blob.read(0, CHUNK_SIZE)
+            d = body_blob.pread(0, CHUNK_SIZE)
             last = len(d) < CHUNK_SIZE
             content_length = off + len(d) if last else None
             logging.debug('_maybe_write_body_blob %s %d %s',
@@ -352,6 +355,6 @@ class StorageWriterFilter(AsyncFilter):
                     pass
         else:
             blob = self.storage.get_blob_for_append(
-                BlobUri(tx_id=self.rest_id, blob=blob_rest_id))
+                BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))
 
         return blob

@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from abc import ABC, abstractmethod
 import os
 from io import IOBase
+import os
 
 class Blob(ABC):
     @abstractmethod
@@ -17,7 +18,7 @@ class Blob(ABC):
         return None
 
     @abstractmethod
-    def read(self, offset, len=None) -> Optional[bytes]:
+    def pread(self, offset, len=None) -> Optional[bytes]:
         # pytype doesn't flag len() (above) but does flag this?!
         raise NotImplementedError()
 
@@ -42,6 +43,10 @@ class WritableBlob(ABC):
     def rest_id(self) -> Optional[str]:
         return None
 
+    # returns session uri if different from this process
+    def session_uri(self) -> Optional[str]:
+        return None
+
 
 class InlineBlob(Blob, WritableBlob):
     d : bytes
@@ -50,9 +55,11 @@ class InlineBlob(Blob, WritableBlob):
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 last = False):
+        assert not (last and (content_length is not None))
         self.d = d
-        self._content_length = content_length
+        self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
 
     def len(self):
@@ -61,14 +68,11 @@ class InlineBlob(Blob, WritableBlob):
     def rest_id(self):
         return self._rest_id
 
-    def read(self, offset, len=None):
+    def pread(self, offset, len=None):
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
-        # TODO this may be surprising behavior
-        if self._content_length is not None:
-            return self._content_length
-        return len(self.d)
+        return self._content_length
 
     def append(self, dd : bytes):
         self.d += dd
@@ -111,7 +115,7 @@ class FileLikeBlob(Blob, WritableBlob):
     def rest_id(self):
         return self._rest_id
 
-    def read(self, offset, len=None) -> bytes:
+    def pread(self, offset, len=None) -> bytes:
         self.f.seek(offset)
         return self.f.read(len)
 
@@ -157,14 +161,14 @@ class Chunk:
         self.blob_offset = blob_offset
         self.length = length
 
-    def read(self, offset, length):
+    def pread(self, offset, length):
         offset -= self.offset
         offset += self.blob_offset
         if length is not None:
             length = min(length, self.length - offset + self.blob_offset)
         else:
             length = self.length
-        return self.blob.read(offset, length)
+        return self.blob.pread(offset, length)
 
 class CompositeBlob(Blob):
     chunks : List[Chunk]
@@ -187,7 +191,7 @@ class CompositeBlob(Blob):
         # TODO for bonus points, if isinstance(blob, CompositeBlob)
         # copy the chunks directly
 
-    def read(self, offset, length=None) -> bytes:
+    def pread(self, offset, length=None) -> bytes:
         out = bytes()
         for chunk in self.chunks:
             if offset > (chunk.offset + chunk.length):
@@ -195,7 +199,7 @@ class CompositeBlob(Blob):
             if length is not None and ((offset + length) < chunk.offset):
                 break
 
-            d = chunk.read(offset, length)
+            d = chunk.pread(offset, length)
             out += d
             offset += len(d)
             if length:
@@ -216,3 +220,32 @@ class CompositeBlob(Blob):
         return self.len()
 
 
+class BlobReader(IOBase):
+    blob : Blob
+    offset : int =  0
+
+    def __init__(self, blob : Blob):
+        self.blob = blob
+
+    def read(self, req_len : Optional[int] = None):
+        rv = self.blob.pread(self.offset, req_len)
+        if rv:
+            self.offset += len(rv)
+        return rv
+
+    def tell(self):
+        return self.offset
+
+    def seek(self, offset : int, whence=os.SEEK_SET):
+        if whence == os.SEEK_SET:
+            rel = 0
+        elif whence == os.SEEK_CUR:
+            rel = self.offset
+        elif whence == os.SEEK_END:
+            rel = self.blob.len()
+        else:
+            raise ValueError()
+        if rel + offset < 0 or rel + offset > self.blob.len():
+            raise ValueError()
+        self.offset = rel + offset
+        return self.offset

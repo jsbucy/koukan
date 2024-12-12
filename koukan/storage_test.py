@@ -11,11 +11,6 @@ import tempfile
 import os
 from datetime import datetime, timedelta
 
-import testing.postgresql
-
-import sqlite3
-import psycopg
-import psycopg.errors
 from koukan.storage import BlobCursor, Storage, TransactionCursor
 from koukan.storage_schema import (
     InvalidActionException, VersionConflictException )
@@ -37,8 +32,10 @@ class StorageTestBase(unittest.TestCase):
     sqlite : bool
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s [%(thread)d] %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def tearDown(self):
         self.s._del_session()
@@ -120,11 +117,11 @@ class StorageTestBase(unittest.TestCase):
 
         blob_reader = self.s.get_blob_for_read(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-        b = blob_reader.read(0, 3)
+        b = blob_reader.pread(0, 3)
         self.assertEqual(b'abc', b)
-        b = blob_reader.read(3)
+        b = blob_reader.pread(3)
         self.assertEqual(b'xyzuvw', b)
-        b = blob_reader.read(4, 3)
+        b = blob_reader.pread(4, 3)
         self.assertEqual(b'yzu', b)
 
         upstream = self.s.load_one()
@@ -156,6 +153,19 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug(self.s.debug_dump())
 
+    def test_mixed_notify_retry(self):
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host'),
+            create_leased=True)
+        with self.assertRaises(AssertionError):
+            cursor.write_envelope(TransactionMetadata(
+                mail_from=Mailbox('alice'),
+                retry=None,
+                notification={'host': 'submission'}))
+
     def test_blob_8bitclean(self):
         blob_writer = BlobCursor(self.s)
         blob_writer.create()
@@ -168,7 +178,7 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(len(d), d, len(d)*2)
         blob_reader = BlobCursor(self.s)
         blob_reader.load(blob_id=blob_writer.id)
-        self.assertEqual(blob_reader.read(0), d+d)
+        self.assertEqual(blob_reader.pread(0), d+d)
 
     def test_body_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -271,13 +281,21 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(tx_writer.input_done)
 
     def test_sessions(self):
-        self.assertTrue(self.s._refresh_session())
+        stale_session = self.s.session_id
+        self.s = self._connect()
 
-        self.s._gc_session(timedelta(minutes=1))
+        self.assertEqual(0, self.s._gc_session(timedelta(seconds=1)))
+        for i in range(0,4):
+            logging.debug('%d', i)
+            time.sleep(0.5)
+            self.s._refresh_session()
+
+        self.assertEqual(1, self.s._gc_session(timedelta(seconds=1)))
+        self.assertFalse(self.s.testonly_get_session(stale_session)['live'])
+        self.assertTrue(self.s.testonly_get_session(self.s.session_id)['live'])
 
     def test_recovery(self):
         old_session = self._connect()
-        old_session._init_session(datetime.fromtimestamp(1234567890))
         old_tx = old_session.get_transaction_cursor()
         old_tx.create('tx_rest_id', TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -286,14 +304,17 @@ class StorageTestBase(unittest.TestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
-        old_session._del_session()
-        old_session.engine = None
+        # don't cleanup the session
+        old_session.session_id = None
         try:
             del old_session
         except:
             pass
 
-        self.s.recover(ttl=timedelta(hours=24))
+        self.assertEqual(0, self.s.recover(session_ttl=timedelta(hours=1)))
+        time.sleep(2)
+        self.s._refresh_session()
+        self.assertEqual(1, self.s.recover(session_ttl=timedelta(seconds=1)))
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
@@ -346,16 +367,17 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(tx_reader.id, tx_writer.id)
 
         # not expired, leased
-        count = self.s.gc(ttl=10)
+        count = self.s.gc(ttl=timedelta(seconds=10))
         self.assertEqual(count, (0, 0))
         self.assertTrue(tx_reader.load())
         blob_reader = self.s.get_blob_for_read(
             BlobUri(tx_id='xyz', tx_body=True))
         self.assertEqual(blob_reader.content_length(), len(d))
 
+        time.sleep(2)
+
         # expired, leased
-        count = self.s.gc(ttl=0)
-        self.assertEqual(count, (0, 0))
+        self.assertEqual((0, 0), self.s.gc(ttl=timedelta(seconds=1)))
         self.assertTrue(tx_reader.load())
 
         blob_reader = self.s.get_blob_for_read(
@@ -363,11 +385,13 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(blob_reader.content_length(), len(d))
 
         tx_reader.write_envelope(TransactionMetadata(),
-                              final_attempt_reason = 'upstream success',
-                              finalize_attempt = True)
+                                 final_attempt_reason = 'upstream success',
+                                 finalize_attempt = True)
+
+        time.sleep(2)
 
         # expired, unleased
-        self.assertEqual(self.s.gc(ttl=0), (1,1))
+        self.assertEqual((1,1), self.s.gc(ttl=timedelta(seconds=1)))
 
         self.assertIsNone(self.s.get_blob_for_read(
             BlobUri(tx_id='xyz', tx_body=True)))
@@ -448,7 +472,7 @@ class StorageTestBase(unittest.TestCase):
                reader.len() < reader.content_length()):
             logging.info('reader %d', len(d))
             reader.load()
-            d += reader.read(len(d))
+            d += reader.pread(len(d))
         dd[0] = d
 
     def test_blob_waiting_poll(self):
@@ -488,7 +512,7 @@ class StorageTestSqlite(StorageTestBase):
         self.dir.cleanup()
 
     def _connect(self):
-        return Storage.connect(self.db_url)
+        return Storage.connect(self.db_url, session_uri='http://storage-test')
 
 
 class StorageTestPostgres(StorageTestBase):
@@ -505,7 +529,7 @@ class StorageTestPostgres(StorageTestBase):
             self.storage_yaml = {}
             self.pg, self.pg_url = postgres_test_utils.setup_postgres()
 
-        return Storage.connect(self.pg_url)
+        return Storage.connect(self.pg_url, session_uri='http://storage-test')
 
 
 if __name__ == '__main__':

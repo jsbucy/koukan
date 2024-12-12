@@ -1,0 +1,16 @@
+{
+    "headers": [
+        ["subject", "hello"]
+    ],
+
+    "text_body": [
+        {
+            "content_type": "text/html",
+            "content": "<b>hello, world!</b>"
+        },
+        {
+            "content_type": "text/plain",
+            "content": "hello, world!"
+        }
+    ]
+}

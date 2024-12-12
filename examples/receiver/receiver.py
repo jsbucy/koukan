@@ -9,6 +9,7 @@ import logging
 from tempfile import TemporaryFile
 import json
 from io import IOBase
+import os
 
 from flask import (
     Flask,
@@ -18,9 +19,6 @@ from flask import (
     make_response,
     request )
 
-from werkzeug.datastructures import ContentRange
-import werkzeug.http
-
 import secrets
 import copy
 
@@ -28,12 +26,13 @@ class Transaction:
     CHUNK_SIZE=1048576
 
     tx_json : dict
-    file : Optional[IOBase] = None
+    body_file : Optional[IOBase] = None
     message_json : Optional[dict] = None
 
     blobs : Dict[str, IOBase]
+    close_files : bool
 
-    def __init__(self, tx_json):
+    def __init__(self, tx_json, close_files):
         self.blobs = {}
 
         logging.debug('Tx.init %s', tx_json)
@@ -42,6 +41,7 @@ class Transaction:
             del self.tx_json['smtp_meta']
         self.tx_json['mail_response'] = {'code': 250, 'message': 'ok'}
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
+        self.close_files = close_files
 
     def get_json(self):
         json_out = copy.copy(self.tx_json)
@@ -49,7 +49,7 @@ class Transaction:
             json_out['mail_from'] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
-        if self.file:
+        if self.body_file:
             json_out['body'] = {}
         logging.debug('Tx.get %s', json_out)
         return json_out
@@ -58,16 +58,15 @@ class Transaction:
         logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
             if 'blob_rest_id' not in part_json:
-                return
+                return True
             blob_id = part_json['blob_rest_id']
             if blob_id.startswith('/'):
                 return False  # this doesn't support reuse
             logging.debug('check_blobs %s', blob_id)
-            if not self.create_tx_body(
-                    upload_chunked=True,
-                    tx_body=False,
-                    blob_id=blob_id):
-                return False
+            if blob_id in self.blobs:
+                return None  # bad
+            file = TemporaryFile('w+b')
+            self.blobs[blob_id] = file
             return True
 
         for part_i in part_json['parts']:
@@ -82,75 +81,44 @@ class Transaction:
         if not self._check_blobs(self.message_json['parts']):
             return FlaskResponse(400, 'bad blob in message builder json')
 
-    def create_tx_body(self, upload_chunked : bool,
-                       tx_body : bool = False,
-                       blob_id : Optional[str] = None,
-                       stream = None
-                       ) -> Optional[str]:  # blob-id if !tx_body
-        assert upload_chunked or stream
-        if tx_body:
-            if self.file is not None:
-                return None  # bad
-            file = TemporaryFile('w+b')
-            assert isinstance(file, IOBase)
-            self.file = file
-        else:
-            logging.debug('create_tx_body %s %s', self.blobs, blob_id)
-            if blob_id in self.blobs:
-                return None  # bad
-            file = TemporaryFile('w+b')
-            self.blobs[blob_id] = file
-        if stream is None:
-            return
-        if upload_chunked:
-            return blob_id
+    def create_tx_body(self, stream : IOBase):
+        if self.body_file is not None:
+            return None  # bad
+        file = TemporaryFile('w+b')
+        assert isinstance(file, IOBase)
+        self.body_file = file
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
-        if tx_body:
-            self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-            self.log()
-        file.seek(0)
-        #logging.debug(file.read())
-        return blob_id
+        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+        self.log()
 
-    def _put_blob(self, range : ContentRange, stream,
-                  file
-                  ) -> Tuple[int, ContentRange]:
-        if range.start != file.tell():
-            return 412, ContentRange('bytes', 0, file.tell())
+    def _put_blob(self, stream : IOBase, file) -> int:
         while b := stream.read(self.CHUNK_SIZE):
             file.write(b)
-        if file.tell() == range.length:
-            file.seek(0)
-            logging.debug(file.read())
-        return 200, ContentRange('bytes', 0, file.tell(), range.length)
+        return 200
 
-    def put_tx_body(self, range : ContentRange, stream
-                    ) -> Tuple[int, ContentRange]:
-        logging.debug('put_tx_body %s', range)
-        resp = self._put_blob(range, stream, self.file)
-        if range.length is not None and self.file.tell() == range.length:
-            self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-            self.log()
-        return resp
+    def put_blob(self, blob_id, stream : IOBase) -> int:
+        logging.debug('put_blob %s', blob_id)
+        return self._put_blob(stream, self.blobs[blob_id])
 
-    def put_blob(self, blob_id, range : ContentRange, stream
-                    ) -> Tuple[int, ContentRange]:
-        logging.debug('put_blob %s %s', blob_id, range)
-        #parsed_blob_id = self._parse_blob_id(blob_id)
-        #assert parsed_blob_id < len(self.blobs)
-        return self._put_blob(range, stream, self.blobs[blob_id])
+    def _file_size(self, file):
+        file.seek(-1, os.SEEK_END)
+        return file.tell() + 1
 
     def log(self):
         logging.debug('received tx %s', self.tx_json)
         logging.debug('received parsed %s',
                       self.message_json if self.message_json else None)
-        self.file.seek(0)
-        logging.debug('received body %s', self.file.read())
-        logging.debug('received blob %s', self.blobs.keys())
-        for blob_id,file in self.blobs.items():
-            file.seek(0)
-            logging.debug('received blob %s %s', blob_id, file.read())
+        logging.debug('received body %d bytes', self._file_size(self.body_file))
+
+        logging.debug('received blobs %s', self.blobs.keys())
+        for blob_id, blob_file in self.blobs.items():
+            logging.debug('received blob %s %d bytes',
+                          blob_id, self._file_size(blob_file))
+
+        if self.close_files:
+            for f in [ self.body_file ] + [f for f in self.blobs.values()]:
+                f.close()
 
     def cancel(self):
         return FlaskResponse()
@@ -158,13 +126,15 @@ class Transaction:
 
 class Receiver:
     transactions : dict[str, Transaction]
+    close_files : bool
 
-    def __init__(self):
+    def __init__(self, close_files=False):
         self.transactions = {}
+        self.close_files = close_files
 
     def create_tx(self, tx_json) -> Tuple[str,dict]:
         tx_id = secrets.token_urlsafe()
-        tx = Transaction(tx_json)
+        tx = Transaction(tx_json, self.close_files)
         self.transactions[tx_id] = tx
         return tx_id, tx.get_json()
 
@@ -178,29 +148,14 @@ class Receiver:
         assert tx is not None
         return tx.update_message_builder(message_json)
 
-    def create_tx_body(self, tx_rest_id : str,
-                       upload_chunked : bool,
-                       tx_body : bool = False,
-                       blob_id : Optional[str] = None,
-                       stream = None):
-        logging.debug('create_tx_body %s', blob_id)
-        return self.transactions[tx_rest_id].create_tx_body(
-            upload_chunked, tx_body, blob_id, stream)
+    def create_tx_body(self,
+                       tx_rest_id : str,
+                       stream : IOBase):
+        return self.transactions[tx_rest_id].create_tx_body(stream)
 
-    def put_tx_body(self, tx_rest_id: str, range : ContentRange, stream):
-        status, range = self.transactions[tx_rest_id].put_tx_body(range, stream)
-        response = FlaskResponse(status=status)
-        response.headers.set('content-range', range)
-        return response
-
-    def put_blob(self, tx_rest_id: str, blob_id : str,
-                 range : ContentRange, stream):
-        status, range = self.transactions[tx_rest_id].put_blob(
-            blob_id, range, stream)
-        response = FlaskResponse(status=status)
-        response.headers.set('content-range', range)
-        return response
-
+    def put_blob(self, tx_rest_id: str, blob_id : str, stream):
+        status = self.transactions[tx_rest_id].put_blob(blob_id, stream)
+        return FlaskResponse(status=status)
 
     def cancel_tx(self, tx_rest_id : str):
         return self.transactions[tx_rest_id].cancel()
@@ -212,7 +167,8 @@ def create_app(receiver = None):
         receiver = Receiver()
 
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] '
+                        '%(filename)s:%(lineno)d %(message)s')
 
     @app.route('/transactions', methods=['POST'])
     def create_transaction() -> FlaskResponse:
@@ -234,28 +190,12 @@ def create_app(receiver = None):
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['POST'])
     def create_tx_body(tx_rest_id) -> FlaskResponse:
-        receiver.create_tx_body(
-            tx_rest_id,
-            request.args.get('upload', None),
-            tx_body=True,
-            stream=request.stream)
+        receiver.create_tx_body(tx_rest_id, request.stream)
         return FlaskResponse(status=201)
-
-    @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
-    def put_tx_body(tx_rest_id) -> FlaskResponse:
-        range = werkzeug.http.parse_content_range_header(
-            request.headers.get('content-range'))
-        return receiver.put_tx_body(tx_rest_id, range, request.stream)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:
-        range = werkzeug.http.parse_content_range_header(
-            request.headers.get('content-range'))
-        if range is None:
-            content_length = int(request.headers.get('content-length'))
-            range = ContentRange('bytes', 0, content_length, content_length)
-        return receiver.put_blob(tx_rest_id, blob_id, range, request.stream)
-
+        return receiver.put_blob(tx_rest_id, blob_id, request.stream)
 
     @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
     def cancel_tx(tx_rest_id) -> FlaskResponse:

@@ -67,7 +67,7 @@ class MessageBuilder:
             content = part_json['content'].encode('utf-8')
         elif 'blob_rest_id' in part_json:
             blob = self.blob_factory(part_json['blob_rest_id'])
-            content = blob.read(0)
+            content = blob.pread(0)
         else:
             raise ValueError()
 

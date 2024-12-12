@@ -230,8 +230,7 @@ _tx_fields = [
             to_json=Response.to_json,
             from_json=Response.from_json),
     TxField('attempt_count',
-            validity=set([WhichJson.DB,
-                          WhichJson.REST_READ])),
+            validity=set([WhichJson.REST_READ])),
     TxField('body',
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
@@ -269,7 +268,8 @@ _tx_fields = [
     TxField('options', validity=None),
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
-    TxField('version', validity=None)
+    TxField('version', validity=None),
+    TxField('session_uri', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -325,6 +325,7 @@ class TransactionMetadata:
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
     version : Optional[int] = None
+    session_uri : Optional[str] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,

@@ -3,6 +3,7 @@
 import unittest
 import logging
 import time
+from functools import partial
 
 from koukan.executor import Executor
 from koukan.version_cache import IdVersionMap
@@ -25,15 +26,20 @@ class VersionCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await id_version.wait_async(
             version=0, timeout=0))
 
-        def update():
+        def update(new_version):
             time.sleep(1)
-            id_version.update(2)
-        self.executor.submit(update)
+            id_version.update(new_version)
+        self.executor.submit(partial(update, 2))
         self.assertFalse(await id_version.wait_async(
             version=1, timeout=0.1))
 
         self.assertTrue(await id_version.wait_async(
             version=1, timeout=2))
+
+        # no spurious wakeups
+        self.executor.submit(partial(update, 2))
+        self.assertFalse(await id_version.wait_async(
+            version=2, timeout=2))
 
         self.assertFalse(id_version.wait(2, 0))
         id_version = version_cache.insert_or_update(1, "rest_id", 3)

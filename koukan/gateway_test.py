@@ -34,14 +34,19 @@ root_yaml = {
     }
 }
 
-@parameterized_class(('use_fastapi',), [(True,), (False,)])
+@parameterized_class(('use_fastapi', 'protocol'),
+                     [(True, 'smtp'),
+                      (True, 'lmtp'),
+                      (False, 'smtp')])
 class GatewayTest(unittest.TestCase):
     def setUp(self):
-        logging.info('GatewayTest.setUp')
+        logging.info('GatewayTest.setUp use_fastapi=%s protocol=%s',
+                     self.use_fastapi, self.protocol)
 
         rest_port = self.find_unused_port()
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
         root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
+        root_yaml['smtp_output']['outbound']['protocol'] = self.protocol
 
         self.config = Config()
         self.config.inject_yaml(root_yaml)
@@ -50,7 +55,8 @@ class GatewayTest(unittest.TestCase):
 
         self.fake_smtpd_port = self.find_unused_port()
 
-        self.fake_smtpd = FakeSmtpd("localhost", self.fake_smtpd_port)
+        self.fake_smtpd = FakeSmtpd(
+            "localhost", self.fake_smtpd_port, self.protocol)
         self.fake_smtpd.start()
 
         self.service_thread = Thread(
@@ -104,7 +110,8 @@ class GatewayTest(unittest.TestCase):
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
-        tx_delta = TransactionMetadata(body_blob=InlineBlob('hello'))
+        tx_delta = TransactionMetadata(
+            body_blob=InlineBlob(b'hello', last=True))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
@@ -132,7 +139,8 @@ class GatewayTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d  %(message)s')
 
     unittest.main()

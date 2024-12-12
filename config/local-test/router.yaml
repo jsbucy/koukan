@@ -7,18 +7,30 @@ global:
   rest_id_entropy: 4
 
 rest_listener:
-  use_fastapi: true
   addr: ["127.0.0.1", 8000]
   #cert: localhost.crt
   #key: localhost.key
 
+  # base uri of this instance/replica to redirect clients for multi-node
+  # endpoints with rest_lro: false will be qualified to this
+  session_uri: http://localhost:8000
+  # e.g. k8s service alias, endpoints with rest_lro: true will be
+  # qualified to this
+  #service_uri: http://localhost:8000
+
 endpoint:
 - name: outbound-gw
+  # equivalent to "chain ends with exploder/tx is always ephemeral"
+  # create returns uri qualified to ephemeral session rather than
+  # canonical service host
+  rest_lro: false
   msa: true
   output_handler:
     downstream_env_timeout: 5
     downstream_data_timeout: 5
   chain:
+  #- filter: relay_auth
+  #  smtp_auth: true
   - filter: exploder
     output_chain: msa-output
     msa: true
@@ -28,6 +40,7 @@ endpoint:
       host: msa-output
 
 - name: msa-output
+  rest_lro: true
   msa: true
   output_handler:
     retry_params:
@@ -83,6 +96,7 @@ endpoint:
     data_timeout: 5
 
 - name: inbound-gw
+  rest_lro: false
   msa: false
   output_handler:
     downstream_env_timeout: 5
@@ -97,6 +111,7 @@ endpoint:
       host: msa-output
 
 - name: mx-out
+  rest_lro: true
   msa: false
   output_handler:
     retry_params:

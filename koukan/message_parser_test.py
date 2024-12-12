@@ -44,7 +44,7 @@ class MessageParserTest(unittest.TestCase):
 
             self.assertEqual(len(parsed.blobs), len(blob))
             for i in range(0, len(blob)):
-                self.assertEqual(blob[i], parsed.blobs[i].read(0))
+                self.assertEqual(blob[i], parsed.blobs[i].pread(0))
 
     def test_dsn(self):
 

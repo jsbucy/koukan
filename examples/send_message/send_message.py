@@ -1,7 +1,20 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Optional
+# full-featured sender
+# - message builder json or pre-formatted rfc822
+# - hanging GET track transaction status
+# - separate blob upload
+# - reuses blobs across multiple rcpts
+
+# python3 examples/send_message/send_message.py \
+#   --router_url http://localhost:8000
+#   --mail_from alice@example.com
+#   --message_builder_filename examples/cli/message_builder.json \
+#   bob@example.com carol@example.com dave@example.com
+
+
+from typing import Any, Dict, Optional
 import logging
 from urllib.parse import urljoin
 import time
@@ -10,6 +23,7 @@ import socket
 import copy
 import json
 import argparse
+import threading
 
 import time
 import requests
@@ -17,13 +31,15 @@ import copy
 from sys import argv
 from contextlib import nullcontext
 
+# Sends a message to one or more recipients. Does hanging GET to wait
+# for upstream status. Reuses blobs across recipients.
 class Sender:
     base_url : str
     host : str
-    notification_host : str
+    notification_host : Optional[str]
     mail_from : str
 
-    message_builder : dict
+    message_builder : Optional[Dict[str, Any]]
     # has blobs uris referencing first first recipient transaction
     message_builder_blobs : Optional[dict] = None
     body_filename : Optional[str] = None
@@ -55,37 +71,26 @@ class Sender:
     def send_part(self,
                   tx_url,
                   blob_id : str,
-                  inline : Optional[str] = None,
-                  filename : Optional[str] = None) -> Optional[str]:
-        assert inline or filename
-
+                  filename : str) -> Optional[str]:
         path = tx_url + '/blob/' + blob_id
         uri = urljoin(self.base_url, path)
         logging.info('PUT %s', uri)
 
-        def put(content):
-            return self.session.put(uri, data=content)
-
-        if inline:
-            resp = put(inline.encode('utf-8'))
-        elif filename:
-            with open(filename, 'rb') as file:
-                resp = put(file)
+        with open(filename, 'rb') as file:
+            resp = self.session.put(uri, data=file)
 
         logging.info('PUT %s %s', uri, resp)
         if resp.status_code >= 300:
             return None
         return path
 
-    def strip_filenames(self, json):
+    def strip_filenames(self, json : Dict[str, Any]):
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
             if not (multipart := json.get(multi, [])):
                 continue
             for part in multipart:
                 if 'file_content' in part:
                     del part['file_content']
-                if 'put_content' in part:
-                    del part['put_content']
         return json
 
 
@@ -97,15 +102,14 @@ class Sender:
                 logging.info('send_body %s', part)
                 if part['content_uri'].startswith('/'):
                     continue
-                inline = part.get('put_content', None)
                 filename = part.get('file_content', None)
                 if filename:
                     del part['file_content']
-                if not inline and not filename:
+                if not filename:
                     continue
 
                 if (uri := self.send_part(
-                        tx_url, part['content_uri'], inline=inline,
+                        tx_url, part['content_uri'],
                         filename=filename)) is None:
                     return False
 
@@ -116,21 +120,23 @@ class Sender:
 
         return True
 
-    def send(self, rcpt_to, max_wait=30):
+    def send(self, rcpt_to : str, retry : Dict[str, Any]={}, max_wait=30):
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json={
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
-            'retry': {},         # use system defaults for retries
         }
+        if retry is not None:
+            tx_json['retry'] = retry
         if self.notification_host:
             tx_json['notification'] = {'host': self.notification_host }
         if self.body_path is not None:
             tx_json['body'] = self.body_path
         elif self.body_filename is not None:
             pass
-        elif self.message_builder_blobs is None:
+        elif (self.message_builder_blobs is None and
+              self.message_builder is not None):
             tx_json['message_builder'] = self.strip_filenames(
                 copy.deepcopy(self.message_builder))
         else:
@@ -182,7 +188,6 @@ class Sender:
                 return
             logging.info('main message_builder spec %s',
                          json.dumps(self.message_builder, indent=2))
-            get_tx_resp = self.session.get(tx_url)
             message_builder_blobs = self.message_builder
             rest_resp = None
 
@@ -194,7 +199,7 @@ class Sender:
             if rest_resp is None:
                 spin = True
                 start = time.monotonic()
-                logging.info('GET %s', tx_url)
+                logging.info('GET %s etag=%s', tx_url, etag)
                 headers = {'request-timeout': '5'}
                 if etag:
                     headers['if-none-match'] = etag
@@ -210,7 +215,10 @@ class Sender:
                     logging.debug('etag %s', etag)
                 else:
                     etag = None
-            # xxx rest_resp.status_code?
+
+            if rest_resp.status_code == 304:
+                continue
+
             tx_json = rest_resp.json()
 
             for resp in ['mail_response', 'rcpt_response', 'data_response']:
@@ -245,7 +253,7 @@ class Sender:
             tx_json = None
 
         logging.info('recipient %s result %s', rcpt_to, result)
-
+        return result
 
     def _get_header(self, headers, name):
         for h in headers:
@@ -267,7 +275,7 @@ class Sender:
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--mail_from')
@@ -276,6 +284,10 @@ if __name__ == '__main__':
     parser.add_argument('--base_url', default='http://localhost:8000')
     parser.add_argument('--host', default='msa-output')
     parser.add_argument('--notification_host', default='msa-output')
+    # {}: use system defaults for retries
+    parser.add_argument('--retry', default='{}')
+    parser.add_argument('--iters', default='1')
+    parser.add_argument('--threads', default='1')
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -289,11 +301,33 @@ if __name__ == '__main__':
 
     logging.debug(args.rcpt_to)
 
-    sender = Sender(args.base_url,
-                    args.host,
-                    args.mail_from,
-                    message_builder=message_builder,
-                    body_filename=args.rfc822_filename,
-                    notification_host=args.notification_host)
-    for rcpt in args.rcpt_to:
-        sender.send(rcpt)
+    results = {}
+    mu = threading.Lock()
+    def send():
+        sender = Sender(args.base_url,
+                        args.host,
+                        args.mail_from,
+                        message_builder=message_builder,
+                        body_filename=args.rfc822_filename,
+                        notification_host=args.notification_host)
+
+        for i in range(0, int(args.iters)):
+            for rcpt in args.rcpt_to:
+                result = sender.send(rcpt, retry)
+                with mu:
+                    if result not in results:
+                        results[result] = 0
+                    results[result] += 1
+
+    retry = json.loads(args.retry) if args.retry else None
+    threads = []
+    start = time.monotonic()
+    for t in range(0, int(args.threads)):
+        t = threading.Thread(target = send)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    stop = time.monotonic()
+    logging.info('done %f', stop - start)
+    logging.info(results)

@@ -104,7 +104,7 @@ class ReceivedHeaderFilter(SyncFilter):
         return received
 
     def _check_max_received_headers(self, body_blob : Blob):
-        body = body_blob.read(0, 65536)
+        body = body_blob.pread(0, 65536)
         parser = BytesHeaderParser(policy=policy.SMTP)
         parsed = parser.parsebytes(body)
         received_count = 0

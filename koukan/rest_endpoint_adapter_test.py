@@ -1,10 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import unittest
 import logging
 import io
 import json
+import time
+from threading import Condition, Lock
 
 from flask import (
     Flask,
@@ -16,6 +18,8 @@ from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
+from httpx import Response as HttpxResponse
+
 from koukan.blob import InlineBlob
 from koukan.rest_endpoint_adapter import RestHandler, SyncFilterAdapter
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
@@ -23,6 +27,7 @@ from koukan.executor import Executor
 from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response
 from koukan.executor import Executor
+from koukan.storage_schema import VersionConflictException
 
 class SyncFilterAdapterTest(unittest.TestCase):
     def setUp(self):
@@ -75,16 +80,34 @@ class SyncFilterAdapterTest(unittest.TestCase):
         body = b'hello, world!'
 
         def exp_body(tx, tx_delta):
-            self.assertEqual(tx.body_blob.read(0), body)
+            logging.debug(tx.body_blob)
+            if not tx.body_blob.finalized():
+                return
+            self.assertEqual(body, tx.body_blob.pread(0))
             upstream_delta=TransactionMetadata(
-                data_response = [Response(203)])
+                data_response = Response(203))
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream.add_expectation(exp_body)
 
-        delta = TransactionMetadata(body_blob=InlineBlob(body))
-        tx.merge_from(delta)
-        sync_filter_adapter.update(tx, delta)
+        blob_writer = sync_filter_adapter.get_blob_writer(
+            create=True, blob_rest_id=None, tx_body=True)
+        b=b'hello, '
+        b2=b'world!'
+        blob_writer.append_data(0, b, None)
+        blob_writer = sync_filter_adapter.get_blob_writer(
+            create=False, blob_rest_id=None, tx_body=True)
+        blob_writer.append_data(len(b), b2, len(b) + len(b2))
+
+        for i in range(0,3):
+            tx = sync_filter_adapter.get()
+            logging.debug(tx)
+            if tx is not None and tx.data_response is not None and tx.data_response.code == 203:
+                break
+            sync_filter_adapter.wait(tx.version, 1)
+        else:
+            self.fail('expected data response')
+
         for i in range(0,3):
             sync_filter_adapter.wait(tx.version, 1)
             if sync_filter_adapter.done:
@@ -92,6 +115,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             tx = sync_filter_adapter.get()
         else:
             self.fail('expected done')
+        self.assertTrue(sync_filter_adapter.idle(time.time(), 0, 0))
 
 class RestHandlerTest(unittest.TestCase):
     def test_create_tx(self):
@@ -114,7 +138,6 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(resp.json, {})
             self.assertEqual(resp.headers['location'], '/transactions/rest_id')
 
-
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
                 version=1))
@@ -136,18 +159,23 @@ class RestHandlerTest(unittest.TestCase):
             self.assertEqual(resp.status, '200 OK')
 
             handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                                          http_host='msa')
+                                  http_host='msa')
+            endpoint.expect_get(TransactionMetadata(
+                host='msa',
+                mail_from=Mailbox('alice'),
+                version=2))
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
                 mail_from=Mailbox('alice'),
                 mail_response=Response(201),
                 version=3))
-            resp = handler.get_tx(FlaskRequest.from_values())
+            resp = handler.get_tx(FlaskRequest.from_values(
+                headers=[('if-none-match', '2'),
+                         ('request-timeout', '1')]))
             self.assertEqual(resp.json, {
                 'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'}
             })
-
 
             endpoint.expect_get(TransactionMetadata(
                 host='msa',
@@ -249,7 +277,8 @@ class RestHandlerTest(unittest.TestCase):
                 async_filter=endpoint,
                 http_host='msa',
                 rest_id_factory = lambda: 'blob-rest-id',
-                tx_rest_id='rest_id')
+                tx_rest_id='rest_id',
+                chunk_size=8)
             resp = handler.create_blob(
                 FlaskRequest.from_values(data=body),
                 tx_body=True)
@@ -387,7 +416,12 @@ class RestHandlerTest(unittest.TestCase):
             self.assert_eq_content_range(resp.content_range,
                                          ContentRange('bytes', 0, 13, 13))
 
-
+    # TODO if we want to continue to support flask long-term, this is
+    # missing fine-grained coverage of POST/PUT with
+    # transfer-encoding: chunked and no content-length header in this
+    # test though it has some coverage from
+    # RouterServiceTest.test_rest_body_chunked. I couldn't figure out
+    # how to exercise that with the flask test framework.
 
 class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -397,7 +431,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         return [(k.encode('ascii'), v.encode('ascii')) for k,v in d]
 
     async def test_create_tx(self):
-        app = Flask(__name__)
         endpoint = MockAsyncFilter()
         tx = TransactionMetadata()
 
@@ -451,6 +484,10 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         endpoint.expect_get(TransactionMetadata(
             host='msa',
             mail_from=Mailbox('alice'),
+            version=2))
+        endpoint.expect_get(TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'),
             mail_response=Response(201),
             version=3))
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
@@ -458,7 +495,9 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                               executor=self.executor)
 
         scope = {'type': 'http',
-                 'headers': []}
+                 'headers': self._headers(
+                     [('if-none-match', '2'),
+                      ('request-timeout', '1')])}
         req = FastApiRequest(scope)
 
         resp = await handler.get_tx_async(req)
@@ -592,7 +631,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            chunk_size=8)
 
         scope = {'type': 'http',
                  'headers': self._headers([
@@ -660,7 +700,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_blob_chunking(self):
         endpoint = MockAsyncFilter()
-        app = Flask(__name__)
 
         # content-range header is not accepted in non-chunked blob post
         handler = RestHandler(
@@ -767,10 +806,191 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             ContentRange('bytes', 0, 13, 13))
 
 
+    # transfer-encoding: chunked
+    # i.e. no content-length header
+    async def test_chunked_blob(self):
+        endpoint = MockAsyncFilter()
+
+        endpoint.body_blob = InlineBlob(b'')
+        handler = RestHandler(
+            async_filter=endpoint,
+            http_host='msa',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+        scope = {'type': 'http',
+                 'headers': []}
+        req = FastApiRequest(scope)
+
+        resp = await handler.create_blob_async(
+            req, tx_body=True, req_upload='chunked')
+        self.assertEqual(resp.status_code, 201)
+        self.assertNotIn('content-range', resp.headers)
+
+        handler = RestHandler(
+            async_filter=endpoint, blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+
+        b = b'hello, '
+        b2 = b'world!'
+
+        range = ContentRange('bytes', 0, len(b))
+        scope = {'type': 'http',
+                 'headers': self._headers([])}
+
+        chunks = [
+            {'type': 'http.request',
+             'body': b,
+             'more_body': True},
+            {'type': 'http.request',
+             'body': b2,
+             'more_body': False}]
+        async def input():
+            return chunks.pop(0)
+
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('content-range', resp.headers)
+
+        self.assertEqual(b+b2, endpoint.body_blob.d)
 
 
+    async def _test_uri_qualification(
+            self,
+            session_uri : Optional[str], service_uri : Optional[str],
+            rest_lro : bool):
+        endpoint = MockAsyncFilter()
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri=session_uri,
+            service_uri=service_uri,
+            endpoint_yaml={'rest_lro': rest_lro})
+
+        scope = {'type': 'http',
+                 'headers': self._headers([])}
+        req = FastApiRequest(scope)
+
+        def exp(tx, tx_delta):
+            delta = TransactionMetadata(rest_id='rest_id',
+                                        version=1)
+            tx.merge_from(delta)
+            return delta
+        endpoint.expect_update(exp)
+
+        resp = await handler.handle_async(
+            req, lambda: handler.create_tx(req, req_json={}))
+        logging.debug(resp.headers)
+        return resp.headers['location']
+
+    async def test_uri_qualification(self):
+        location = await self._test_uri_qualification(
+            'http://0.router', 'http://router', rest_lro=True)
+        self.assertTrue(location.startswith('http://router'))
+        location = await self._test_uri_qualification(
+            'http://0.router', 'http://router', rest_lro=False)
+        self.assertTrue(location.startswith('http://0.router'))
+        location = await self._test_uri_qualification(
+            None, None, rest_lro=False)
+        self.assertTrue(location.startswith('/transactions'))
+
+
+    async def _test_get_redirect(self, session_uri : Optional[str] = None
+                                 ) -> FastApiResponse:
+        endpoint = MockAsyncFilter()
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri='http://0.router',
+            service_uri='http://router')
+
+        scope = {'type': 'http',
+                 'headers': self._headers([('if-none-match', '1'),
+                                           ('request-timeout', '5')])}
+        req = FastApiRequest(scope)
+
+        tx = TransactionMetadata(rest_id='rest_id',
+                                 version=1)
+        tx.session_uri = session_uri
+        endpoint.expect_get(tx)
+
+        return await handler.get_tx_async(req)
+
+    async def test_get_redirect(self):
+        resp = await self._test_get_redirect()
+        self.assertEqual(304, resp.status_code)  # no change
+        self.assertNotIn('location', resp.headers)
+        resp = await self._test_get_redirect('http://1.router')
+        self.assertEqual(307, resp.status_code)
+        self.assertTrue(resp.headers['location'].startswith('http://1.router'))
+
+    async def test_ping_session(self):
+        endpoint = MockAsyncFilter()
+
+        mu = Lock()
+        cv = Condition(mu)
+
+        def client(u):
+            logging.debug(u)
+            with mu:
+                self.uri = u
+                cv.notifyAll()
+            return HttpxResponse(200)
+
+        handler = RestHandler(
+            async_filter=endpoint,
+            executor=self.executor,
+            blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            session_uri='http://0.router',
+            service_uri='http://router',
+            client=client)
+
+        scope = {'type': 'http',
+                 'headers': self._headers([('if-match', '1'),
+                                           ('request-timeout', '5')])}
+        req = FastApiRequest(scope)
+
+        tx = TransactionMetadata(rest_id='rest_id',
+                                 version=1)
+        tx.session_uri = 'http://127.0.0.1:12345'
+        endpoint.expect_get(tx)
+
+        def exp(tx, tx_delta):
+            delta = TransactionMetadata(rest_id='rest_id',
+                                        version=1)
+            delta.session_uri='http://127.0.0.1:12345'
+            tx.merge_from(delta)
+            return delta
+        endpoint.expect_update(exp)
+
+        resp = await handler.handle_async(
+            req, lambda: handler.patch_tx(req, req_json={
+                'mail_from': {'m': 'alice@example.com'}}))
+
+        with mu:
+            self.assertTrue(cv.wait_for(lambda: self.uri is not None, 1))
+        logging.debug('%s %s', resp.status_code, resp.body)
+        self.assertEqual('http://127.0.0.1:12345/transactions/tx_rest_id',
+                         self.uri)
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
     unittest.main()

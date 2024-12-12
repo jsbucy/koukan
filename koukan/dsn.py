@@ -29,7 +29,7 @@ from koukan.response import Response
 # input headers without the body and without reserializing or the byte
 # offset of the end of the headers.
 def read_headers(blob) -> Optional[str]:
-    body = blob.read(0, int(pow(2, 16)))
+    body = blob.pread(0, int(pow(2, 16)))
     off = body.find(b'\r\n\r\n')
     if off == -1:
         # if we can't find CRLFCRLF in the first 65k, it's probably garbage

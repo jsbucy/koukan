@@ -168,7 +168,7 @@ class FilterTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to = [Mailbox('bob1'), Mailbox('bob2')],
-            body_blob=InlineBlob(b'hello'))
+            body_blob=InlineBlob(b'hello', last=True))
         tx.fill_inflight_responses(Response(123))
         self.assertEqual(tx.mail_response.code, 123)
         self.assertEqual([r.code for r in tx.rcpt_response], [123,123])
@@ -197,7 +197,7 @@ class FilterTest(unittest.TestCase):
         tx = TransactionMetadata(rcpt_to = [Mailbox('bob')])
         self.assertTrue(bool(tx))
 
-        tx = TransactionMetadata(body_blob = InlineBlob(b'hello'))
+        tx = TransactionMetadata(body_blob = InlineBlob(b'hello', last=True))
         self.assertTrue(bool(tx))
 
         tx = TransactionMetadata(retry = {})
@@ -256,7 +256,7 @@ class FilterTest(unittest.TestCase):
 
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
-            body_blob=InlineBlob(b'hello'))
+            body_blob=InlineBlob(b'hello', last=True))
         upstream_delta = update_wait_inflight(
             async_filter, tx, tx.copy(), Deadline(1))
         self.assertIsNotNone(upstream_delta)

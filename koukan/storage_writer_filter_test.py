@@ -23,7 +23,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url)
+        self.storage = Storage.connect(self.db_url, 'http://storage_writer_filter_test')
 
     def tearDown(self):
         self.db_dir.cleanup()
@@ -62,6 +62,28 @@ class StorageWriterFilterTest(unittest.TestCase):
         cursor = filter.release_transaction_cursor()
         self.assertEqual(cursor.rest_id, 'tx_rest_id')
 
+    def test_body_blob(self):
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'tx_rest_id',
+            create_leased = True)
+        tx = TransactionMetadata(
+            host='submission',
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
+        filter.update(tx, tx.copy())
+
+        blob_writer = filter.get_blob_writer(
+            create=True, tx_body=True)
+        d = b'hello, world!'
+        chunk1 = 7
+        blob_writer.append_data(0, d[0:chunk1])
+
+        blob_writer = filter.get_blob_writer(
+            create=False, tx_body=True)
+        blob_writer.append_data(chunk1, d[chunk1:], len(d))
+
+        tx = filter.get()
+        self.assertTrue(filter.tx_cursor.input_done)
 
     def test_invalid(self):
         filter = StorageWriterFilter(
@@ -342,7 +364,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_reader = self.storage.get_blob_for_read(
             BlobUri(tx_id='reuse', tx_body=True))
         self.assertIsNotNone(blob_reader)
-        self.assertEqual(blob_reader.read(0), b.encode('utf-8'))
+        self.assertEqual(blob_reader.pread(0), b.encode('utf-8'))
 
     def test_create_leased(self):
         filter = StorageWriterFilter(

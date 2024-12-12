@@ -1,16 +1,24 @@
+global:
+  executor:
+    max_inflight: 100
+    watchdog_timeout: 60
+
+
 # rest -> smtp
 rest_listener:
-  use_fastapi: true
   addr: ["[::0]", 8001]
   #cert: localhost.crt
   #key: localhost.key
 
   gc_interval: 5
   gc_tx_ttl: 5
+  session_uri: http://localhost:8001
 
 smtp_output:
   outbound:
+    # protocol: lmtp
     ehlo_host: localhost
+
 
 # smtp -> rest
 smtp_listener:
@@ -19,15 +27,16 @@ smtp_listener:
       endpoint: mx
     - addr: [localhost, 1587]
       endpoint: msa
+      # auth_secrets: secrets.json
 
 rest_output:
   - name: mx
     host: inbound-gw
-    endpoint: https://localhost:8000/
+    endpoint: http://localhost:8000/
     verify: localhost.crt
   - name: msa
     host: outbound-gw
-    endpoint: https://localhost:8000/
+    endpoint: http://localhost:8000/
     verify: localhost.crt
 
 

@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Dict, List, Optional, Tuple
-from smtplib import SMTP, SMTPException
+from smtplib import LMTP, SMTP, SMTPException
 import logging
 import time
 import ipaddress
@@ -18,21 +18,25 @@ class Factory:
     def __init__(self):
         pass
 
-    def new(self, ehlo_hostname, timeout):
-        return SmtpEndpoint(ehlo_hostname, timeout)
+    def new(self, ehlo_hostname, timeout, protocol):
+        return SmtpEndpoint(ehlo_hostname, timeout, protocol)
 
 class SmtpEndpoint(SyncFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[SMTP] = None
     good_rcpt : bool = False
     timeout : int = 30
-
-    def __init__(self, ehlo_hostname, timeout : Optional[int] = None):
+    protocol : str
+    any_rcpt = False
+    def __init__(self, ehlo_hostname, timeout : Optional[int] = None,
+                 protocol : str = 'smtp'):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
         if timeout is not None:
             self.timeout = timeout
+        assert protocol in ['smtp', 'lmtp']
+        self.protocol = protocol
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -61,7 +65,13 @@ class SmtpEndpoint(SyncFilter):
                 400, 'SmtpEndpoint: bad request: '
                 'remote_host.host is not a valid IP address')
 
-        self.smtp = SMTP(timeout=self.timeout)
+        if self.protocol == 'smtp':
+            self.smtp = SMTP(timeout=self.timeout)
+        elif self.protocol == 'lmtp':
+            self.smtp = LMTP(timeout=self.timeout)
+        else:
+            raise ValueError()
+
         try:
             # TODO workaround bug in smtplib py<3.11
             # https://stackoverflow.com/questions/51768041/python3-smtp-valueerror-server-hostname-cannot-be-an-empty-string-or-start-with
@@ -76,6 +86,7 @@ class SmtpEndpoint(SyncFilter):
 
         # TODO all of these smtplib.SMTP calls on self.smtp can throw
         # e.g. on tcp reset/server hung up
+        # LMTP sends LHLO here
         resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
         if resp.err():
             self._shutdown()
@@ -101,11 +112,9 @@ class SmtpEndpoint(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.info('SmtpEndpoint.on_update %s', tx.remote_host)
-
         if tx_delta.cancelled:
             self._shutdown()
-            return
+            return TransactionMetadata()
 
         upstream_delta = self._update(tx, tx_delta)
         assert tx.merge_from(upstream_delta) is not None
@@ -161,9 +170,16 @@ class SmtpEndpoint(SyncFilter):
             if upstream_delta.mail_response.err():
                 self._shutdown()
                 return upstream_delta
-        assert self.smtp is not None
 
         for rcpt in tx_delta.rcpt_to:
+            # smtplib.LMTP doesn't support multi-rcpt transactions
+            # https://github.com/python/cpython/issues/76984
+            # as of this writing (2024/10) there is a PR in review to fix
+            if self.protocol == 'lmtp' and self.any_rcpt:
+                upstream_delta.rcpt_response.append(
+                    Response(450, 'lmtp multi-rcpt unimplemented'))
+                continue
+            self.any_rcpt = True
             bad_ext = None
 
             if err := self._check_esmtp(rcpt.esmtp):
@@ -182,18 +198,16 @@ class SmtpEndpoint(SyncFilter):
         if tx_delta.message_builder is not None:
             upstream_delta.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
-        elif tx_delta.body_blob is not None and (
-                tx_delta.body_blob.len() ==
-                tx_delta.body_blob.content_length()):
+        elif not tx.data_response and tx.body_blob is not None and tx.body_blob.finalized():
             logging.info('SmtpEndpoint %s append_data len=%d',
-                         tx.rest_id, tx_delta.body_blob.len())
+                         tx.rest_id, tx.body_blob.len())
             if not self.good_rcpt:
                 upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
                 upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(tx_delta.body_blob.read(0)))
-            logging.info('SmtpEndpoint %s data_resp %s',
+                    self.smtp.data(tx.body_blob.pread(0)))
+            logging.info('SmtpEndpoint %s data_response %s',
                          tx.rest_id, upstream_delta.data_response)
 
             self._shutdown()

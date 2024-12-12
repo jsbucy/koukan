@@ -41,11 +41,12 @@ class DkimEndpointTest(unittest.TestCase):
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
-            b'hello\r\n')
+            b'hello\r\n',
+            last=True)
 
         def exp(tx, delta):
-            logging.debug(delta.body_blob.read(0))
-            self.assertTrue(delta.body_blob.read(0).startswith(
+            logging.debug(delta.body_blob.pread(0))
+            self.assertTrue(delta.body_blob.pread(0).startswith(
                 b'DKIM-Signature:'))
 
             upstream_delta = TransactionMetadata(
@@ -72,7 +73,7 @@ class DkimEndpointTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
         tx.body_blob = InlineBlob(
-            b'definitely not valid rfc822\r\n')
+            b'definitely not valid rfc822\r\n', last=True)
         upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.data_response.code, 500)
         self.assertEqual(upstream_delta.data_response.code, 500)

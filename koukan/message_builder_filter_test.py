@@ -21,7 +21,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url)
+        self.storage = Storage.connect(
+            self.db_url, 'http://message_builder_filter_test')
 
     def tearDown(self):
         self.db_dir.cleanup()
@@ -57,7 +58,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         def exp(tx, delta):
             self.assertTrue(delta.body_blob.finalized())
             self.assertNotEqual(
-                delta.body_blob.read(0).find(b'MIME-Version'), -1)
+                delta.body_blob.pread(0).find(b'MIME-Version'), -1)
             self.assertIsNone(tx.message_builder)
             self.assertIsNone(delta.message_builder)
             upstream_delta = TransactionMetadata(

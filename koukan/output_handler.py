@@ -50,11 +50,11 @@ class OutputHandler:
         self.retry_params = retry_params
 
     def _wait_downstream(self, delta : TransactionMetadata,
-                         have_body : bool, ok_rcpt : bool
+                         ok_rcpt : bool
                          ) -> Tuple[Optional[bool], Optional[Response]]:
         if ((delta.mail_from is not None) or
             bool(delta.rcpt_to) or
-            have_body):
+            self.cursor.input_done):
             return False, None
 
         timeout = self.env_timeout
@@ -108,9 +108,8 @@ class OutputHandler:
                     if getattr(obj, field) is not None:
                         delattr(obj, field)
 
-
-            have_body = (self.cursor.input_done and
-                         ((self.cursor.tx.body is not None) or
+            # have_body here is really a proxy for "envelope done"
+            have_body = (((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
                     delta.cancelled):
@@ -128,7 +127,7 @@ class OutputHandler:
                     # post-exploder/single-recipient tx
                     return Response(400, 'OutputHandler all recipients failed')
 
-            waited, err = self._wait_downstream(delta, have_body, ok_rcpt)
+            waited, err = self._wait_downstream(delta, ok_rcpt)
             if err is not None:
                 return err
             elif waited:
@@ -151,7 +150,7 @@ class OutputHandler:
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
-            if delta.mail_from is None and not delta.rcpt_to and not have_body:
+            if delta.mail_from is None and not delta.rcpt_to and not self.cursor.input_done:
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
 
@@ -250,7 +249,12 @@ class OutputHandler:
             final_attempt_reason = 'upstream response success'
         elif resp.perm():
             final_attempt_reason = 'upstream response permfail'
-        elif not self.cursor.input_done:
+        elif (not self.cursor.input_done) and (self.cursor.tx.retry is None):
+            # if we early-returned due to upstream fastfail before
+            # receiving all of the body, don't set
+            # final_attempt_reason if retries are enabled so it is
+            # recoverable at such time as we get the rest of the
+            # body/input_done
             final_attempt_reason = 'downstream timeout'
         else:
             final_attempt_reason, next_attempt_time = (
@@ -265,6 +269,7 @@ class OutputHandler:
         return final_attempt_reason, next_attempt_time
 
 
+    # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
         if self.cursor.tx.retry is None:
             # leave the existing value for final_attempt_reason
@@ -392,7 +397,7 @@ class OutputHandler:
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
-            body_blob = InlineBlob(dsn),
+            body_blob = InlineBlob(dsn, last=True),
             retry={})
         notification_endpoint = self.notification_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream

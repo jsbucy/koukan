@@ -21,9 +21,10 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+                            format='%(asctime)s [%(thread)d] '
+                            '%(filename)s:%(lineno)d %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url)
+        self.storage = Storage.connect(self.db_url, 'http://output_handler_test')
         self.executor = Executor(inflight_limit=10, watchdog_timeout=10)
 
     def tearDown(self):
@@ -65,7 +66,7 @@ class OutputHandlerTest(unittest.TestCase):
         def exp(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'bob')
-            self.assertEqual(tx.body_blob.read(0), b'hello, world!')
+            self.assertEqual(tx.body_blob.pread(0), b'hello, world!')
 
             upstream_delta = TransactionMetadata(
                 mail_response = Response(),
@@ -199,7 +200,7 @@ class OutputHandlerTest(unittest.TestCase):
         def exp_body(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
-            self.assertEqual(tx_delta.body_blob.read(0), body)
+            self.assertEqual(tx_delta.body_blob.pread(0), body)
             upstream_delta = TransactionMetadata(
                 data_response = Response(204))
             assert tx.merge_from(upstream_delta) is not None
@@ -420,7 +421,7 @@ class OutputHandlerTest(unittest.TestCase):
         def exp_notification(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
-            dsn = tx.body_blob.read(0).decode('utf-8')
+            dsn = tx.body_blob.pread(0).decode('utf-8')
             logging.debug(dsn)
             self.assertIn('subject: Delivery Status Notification', dsn)
 
@@ -490,7 +491,7 @@ class OutputHandlerTest(unittest.TestCase):
         def exp_notification(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
-            dsn = tx.body_blob.read(0).decode('utf-8')
+            dsn = tx.body_blob.pread(0).decode('utf-8')
             logging.debug(dsn)
             self.assertIn('subject: Delivery Status Notification', dsn)
             orig_headers = [
@@ -499,7 +500,7 @@ class OutputHandlerTest(unittest.TestCase):
                 'subject: hello',
                 'date: Wed, 06 Mar 2024 10:42:31 -0800',
                 'message-id: <abc@xyz>']
-            dsn = tx.body_blob.read(0).decode('utf-8')
+            dsn = tx.body_blob.pread(0).decode('utf-8')
             logging.debug(dsn)
             self.assertIn('subject: Delivery Status Notification', dsn)
 
@@ -587,7 +588,7 @@ class OutputHandlerTest(unittest.TestCase):
         def exp_notification(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
-            dsn = tx.body_blob.read(0).decode('utf-8')
+            dsn = tx.body_blob.pread(0).decode('utf-8')
             logging.debug(dsn)
             self.assertIn('subject: Delivery Status Notification', dsn)
             upstream_delta = TransactionMetadata(

@@ -16,7 +16,12 @@ import werkzeug.http
 
 from koukan.deadline import Deadline
 from koukan.rest_endpoint import RestEndpoint
-from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
+from koukan.filter import (
+    HostPort,
+    Mailbox,
+    Resolution,
+    TransactionMetadata,
+    WhichJson )
 from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
 
@@ -83,8 +88,9 @@ class RestEndpointTest(unittest.TestCase):
         super().__init__(name)
 
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s %(filename)s:%(lineno)d %(message)s')
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -129,13 +135,6 @@ class RestEndpointTest(unittest.TestCase):
             req.body = wsgi_input.read(int(length))
         self.requests.append(req)
 
-        if not self.responses:
-            # XXX some test uses this to exercise timeouts but we want to
-            # fastfail the rest of the time?
-            time.sleep(5)
-            start_response('500 timeout', [])
-            return ''
-
         resp = self.responses.pop(0)
         resp_headers = []
         if resp.content_type:
@@ -162,7 +161,7 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '201 created',
             resp_json={},
             location='/transactions/123'))
-        rest_resp = rest_endpoint._start(
+        rest_resp = rest_endpoint._create(
             resolution=None, tx=tx, deadline=Deadline())
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)
@@ -385,7 +384,7 @@ class RestEndpointTest(unittest.TestCase):
                                  rcpt_to=[Mailbox('bob')])
         rest_endpoint.on_update(tx, tx.copy())
 
-        blob = InlineBlob(b'hello, world!')
+        blob = InlineBlob(b'hello, world!', last=True)
         rest_endpoint._put_blob(blob)
 
         # POST /transactions
@@ -422,6 +421,42 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.content_range.start, 10)
         self.assertEqual(req.content_range.stop, 13)
         self.assertEqual(req.content_range.length, 13)
+
+
+
+    def testPutBlobSingle(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            location='/transactions/123',
+            resp_json={
+                'mail_from': {},
+                'mail_response': {'code': 201},
+                'rcpt_to': [{}],
+                'rcpt_response': [{'code': 202}],
+            }))
+
+        # POST /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '201 created'))
+
+        b = b'hello, world!'
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')],
+                                 body_blob=InlineBlob(b, last=True))
+        rest_endpoint.on_update(tx, tx.copy())
+
+        # POST /transactions
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions')
+
+        # POST /transactions/123/body
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertIsNone(req.content_range)
+        self.assertEqual(req.body, b)
 
 
     # TODO maybe drop this test, entering _put_blob_chunk() in the middle
@@ -535,7 +570,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         blob_bytes = b'hello'
         tx_delta = TransactionMetadata(
-            body_blob=InlineBlob(blob_bytes, len(blob_bytes)))
+            body_blob=InlineBlob(blob_bytes, last=True))
         assert tx.merge_from(tx_delta) is not None
         upstream_delta = rest_endpoint.on_update(tx, tx_delta, 5)
         self.assertEqual(tx.data_response.code, 450)
@@ -559,7 +594,8 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(upstream_delta.mail_response.code, 201)
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
-        tx_delta = TransactionMetadata(body_blob=InlineBlob(b'hello'))
+        tx_delta = TransactionMetadata(
+            body_blob=InlineBlob(b'hello', last=True))
         assert tx.merge_from(tx_delta) is not None
         self.responses.append(Response(
             http_resp = '201 created',
@@ -604,7 +640,7 @@ class RestEndpointTest(unittest.TestCase):
         # incomplete -> noop
         tx_delta = TransactionMetadata()
         tx.body_blob = tx_delta.body_blob = CompositeBlob()
-        b = InlineBlob(b'hello, ')
+        b = InlineBlob(b'hello, ', last=True)
         tx.body_blob.append(b, 0, b.len())
         upstream_delta = rest_endpoint.on_update(tx, tx_delta, 5)
         self.assertIsNone(upstream_delta.mail_response)
@@ -613,7 +649,7 @@ class RestEndpointTest(unittest.TestCase):
 
         logging.debug('testFilterApi last append')
 
-        b = InlineBlob(b'world!')
+        b = InlineBlob(b'world!', last=True)
         tx.body_blob.append(b, 0, b.len(), True)
 
         # POST /transactions/123/body?upload=chunked
@@ -724,7 +760,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(body))
+            body_blob=InlineBlob(body, last=True))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
         logging.debug('tx after update %s', tx)
         logging.debug('upstream_delta %s', upstream_delta)
@@ -732,6 +768,32 @@ class RestEndpointTest(unittest.TestCase):
             self.assertEqual(t.mail_response.code, 201)
             self.assertEqual([r.code for r in t.rcpt_response], [202])
             self.assertEqual(t.data_response.code, 203)
+
+    def test_filter_api_internal_delta(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     min_poll=0.1)
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
+            location = '/transactions/123'))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+
+        # update with internal-only fields -> empty delta -> should
+        # not send an http request upstream
+        delta = TransactionMetadata()
+        delta.options = {}  # internal-only field
+        upstream_delta = rest_endpoint.on_update(tx, delta, 5)
+        self.assertTrue(upstream_delta.empty(WhichJson.ALL))
 
     def testFilterApiMultiRcpt(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
@@ -904,12 +966,12 @@ class RestEndpointTest(unittest.TestCase):
         parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
         parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, len(blob), 'blob_rest_id')
+            blob, rest_id='blob_rest_id', last=True)
         ]
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body_blob = InlineBlob(body, len(body))
+        parsed_delta.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
@@ -976,12 +1038,12 @@ class RestEndpointTest(unittest.TestCase):
         parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
         parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, len(blob), 'blob_rest_id')
+            blob, rest_id='blob_rest_id', last=True)
         ]
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body_blob = InlineBlob(body, len(body))
+        parsed_delta.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
@@ -1027,12 +1089,12 @@ class RestEndpointTest(unittest.TestCase):
         parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
         parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, len(blob), 'blob_rest_id')
+            blob, rest_id='blob_rest_id', last=True)
         ]
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body_blob = InlineBlob(body, len(body))
+        parsed_delta.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
@@ -1052,7 +1114,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(body, len(body)))
+            body_blob=InlineBlob(body, last=True))
 
         # POST /transactions
         self.responses.append(Response(
@@ -1077,7 +1139,7 @@ class RestEndpointTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(body, len(body)))
+            body_blob=InlineBlob(body, last=True))
 
         # POST /transactions
         self.responses.append(Response(
