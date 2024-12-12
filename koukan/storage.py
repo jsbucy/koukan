@@ -994,14 +994,14 @@ class Storage():
             return row._mapping
 
 
-    def _gc_session(self, ttl : timedelta):
+    def _gc_session(self, ttl : timedelta) -> Optional[int]:
         with self.begin_transaction() as db_tx:
             upd = (update(self.session_table).values(
                 live = False,
                 last_update = self._current_timestamp_epoch()
             ).where(
                 (self._current_timestamp_epoch() -
-                 self.session_table.c.last_update) > ttl.seconds,
+                 self.session_table.c.last_update) > ttl.total_seconds(),
                 self.session_table.c.live.is_(True)
             ).returning(self.session_table.c.id,
                         self.session_table.c.last_update))
@@ -1020,7 +1020,7 @@ class Storage():
 
         return rows
 
-    def recover(self, session_ttl=timedelta(seconds=1)) -> int:
+    def recover(self, session_ttl=timedelta(seconds=1)) -> Optional[int]:
         return self._gc_session(session_ttl)
 
     # TODO these blob methods should move into TransactionCursor?
@@ -1150,7 +1150,7 @@ class Storage():
             self.tx_table.c.inflight_session_id == None,
             or_(self.tx_table.c.input_done.is_not(sa_true()),
                 self.tx_table.c.final_attempt_reason.is_not(None)),
-            (self._current_timestamp_epoch() - self.tx_table.c.last_update) > ttl.seconds)
+            (self._current_timestamp_epoch() - self.tx_table.c.last_update) > ttl.total_seconds())
         res = db_tx.execute(del_tx)
         deleted_tx = rowcount(res)
 
@@ -1163,7 +1163,7 @@ class Storage():
         sel = (select(self.blob_table.c.id).select_from(j)
                .where(self.tx_blobref_table.c.transaction_id == None))
         del_blob = delete(self.blob_table).where(
-            (self._current_timestamp_epoch() - self.blob_table.c.last_update) > ttl.seconds,
+            (self._current_timestamp_epoch() - self.blob_table.c.last_update) > ttl.total_seconds(),
             self.blob_table.c.id.in_(sel)
         )
         res = db_tx.execute(del_blob)
