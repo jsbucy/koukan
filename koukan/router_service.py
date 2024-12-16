@@ -4,8 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import time
 import logging
 from threading import Lock, Condition
-import json
-import os
 from functools import partial
 import asyncio
 from datetime import timedelta
@@ -13,8 +11,6 @@ from datetime import timedelta
 import koukan.rest_service as rest_service
 import koukan.fastapi_service as fastapi_service
 import koukan.hypercorn_main as hypercorn_main
-
-from koukan.blob import InlineBlob
 
 from koukan.storage import Storage, TransactionCursor
 from koukan.rest_endpoint_adapter import (

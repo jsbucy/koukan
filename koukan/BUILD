@@ -1,3 +1,5 @@
+load("@rules_python//python:py_library.bzl", "py_library")
+
 load('//:pytype.bzl', 'pytype_library')
 
 pytype_library(name='deadline',
@@ -31,14 +33,20 @@ pytype_library(name='rest_endpoint',
                deps=[':blob',
                      ':deadline',
                      ':filter',
-                     ':response'])
+                     ':response',
+                     '@pypi//h2',
+                     '@pypi//httpx',
+                     '@pypi//werkzeug'])
 
 py_test(name='rest_endpoint_test',
         srcs=['rest_endpoint_test.py'],
-        deps=[':rest_endpoint'])
+        deps=[':rest_endpoint',
+              '@pypi//werkzeug'])
 
 pytype_library(name='rest_service_handler',
-               srcs=['rest_service_handler.py'])
+               srcs=['rest_service_handler.py'],
+               deps=['@pypi//fastapi',
+                     '@pypi//flask'])
 
 pytype_library(name='storage_schema',
                srcs=['storage_schema.py'],
@@ -53,7 +61,7 @@ py_test(name='version_cache_test',
         deps=[':version_cache',
               ':executor'])
 
-pytype_library(name='storage',
+py_library(name='storage',
                srcs=['storage.py'],
                data=['init_storage.sql',
                      'init_storage_postgres.sql'],
@@ -62,7 +70,8 @@ pytype_library(name='storage',
                      ':version_cache',
                      ':blob',
                      ':response',
-                     ':filter'])
+                     ':filter',
+                     '@pypi//sqlalchemy'])
 
 py_test(name='storage_test_sqlite',
         args=['StorageTestSqlite'],
@@ -72,7 +81,8 @@ py_test(name='storage_test_sqlite',
               ':rest_schema',
               ':version_cache',
               ':postgres_test_utils',
-              ':sqlite_test_utils'])
+              ':sqlite_test_utils',
+              '@pypi//sqlalchemy'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
@@ -212,33 +222,39 @@ pytype_library(name='dest_domain_policy',
                      ':filter'])
 
 pytype_library(name='dkim_endpoint',
-               srcs=['dkim_endpoint.py'])
+               srcs=['dkim_endpoint.py'],
+               deps=['@pypi//dkimpy'])
 
 py_test(name='dkim_endpoint_test',
         srcs=['dkim_endpoint_test.py'],
         deps=[':dkim_endpoint',
               ':dest_domain_policy',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              '@pypi//dkimpy'])
 
 pytype_library(name='dns_wrapper',
-               srcs=['dns_wrapper.py'])
+               srcs=['dns_wrapper.py'],
+               deps=['@pypi//dnspython'])
 
 pytype_library(name='fake_dns_wrapper',
                srcs=['fake_dns_wrapper.py'],
-               deps=[':dns_wrapper'])
+               deps=[':dns_wrapper',
+                     '@pypi//dnspython'])
 
 pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'],
                deps=[':filter',
                      ':dns_wrapper',
-                     ':response'])
+                     ':response',
+                     '@pypi//dnspython'])
 
 py_test(name='mx_resolution_test',
         srcs=['mx_resolution_test.py'],
         deps=[':mx_resolution',
               ':filter',
               ':fake_endpoints',
-              ':fake_dns_wrapper'])
+              ':fake_dns_wrapper',
+              '@pypi//dnspython'])
 
 pytype_library(name='storage_writer_filter',
                srcs=['storage_writer_filter.py'],
@@ -291,7 +307,8 @@ py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter',
               ':fake_endpoints',
-              ':fake_dns_wrapper'])
+              ':fake_dns_wrapper',
+              '@pypi//dnspython'])
 
 pytype_library(name='received_header_filter',
                srcs=['received_header_filter.py'],
@@ -329,7 +346,8 @@ pytype_library(name='config',
                      ':exploder',
                      ':remote_host_filter',
                      ':received_header_filter',
-                     ':relay_auth_filter'])
+                     ':relay_auth_filter',
+                     '@pypi//pyyaml'])
 
 pytype_library(name='executor',
                srcs=['executor.py'])
@@ -338,15 +356,18 @@ py_test(name='executor_test',
         deps=[':executor'])
 
 pytype_library(name='hypercorn_main',
-               srcs=['hypercorn_main.py'])
+               srcs=['hypercorn_main.py'],
+               deps=['@pypi//hypercorn'])
 
 pytype_library(name='rest_service',
                srcs=['rest_service.py'],
-               deps=[':rest_service_handler'])
+               deps=[':rest_service_handler',
+                     '@pypi//flask'])
 
 pytype_library(name='fastapi_service',
                srcs=['fastapi_service.py'],
-               deps=[':rest_service_handler'])
+               deps=[':rest_service_handler',
+                     '@pypi//fastapi'])
 
 pytype_library(name='rest_schema',
                srcs=['rest_schema.py'])
@@ -415,7 +436,8 @@ py_test(name='router_service_test_sqlite',
         data=['//testdata:multipart.msg'])
 
 pytype_library(name='smtp_auth',
-               srcs=['smtp_auth.py'])
+               srcs=['smtp_auth.py'],
+               deps=['@pypi//aiosmtpd'])
 
 pytype_library(name='smtp_service',
                srcs=['smtp_service.py'],
@@ -423,7 +445,8 @@ pytype_library(name='smtp_service',
                      ':smtp_auth',
                      ':response',
                      ':filter',
-                     ':executor'])
+                     ':executor',
+                     '@pypi//aiosmtpd'])
 
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
@@ -442,7 +465,10 @@ pytype_library(name='rest_endpoint_adapter',
                      ':rest_schema',
                      ':rest_service',
                      ':rest_service_handler',
-                     ':version_cache'])
+                     ':version_cache',
+                     '@pypi//fastapi',
+                     '@pypi//flask',
+                     '@pypi//werkzeug'])
 
 py_test(name='rest_endpoint_adapter_test',
         srcs=['rest_endpoint_adapter_test.py'],
@@ -451,12 +477,14 @@ py_test(name='rest_endpoint_adapter_test',
               ':fake_endpoints',
               ':filter',
               ':response',
-              ':storage'])
+              ':storage',
+              '@pypi//fastapi',
+              '@pypi//flask',
+              '@pypi//werkzeug'])
 
 pytype_library(name='smtp_endpoint',
                srcs=['smtp_endpoint.py'],
                deps=[])
-
 
 pytype_library(name='gateway_lib',
                srcs=['gateway.py'],
@@ -489,10 +517,14 @@ py_test(name='gateway_test',
               ':rest_endpoint',
               ':fake_smtpd',
               ':blob',
-              ':config'])
+              ':config',
+              '@pypi//parameterized',
+              '@pypi//requests'])
 
 pytype_library(name='postgres_test_utils',
-               srcs=['postgres_test_utils.py'])
+               srcs=['postgres_test_utils.py'],
+               deps=['@pypi//psycopg',
+                     '@pypi//testing_postgresql'])
 
 pytype_library(name='sqlite_test_utils',
                srcs=['sqlite_test_utils.py'])
@@ -513,7 +545,8 @@ py_test(name='end2end_test',
               ':fake_smtpd',
               ':postgres_test_utils',
               '//examples/send_message:send_message',
-              '//examples/receiver:receiver'])
+              '//examples/receiver:receiver',
+              '@pypi//dkimpy'])
 
 py_binary(name='router',
           main='router_service_main.py',

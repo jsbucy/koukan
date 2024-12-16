@@ -11,22 +11,16 @@ from dkim import dknewkey
 import tempfile
 
 from koukan.config import Config
-
 from koukan.gateway import SmtpGateway
-
 from koukan.router_service import Service
-
 from koukan.fake_smtpd import FakeSmtpd
-
 from koukan.ssmtp import main as send_smtp
-
 from koukan.executor import Executor
-
-from examples.send_message.send_message import Sender
-
-from examples.receiver.receiver import Receiver, create_app
 from koukan.hypercorn_main import run
 import koukan.postgres_test_utils as postgres_test_utils
+
+from examples.send_message.send_message import Sender
+from examples.receiver.receiver import Receiver, create_app
 
 def setUpModule():
     postgres_test_utils.setUpModule()
