@@ -334,10 +334,8 @@ class Exploder(SyncFilter):
                                   rcpt)
             self.recipients.append(recipient)
             rcpts.append(recipient)
-            fns.append(
-                partial(lambda r: r._on_rcpt(downstream_tx, downstream_delta,
-                                             deadline),
-                        recipient))
+            fns.append(partial(recipient._on_rcpt,
+                               downstream_tx, downstream_delta, deadline))
 
         self._run(fns, deadline)
 
@@ -446,9 +444,7 @@ class Exploder(SyncFilter):
         for recipient in self.recipients:
             if recipient.status is not None and not recipient.status.ok():
                 continue
-            fns.append(
-                partial(lambda r: r._append_upstream(blob, deadline),
-                        recipient))
+            fns.append(partial(recipient._append_upstream, blob, deadline))
 
         if not self._run(fns, deadline):
             # hopefully this is rare
