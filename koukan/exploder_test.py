@@ -402,6 +402,7 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, t : Test):
         exploder = Exploder('output-chain', self.factory,
+                            None,
                             executor=self.executor,
                             rcpt_timeout=2,
                             msa=msa,
@@ -466,6 +467,7 @@ class ExploderTest(unittest.TestCase):
     # implements SMTP PIPELINING
     def testSuccess(self):
         exploder = Exploder('output-chain', self.factory,
+                            None,
                             executor=self.executor)
 
         tx = TransactionMetadata()
@@ -528,6 +530,7 @@ class ExploderTest(unittest.TestCase):
 
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain', self.factory,
+                            None,
                             executor=self.executor,
                             rcpt_timeout=2, msa=False,
                             default_notification={'host': 'smtp-out'})
@@ -607,6 +610,7 @@ class ExploderRecipientTest(unittest.TestCase):
 
         rcpt = Recipient('smtp-out',
                          endpoint,
+                         None,
                          msa=msa,
                          rcpt=downstream_tx.rcpt_to[0])
 

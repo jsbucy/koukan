@@ -53,6 +53,7 @@ from koukan.storage_schema import VersionConflictException
 
 class Recipient:
     upstream : AsyncFilter
+    sync_upstream : SyncFilter
     tx :  Optional[TransactionMetadata] = None
 
     # upgraded/returned downstream
@@ -75,10 +76,12 @@ class Recipient:
     def __init__(self,
                  output_chain: str,
                  upstream : AsyncFilter,
+                 sync_upstream : SyncFilter,
                  msa : bool,
                  rcpt : Mailbox):
         self.output_chain = output_chain
         self.upstream = upstream
+        self.sync_upstream = sync_upstream
         self.msa = msa
         self.rcpt = rcpt
 
@@ -114,8 +117,12 @@ class Recipient:
             del self.tx.body_blob
 
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
-        upstream_delta = update_wait_inflight(
-            self.upstream, self.tx, self.tx.copy(), deadline)
+        if self.sync_upstream:
+            upstream_delta = self.sync_upstream.on_update(
+                self.tx, self.tx.copy())
+        else:
+            upstream_delta = update_wait_inflight(
+                self.upstream, self.tx, self.tx.copy(), deadline)
         del upstream_delta.version
         del self.tx.version
 
@@ -194,8 +201,12 @@ class Recipient:
             downstream_tx = self.tx.copy()
             downstream_tx.body_blob = blob
             try:
-                upstream_delta = update_wait_inflight(
-                    self.upstream, downstream_tx, body_delta, deadline)
+                if self.sync_upstream:
+                    upstream_delta = self.sync_upstream.on_update(
+                        downstream_tx, body_delta)
+                else:
+                    upstream_delta = update_wait_inflight(
+                        self.upstream, downstream_tx, body_delta, deadline)
                 break
             except VersionConflictException:
                 upstream_tx = self.upstream.get()
@@ -238,10 +249,12 @@ class Recipient:
         upstream_delta = self.upstream.update(self.tx, delta)
 
 AsyncFilterFactory = Callable[[str], Optional[AsyncFilter]]
+FilterFactory = Callable[[], Optional[SyncFilter]]
 
 class Exploder(SyncFilter):
     output_chain : str
     factory : AsyncFilterFactory
+    sync_factory : FilterFactory
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
     msa : Optional[bool] = None
@@ -256,6 +269,7 @@ class Exploder(SyncFilter):
 
     def __init__(self, output_chain : str,
                  factory : AsyncFilterFactory,
+                 sync_factory : FilterFactory,
                  executor : Executor,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
@@ -263,6 +277,7 @@ class Exploder(SyncFilter):
                  default_notification : Optional[dict] = None):
         self.output_chain = output_chain
         self.factory = factory
+        self.sync_factory = sync_factory
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.msa = msa
@@ -329,7 +344,8 @@ class Exploder(SyncFilter):
         deadline = Deadline(self.rcpt_timeout)
         for i,rcpt in enumerate(downstream_delta.rcpt_to):
             recipient = Recipient(self.output_chain,
-                                  self.factory(self.output_chain),
+                                  self.factory(self.output_chain) if self.factory else None,
+                                  self.sync_factory() if self.sync_factory else None,
                                   self.msa,
                                   rcpt)
             self.recipients.append(recipient)
@@ -483,3 +499,42 @@ class Exploder(SyncFilter):
                     recipient.tx = recipient.upstream.get()
         return Response(250, 'accepted (exploder store&forward DATA)')
 
+
+# initial sketch of lifting ~everything except fan-out/in out of Exploder
+class DecomposedExploder(SyncFilter):
+    factory : FilterFactory
+    rcpt_endpoints : List[SyncFilter]
+    rcpt_tx : List[TransactionMetadata]
+
+    def __init__(self, factory : FilterFactory):
+        self.factory = Factory
+        self.rcpts = []
+
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        # downstream mail response comes from MailOk
+        # upstream mail err -> rcpt failed precondition error
+        # by AsyncWrapper etc.
+        upstream_delta = TransactionMetadata()
+        # fut : List[Future] = []
+        for i in range(len(self.rcpts), len(tx.rcpt_to)):
+            filter = self.factory()
+            rcpt_tx = tx.copy()
+            rcpt_delta = tx_delta.copy()
+            rcpt_tx.rcpt_to = tx.rcpt_to[i]
+            rcpt_delta.rcpt_to = tx.rcpt_to[i]
+            # fut.append(executor.submit())
+            rcpt_upstream_delta = filter.on_update(rcpt_tx, rcpt_delta)
+            tx.rcpt_response[i] = upstream_delta.rcpt_response[i] = rcpt_upstream_delta.rcpt_response[0]
+            rcpts.append(filter)
+        # [ f.result() for f in fut ]
+
+        if tx.body_blob.finalized():
+            for rcpt in self.rcpts:
+                rcpt_tx.body_blob = tx.body_blob
+                rcpt_delta = rcpt.on_update(rcpt_tx, tx_delta)
+            # if all data responses same major, save that to upstream_delta
+            # else enable notifications/retries and return Response(250)
+        tx.merge_from(upstream_delta)
+        return upstream_delta

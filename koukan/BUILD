@@ -28,6 +28,19 @@ py_test(name='filter_test',
               ':deadline',
               ':fake_endpoints'])
 
+pytype_library(name='async_filter_wrapper',
+               srcs=['async_filter_wrapper.py'],
+               deps=[':blob',
+                     ':deadline',
+                     ':response'])
+
+py_test(name='async_filter_wrapper_test',
+        srcs=['async_filter_wrapper_test.py'],
+        deps=[':async_filter_wrapper',
+              ':blob',
+              ':deadline',
+              ':fake_endpoints'])
+
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],
                deps=[':blob',
@@ -332,7 +345,8 @@ py_test(name='relay_auth_filter_test',
 # clients should get at this via ABC since it depends on ~everything?
 pytype_library(name='config',
                srcs=['config.py'],
-               deps=[':storage',
+               deps=[':async_filter_wrapper',
+                     ':storage',
                      ':filter',
                      ':rest_endpoint',
                      ':address_list_policy',
