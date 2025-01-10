@@ -659,7 +659,7 @@ class TransactionMetadata:
     # NOTE this copies the rcpt req/resp lists which we know we mutate
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
-    def copy(self):
+    def copy(self) -> 'TransactionMetadata':
         # TODO probably this should use tx_json_fields?
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
@@ -752,49 +752,3 @@ class AsyncFilter(ABC):
         pass
 
 
-# TODO this is the beginning of a AsyncToSyncFilterWrapper
-# RestEndpoint should probably be AsyncFilter and wrapped for the sync
-# output chain
-# ditto for Exploder->StorageWriterFilter
-# and OutputHandler->StorageWriterFilter
-#   _maybe_send_notification() though that's basically fire&forget
-
-# async_filter.update(tx, tx_delta) and loop up to deadline
-# on tx.req_inflight()
-# returns
-def update_wait_inflight(async_filter : AsyncFilter,
-                         tx : TransactionMetadata,
-                         tx_delta : TransactionMetadata,
-                         deadline : Deadline
-                         ) -> TransactionMetadata:
-    tx_orig = tx.copy()
-    upstream_tx = tx.copy()
-    upstream_delta = async_filter.update(upstream_tx, tx_delta)
-    while deadline.remaining() and upstream_tx.req_inflight():
-        logging.debug('update_wait_inflight version %s', upstream_tx.version)
-        if not async_filter.wait(upstream_tx.version,
-                                 deadline.deadline_left()):
-            break
-        upstream_tx = async_filter.get()
-
-    # TODO: we have a few of these hacks due to the way body/body_blob
-    # get swapped around in and out of storage
-    if tx_orig.body_blob:
-        del tx_orig.body_blob
-
-    # e.g. with rest, the client may
-    # PUT /tx/123/body
-    # GET /tx/123
-    # and expect to see {...'body': {}}
-
-    # however in internal call sites (i.e. Exploder), it's updating with
-    # body_blob and not expecting to get body back
-    # so only do this if tx_orig.body_blob?
-    if upstream_tx.body:
-        del upstream_tx.body
-    if tx_orig.version:
-        del tx_orig.version
-    upstream_delta = tx_orig.delta(upstream_tx)
-    # TODO one would expect merge_from()?
-    tx.replace_from(upstream_tx)
-    return upstream_delta

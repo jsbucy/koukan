@@ -3,6 +3,7 @@
 from typing import Any, List, Optional, Tuple
 from threading import Lock, Condition
 import logging
+import logging.config
 import unittest
 import socketserver
 import time
@@ -185,7 +186,13 @@ class RouterServiceTest(unittest.TestCase):
             level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
-
+        logging.config.dictConfig({'version': 1,
+             'loggers': {
+                 'hpack': {
+                     'level': 'INFO'
+                     }
+                 }
+             })
         self.lock = Lock()
         self.cv = Condition(self.lock)
 

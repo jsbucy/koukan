@@ -30,7 +30,7 @@ from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
 from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.executor import Executor
-from async_filter_wrapper import AsyncFilterWrapper
+from koukan.async_filter_wrapper import AsyncFilterWrapper
 
 class FilterSpec:
     def __init__(self, builder, t):
@@ -134,7 +134,6 @@ class Config:
             data_timeout = 30
         return Exploder(
             yaml['output_chain'],
-            None,  #self.exploder_output_factory,
             partial(self.exploder_sync_output, yaml['output_chain'],
                     rcpt_timeout, data_timeout),
             self.executor,

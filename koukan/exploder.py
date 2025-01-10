@@ -12,8 +12,7 @@ from koukan.filter import (
     AsyncFilter,
     Mailbox,
     SyncFilter,
-    TransactionMetadata,
-    update_wait_inflight )
+    TransactionMetadata )
 from koukan.blob import Blob
 from koukan.response import Response
 
@@ -52,7 +51,6 @@ from koukan.storage_schema import VersionConflictException
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    upstream : AsyncFilter
     sync_upstream : SyncFilter
     tx :  Optional[TransactionMetadata] = None
 
@@ -75,12 +73,10 @@ class Recipient:
 
     def __init__(self,
                  output_chain: str,
-                 upstream : AsyncFilter,
                  sync_upstream : SyncFilter,
                  msa : bool,
                  rcpt : Mailbox):
         self.output_chain = output_chain
-        self.upstream = upstream
         self.sync_upstream = sync_upstream
         self.msa = msa
         self.rcpt = rcpt
@@ -117,12 +113,8 @@ class Recipient:
             del self.tx.body_blob
 
         logging.debug('exploder.Recipient._on_rcpt() downstream_tx %s', self.tx)
-        if self.sync_upstream:
-            upstream_delta = self.sync_upstream.on_update(
-                self.tx, self.tx.copy())
-        else:
-            upstream_delta = update_wait_inflight(
-                self.upstream, self.tx, self.tx.copy(), deadline)
+        upstream_delta = self.sync_upstream.on_update(
+            self.tx, self.tx.copy())
         del upstream_delta.version
         del self.tx.version
 
@@ -192,29 +184,18 @@ class Recipient:
         # esp. with rcpt store&forward (msa), upstream OutputHandler
         # may update rcpt_response concurrent with downstream body
         # append so this can conflict in practice
-        while True:
-            logging.debug(
-                'exploder Recipient._append_upstream %d/%s timeout=%s',
-                blob.len(), blob.content_length(),
-                deadline.deadline_left())
-
-            downstream_tx = self.tx.copy()
-            downstream_tx.body_blob = blob
-            try:
-                if self.sync_upstream:
-                    upstream_delta = self.sync_upstream.on_update(
-                        downstream_tx, body_delta)
-                else:
-                    upstream_delta = update_wait_inflight(
-                        self.upstream, downstream_tx, body_delta, deadline)
-                break
-            except VersionConflictException:
-                upstream_tx = self.upstream.get()
-                if self.tx.version is not None:
-                    del self.tx.version
-                upstream_delta = self.tx.delta(upstream_tx)
-                assert self.tx.merge_from(upstream_delta) is not None
-        self.tx = downstream_tx
+        logging.debug(
+            'exploder Recipient._append_upstream %d/%s (%s) timeout=%s',
+            blob.len(), blob.content_length(), last,
+            deadline.deadline_left())
+        # TODO tx.delta/merge isn't very smart about body_blob, move
+        # this logic there?
+        assert self.tx.body_blob is None or (
+            (self.tx.body_blob.len() <= blob.len()) and
+            (self.tx.body_blob.content_length() == blob.content_length()))
+        self.tx.body_blob = blob
+        logging.debug('%s', self.tx)
+        upstream_delta = self.sync_upstream.on_update(self.tx, body_delta)
 
         if upstream_delta is None:
             data_resp = Response(
@@ -246,14 +227,12 @@ class Recipient:
         logging.info('exploder.Recipient.cancel')
         delta = TransactionMetadata(cancelled=True)
         assert self.tx.merge_from(delta) is not None
-        upstream_delta = self.upstream.update(self.tx, delta)
+        self.sync_upstream.on_update(self.tx, delta)
 
-AsyncFilterFactory = Callable[[str], Optional[AsyncFilter]]
 FilterFactory = Callable[[], Optional[SyncFilter]]
 
 class Exploder(SyncFilter):
     output_chain : str
-    factory : AsyncFilterFactory
     sync_factory : FilterFactory
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
@@ -268,7 +247,6 @@ class Exploder(SyncFilter):
     recipients : List[Recipient]
 
     def __init__(self, output_chain : str,
-                 factory : AsyncFilterFactory,
                  sync_factory : FilterFactory,
                  executor : Executor,
                  rcpt_timeout : Optional[float] = None,
@@ -276,7 +254,6 @@ class Exploder(SyncFilter):
                  msa : Optional[bool] = None,
                  default_notification : Optional[dict] = None):
         self.output_chain = output_chain
-        self.factory = factory
         self.sync_factory = sync_factory
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
@@ -344,8 +321,7 @@ class Exploder(SyncFilter):
         deadline = Deadline(self.rcpt_timeout)
         for i,rcpt in enumerate(downstream_delta.rcpt_to):
             recipient = Recipient(self.output_chain,
-                                  self.factory(self.output_chain) if self.factory else None,
-                                  self.sync_factory() if self.sync_factory else None,
+                                  self.sync_factory(),
                                   self.msa,
                                   rcpt)
             self.recipients.append(recipient)
@@ -490,13 +466,9 @@ class Exploder(SyncFilter):
                 notification=self.default_notification)
 
             assert not recipient.tx.body
-            while True:
-                try:
-                    recipient.upstream.update(
-                        recipient.tx.merge(retry_delta), retry_delta)
-                    break
-                except VersionConflictException:
-                    recipient.tx = recipient.upstream.get()
+            assert recipient.tx.merge_from(retry_delta) is not None
+            upstream_delta = recipient.sync_upstream.on_update(
+                recipient.tx, retry_delta)
         return Response(250, 'accepted (exploder store&forward DATA)')
 
 
@@ -507,7 +479,7 @@ class DecomposedExploder(SyncFilter):
     rcpt_tx : List[TransactionMetadata]
 
     def __init__(self, factory : FilterFactory):
-        self.factory = Factory
+        self.factory = factory
         self.rcpts = []
 
     def on_update(self, tx : TransactionMetadata,
@@ -520,20 +492,22 @@ class DecomposedExploder(SyncFilter):
         # fut : List[Future] = []
         for i in range(len(self.rcpts), len(tx.rcpt_to)):
             filter = self.factory()
+            assert filter is not None
             rcpt_tx = tx.copy()
             rcpt_delta = tx_delta.copy()
             rcpt_tx.rcpt_to = tx.rcpt_to[i]
             rcpt_delta.rcpt_to = tx.rcpt_to[i]
             # fut.append(executor.submit())
             rcpt_upstream_delta = filter.on_update(rcpt_tx, rcpt_delta)
+            assert rcpt_upstream_delta is not None
             tx.rcpt_response[i] = upstream_delta.rcpt_response[i] = rcpt_upstream_delta.rcpt_response[0]
-            rcpts.append(filter)
+            self.rcpt_endpoints.append(filter)
         # [ f.result() for f in fut ]
 
         if tx.body_blob.finalized():
-            for rcpt in self.rcpts:
+            for rcpt_endpoint in self.rcpt_endpoints:
                 rcpt_tx.body_blob = tx.body_blob
-                rcpt_delta = rcpt.on_update(rcpt_tx, tx_delta)
+                rcpt_delta = rcpt_endpoint.on_update(rcpt_tx, tx_delta)
             # if all data responses same major, save that to upstream_delta
             # else enable notifications/retries and return Response(250)
         tx.merge_from(upstream_delta)

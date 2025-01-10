@@ -10,7 +10,7 @@ from functools import partial
 from koukan.deadline import Deadline
 from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
-from koukan.fake_endpoints import MockAsyncFilter
+from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.executor import Executor
 
@@ -19,6 +19,7 @@ from koukan.blob import CompositeBlob, InlineBlob
 from koukan.exploder import Exploder, Recipient
 
 import koukan.sqlite_test_utils as sqlite_test_utils
+from koukan.async_filter_wrapper import AsyncFilterWrapper
 
 class Rcpt:
     addr : str
@@ -395,14 +396,14 @@ class ExploderTest(unittest.TestCase):
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
-    def factory(self, host):
-        return self.upstream_endpoints.pop(0)
+    def factory(self):  #, host):
+        return AsyncFilterWrapper(self.upstream_endpoints.pop(0), 5)
 
     # xxx all tests validate response message
 
     def _test_one(self, msa, t : Test):
-        exploder = Exploder('output-chain', self.factory,
-                            None,
+        exploder = Exploder('output-chain',
+                            self.factory,
                             executor=self.executor,
                             rcpt_timeout=2,
                             msa=msa,
@@ -458,6 +459,7 @@ class ExploderTest(unittest.TestCase):
             self._test_one(False, t)
 
     def test_msa(self):
+        self._test_one(True, vec_msa[1])
         for i,t in enumerate(vec_msa):
             logging.info('test_msa %d', i)
             self._test_one(True, t)
@@ -466,8 +468,8 @@ class ExploderTest(unittest.TestCase):
     # in Exploder._on_rcpts() that is otherwise dead code until the gateway
     # implements SMTP PIPELINING
     def testSuccess(self):
-        exploder = Exploder('output-chain', self.factory,
-                            None,
+        exploder = Exploder('output-chain',
+                            self.factory,
                             executor=self.executor)
 
         tx = TransactionMetadata()
@@ -497,7 +499,7 @@ class ExploderTest(unittest.TestCase):
         body_blob.append(b, 0, b.len())
 
         def exp_data(tx, delta):
-            self.assertFalse(tx.body_blob.finalized())
+            self.assertFalse(tx.body_blob and tx.body_blob.finalized())
             return TransactionMetadata()
         up0.expect_update(exp_data)
         up1.expect_update(exp_data)
@@ -529,8 +531,8 @@ class ExploderTest(unittest.TestCase):
         # don't expect an additional update to enable retry/notification
 
     def testMxRcptTemp(self):
-        exploder = Exploder('output-chain', self.factory,
-                            None,
+        exploder = Exploder('output-chain',
+                            self.factory,
                             executor=self.executor,
                             rcpt_timeout=2, msa=False,
                             default_notification={'host': 'smtp-out'})
@@ -601,7 +603,7 @@ class ExploderRecipientTest(unittest.TestCase):
             upstream_data_resp_last = None,
             exp_sf_after_data_last = None,
             exp_status_after_data_last = None):
-        endpoint = MockAsyncFilter()
+        endpoint = FakeSyncFilter()
 
         downstream_tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -610,7 +612,6 @@ class ExploderRecipientTest(unittest.TestCase):
 
         rcpt = Recipient('smtp-out',
                          endpoint,
-                         None,
                          msa=msa,
                          rcpt=downstream_tx.rcpt_to[0])
 
@@ -622,7 +623,7 @@ class ExploderRecipientTest(unittest.TestCase):
                 upstream_delta.rcpt_response = [upstream_rcpt_resp]
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.expect_update(exp_rcpt)
+        endpoint.add_expectation(exp_rcpt)
 
         rcpt._on_rcpt(downstream_tx, downstream_delta, Deadline(2))
         self.assertEqual(rcpt.mail_response.code, exp_mail_resp.code)
@@ -635,13 +636,14 @@ class ExploderRecipientTest(unittest.TestCase):
 
         def exp_data(tx, tx_delta):
             logging.debug('exp_data %s', tx)
+            self.assertIsNotNone(tx.body_blob)
             self.assertFalse(tx.body_blob.finalized())
             upstream_delta = TransactionMetadata(version=4)
             if upstream_data_resp:
                 upstream_delta.data_response = upstream_data_resp
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.expect_update(exp_data)
+        endpoint.add_expectation(exp_data)
 
         d = 'hello, world!'
         rcpt._append_upstream(InlineBlob(d[0:7], len(d)), Deadline(2))
@@ -652,20 +654,21 @@ class ExploderRecipientTest(unittest.TestCase):
             return
 
         def exp_data_last(tx, tx_delta):
+            logging.debug('exp_data_last %s', tx)
             upstream_delta = TransactionMetadata()
             self.assertTrue(tx.body_blob.finalized())
             if upstream_data_resp_last:
                 upstream_delta.data_response = upstream_data_resp_last
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.expect_update(exp_data_last)
+        endpoint.add_expectation(exp_data_last)
         blob = InlineBlob(d, len(d))
         self.assertTrue(blob.finalized())
         rcpt._append_upstream(blob, Deadline(2))
         self.assertEqual(rcpt.store_and_forward, exp_sf_after_data_last)
         self.assertEqualStatus(rcpt.status, exp_status_after_data_last)
 
-        self.assertFalse(endpoint.update_expectation)
+        self.assertFalse(endpoint.expectation)
 
     def test_msa_store_and_forward_after_mail_timeout(self):
         self._test(
@@ -839,6 +842,7 @@ class ExploderRecipientTest(unittest.TestCase):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+                        format='%(asctime)s [%(thread)d] '
+                        '%(filename)s:%(lineno)d %(message)s')
 
     unittest.main()
