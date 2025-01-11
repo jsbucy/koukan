@@ -742,7 +742,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(tx.data_response.code, 205)
         self.assertEqual(tx.data_response.message,
-                         'exploder same status: upstream data 0')
+                         'exploder same response')
 
 
     def test_notification_retry_timeout(self):

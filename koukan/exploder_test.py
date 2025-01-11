@@ -468,8 +468,8 @@ class ExploderTest(unittest.TestCase):
     # in Exploder._on_rcpts() that is otherwise dead code until the gateway
     # implements SMTP PIPELINING
     def testSuccess(self):
-        exploder = Exploder('output-chain',
-                            self.factory,
+        exploder = Exploder(self.factory,
+                            'output-chain',
                             executor=self.executor)
 
         tx = TransactionMetadata()

@@ -118,11 +118,15 @@ class Config:
             root_yaml = load(yaml_file, Loader=Loader)
             self.inject_yaml(root_yaml)
 
-    def exploder_sync_output(self, http_host, rcpt_timeout, data_timeout):
+    def exploder_sync_output(self, http_host : str,
+                             rcpt_timeout : float,
+                             data_timeout : float,
+                             store_and_forward : bool):
         # XXX data_timeout
         return AsyncFilterWrapper(
             self.exploder_output_factory(http_host),
-            rcpt_timeout)
+            rcpt_timeout,
+            store_and_forward=store_and_forward)
 
     def exploder(self, yaml, next):
         assert next is None
@@ -133,11 +137,10 @@ class Config:
             rcpt_timeout = 5
             data_timeout = 30
         return Exploder(
-            yaml['output_chain'],
             partial(self.exploder_sync_output, yaml['output_chain'],
-                    rcpt_timeout, data_timeout),
+                    rcpt_timeout, data_timeout, msa),
+            yaml['output_chain'],
             self.executor,
-            msa=msa,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
             default_notification=yaml.get('default_notification', None))
