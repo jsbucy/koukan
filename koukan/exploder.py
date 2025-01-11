@@ -37,8 +37,12 @@ class Recipient:
         self.tx = tx
 
     def on_update(self,
-                  delta : TransactionMetadata) -> TransactionMetadata:
-        assert self.tx.merge_from(delta) is not None
+                  delta : Optional[TransactionMetadata]) -> TransactionMetadata:
+        if delta is not None:
+            assert self.tx.merge_from(delta) is not None
+        else:
+            delta = self.tx.copy()
+        assert delta is not None
         return self.sync_upstream.on_update(self.tx, delta)
 
 FilterFactory = Callable[[], Optional[SyncFilter]]
@@ -58,8 +62,8 @@ class Exploder(SyncFilter):
     recipients : List[Recipient]
 
     def __init__(self,
-                 sync_factory : FilterFactory,
                  output_chain : str,
+                 sync_factory : FilterFactory,
                  executor : Executor,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
@@ -111,24 +115,27 @@ class Exploder(SyncFilter):
         for i in range(0, len(tx.rcpt_to)):
             logging.debug(i)
             downstream_delta = tx_delta.copy()
-            # XXX this field shouldn't be here?
-            if hasattr(downstream_delta, 'rcpt_to_list_offset'):
-                del downstream_delta.rcpt_to_list_offset
 
             new_rcpt = None
             if i >= len(self.recipients):
                 logging.debug(i)
                 downstream_tx = tx_orig.copy()
+                if hasattr(downstream_tx, 'rcpt_to_list_offset'):
+                    del downstream_tx.rcpt_to_list_offset
                 downstream_tx.rest_id = None
                 downstream_tx.tx_db_id = None
                 downstream_tx.mail_response = None
                 downstream_tx.host = self.output_chain
                 downstream_tx.rcpt_to = [tx.rcpt_to[i]]
-                downstream_delta = TransactionMetadata()
+                downstream_tx.rcpt_response = []
+                downstream_delta = None
                 new_rcpt = rcpt = Recipient(self.sync_factory(), downstream_tx)
                 self.recipients.append(rcpt)
             else:
                 logging.debug(i)
+                # XXX this field shouldn't be here?
+                if hasattr(downstream_delta, 'rcpt_to_list_offset'):
+                    del downstream_delta.rcpt_to_list_offset
                 downstream_delta.rcpt_to = []
                 rcpt = self.recipients[i]
             if new_rcpt or downstream_delta:
@@ -154,8 +161,8 @@ class Exploder(SyncFilter):
                 # XXX this will blackhole if unset!
                 notification=self.default_notification)
             for rcpt in self.recipients:
-                if not rcpt.tx.data_response.ok():
-                    rcpt.on_update(rcpt.tx, retry_delta)
+                if rcpt.tx.rcpt_response[0].ok() and not rcpt.tx.data_response.ok():
+                    rcpt.on_update(retry_delta)
 
             tx.data_response = Response(250, 'exploder store and forward data')
 

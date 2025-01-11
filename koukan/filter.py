@@ -648,8 +648,10 @@ class TransactionMetadata:
                 if old_v[i] is None and new_v[i] is not None:
                     pass  #ok   XXX why would old_v be None?
                 if old_v[i] is not None and new_v[i] is None:
+                    logging.debug('tx.delta %s ->None', f)
                     return None  # bad
                 if old_v[i] != new_v[i]:
+                    logging.debug('tx.delta %s !=', f)
                     return None  # bad
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)

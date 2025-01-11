@@ -137,9 +137,9 @@ class Config:
             rcpt_timeout = 5
             data_timeout = 30
         return Exploder(
+            yaml['output_chain'],
             partial(self.exploder_sync_output, yaml['output_chain'],
                     rcpt_timeout, data_timeout, msa),
-            yaml['output_chain'],
             self.executor,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),

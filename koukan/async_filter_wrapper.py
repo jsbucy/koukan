@@ -68,6 +68,8 @@ class AsyncFilterWrapper(SyncFilter):
             del upstream_tx.body
         if tx_orig.version:
             del tx_orig.version
+        logging.debug(tx_orig)
+        logging.debug(upstream_tx)
         upstream_delta = tx_orig.delta(upstream_tx)
         assert tx.merge_from(upstream_delta) is not None
 
@@ -92,9 +94,9 @@ class AsyncFilterWrapper(SyncFilter):
             rcpt_response = [rcpt_response if r.temp() else r for r in tx.rcpt_response]
             tx.rcpt_response = upstream_delta.rcpt_response = rcpt_response
             if tx.data_response and tx.data_response.temp():
-                tx.mail_response = upstream_delta.mail_response = Response(
+                tx.data_response = upstream_delta.data_response = Response(
                     250, 'DATA ok (AsyncFilterWrapper store and forward)')
-
+            logging.debug(tx)
             # XXX enable retry/notification
 
         # check preconditions
