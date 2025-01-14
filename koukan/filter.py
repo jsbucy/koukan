@@ -746,11 +746,11 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version, timeout) -> bool:
+    def wait(self, version : int, timeout : float) -> bool:
         pass
 
     @abstractmethod
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, version : int, timeout : float) -> bool:
         pass
 
 

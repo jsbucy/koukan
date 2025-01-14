@@ -27,13 +27,13 @@ from koukan.storage_schema import VersionConflictException
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    sync_upstream : SyncFilter
+    filter : SyncFilter
     tx :  TransactionMetadata
 
     def __init__(self,
-                 sync_upstream : SyncFilter,
+                 filter : SyncFilter,
                  tx :  TransactionMetadata):
-        self.sync_upstream = sync_upstream
+        self.filter = filter
         self.tx = tx
 
     def on_update(self,
@@ -43,7 +43,7 @@ class Recipient:
         else:
             delta = self.tx.copy()
         assert delta is not None
-        return self.sync_upstream.on_update(self.tx, delta)
+        return self.filter.update(self.tx, delta)
 
 FilterFactory = Callable[[], Optional[SyncFilter]]
 
@@ -77,25 +77,25 @@ class Exploder(SyncFilter):
         self.executor = executor
 
     # run fns possibly in parallel
-    def _run(self, fns : List[Optional[Callable]]):
-        assert not any([f for f in fns if f is None])
-        if len(fns) == 1:
-            fns[0]()
-            return True
+    # def _run(self, fns : List[Optional[Callable]]):
+    #     assert not any([f for f in fns if f is None])
+    #     if len(fns) == 1:
+    #         fns[0]()
+    #         return True
 
-        futures = []
-        for fn in fns:
-            fut = self.executor.submit(fn)
-            assert fut is not None  # TODO better error handling
-            futures.append(fut)
-        # fns are something internal that respects timeouts
-        for fut in futures:
-            fut.result()
+    #     futures = []
+    #     for fn in fns:
+    #         fut = self.executor.submit(fn)
+    #         assert fut is not None  # TODO better error handling
+    #         futures.append(fut)
+    #     # fns are something internal that respects timeouts
+    #     for fut in futures:
+    #         fut.result()
 
     def reduce_data_response(
             lhs : Union[None, Recipient],
             rhs : Recipient) -> Union[None, Recipient]:
-        if lhs is None:
+        if lhs is None or lhs.tx.data_response is None:
             return None
         if lhs.tx.data_response.major_code() == rhs.tx.data_response.major_code():
             return lhs
@@ -111,7 +111,6 @@ class Exploder(SyncFilter):
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(250, 'MAIL ok (exploder noop)')
 
-        # TODO parallelize data on executor
         for i in range(0, len(tx.rcpt_to)):
             logging.debug(i)
             downstream_delta = tx_delta.copy()
@@ -138,24 +137,45 @@ class Exploder(SyncFilter):
                     del downstream_delta.rcpt_to_list_offset
                 downstream_delta.rcpt_to = []
                 rcpt = self.recipients[i]
+                # xxx drop body if prev rcpt/data perm err?
+
             if new_rcpt or downstream_delta:
                 rcpt.on_update(downstream_delta)
+                logging.debug(rcpt.tx)
                 # xxx need to propagate arbitrary fields from this
                 # upstream_delta to downstream_delta?
 
-            if new_rcpt:
-                tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
-
         assert len(self.recipients) == len(tx.rcpt_to)
 
-        if tx.body_blob is None or not tx.body_blob.finalized() or tx.data_response is not None:
+        rcpts = [ r for r in self.recipients if r.tx.req_inflight() ]
+        deadline = Deadline(self.rcpt_timeout)  # XXX
+        logging.debug('%s %s', rcpts, deadline.deadline_left())
+        while rcpts and deadline.remaining():
+            logging.debug('%s %s', rcpts, deadline.deadline_left())
+            rcpt_next = []
+            for rcpt in rcpts:
+                rcpt.filter.wait(rcpt.filter.version(), deadline.deadline_left())
+                rcpt.tx = rcpt.filter.get()
+                if rcpt.tx.req_inflight():
+                    rcpt_next.append(rcpt)
+            rcpts = rcpt_next
+
+        assert not rcpts
+        assert not any([r.tx.req_inflight() for r in self.recipients])
+
+        for i,rcpt in enumerate(self.recipients):
+            if i >= len(tx.rcpt_response):
+                tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
+
+        if tx.body_blob is None or tx.data_response is not None:
             return tx_orig.delta(tx)
 
-        rcpt = reduce(Exploder.reduce_data_response, self.recipients)
-        if rcpt is not None:
+        rcpt = reduce(Exploder.reduce_data_response,
+                      [ r for r in self.recipients if r.tx.rcpt_response[0].ok()])
+        if rcpt is not None and rcpt.tx.data_response is not None:
             tx.data_response = Response(
                 rcpt.tx.data_response.code, 'exploder same response')
-        else:
+        elif tx.body_blob.finalized():
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
