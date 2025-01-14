@@ -17,9 +17,10 @@ from koukan.storage_schema import VersionConflictException
 
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
                              Optional[TransactionMetadata]]
+GetExpectation = Callable[[],Optional[TransactionMetadata]]
 class MockAsyncFilter(AsyncFilter):
     update_expectation : List[UpdateExpectation]
-    get_expectation : List[TransactionMetadata]
+    get_expectation : List[GetExpectation]
     body_blob : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
 
@@ -31,7 +32,9 @@ class MockAsyncFilter(AsyncFilter):
     def expect_update(self, exp : UpdateExpectation):
         self.update_expectation.append(exp)
     def expect_get(self, tx : TransactionMetadata):
-        self.get_expectation.append(tx)
+        self.get_expectation.append(lambda: tx)
+    def expect_get_cb(self, exp : GetExpectation):
+        self.get_expectation.append(exp)
 
     def update(self,
                tx : TransactionMetadata,
@@ -45,9 +48,9 @@ class MockAsyncFilter(AsyncFilter):
         return upstream_delta
 
     def get(self) -> TransactionMetadata:
-        tx = self.get_expectation[0]
+        cb = self.get_expectation[0]
         self.get_expectation.pop(0)
-        return tx
+        return cb()
 
     def get_blob_writer(
             self,

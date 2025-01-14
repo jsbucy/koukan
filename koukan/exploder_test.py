@@ -27,8 +27,13 @@ class Rcpt:
     rcpt_resp : Optional[Response]
     data_resp : List[Optional[Response]]
     store_and_forward : bool
+    # TODO this is a little bit of a hack, maybe we want more of a
+    # fake async filter here that remembers the last update, etc.
+    tx : Optional[TransactionMetadata]
 
-    def __init__(self, addr, m=None, r=None, d=None, store_and_forward=False):
+    def __init__(self, addr,  # rcpt_to
+                 m=None, r=None, d=None,
+                 store_and_forward=False):
         self.addr = addr
         self.mail_resp = m
         self.rcpt_resp = r
@@ -39,15 +44,17 @@ class Rcpt:
         self.endpoint = endpoint
 
         def exp(tx, tx_delta):
-            upstream_delta = TransactionMetadata()
-            if self.mail_resp:
-                upstream_delta.mail_response = self.mail_resp
-            if self.rcpt_resp:
-                upstream_delta.rcpt_response=[self.rcpt_resp]
-            assert tx.merge_from(upstream_delta)
-            return upstream_delta
+            self.tx = tx.copy()
+            return TransactionMetadata()
         self.endpoint.expect_update(exp)
 
+        def exp_get():
+            if self.mail_resp:
+                self.tx.mail_response = self.mail_resp
+            if self.rcpt_resp:
+                self.tx.rcpt_response=[self.rcpt_resp]
+            return self.tx
+        self.endpoint.expect_get_cb(exp_get)
 
     def set_data_response(self, parent, i):
         logging.debug('Rcpt.set_data_response %d %d', i, len(self.data_resp))
@@ -94,13 +101,13 @@ class ExploderTest(unittest.TestCase):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
                                  debug_futures=True)
 
-        self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(self.db_url, session_uri='http://exploder_test')
+        #self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        #self.storage = Storage.connect(self.db_url, session_uri='http://exploder_test')
         self.upstream_endpoints = []
 
     def tearDown(self):
         self.executor.shutdown(timeout=5)
-        self.db_dir.cleanup()
+        #self.db_dir.cleanup()
 
     def dump_db(self):
         for l in self.storage.db.iterdump():

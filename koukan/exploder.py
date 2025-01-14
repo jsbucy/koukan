@@ -155,7 +155,10 @@ class Exploder(SyncFilter):
             rcpt_next = []
             for rcpt in rcpts:
                 rcpt.filter.wait(rcpt.filter.version(), deadline.deadline_left())
-                rcpt.tx = rcpt.filter.get()
+                t = rcpt.filter.get()
+                assert rcpt.tx.delta(t) is not None  # check buggy filter
+                rcpt.tx = t
+                logging.debug(rcpt.tx)
                 if rcpt.tx.req_inflight():
                     rcpt_next.append(rcpt)
             rcpts = rcpt_next
