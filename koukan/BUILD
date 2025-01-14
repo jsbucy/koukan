@@ -299,7 +299,6 @@ pytype_library(name='exploder',
                deps=[
                    ':blob',
                    ':deadline',
-                   ':executor',
                    ':filter',
                    ':response',
                ])
