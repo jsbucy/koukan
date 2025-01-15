@@ -140,7 +140,6 @@ class Config:
             yaml['output_chain'],
             partial(self.exploder_sync_output, yaml['output_chain'],
                     rcpt_timeout, data_timeout, msa),
-            self.executor,
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
             default_notification=yaml.get('default_notification', None))

@@ -9,18 +9,30 @@ from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 
+# AsyncFilterWrapper provdes store&forward business logic for Exploder
+# and related workflows (add-route in the near future). This consists
+# of ~3 things:
+# 1: populate a temp error response for upstream timeout
+# 2: populate "smtp precondition" failure responses e.g. rcpt fails if
+# mail failed, etc.
+# 3: if store-and-forward is enabled, upgrades upstream temp errs to
+# success and enables retries/notifications on the upstream transaction.
 class AsyncFilterWrapper(AsyncFilter):
     filter : AsyncFilter
     timeout : float
     store_and_forward : bool
     tx : Optional[TransactionMetadata] = None
+    default_notification : Optional[dict] = None
+    do_store_and_forward : bool = False
 
     def __init__(self, filter : AsyncFilter,
                  timeout : float,
-                 store_and_forward : bool = False):
+                 store_and_forward : bool = False,
+                 default_notification : Optional[dict] = None):
         self.filter = filter
         self.timeout = timeout
         self.store_and_forward = store_and_forward
+        self.default_notification = default_notification
 
     def get_blob_writer(
             self,
@@ -30,6 +42,7 @@ class AsyncFilterWrapper(AsyncFilter):
         raise NotImplementedError()
 
     def wait(self, version : int, timeout : float) -> bool:
+        # TODO don't wait if self.do_store_and_forward
         if rv := self.filter.wait(version, timeout):
             self.tx = None
         else:
@@ -77,9 +90,6 @@ class AsyncFilterWrapper(AsyncFilter):
 
 
     def get(self) -> Optional[TransactionMetadata]:
-
-        # TODO don't wait if store&forward and prev err
-
         if self.tx is not None:
             return self.tx
 
@@ -125,37 +135,47 @@ class AsyncFilterWrapper(AsyncFilter):
             (not tx.data_response) and
             (not any([r.ok() for r in tx.rcpt_response]))):
             temp = any([r.temp() for r in tx.rcpt_response])
-            # upstream_delta.data_response =
             tx.data_response = Response(
                 450 if temp else 550,
                 'DATA failed precondition RCPT (AsyncFilterWrapper)')
 
         # if store&forward: upgrade temp errors to success
         if self.store_and_forward:
+            data_last = False
             if tx.mail_response and tx.mail_response.temp():
-                #upstream_delta.mail_response =
+                self.do_store_and_forward = True
                 tx.mail_response = Response(
                     250, 'MAIL ok (AsyncFilterWrapper store and forward)')
             rcpt_response = Response(
                 250, 'RCPT ok (AsyncFilterWrapper store and forward)')
             logging.debug(tx)
-            rcpt_response = [rcpt_response if r.temp() else r
-                             for r in tx.rcpt_response]
-            #upstream_delta.rcpt_response =
-            tx.rcpt_response = rcpt_response
+            for i, resp in enumerate(tx.rcpt_response):
+                if resp.temp():
+                    tx.rcpt_response[i] = rcpt_response
+                    self.do_store_and_forward = True
 
             if tx.body_blob is not None:
                 if (not tx.body_blob.finalized() and
                     tx.data_response and tx.data_response.temp()):
                     tx.data_response = None
+                    self.do_store_and_forward = True
 
                 if (tx.body_blob.finalized() and
                     (tx.data_response is None or tx.data_response.temp())):
+                    data_last = True
+                    self.do_store_and_forward = True
                     tx.data_response = Response(
                         250, 'DATA ok (AsyncFilterWrapper store and forward)')
 
             logging.debug(tx)
-            # XXX enable retry/notification
+            if data_last and self.do_store_and_forward and tx.retry is None:
+                logging.debug('retry')
+                retry_delta = TransactionMetadata(
+                    retry = {},
+                    # XXX this will blackhole if unset!
+                    notification=self.default_notification)
+                assert tx.merge_from(retry_delta) is not None
+                self.filter.update(tx, retry_delta)
 
 
     # update(tx)

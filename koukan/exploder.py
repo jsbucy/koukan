@@ -18,7 +18,7 @@ from koukan.response import Response
 from koukan.storage_schema import VersionConflictException
 
 # Fan-out multi-rcpt from smtp gw and fan responses back in.
-
+# Store&forward when smtp requires it i.e. mixed data responses
 
 # TODO options try to avoid accept&bounce smtp extensions i.e. if the
 # envelope contains an extension and we time out upstream and would
@@ -78,7 +78,6 @@ class Exploder(SyncFilter):
     def __init__(self,
                  output_chain : str,
                  sync_factory : FilterFactory,
-                 executor,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  default_notification : Optional[dict] = None):
@@ -166,7 +165,8 @@ class Exploder(SyncFilter):
                 notification=self.default_notification)
             for rcpt in self.recipients:
                 if (rcpt.tx.rcpt_response[0].ok() and
-                    not rcpt.tx.data_response.ok()):
+                    (not rcpt.tx.data_response.ok()) and
+                    rcpt.tx.retry is None):
                     rcpt.update(retry_delta)
 
             tx.data_response = Response(250, 'exploder store and forward data')

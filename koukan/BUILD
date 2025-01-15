@@ -42,7 +42,8 @@ py_test(name='async_filter_wrapper_test',
               ':deadline',
               ':fake_endpoints',
               ':filter',
-              ':response'])
+              ':response',
+              ':storage_schema'])
 
 pytype_library(name='rest_endpoint',
                srcs=['rest_endpoint.py'],

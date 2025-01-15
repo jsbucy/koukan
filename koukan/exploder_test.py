@@ -12,7 +12,6 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.filter import Mailbox, TransactionMetadata
-from koukan.executor import Executor
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -92,21 +91,13 @@ class Test:
         self.expected_data_resp = ed
 
 
-
-
 class ExploderTest(unittest.TestCase):
-    executor : Executor
-
     def setUp(self):
-        self.executor = Executor(inflight_limit=10, watchdog_timeout=30,
-                                 debug_futures=True)
-
         #self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
         #self.storage = Storage.connect(self.db_url, session_uri='http://exploder_test')
         self.upstream_endpoints = []
 
-    def tearDown(self):
-        self.executor.shutdown(timeout=5)
+    #def tearDown(self):
         #self.db_dir.cleanup()
 
     def dump_db(self):
@@ -120,16 +111,17 @@ class ExploderTest(unittest.TestCase):
 
     def factory(self, store_and_forward):
         logging.debug('%s', store_and_forward)
+        notify = {} if store_and_forward else None
         return AsyncFilterWrapper(self.upstream_endpoints.pop(0),
                                   timeout=5,
-                                  store_and_forward=store_and_forward)
+                                  store_and_forward=store_and_forward,
+                                  default_notification=notify)
 
     # xxx all tests validate response message
 
     def _test_one(self, msa, t : Test):
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
-                            executor=self.executor,
                             rcpt_timeout=5,
                             default_notification={})
 
@@ -509,8 +501,7 @@ class ExploderTest(unittest.TestCase):
     # implements SMTP PIPELINING
     def testSuccess(self):
         exploder = Exploder('output-chain',
-                            partial(self.factory, True),
-                            executor=self.executor)
+                            partial(self.factory, True))
 
         tx = TransactionMetadata()
         tx.mail_from = Mailbox('alice')
@@ -573,7 +564,6 @@ class ExploderTest(unittest.TestCase):
     def testMxRcptTemp(self):
         exploder = Exploder('output-chain',
                             partial(self.factory, False),
-                            executor=self.executor,
                             rcpt_timeout=2,
                             default_notification={'host': 'smtp-out'})
 
