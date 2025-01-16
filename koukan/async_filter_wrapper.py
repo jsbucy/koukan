@@ -56,11 +56,14 @@ class AsyncFilterWrapper(AsyncFilter):
         return await self.filter.wait_async(version, timeout)
 
     def version(self) -> Optional[int]:
+        # XXX self.tx.version?
         return self.filter.version()
 
     def update(self, tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        # xxx this is only used for the version conflict retry loop,
+        # shouldn't need to retry very many times
         deadline = Deadline(self.timeout)
         logging.debug('%s %s', tx, tx_delta)
 
@@ -83,6 +86,8 @@ class AsyncFilterWrapper(AsyncFilter):
                 assert upstream_tx.merge_from(tx_delta) is not None
 
         self._check_preconditions(upstream_tx)
+        logging.debug(upstream_tx)
+        del tx_orig.version
         upstream_delta = tx_orig.delta(upstream_tx)
         assert tx.merge_from(upstream_delta) is not None
         self.tx = upstream_tx
@@ -91,6 +96,7 @@ class AsyncFilterWrapper(AsyncFilter):
 
     def get(self) -> Optional[TransactionMetadata]:
         if self.tx is not None:
+            logging.debug('get noop')
             return self.tx
 
         t = self.filter.get()
@@ -111,10 +117,8 @@ class AsyncFilterWrapper(AsyncFilter):
         # however in internal call sites (i.e. Exploder), it's updating with
         # body_blob and not expecting to get body back
         # so only do this if tx_orig.body_blob?
-        if self.tx.body:
-            del self.tx.body
-        if self.tx.version:
-            del self.tx.version
+        #if self.tx.body:
+        #    del self.tx.body
         logging.debug(self.tx)
 
         self._check_preconditions(self.tx)
@@ -129,7 +133,6 @@ class AsyncFilterWrapper(AsyncFilter):
                 'RCPT failed precondition MAIL (AsyncFilterWrapper)')
             for i in range(len(tx.rcpt_response), len(tx.rcpt_to)):
                 tx.rcpt_response.append(rcpt_err)
-                #upstream_delta.rcpt_response.append(rcpt_err)
         logging.debug(tx)
         if (tx.body_blob and tx.body_blob.finalized() and
             (not tx.data_response) and
@@ -161,7 +164,10 @@ class AsyncFilterWrapper(AsyncFilter):
                     self.do_store_and_forward = True
 
                 if (tx.body_blob.finalized() and
-                    (tx.data_response is None or tx.data_response.temp())):
+                    ( #tx.data_response is None
+                     self.do_store_and_forward or
+                        (tx.data_response is not None and
+                         tx.data_response.temp()))):
                     data_last = True
                     self.do_store_and_forward = True
                     tx.data_response = Response(

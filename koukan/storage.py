@@ -131,6 +131,9 @@ class TransactionCursor:
             if reuse_blob_rest_id is not None:
                 reuse_blob = []
                 for blob in reuse_blob_rest_id:
+                    # XXX write_envelope() doesn't do this?
+                    # because you can only reuse body on a rest create?
+                    # vs adding the message builder after the fact?
                     blob = body_blob_uri(blob)
                     reuse_blob.append(blob)
 

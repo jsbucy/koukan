@@ -255,15 +255,15 @@ class RouterServiceTest(unittest.TestCase):
             for l in db_tx.connection.iterdump():
                 logging.debug(l)
 
-    def assertRcptCodesEqual(self, responses : List[Optional[Response]],
-                             expected_codes):
-        self.assertEqual([r.code if r else None for r in responses],
-                         expected_codes)
+    def assertRcptCodesEqual(self, expected_codes : List[int],
+                             responses : List[Optional[Response]]):
+        self.assertEqual(expected_codes,
+                         [r.code if r else None for r in responses])
 
-    def assertRcptJsonCodesEqual(self, resp_json, expected_codes):
-        self.assertRcptCodesEqual(
-            [Response.from_json(r) for r in resp_json.get('rcpt_response', [])],
-            expected_codes)
+    # def assertRcptJsonCodesEqual(self, resp_json, expected_codes):
+    #     self.assertRcptCodesEqual(
+    #         expected_codes,
+    #         [Response.from_json(r) for r in resp_json.get('rcpt_response', [])])
 
     def _dequeue(self, n=1):
         deq = 0
@@ -693,7 +693,7 @@ class RouterServiceTest(unittest.TestCase):
         tx_delta = tx.delta(updated_tx)
         tx = updated_tx
         rest_endpoint.on_update(tx, tx_delta)
-        self.assertRcptCodesEqual(tx.rcpt_response, [202])
+        self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
 
         # upstream tx #2
@@ -718,8 +718,8 @@ class RouterServiceTest(unittest.TestCase):
         tx = updated_tx
         rest_endpoint.on_update(tx, tx_delta)
 
-        self.assertRcptCodesEqual(tx.rcpt_response, [202, 204])
-        self.assertEqual(tx.rcpt_response[1].message, 'upstream rcpt 2')
+        self.assertRcptCodesEqual([202, 204], tx.rcpt_response)
+        self.assertEqual('upstream rcpt 2', tx.rcpt_response[1].message)
 
         def exp_body(i, tx, tx_delta):
             self.assertEqual(tx.body_blob.pread(0),
@@ -740,9 +740,9 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIsNotNone(tx.merge_from(tx_delta))
         rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_exploder_multi_rcpt %s', tx)
-        self.assertEqual(tx.data_response.code, 205)
-        self.assertEqual(tx.data_response.message,
-                         'exploder same response')
+        self.assertEqual(205, tx.data_response.code)
+        self.assertEqual('exploder same response',
+                         tx.data_response.message)
 
 
     def test_notification_retry_timeout(self):
@@ -779,10 +779,10 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
 
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual(tx.mail_response.message, 'ok')
-        self.assertEqual([r.code for r in tx.rcpt_response], [250])
-        self.assertIn('exploder store&forward RCPT',
+        self.assertEqual(250, tx.mail_response.code, 201)
+        self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
+        self.assertRcptCodesEqual([250], tx.rcpt_response)
+        self.assertIn('RCPT ok (AsyncFilterWrapper store and forward)',
                       tx.rcpt_response[0].message)
 
         for i in range(0,2):
@@ -851,32 +851,34 @@ class RouterServiceTest(unittest.TestCase):
         # output for each of rcpt1, rcpt2
         for j in range(0,2):
             upstream = FakeSyncFilter()
+            logging.debug(id(upstream))
             upstream.add_expectation(exp_rcpt)
             self.add_endpoint(upstream)
 
         rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
-        # we get the upstream MAIL response since exploder got the
-        # whole env in the same call
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual(tx.mail_response.message, 'ok')
-        self.assertEqual(len(tx.rcpt_response), 2)
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
+        self.assertEqual(2, len(tx.rcpt_response))
         for r in tx.rcpt_response:
-            self.assertEqual(r.code, 202)
-            self.assertEqual(r.message, 'ok')
-        self.assertEqual(tx.data_response.code, 250)
-        self.assertIn('exploder store&forward DATA', tx.data_response.message)
+            self.assertEqual(202, r.code)
+            self.assertEqual('ok', r.message)
+        self.assertEqual(250, tx.data_response.code)
+        self.assertIn('DATA ok (Exploder store&forward)', tx.data_response.message)
 
-        # no_final_notification OutputHandler handler for both rcpts
-        for i in range(0,2):
+        # no_final_notification OutputHandler handler for the rcpt that failed
+        for i in range(0,1):
             unused_upstream_endpoint = FakeSyncFilter()
+            logging.debug(id(unused_upstream_endpoint))
             self.add_endpoint(unused_upstream_endpoint)
 
         dsn_endpoint = FakeSyncFilter()
+        logging.debug(id(dsn_endpoint))
         def exp_dsn_env(tx, tx_delta):
-            self.assertEqual(tx.mail_from.mailbox, '')
-            self.assertEqual(tx.rcpt_to[0].mailbox, 'alice@example.com')
+            logging.error(tx)
+            self.assertEqual('', tx.mail_from.mailbox)
+            self.assertEqual('alice@example.com', tx.rcpt_to[0].mailbox)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(250),
                 rcpt_response=[Response(250)])
@@ -884,6 +886,7 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
 
         def exp_dsn_body(tx, tx_delta):
+            logging.error(tx)
             dsn = tx.body_blob.pread(0)
             logging.debug('test_notification %s', dsn)
             self.assertIn(b'subject: Delivery Status Notification', dsn)
@@ -895,8 +898,8 @@ class RouterServiceTest(unittest.TestCase):
         dsn_endpoint.add_expectation(exp_dsn_env)
         dsn_endpoint.add_expectation(exp_dsn_body)
         self.add_endpoint(dsn_endpoint)
-        # no_final_notification x2 + dsn output
-        self._dequeue(3)
+        # no_final_notification + dsn output
+        self._dequeue(2)
 
         # xxx kludge, fix SyncEndpoint to wait on this
         for i in range(0,5):
@@ -1065,7 +1068,7 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 201)
-        self.assertRcptCodesEqual(tx.rcpt_response, [202])
+        self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.data_response.code, 203)
 
 

@@ -58,7 +58,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         # XXX mock doesn't implement
         #self.assertEqual(2, wrapper.version())
 
-    def disabled_test_store_and_forward(self):
+    def test_store_and_forward(self):
         async_filter = MockAsyncFilter()
         wrapper = AsyncFilterWrapper(async_filter, 1, store_and_forward=True)
         b = b'hello, world!'
@@ -66,15 +66,26 @@ class AsyncFilterWrapperTest(unittest.TestCase):
                                  rcpt_to=[Mailbox('bob')],
                                  body_blob=InlineBlob(b, len(b)))
         def exp_update(tx, delta):
-            return TransactionMetadata()
+            return TransactionMetadata(version=1)
         async_filter.expect_update(exp_update)
         upstream_tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             mail_response=Response(450),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(b, len(b)))
+            body_blob=InlineBlob(b, len(b)),
+            version=2)
         async_filter.expect_get(upstream_tx)
+        def exp_sf(tx, delta):
+            self.assertIsNotNone(delta.retry)
+            upstream_delta=TransactionMetadata(version=3)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        async_filter.expect_update(exp_sf)
         wrapper.update(tx, tx.copy())
+        logging.debug(tx)
+        self.assertTrue(wrapper.wait(wrapper.version(), 1))
+        tx = wrapper.get()
+        logging.debug(tx)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

@@ -26,10 +26,10 @@ from koukan.storage_schema import VersionConflictException
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    filter : SyncFilter
+    filter : AsyncFilter
     tx :  Optional[TransactionMetadata] = None
 
-    def __init__(self, filter : SyncFilter):
+    def __init__(self, filter : AsyncFilter):
         self.filter = filter
 
     def first_update(self,
@@ -42,11 +42,17 @@ class Recipient:
         self.tx.host = output_chain
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
+        for a in ['version', 'attempt_count']:
+            if getattr(self.tx, a, None) is not None:
+                delattr(self.tx, a)
         return self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         delta = delta.copy()
+        for a in ['version']:
+            if getattr(delta, a, None) is not None:
+                delattr(delta, a)
         # XXX this field shouldn't be here?
         if hasattr(delta, 'rcpt_to_list_offset'):
             del delta.rcpt_to_list_offset
@@ -60,7 +66,19 @@ class Recipient:
         logging.debug(self.tx)
         return self.filter.update(self.tx, delta)
 
-FilterFactory = Callable[[], Optional[SyncFilter]]
+    def wait(self, timeout : float):
+        self.filter.wait(self.tx.version, timeout)
+        t = self.filter.get()
+        assert t is not None
+        orig = self.tx.copy()
+        tt = t.copy()
+        for ti in [orig, tt]:
+            del ti.version
+            del ti.body_blob
+        assert orig.delta(tt) is not None  # check buggy filter
+        self.tx = t
+
+FilterFactory = Callable[[], Optional[AsyncFilter]]
 
 class Exploder(SyncFilter):
     sync_factory : FilterFactory
@@ -88,6 +106,7 @@ class Exploder(SyncFilter):
         self.recipients = []
         self.default_notification = default_notification
 
+    @staticmethod
     def reduce_data_response(
             lhs : Union[None, Recipient],
             rhs : Recipient) -> Union[None, Recipient]:
@@ -103,6 +122,19 @@ class Exploder(SyncFilter):
         logging.info('Exploder.on_update %s', tx_delta)
 
         tx_orig = tx.copy()
+        tx_delta = tx_delta.copy()
+        # for t in [tx_orig, tx_delta]:
+        #     for a in ['version', 'attempt_count']:
+        #         if getattr(t, a, None) is not None:
+        #             delattr(t, a)
+
+        # TODO the old code had some complicated logic to try to pick
+        # the best upstream mail response if we got it pipelined with
+        # rcpts (which the aiosmtpd/gw implementation doesn't
+        # currently support). This feels kind of academic since the
+        # AsyncFilterWrapper precondition check will return any
+        # upstream mail err in response to rcpt.
+
         # TODO -> MailOkFilter
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(
@@ -115,7 +147,7 @@ class Exploder(SyncFilter):
                 logging.debug(i)
                 rcpt = Recipient(self.sync_factory())
                 self.recipients.append(rcpt)
-                rcpt.first_update(tx, self.output_chain, i)
+                rcpt.first_update(tx_orig, self.output_chain, i)
             else:
                 rcpt = self.recipients[i]
                 rcpt.update(tx_delta)
@@ -132,11 +164,7 @@ class Exploder(SyncFilter):
             logging.debug('%s %s', rcpts, deadline.deadline_left())
             rcpt_next = []
             for rcpt in rcpts:
-                rcpt.filter.wait(
-                    rcpt.filter.version(), deadline.deadline_left())
-                t = rcpt.filter.get()
-                assert rcpt.tx.delta(t) is not None  # check buggy filter
-                rcpt.tx = t
+                rcpt.wait(deadline.deadline_left())
                 logging.debug(rcpt.tx)
                 if rcpt.tx.req_inflight():
                     rcpt_next.append(rcpt)
@@ -169,6 +197,6 @@ class Exploder(SyncFilter):
                     rcpt.tx.retry is None):
                     rcpt.update(retry_delta)
 
-            tx.data_response = Response(250, 'exploder store and forward data')
+            tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
 
         return tx_orig.delta(tx)

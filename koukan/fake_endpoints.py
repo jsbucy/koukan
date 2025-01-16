@@ -23,6 +23,7 @@ class MockAsyncFilter(AsyncFilter):
     get_expectation : List[GetExpectation]
     body_blob : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
+    _version : Optional[int] = None
 
     def __init__(self):
         self.update_expectation = []
@@ -45,12 +46,15 @@ class MockAsyncFilter(AsyncFilter):
         self.update_expectation.pop(0)
         upstream_delta = exp(tx, tx_delta)
         assert upstream_delta is not None
+        self._version = tx.version
         return upstream_delta
 
     def get(self) -> TransactionMetadata:
         cb = self.get_expectation[0]
         self.get_expectation.pop(0)
-        return cb()
+        tx = cb()
+        self._version = tx.version
+        return tx
 
     def get_blob_writer(
             self,
@@ -64,7 +68,7 @@ class MockAsyncFilter(AsyncFilter):
         return self.blob[blob_rest_id]
 
     def version(self) -> Optional[int]:
-        pass
+        return self._version
 
     def wait(self, version, timeout) -> bool:
         return bool(self.get_expectation)
@@ -89,6 +93,9 @@ class FakeSyncFilter(SyncFilter):
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
+        logging.error('%d %s', id(self), tx)
+        if not self.expectation:
+            raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
         upstream_delta = exp(tx, tx_delta)
