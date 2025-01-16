@@ -1067,7 +1067,7 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())
-        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual(tx.mail_response.code, 250)
         self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.data_response.code, 203)
 

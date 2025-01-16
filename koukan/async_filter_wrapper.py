@@ -136,6 +136,8 @@ class AsyncFilterWrapper(AsyncFilter):
         logging.debug(tx)
         if (tx.body_blob and tx.body_blob.finalized() and
             (not tx.data_response) and
+            (len([r for r in tx.rcpt_response if r is not None]) ==
+             len(tx.rcpt_to)) and
             (not any([r.ok() for r in tx.rcpt_response]))):
             temp = any([r.temp() for r in tx.rcpt_response])
             tx.data_response = Response(

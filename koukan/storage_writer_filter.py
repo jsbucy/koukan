@@ -121,7 +121,8 @@ class StorageWriterFilter(AsyncFilter):
             return None
         if isinstance(tx.body_blob, BlobCursor):
             self.body_blob_uri = True
-            return tx.body_blob.blob_uri
+            # drop internal blob id
+            return BlobUri(tx.body_blob.blob_uri.tx_id, tx_body=True)
         elif tx.body:
             self.body_blob_uri = True
             uri = parse_blob_uri(tx.body)

@@ -127,17 +127,7 @@ class TransactionCursor:
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
 
-            reuse_blob = None
-            if reuse_blob_rest_id is not None:
-                reuse_blob = []
-                for blob in reuse_blob_rest_id:
-                    # XXX write_envelope() doesn't do this?
-                    # because you can only reuse body on a rest create?
-                    # vs adding the message builder after the fact?
-                    blob = body_blob_uri(blob)
-                    reuse_blob.append(blob)
-
-            self._write(db_tx, tx, reuse_blob_rest_id=reuse_blob,
+            self._write(db_tx, tx, reuse_blob_rest_id=reuse_blob_rest_id,
                         message_builder_blobs_done=message_builder_blobs_done)
             self.tx.rest_id = rest_id
 
@@ -408,7 +398,8 @@ class TransactionCursor:
 
         if reuse_blob_rest_id or ref_blob_id:
             upd,blobs_done = self._write_blob(
-                db_tx, tx_delta, upd, reuse_blob_rest_id,
+                db_tx, tx_delta, upd,
+                [body_blob_uri(b) for b in reuse_blob_rest_id],
                 ref_blob_id=ref_blob_id,
                 require_finalized=require_finalized_blobs)
 
