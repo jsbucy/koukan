@@ -9,13 +9,14 @@ from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 
-# AsyncFilterWrapper provdes store&forward business logic for Exploder
-# and related workflows (add-route in the near future). This consists
-# of ~3 things:
-# 1: populate a temp error response for upstream timeout
-# 2: populate "smtp precondition" failure responses e.g. rcpt fails if
+# AsyncFilterWrapper provdes store&forward business logic on top of
+# StorageWriterFilter for Exploder and related workflows (add-route in
+# the near future). This consists of ~4 things:
+# 1: version conflict retries
+# 2: populate a temp error response for upstream timeout
+# 3: populate "smtp precondition" failure responses e.g. rcpt fails if
 # mail failed, etc.
-# 3: if store-and-forward is enabled, upgrades upstream temp errs to
+# 4: if store-and-forward is enabled, upgrades upstream temp errs to
 # success and enables retries/notifications on the upstream transaction.
 class AsyncFilterWrapper(AsyncFilter):
     filter : AsyncFilter
@@ -104,23 +105,6 @@ class AsyncFilterWrapper(AsyncFilter):
         self.tx = t
         logging.debug('%s', self.tx)
 
-        # TODO: we have a few of these hacks due to the way body/body_blob
-        # get swapped around in and out of storage
-#        if tx_orig.body_blob:
-#            del tx_orig.body_blob
-
-        # e.g. with rest, the client may
-        # PUT /tx/123/body
-        # GET /tx/123
-        # and expect to see {...'body': {}}
-
-        # however in internal call sites (i.e. Exploder), it's updating with
-        # body_blob and not expecting to get body back
-        # so only do this if tx_orig.body_blob?
-        #if self.tx.body:
-        #    del self.tx.body
-        logging.debug(self.tx)
-
         self._check_preconditions(self.tx)
         return self.tx
 
@@ -185,31 +169,3 @@ class AsyncFilterWrapper(AsyncFilter):
                 assert tx.merge_from(retry_delta) is not None
                 self.filter.update(tx, retry_delta)
 
-
-    # update(tx)
-    #   self.filter.update()  handling version conflict
-    #   self.tx = tx
-
-    # wait()
-    #   if rv := self.filter.wait()
-    #     self.tx = None
-    #   else:
-    #     self.tx.fill_inflight_response(Response(450, 'upstream timeout'))
-    #   return rv
-
-    # get()
-    #   if self.tx is None:
-    #     self.tx = self.filter.get()
-    #   preconditions: rcpt but mail failed, etc.
-    #   store and forward: prev timeout or temp err
-    #   return self.tx
-
-
-    # sync on_update
-    #   self.filter.update()  handling version conflict
-    #   while not timed out and req_inflight:
-    #     self.filter.wait()
-    #   tx = self.filter.get()
-    #   timeout: req and resp is None
-    #   s&f: temp err -> ok
-    #   preconditions
