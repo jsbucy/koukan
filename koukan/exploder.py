@@ -158,7 +158,10 @@ class Exploder(SyncFilter):
         assert len(self.recipients) == len(tx.rcpt_to)
 
         rcpts = [ r for r in self.recipients if r.tx.req_inflight() ]
-        deadline = Deadline(self.rcpt_timeout)  # XXX
+
+        deadline = Deadline(
+            self.data_timeout if tx.body_blob and tx.body_blob.finalized()
+            else self.rcpt_timeout)
         logging.debug('%s %s', rcpts, deadline.deadline_left())
         while rcpts and deadline.remaining():
             logging.debug('%s %s', rcpts, deadline.deadline_left())
