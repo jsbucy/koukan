@@ -127,11 +127,13 @@ def list_from_js(js, builder):
 
 class WhichJson(IntEnum):
     ALL = 0
-    REST_READ = 1,
-    REST_CREATE = 2,
-    REST_UPDATE = 3,
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
     DB = 4
     DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
 
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
@@ -187,13 +189,15 @@ _tx_fields = [
             # i.e. the smtp gateway
             validity = set([WhichJson.REST_CREATE,
                             WhichJson.REST_READ,
-                            WhichJson.DB]),
+                            WhichJson.DB,
+                            WhichJson.EXPLODER_CREATE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('local_host',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('mail_from',
@@ -201,7 +205,9 @@ _tx_fields = [
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE]),
             from_json=Mailbox.from_json,
             to_json=Mailbox.to_json),
     TxField('mail_response',
@@ -215,7 +221,7 @@ _tx_fields = [
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB ]),
             to_json=Mailbox.to_json,
             from_json=Mailbox.from_json),
     TxField('rcpt_response',
@@ -244,22 +250,31 @@ _tx_fields = [
     TxField('notification',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB])),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE])),
     TxField('retry',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB])),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE])),
     TxField('smtp_meta',
             validity=set([WhichJson.REST_CREATE,
-                          WhichJson.DB])),
-    TxField('body_blob', validity=None),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE])),
+    TxField('body_blob',
+            validity=set([WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE])),
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
     TxField('tx_db_id', validity=None),
     TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
-                                       WhichJson.DB])),
+                                       WhichJson.DB,
+                                       WhichJson.EXPLODER_CREATE,
+                                       WhichJson.EXPLODER_UPDATE])),
     TxField('parsed_blobs', validity=None),
     TxField('parsed_json', validity=None),
 

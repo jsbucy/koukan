@@ -867,7 +867,8 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual(202, r.code)
             self.assertEqual('ok', r.message)
         self.assertEqual(250, tx.data_response.code)
-        self.assertIn('DATA ok (Exploder store&forward)', tx.data_response.message)
+        self.assertIn('DATA ok (Exploder store&forward)',
+                      tx.data_response.message)
 
         # no_final_notification OutputHandler handler for the rcpt that failed
         for i in range(0,1):

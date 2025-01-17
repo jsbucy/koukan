@@ -76,7 +76,8 @@ class AsyncFilterWrapper(AsyncFilter):
         for i in range(0,5):
             logging.debug('%s', upstream_tx)
             try:
-                if upstream_tx.body:  # XXX yikes!
+                # StorageWriterFilter write body_blob -> body (placeholder)
+                if upstream_tx.body:
                     del upstream_tx.body
 
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)

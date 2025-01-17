@@ -11,7 +11,8 @@ from koukan.filter import (
     AsyncFilter,
     Mailbox,
     SyncFilter,
-    TransactionMetadata )
+    TransactionMetadata,
+    WhichJson )
 from koukan.blob import Blob
 from koukan.response import Response
 
@@ -35,29 +36,15 @@ class Recipient:
     def first_update(self,
                      tx : TransactionMetadata,
                      output_chain : str, i : int):
-        self.tx = tx.copy()
-        self.tx.rest_id = None
-        self.tx.tx_db_id = None
-        self.tx.mail_response = None
+        self.tx = tx.copy_valid(WhichJson.EXPLODER_CREATE)
         self.tx.host = output_chain
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
-        for a in ['version', 'attempt_count']:
-            if getattr(self.tx, a, None) is not None:
-                delattr(self.tx, a)
         return self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        delta = delta.copy()
-        for a in ['version']:
-            if getattr(delta, a, None) is not None:
-                delattr(delta, a)
-        # XXX this field shouldn't be here?
-        if hasattr(delta, 'rcpt_to_list_offset'):
-            del delta.rcpt_to_list_offset
-        delta.rcpt_to = []
-        delta.rcpt_response = []
+        delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
         assert self.tx.merge_from(delta) is not None
         # xxx drop body if prev rcpt/data perm err?
         if not delta:
@@ -112,21 +99,19 @@ class Exploder(SyncFilter):
             rhs : Recipient) -> Union[None, Recipient]:
         if lhs is None or lhs.tx.data_response is None:
             return None
-        if lhs.tx.data_response.major_code() == rhs.tx.data_response.major_code():
+        if (lhs.tx.data_response.major_code() ==
+            rhs.tx.data_response.major_code()):
             return lhs
 
     def on_update(self,
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.info('Exploder.on_update %s', tx_delta)
+        logging.info(tx)
+        logging.info(tx_delta)
 
         tx_orig = tx.copy()
         tx_delta = tx_delta.copy()
-        # for t in [tx_orig, tx_delta]:
-        #     for a in ['version', 'attempt_count']:
-        #         if getattr(t, a, None) is not None:
-        #             delattr(t, a)
 
         # TODO the old code had some complicated logic to try to pick
         # the best upstream mail response if we got it pipelined with
@@ -179,7 +164,6 @@ class Exploder(SyncFilter):
         for i,rcpt in enumerate(self.recipients):
             if i >= len(tx.rcpt_response):
                 tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
-
         if tx.body_blob is None or tx.data_response is not None:
             return tx_orig.delta(tx)
 
