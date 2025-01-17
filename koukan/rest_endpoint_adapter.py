@@ -288,7 +288,7 @@ class RestHandler(Handler):
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : str
 
-    _blob_rest_id : str
+    _blob_rest_id : Optional[str] = None
     rest_id_factory : Optional[Callable[[], str]]
     http_host : Optional[str] = None
 
@@ -305,8 +305,8 @@ class RestHandler(Handler):
     def __init__(self,
                  executor : Optional[Executor] = None,
                  async_filter : Optional[AsyncFilter] = None,
-                 tx_rest_id=None,
-                 blob_rest_id=None,
+                 tx_rest_id : Optional[str] = None,
+                 blob_rest_id : Optional[str] = None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None,
                  chunk_size : int = 1048576,
@@ -690,8 +690,8 @@ class RestHandler(Handler):
     def _create_blob(self, request : HttpRequest,
                      tx_body : bool = False,
                      req_upload : Optional[str] = None) -> HttpResponse:
-        logging.debug('RestHandler._create_blob %s %s blob %s tx %s',
-                      request, request.headers, self._blob_rest_id,
+        logging.debug('RestHandler._create_blob %s tx_body %s %s blob %s tx %s',
+                      request, tx_body, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
         if not tx_body:
@@ -737,8 +737,8 @@ class RestHandler(Handler):
             ) -> FastApiResponse:
         logging.debug('RestHandler.create_blob_async')
         cfut = self.executor.submit(
-            lambda: self._create_blob(
-                request, tx_body, req_upload=req_upload), 0)
+            partial(self._create_blob, request, tx_body, req_upload=req_upload),
+            0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
