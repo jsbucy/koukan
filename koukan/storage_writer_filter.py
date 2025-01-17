@@ -307,12 +307,6 @@ class StorageWriterFilter(AsyncFilter):
         # notification/dsn: InlineBlob w/dsn,
         # exploder currently sends downstream BlobCursor verbatim but
         # could chain received header which would send us CompositeBlob
-
-        # XXX1: ping tx revs the version which will cause a conflict
-        # on the following write_envelope()
-        # XXX2: exploder is hitting this when it should be using blobcursor?
-        # XXX3: this creates a new blob each time we retry due to
-        # version conflict
         if body_blob_uri is None:
             err = self._maybe_write_body_blob(tx_delta)
             if err:
