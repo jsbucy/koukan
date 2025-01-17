@@ -101,6 +101,8 @@ root_yaml_template = {
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
                        'msa': False,
+                       'rcpt_timeout': 10,
+                       'data_timeout': 10,
                        'default_notification': {
                            'host': 'inbound-gw'
                        }}]

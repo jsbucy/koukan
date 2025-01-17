@@ -152,8 +152,10 @@ class StorageWriterFilter(AsyncFilter):
             return
 
         # refs into tx
+        # XXX why is this specifying blob_rest_id for tx_body?
         blob_writer = self.get_blob_writer(
-            create=True, blob_rest_id=self.rest_id_factory(), tx_body=True)
+            create=True, blob_rest_id=None, #self.rest_id_factory(),
+            tx_body=True)
         if blob_writer is None:
             return Response(400, 'StorageWriterFilter: internal error')
         off = 0
@@ -169,9 +171,13 @@ class StorageWriterFilter(AsyncFilter):
             if (not appended or length != (off + len(d)) or
                 content_length_out != content_length):
                 return Response(400, 'StorageWriterFilter: internal error')
+
             off = length
             if last:
                 break
+
+        # xxx blob append ping tx, avoid version conflict in update()
+        self.tx_cursor.load()
 
     # -> blobs to reuse, blobs to create in tx
     def _get_message_builder_blobs(
@@ -301,6 +307,12 @@ class StorageWriterFilter(AsyncFilter):
         # notification/dsn: InlineBlob w/dsn,
         # exploder currently sends downstream BlobCursor verbatim but
         # could chain received header which would send us CompositeBlob
+
+        # XXX1: ping tx revs the version which will cause a conflict
+        # on the following write_envelope()
+        # XXX2: exploder is hitting this when it should be using blobcursor?
+        # XXX3: this creates a new blob each time we retry due to
+        # version conflict
         if body_blob_uri is None:
             err = self._maybe_write_body_blob(tx_delta)
             if err:

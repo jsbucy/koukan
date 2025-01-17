@@ -53,6 +53,7 @@ class MockAsyncFilter(AsyncFilter):
         cb = self.get_expectation[0]
         self.get_expectation.pop(0)
         tx = cb()
+        assert tx is not None
         self._version = tx.version
         return tx
 

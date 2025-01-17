@@ -815,7 +815,8 @@ class BlobCursor(Blob, WritableBlob):
 
         if self.update_tx is not None:
             cursor = self.parent.get_transaction_cursor()
-            while True:
+            #while True:
+            for i in range(0,5):
                 try:
                     with self.parent.begin_transaction() as db_tx:
                         cursor._load_db(db_tx, rest_id=self.update_tx)
@@ -832,7 +833,10 @@ class BlobCursor(Blob, WritableBlob):
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
-                    pass
+                    logging.exception('version conflict')
+                    if i == 4:
+                        raise
+
             cursor._update_version_cache()
             self._session_uri = cursor.session_uri
         return True, self.length, self._content_length

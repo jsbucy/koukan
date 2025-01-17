@@ -72,7 +72,8 @@ class AsyncFilterWrapper(AsyncFilter):
 
         tx_orig = tx.copy()
         upstream_tx : TransactionMetadata = tx.copy()
-        while deadline.remaining():
+        #while deadline.remaining():
+        for i in range(0,5):
             logging.debug('%s', upstream_tx)
             try:
                 if upstream_tx.body:  # XXX yikes!
@@ -81,6 +82,9 @@ class AsyncFilterWrapper(AsyncFilter):
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)
                 break
             except VersionConflictException:
+                logging.exception('version conflict')
+                if i == 4:
+                    raise
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t
@@ -96,6 +100,8 @@ class AsyncFilterWrapper(AsyncFilter):
 
 
     def get(self) -> Optional[TransactionMetadata]:
+        # XXX maybe this should read from the underlying filter every
+        # time and keep state that it has timed out some other way
         if self.tx is not None:
             logging.debug('get noop')
             return self.tx
