@@ -15,30 +15,49 @@ from koukan.storage_schema import VersionConflictException
 
 
 class AsyncFilterWrapperTest(unittest.TestCase):
-    def test_basic(self):
+    def test_async_smoke(self):
         async_filter = MockAsyncFilter()
 
         wrapper = AsyncFilterWrapper(async_filter, 1)
 
         def exp(tx, tx_delta):
-            return TransactionMetadata()
+            tx.version=1
+            return TransactionMetadata(version=1)
         async_filter.expect_update(exp)
 
-        # TODO see comment in implementation, this is what you
-        # actually get with StorageWriterFilter today
-        async_filter.expect_get(TransactionMetadata(
-            mail_from=Mailbox('alice')))
-        async_filter.expect_get(TransactionMetadata(
-            mail_from=Mailbox('alice')))
         async_filter.expect_get(TransactionMetadata(
             mail_from=Mailbox('alice'),
-            mail_response=Response(250)))
+            version=1))
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            version=1))
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            mail_response=Response(250),
+            version=2))
+        # hack: mock wait succeeds if outstanding expectation
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            mail_response=Response(250),
+            version=2))
 
-        tx = TransactionMetadata(
-            mail_from=Mailbox('alice'))
-            #body_blob=InlineBlob(b'hello', last=True))
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+
         upstream_delta = wrapper.update(tx, tx.copy())
-        self.assertIsNotNone(upstream_delta)
+        self.assertEqual(1, wrapper.version())
+
+        for i in range(0,2):
+            self.assertTrue(wrapper.wait(1, 1))
+            self.assertEqual(1, wrapper.version())
+            upstream_tx = wrapper.get()
+            self.assertIsNone(upstream_tx.mail_response)
+
+        self.assertTrue(wrapper.wait(1, 1))
+        upstream_tx = wrapper.get()
+        # xxx fidelity problem with mock, version updated by get, not wait
+        self.assertEqual(2, wrapper.version())
+        self.assertEqual(250, upstream_tx.mail_response.code)
+
 
     def test_update_conflict(self):
         async_filter = MockAsyncFilter()
@@ -143,7 +162,42 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         async_filter.expect_update(exp_retry)
 
         tx.body_blob = InlineBlob(b, len(b))
-        upstream_delta = wrapper.update(tx, TransactionMetadata(body_blob=tx.body_blob))
+        upstream_delta = wrapper.update(
+            tx, TransactionMetadata(body_blob=tx.body_blob))
+
+    def test_sync_smoke(self):
+        async_filter = MockAsyncFilter()
+
+        wrapper = AsyncFilterWrapper(async_filter, 1)
+
+        def exp(tx, tx_delta):
+            tx.version=1
+            return TransactionMetadata(version=1)
+        async_filter.expect_update(exp)
+
+        # TODO see comment in implementation, this is what you
+        # actually get with StorageWriterFilter today
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            version=1))
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            version=1))
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            mail_response=Response(250),
+            version=2))
+        # hack: mock wait succeeds if outstanding expectation
+        async_filter.expect_get(TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            mail_response=Response(250),
+            version=2))
+
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        upstream_delta = wrapper.on_update(tx, tx.copy())
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertEqual(2, wrapper.version())
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

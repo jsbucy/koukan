@@ -121,6 +121,7 @@ class Exploder(SyncFilter):
         # upstream mail err in response to rcpt.
 
         # TODO -> MailOkFilter
+        # if tx.mail_from and not tx.mail_response
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(
                 250, 'MAIL ok (exploder noop)')

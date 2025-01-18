@@ -10,15 +10,15 @@ from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 
 # AsyncFilterWrapper provdes store&forward business logic on top of
-# StorageWriterFilter for Exploder and related workflows (add-route in
-# the near future). This consists of ~4 things:
+# StorageWriterFilter for Exploder and related workflows
+# e.g. AddRouteFilter. This consists of ~4 things:
 # 1: version conflict retries
 # 2: populate a temp error response for upstream timeout
 # 3: populate "smtp precondition" failure responses e.g. rcpt fails if
 # mail failed, etc.
 # 4: if store-and-forward is enabled, upgrades upstream temp errs to
 # success and enables retries/notifications on the upstream transaction.
-class AsyncFilterWrapper(AsyncFilter):
+class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     filter : AsyncFilter
     timeout : float
     store_and_forward : bool
@@ -176,3 +176,19 @@ class AsyncFilterWrapper(AsyncFilter):
                 assert tx.merge_from(retry_delta) is not None
                 self.filter.update(tx, retry_delta)
 
+
+    def on_update(self, tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
+                  ) -> Optional[TransactionMetadata]:
+        tx_orig = tx.copy()
+        upstream_delta = self.update(tx, tx_delta)
+        deadline = Deadline(self.timeout)
+        upstream_tx = tx.copy()
+        while deadline.remaining() and upstream_tx.req_inflight():
+            self.wait(self.version(), deadline.deadline_left())
+            upstream_tx = self.get()
+            logging.debug(upstream_tx)
+        del tx_orig.version
+        upstream_delta = tx_orig.delta(upstream_tx)
+        assert tx.merge_from(upstream_delta) is not None
+        return upstream_delta

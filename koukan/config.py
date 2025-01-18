@@ -31,6 +31,7 @@ from koukan.received_header_filter import ReceivedHeaderFilter
 from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.executor import Executor
 from koukan.async_filter_wrapper import AsyncFilterWrapper
+from koukan.add_route_filter import AddRouteFilter
 
 class FilterSpec:
     def __init__(self, builder, t):
@@ -66,6 +67,7 @@ class Config:
             'received_header': FilterSpec(self.received_header, SyncFilter),
             'relay_auth': FilterSpec(self.relay_auth, SyncFilter),
             'dns_resolution': FilterSpec(self.dns_resolution, SyncFilter),
+            'add_route': FilterSpec(self.add_route, AddRouteFilter),
         }
 
     def _load_user_module(self, name, mod, add_factory):
@@ -142,6 +144,16 @@ class Config:
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
             default_notification=yaml.get('default_notification', None))
+
+    def add_route(self, yaml, next):
+        if yaml.get('store_and_forward', None):
+            add_route = self.exploder_upstream(
+                yaml['output_chain'],
+                30, 300,
+                store_and_forward=True)
+        else:
+            add_route, output_yaml = self.get_endpoint(yaml['output_chain'])
+        return AddRouteFilter(add_route, yaml['output_chain'], next)
 
     def rest_id_factory(self):
         entropy = self.root_yaml.get('global', {}).get('rest_id_entropy', 16)
@@ -235,7 +247,7 @@ class Config:
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
-    def get_endpoint(self, host) -> Optional[Tuple[SyncFilter, bool]]:
+    def get_endpoint(self, host) -> Optional[Tuple[SyncFilter, dict]]:
         if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
             return None
         next : Optional[SyncFilter] = None

@@ -125,6 +125,8 @@ class Mailbox:
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
 class WhichJson(IntEnum):
     ALL = 0
     REST_READ = 1
@@ -134,6 +136,7 @@ class WhichJson(IntEnum):
     DB_ATTEMPT = 5
     EXPLODER_CREATE = 6
     EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
 
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
@@ -190,14 +193,16 @@ _tx_fields = [
             validity = set([WhichJson.REST_CREATE,
                             WhichJson.REST_READ,
                             WhichJson.DB,
-                            WhichJson.EXPLODER_CREATE]),
+                            WhichJson.EXPLODER_CREATE,
+                            WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('local_host',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
                           WhichJson.DB,
-                          WhichJson.EXPLODER_CREATE]),
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('mail_from',
@@ -207,7 +212,8 @@ _tx_fields = [
                           WhichJson.REST_READ,
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
-                          WhichJson.EXPLODER_UPDATE]),
+                          WhichJson.EXPLODER_UPDATE,
+                          WhichJson.ADD_ROUTE]),
             from_json=Mailbox.from_json,
             to_json=Mailbox.to_json),
     TxField('mail_response',
@@ -221,7 +227,8 @@ _tx_fields = [
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB ]),
+                          WhichJson.DB,
+                          WhichJson.ADD_ROUTE]),
             to_json=Mailbox.to_json,
             from_json=Mailbox.from_json),
     TxField('rcpt_response',
@@ -262,10 +269,12 @@ _tx_fields = [
     TxField('smtp_meta',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.DB,
-                          WhichJson.EXPLODER_CREATE])),
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.ADD_ROUTE])),
     TxField('body_blob',
             validity=set([WhichJson.EXPLODER_CREATE,
-                          WhichJson.EXPLODER_UPDATE])),
+                          WhichJson.EXPLODER_UPDATE,
+                          WhichJson.ADD_ROUTE])),
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
@@ -274,7 +283,8 @@ _tx_fields = [
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB,
                                        WhichJson.EXPLODER_CREATE,
-                                       WhichJson.EXPLODER_UPDATE])),
+                                       WhichJson.EXPLODER_UPDATE,
+                                       WhichJson.ADD_ROUTE])),
     TxField('parsed_blobs', validity=None),
     TxField('parsed_json', validity=None),
 
@@ -384,6 +394,7 @@ class TransactionMetadata:
 
     def __repr__(self):
         out = ''
+        out += 'version=%s ' % self.version
         out += 'mail_from=%s mail_response=%s ' % (
             self.mail_from, self.mail_response)
         out += 'rcpt_to=%s rcpt_response=%s ' % (

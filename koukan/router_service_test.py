@@ -128,6 +128,32 @@ root_yaml_template = {
                 {'filter': 'message_parser'},
                 {'filter': 'sync'} ]
         },
+        {
+            'name': 'submission-sync-sor',
+            'chain': [
+                {'filter': 'add_route',
+                 'output_chain': 'sor',
+                 # store_and_forward
+                },
+                {'filter': 'sync'}
+            ]
+        },
+        {
+            'name': 'submission-sf-sor',
+            'chain': [
+                {'filter': 'add_route',
+                 'output_chain': 'sor',
+                 'store_and_forward': True
+                },
+                {'filter': 'sync'}
+            ]
+        },
+        {
+            'name': 'sor',
+            'chain': [
+                {'filter': 'sync'}
+            ]
+        }
     ],
     'storage': {
         'session_refresh_interval': 1,
@@ -1145,6 +1171,93 @@ class RouterServiceTest(unittest.TestCase):
 
 
         self.assertTrue(service2.shutdown())
+
+    def test_add_route_sync_success(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url,
+            static_http_host='submission-sync-sor',
+            timeout_start=5, timeout_data=5)
+        body = 'hello, world!'
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
+            inline_body=body)
+
+        def exp(tx, tx_delta):
+            logging.debug(tx)
+            #self.assertEqual('sor', tx.host)
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(203)],
+                data_response=Response(205))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        def exp_sor(tx, tx_delta):
+            logging.debug(tx)
+            #self.assertEqual('submission-sor', tx.host)
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(202),
+                rcpt_response=[Response(204)],
+                data_response=Response(206))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp_sor)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertRcptCodesEqual([203], tx.rcpt_response)
+        self.assertEqual(tx.data_response.code, 205)
+
+
+    def test_add_route_sf_success(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url,
+            static_http_host='submission-sf-sor',
+            timeout_start=5, timeout_data=5)
+        body = b'hello, world!'
+        tx = TransactionMetadata(
+            #retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
+            inline_body=body)
+
+        def exp_upstream(tx, tx_delta):
+            logging.debug(tx)
+            self.assertEqual('submission-sf-sor', tx.host)
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(203)],
+                data_response=Response(205))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp_upstream)
+        self.add_endpoint(upstream_endpoint)
+
+        def exp_add_route(tx, tx_delta):
+            logging.debug(tx)
+            self.assertEqual('sor', tx.host)
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(202),
+                rcpt_response=[Response(204)],
+                data_response=Response(206))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp_add_route)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertRcptCodesEqual([203], tx.rcpt_response)
+        self.assertEqual(tx.data_response.code, 205)
 
 
 class RouterServiceTestFlask(RouterServiceTest):

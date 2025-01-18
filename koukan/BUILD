@@ -315,6 +315,18 @@ py_test(name='exploder_test',
               ':sqlite_test_utils',
               ':storage'])
 
+pytype_library(name='add_route_filter',
+               srcs=['add_route_filter.py'],
+               deps=[':filter'])
+
+py_test(name='add_route_filter_test',
+        srcs=['add_route_filter_test.py'],
+        deps=[':add_route_filter',
+              ':blob',
+              ':fake_endpoints',
+              ':filter',
+              ':response'])
+
 pytype_library(name='remote_host_filter',
                srcs=['remote_host_filter.py'],
                deps=[':filter',
