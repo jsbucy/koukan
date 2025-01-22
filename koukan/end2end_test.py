@@ -31,6 +31,7 @@ def tearDownModule():
 
 class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
+    receiver_tempdir = None
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -158,7 +159,10 @@ class End2EndTest(unittest.TestCase):
             partial(self.router.main, alive=self.executor.ping_watchdog))
         self.fake_smtpd.start()
         self.hypercorn_shutdown = asyncio.Event()
-        self.receiver = Receiver(close_files=False)
+        self.receiver_tempdir = tempfile.TemporaryDirectory()
+        self.receiver = Receiver(
+            self.receiver_tempdir.name,
+            gc_interval=0)  # gc on every access
         self.executor.submit(
             partial(run, [('localhost', self.receiver_rest_port)], None, None,
                     create_app(self.receiver), self.hypercorn_shutdown,
@@ -179,8 +183,9 @@ class End2EndTest(unittest.TestCase):
         self.fake_smtpd.stop()
         self.hypercorn_shutdown.set()
         self.assertTrue(self.executor.shutdown(timeout=60))
-        if self.dkim_tempdir:
-            self.dkim_tempdir.cleanup()
+        for d in [d for d in [self.dkim_tempdir, self.receiver_tempdir]
+                  if d is not None]:
+            d.cleanup()
         logging.debug('End2EndTest.tearDown done')
 
 
@@ -221,15 +226,15 @@ class End2EndTest(unittest.TestCase):
         logging.debug(json.dumps(tx.tx_json, indent=2))
         logging.debug(json.dumps(tx.message_json, indent=2))
         blob_content = {}
-        for blob_id,blob in tx.blobs.items():
-            blob.seek(0)
-            content = blob.read()
+        for blob_id,path in tx.blob_paths.items():
+            with open(path, 'rb') as f:
+              content = f.read()
             logging.debug('blob %s %s', blob_id, content)
             self.assertNotIn(blob_id, blob_content)
             blob_content[blob_id] = content
 
-        tx.body_file.seek(0)
-        body = tx.body_file.read()
+        with open(tx.body_path, 'rb') as f:
+            body = f.read()
         logging.debug('raw %s', body)
         self.assertIn(b'Received:', body)
 
