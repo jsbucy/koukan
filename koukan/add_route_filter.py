@@ -32,6 +32,7 @@ class AddRouteFilter(SyncFilter):
     add_route : SyncFilter
     upstream : SyncFilter
     create = True
+    add_route_tx : Optional[TransactionMetadata] = None
 
     def __init__(self, add_route : SyncFilter,
                  host : str,
@@ -43,16 +44,20 @@ class AddRouteFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        add_route_tx = tx.copy_valid(WhichJson.ADD_ROUTE)
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
-        add_route_tx.host = add_route_delta.host = self.host
+        if self.add_route_tx is None:
+            self.add_route_tx = tx.copy_valid(WhichJson.ADD_ROUTE)
+            self.add_route_tx.host = add_route_delta.host = self.host
+        else:
+            assert self.add_route_tx.merge_from(add_route_delta) is not None
         add_route_upstream_delta = self.add_route.on_update(
-            add_route_tx, tx_delta)
-        logging.debug(add_route_tx)
+            self.add_route_tx, add_route_delta)
+        logging.debug(self.add_route_tx)
         # TODO tx.resp_err()?
         if (_err(add_route_upstream_delta.mail_response) or
             any([_err(r) for r in add_route_upstream_delta.rcpt_response]) or
             _err(add_route_upstream_delta.data_response)):
+
             tx.merge_from(add_route_upstream_delta)
             return add_route_upstream_delta
 

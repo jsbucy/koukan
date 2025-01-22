@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # gunicorn3 -b localhost:8002 --access-logfile - --log-level debug
-#   'examples.receiver.receiver:create_app('/tmp/my_messages')'
+#   'examples.receiver.receiver:create_app(path='/tmp/my_messages')'
 
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -236,7 +236,7 @@ class Receiver:
         return FlaskResponse()
 
 
-def create_app(receiver = None, path):
+def create_app(receiver = None, path = None):
     app = Flask(__name__)
 
     if receiver is None:
