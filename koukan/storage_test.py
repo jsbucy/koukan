@@ -12,8 +12,7 @@ import os
 from datetime import datetime, timedelta
 
 from koukan.storage import BlobCursor, Storage, TransactionCursor
-from koukan.storage_schema import (
-    InvalidActionException, VersionConflictException )
+from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri

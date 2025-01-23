@@ -203,7 +203,7 @@ class RouterServiceTest(unittest.TestCase):
         config = Config()
         config.inject_yaml(root_yaml)
         config.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint(), SyncFilter)
+            'sync', lambda yaml, next: self.get_endpoint())
         service = Service(config=config)
         service.start_main()
         self.assertTrue(service.wait_started(5))

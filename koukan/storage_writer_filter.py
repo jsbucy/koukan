@@ -1,15 +1,15 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Callable, Dict, List, Optional, Tuple
-import logging
 import json
+import logging
 import secrets
-import time
 from functools import partial
 from threading import Lock, Condition
 
+from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
-from koukan.storage_schema import InvalidActionException, VersionConflictException
+from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 from koukan.filter import (
     AsyncFilter,
@@ -236,7 +236,7 @@ class StorageWriterFilter(AsyncFilter):
         reuse_blob_rest_id : Optional[List[BlobUri]] = None
 
         if tx_delta.cancelled:
-            while True:
+            for i in range(0,5):
                 assert self.tx_cursor is not None
                 try:
                     # storage has special-case logic to noop if
@@ -245,6 +245,9 @@ class StorageWriterFilter(AsyncFilter):
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
                 except VersionConflictException:
+                    if i == 4:
+                        raise
+                    backoff(i)
                     self.tx_cursor.load()
             version = TransactionMetadata(version=self.tx_cursor.version)
             tx.merge_from(version)
@@ -351,7 +354,7 @@ class StorageWriterFilter(AsyncFilter):
         assert tx_body or blob_rest_id
 
         if create:
-            while True:
+            for i in range(0,5):
                 try:
                     blob_uri = BlobUri(tx_id=self.rest_id,
                                        blob=blob_rest_id,
@@ -359,7 +362,9 @@ class StorageWriterFilter(AsyncFilter):
                     blob = self.storage.create_blob(blob_uri)
                     break
                 except VersionConflictException:
-                    pass
+                    if i == 4:
+                        raise
+                    backoff(i)
         else:
             blob = self.storage.get_blob_for_append(
                 BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))

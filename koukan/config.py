@@ -103,8 +103,8 @@ class Config:
     def set_storage(self, storage : Storage):
         self.storage = storage
 
-    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any], t):
-        self.filters[name] = FilterSpec(fac, t)
+    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any]):
+        self.filters[name] = FilterSpec(fac)
 
     def inject_yaml(self, root_yaml):
         self.root_yaml = root_yaml

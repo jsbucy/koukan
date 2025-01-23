@@ -1,9 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Callable, Optional, Dict, List, Tuple
-import sqlite3
 import json
-import time
 import logging
 from threading import Lock, Condition
 from hashlib import sha256
@@ -25,6 +23,7 @@ from sqlalchemy import (
     delete, event, func, insert, join, literal, not_, or_, select,
     true as sa_true, update, union_all, values)
 
+from koukan.backoff import backoff
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.response import Response
 from koukan.storage_schema import (
@@ -438,13 +437,15 @@ class TransactionCursor:
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None,
              start_attempt : bool = False) -> Optional[TransactionMetadata]:
-        while True:
+        for i in range(0,5):
             try:
                 return self._load(db_id, rest_id, start_attempt)
             # update_version_cache() throws if an update got in
             # between the db read and cache update
             except VersionConflictException:
-                pass
+                if i == 4:
+                    raise
+                backoff(i)
 
     def _load(self, db_id : Optional[int] = None,
               rest_id : Optional[str] = None,
@@ -815,7 +816,6 @@ class BlobCursor(Blob, WritableBlob):
 
         if self.update_tx is not None:
             cursor = self.parent.get_transaction_cursor()
-            #while True:
             for i in range(0,5):
                 try:
                     with self.parent.begin_transaction() as db_tx:
@@ -836,6 +836,7 @@ class BlobCursor(Blob, WritableBlob):
                     logging.exception('version conflict')
                     if i == 4:
                         raise
+                    backoff(i)
 
             cursor._update_version_cache()
             self._session_uri = cursor.session_uri
@@ -1033,7 +1034,7 @@ class Storage():
         blob_uri = body_blob_uri(blob_uri)
 
         cursor = None
-        while True:
+        for i in range(0, 5):
             try:
                 with self.begin_transaction() as db_tx:
                     cursor = self.get_transaction_cursor()
@@ -1046,7 +1047,9 @@ class Storage():
                         require_finalized_blobs=False)
                     break
             except VersionConflictException:
-                pass
+                if i == 4:
+                    break
+                backoff(i)
         cursor._update_version_cache()
 
         writer.update_tx = blob_uri.tx_id

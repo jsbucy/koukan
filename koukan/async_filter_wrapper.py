@@ -1,6 +1,7 @@
 from typing import Optional
 import logging
 
+
 from koukan.filter import (
     AsyncFilter,
     SyncFilter,
@@ -8,6 +9,7 @@ from koukan.filter import (
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
+from koukan.backoff import backoff
 
 # AsyncFilterWrapper provdes store&forward business logic on top of
 # StorageWriterFilter for Exploder and related workflows
@@ -67,16 +69,12 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     def update(self, tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        # xxx this is only used for the version conflict retry loop,
-        # shouldn't need to retry very many times
-        deadline = Deadline(self.timeout)
         logging.debug('%s %s', tx, tx_delta)
 
         # xxx noop if prev temp err and not store&forward?
 
         tx_orig = tx.copy()
         upstream_tx : TransactionMetadata = tx.copy()
-        #while deadline.remaining():
         for i in range(0,5):
             logging.debug('%s', upstream_tx)
             try:
@@ -90,6 +88,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 logging.exception('version conflict')
                 if i == 4:
                     raise
+                backoff(i)
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t
