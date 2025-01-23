@@ -286,7 +286,7 @@ class RestHandler(Handler):
     chunk_size : int
     executor : Optional[Executor] = None
     async_filter : Optional[AsyncFilter]
-    _tx_rest_id : str
+    _tx_rest_id : Optional[str]
 
     _blob_rest_id : Optional[str] = None
     rest_id_factory : Optional[Callable[[], str]]

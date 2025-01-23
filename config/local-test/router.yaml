@@ -153,8 +153,11 @@ endpoint:
   - filter: router
     policy:
       name: address_list
-      # no domains/dest = reject all
+      # no domains: match everything
+      # dest == None: reject
   - filter: message_parser
+  # - filter: add_route
+  #   output_chain: sink
   - filter: dns_resolution
     literal: 'fake_smtpd'
     static_hosts:
@@ -165,6 +168,15 @@ endpoint:
     verify: localhost.crt
     rcpt_timeout: 5
     data_timeout: 5
+
+
+- name: sink
+  chain:
+  - filter: rest_output
+    rcpt_timeout: 30
+    data_timeout: 60
+    static_endpoint: http://localhost:8002
+
 
 modules:
   sync_filter:

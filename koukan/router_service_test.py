@@ -1221,7 +1221,7 @@ class RouterServiceTest(unittest.TestCase):
             static_base_url=self.router_url,
             static_http_host='submission-sf-sor',
             timeout_start=5, timeout_data=5)
-        body = b'hello, world!'
+        body = 'hello, world!'
         tx = TransactionMetadata(
             #retry={},
             mail_from=Mailbox('alice@example.com'),

@@ -1,5 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+from typing import Optional
 import unittest
 import logging
 import socketserver
@@ -9,6 +10,7 @@ from functools import partial
 import asyncio
 from dkim import dknewkey
 import tempfile
+import yaml
 
 from koukan.config import Config
 from koukan.gateway import SmtpGateway
@@ -27,6 +29,20 @@ def setUpModule():
 
 def tearDownModule():
     postgres_test_utils.tearDownModule()
+
+def _get_router_endpoint_yaml(router_yaml : dict, name : str) -> Optional[dict]:
+    for endpoint in router_yaml['endpoint']:
+        if endpoint['name'] == name:
+            return endpoint
+    return None
+def _add_filter_after(endpoint_yaml : dict, filter_name : str,
+                      filter_yaml : dict):
+    for i,filter in enumerate(endpoint_yaml['chain']):
+        if filter['filter'] == filter_name:
+            break
+    else:
+        assert False
+    endpoint_yaml['chain'].insert(i + 1, filter_yaml)
 
 
 class End2EndTest(unittest.TestCase):
@@ -112,9 +128,10 @@ class End2EndTest(unittest.TestCase):
 
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
-        self.router_config = Config()
-        self.router_config.load_yaml('config/local-test/router.yaml')
-        router_yaml = self.router_config.root_yaml
+        with open('config/local-test/router.yaml', 'r') as f:
+            self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
+
+        router_yaml = self.router_yaml
         router_listener_yaml = router_yaml['rest_listener']
         router_listener_yaml['addr'] = ['localhost', self.router_rest_port]
         router_listener_yaml['session_uri'] = (
@@ -140,19 +157,24 @@ class End2EndTest(unittest.TestCase):
                     filter['static_hosts'] = [
                         {'host': '127.0.0.1', 'port': self.fake_smtpd_port}]
                 elif filter['filter'] == 'rest_output':
-                    del filter['verify']
+                    if filter.get('static_endpoint', None) == 'http://localhost:8002':
+                        filter['static_endpoint'] = self.receiver_base_url
+                    if 'verify' in filter:
+                        del filter['verify']
 
         logging.debug('gateway yaml %s', json.dumps(gateway_yaml, indent=2))
         logging.debug('router_yaml %s', json.dumps(router_yaml, indent=2))
         logging.debug('fake smtpd port %d', self.fake_smtpd_port)
         logging.debug('rest receiver port %d', self.receiver_rest_port)
 
+
+    def _run(self):
         self.gateway = SmtpGateway(self.gateway_config)
+        self.router_config = Config()
+        self.router_config.inject_yaml(self.router_yaml)
         self.router = Service(config=self.router_config)
         self.fake_smtpd = FakeSmtpd("localhost", self.fake_smtpd_port)
 
-
-    def _run(self):
         self.gateway_main_fut = self.executor.submit(
             partial(self.gateway.main, alive=self.executor.ping_watchdog))
         self.router_main_fut = self.executor.submit(
@@ -165,12 +187,16 @@ class End2EndTest(unittest.TestCase):
             gc_interval=0)  # gc on every access
         self.executor.submit(
             partial(run, [('localhost', self.receiver_rest_port)], None, None,
-                    create_app(self.receiver), self.hypercorn_shutdown,
+                    create_app(self.receiver),
+                    self.hypercorn_shutdown,
                     self.executor.ping_watchdog))
 
     def setUp(self):
         self.executor = Executor(
             inflight_limit = 10, watchdog_timeout=10, debug_futures=True)
+
+
+    def _configure_and_run(self):
         self._configure()
         self._run()
         time.sleep(1)
@@ -191,6 +217,7 @@ class End2EndTest(unittest.TestCase):
 
     # mx smtp -> smtp
     def test_smoke(self):
+        self._configure_and_run()
         send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
                   'alice@example.com', ['bob@example.com'],
                   'hello, world!')
@@ -213,6 +240,8 @@ class End2EndTest(unittest.TestCase):
 
     # mx smtp -> rest
     def test_rest_receiving(self):
+        self._configure_and_run()
+
         send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
                   'alice@example.com', ['bob@rest-application.example.com'],
                   'hello, world!\n')
@@ -258,6 +287,8 @@ class End2EndTest(unittest.TestCase):
     # submission rest w/mime -> smtp
     # w/payload reuse
     def test_submission_mime(self):
+        self._configure_and_run()
+
         sender = Sender(self.router_base_url,
                         'msa-output',
                         'alice@example.com',
@@ -284,6 +315,8 @@ class End2EndTest(unittest.TestCase):
 
     # submission rest message_builder -> smtp
     def test_submission_message_builder(self):
+        self._configure_and_run()
+
         message_builder_spec = {
             "headers": [
                 ["from", [{"display_name": "alice a",
@@ -326,6 +359,49 @@ class End2EndTest(unittest.TestCase):
 
     # submission rest -> short circuit mx
 
+    def _test_add_route(self, filter_yaml):
+        self._configure()
+        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'mx-out')
+        _add_filter_after(endpoint_yaml, 'message_parser', filter_yaml)
+
+        self._run()
+        time.sleep(1)
+
+        send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
+                  'alice@example.com', ['bob@example.com'],
+                  'hello, world!')
+
+        for handler in self.fake_smtpd.handlers:
+            # smtpd machinery constructs extra handlers during startup?
+            if handler.ehlo is None:
+                logging.debug('empty handler? %s', handler)
+                continue
+            self.assertEqual(handler.ehlo, 'localhost')
+            self.assertEqual(handler.mail_from, 'alice@example.com')
+            self.assertEqual(len(handler.mail_options), 1)
+            self.assertTrue(handler.mail_options[0].startswith('SIZE='))
+            self.assertEqual(handler.rcpt_to, ['bob@example.com'])
+            self.assertEqual(handler.rcpt_options, [[]])
+            self.assertIn(b'hello, world!', handler.data)
+            break
+        else:
+            self.fail('didn\'t receive message')
+
+        for tx_id,tx in self.receiver.transactions.items():
+            logging.debug('test_rest_receiving %s', tx_id)
+            if tx.tx_json['mail_from']['m'] == 'alice@example.com':
+                break
+        else:
+            self.fail('didn\'t receive message')
+
+    def test_add_route_sync(self):
+        return self._test_add_route({'filter': 'add_route',
+                                     'output_chain': 'sink'})
+
+    def test_add_route_async(self):
+        return self._test_add_route({'filter': 'add_route',
+                                     'output_chain': 'sink',
+                                     'store_and_forard': True})
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
