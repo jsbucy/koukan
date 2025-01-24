@@ -833,7 +833,6 @@ class BlobCursor(Blob, WritableBlob):
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
-                    logging.exception('version conflict')
                     if i == 4:
                         raise
                     backoff(i)
@@ -1050,6 +1049,7 @@ class Storage():
                 if i == 4:
                     break
                 backoff(i)
+        assert cursor is not None
         cursor._update_version_cache()
 
         writer.update_tx = blob_uri.tx_id

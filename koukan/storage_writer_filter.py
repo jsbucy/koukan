@@ -152,10 +152,8 @@ class StorageWriterFilter(AsyncFilter):
             return
 
         # refs into tx
-        # XXX why is this specifying blob_rest_id for tx_body?
         blob_writer = self.get_blob_writer(
-            create=True, blob_rest_id=None, #self.rest_id_factory(),
-            tx_body=True)
+            create=True, blob_rest_id=None, tx_body=True)
         if blob_writer is None:
             return Response(400, 'StorageWriterFilter: internal error')
         off = 0
@@ -175,9 +173,6 @@ class StorageWriterFilter(AsyncFilter):
             off = length
             if last:
                 break
-
-        # xxx blob append ping tx, avoid version conflict in update()
-        self.tx_cursor.load()
 
     # -> blobs to reuse, blobs to create in tx
     def _get_message_builder_blobs(
@@ -249,6 +244,7 @@ class StorageWriterFilter(AsyncFilter):
                         raise
                     backoff(i)
                     self.tx_cursor.load()
+            assert self.tx_cursor is not None
             version = TransactionMetadata(version=self.tx_cursor.version)
             tx.merge_from(version)
             return version
@@ -317,6 +313,13 @@ class StorageWriterFilter(AsyncFilter):
                 tx.merge_from(err_delta)
                 return err_delta
             assert not downstream_delta.body
+            # TODO kludge: blob append pings tx, avoid version
+            # conflict on subsequent write_envelope(). Possibly
+            # BlobCursor should be more integrated with
+            # TransactionCursor since a blob is always created/written
+            # ancillary to a specific tx now.
+            if self.tx_cursor is not None:
+                self.tx_cursor.load()
 
         # reuse_blob_rest_id is only
         # POST /tx/123/message_builder  ?

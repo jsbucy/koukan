@@ -58,7 +58,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         return rv
 
     async def wait_async(self, version : int, timeout : float) -> bool:
-        return await self.filter.wait_async(version, timeout)
+        raise NotImplementedError()
 
     def version(self) -> Optional[int]:
         return self.filter.version()
@@ -130,9 +130,9 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             if tx.mail_response and tx.mail_response.temp():
                 self.do_store_and_forward = True
                 tx.mail_response = Response(
-                    250, 'MAIL ok (AsyncFilterWrapper store and forward)')
+                    250, 'MAIL ok (AsyncFilterWrapper store&forward)')
             rcpt_response = Response(
-                250, 'RCPT ok (AsyncFilterWrapper store and forward)')
+                250, 'RCPT ok (AsyncFilterWrapper store&forward)')
             for i, resp in enumerate(tx.rcpt_response):
                 if resp.temp():
                     tx.rcpt_response[i] = rcpt_response
@@ -151,12 +151,12 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     data_last = True
                     self.do_store_and_forward = True
                     tx.data_response = Response(
-                        250, 'DATA ok (AsyncFilterWrapper store and forward)')
+                        250, 'DATA ok (AsyncFilterWrapper store&forward)')
 
             if data_last and self.do_store_and_forward and tx.retry is None:
                 retry_delta = TransactionMetadata(
                     retry = self.retry_params,
-                    # XXX this will blackhole if unset!
+                    # this will blackhole if unset!
                     notification=self.default_notification)
                 assert tx.merge_from(retry_delta) is not None
                 self.filter.update(tx, retry_delta)

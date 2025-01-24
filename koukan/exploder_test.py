@@ -93,8 +93,6 @@ class Test:
 
 class ExploderTest(unittest.TestCase):
     def setUp(self):
-        #self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        #self.storage = Storage.connect(self.db_url, session_uri='http://exploder_test')
         self.upstream_endpoints = []
 
     #def tearDown(self):
@@ -249,7 +247,8 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(501)],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(501)],
                        store_and_forward=False) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -262,7 +261,8 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(401)]) ],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(401)]) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
                 [Response(202)],  # upstream
@@ -274,7 +274,8 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -287,9 +288,11 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
-                  Rcpt('bob2', Response(204), Response(205), [None, Response(206)],
+                  Rcpt('bob2', Response(204), Response(205),
+                       [None, Response(206)],
                        store_and_forward=False) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -303,7 +306,8 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
                   Rcpt('bob2', Response(204), Response(405), [],
                        store_and_forward=False) ],
@@ -397,7 +401,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(501)],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(501)],
                        store_and_forward=False) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -410,7 +415,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(401)],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(401)],
                        store_and_forward=True) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -423,7 +429,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False) ],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -437,7 +444,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
                   Rcpt('bob2', Response(501), Response(502), [],
                        store_and_forward=False)],
@@ -453,7 +461,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
                   Rcpt('bob2', Response(201), Response(501), [],
                        store_and_forward=False)],
@@ -469,7 +478,8 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
                   Rcpt('bob2', Response(204), Response(205), [Response(501)],
                        store_and_forward=True)],
@@ -485,9 +495,11 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             t=Test(
                 'alice',
-                [ Rcpt('bob1', Response(201), Response(202), [None, Response(203)],
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(203)],
                        store_and_forward=False),
-                  Rcpt('bob2', Response(204), Response(205), [None, Response(501)],
+                  Rcpt('bob2', Response(204), Response(205),
+                       [None, Response(501)],
                        store_and_forward=True)],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected

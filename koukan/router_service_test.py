@@ -810,7 +810,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(250, tx.mail_response.code, 201)
         self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
         self.assertRcptCodesEqual([250], tx.rcpt_response)
-        self.assertIn('RCPT ok (AsyncFilterWrapper store and forward)',
+        self.assertIn('RCPT ok (AsyncFilterWrapper store&forward)',
                       tx.rcpt_response[0].message)
 
         for i in range(0,2):

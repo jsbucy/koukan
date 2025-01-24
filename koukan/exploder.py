@@ -108,9 +108,10 @@ class Exploder(SyncFilter):
             return lhs
         if (lhs.tx.data_response is None) or (rhs.tx.data_response is None):
             return None
-        if (lhs.tx.data_response.major_code() ==
+        if (lhs.tx.data_response.major_code() !=
             rhs.tx.data_response.major_code()):
-            return lhs
+            return None
+        return lhs
 
     def on_update(self,
                   tx : TransactionMetadata,
@@ -158,6 +159,8 @@ class Exploder(SyncFilter):
         if tx.body_blob is None or tx.data_response is not None:
             return tx_orig.delta(tx)
 
+        # if all rcpts with rcpt_response.ok() have the same
+        # data_response.major_code(), return that
         rcpt = reduce(Exploder.reduce_data_response, self.recipients)
         if rcpt is not None and rcpt.tx.data_response is not None:
             tx.data_response = Response(

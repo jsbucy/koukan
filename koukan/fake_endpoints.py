@@ -94,7 +94,6 @@ class FakeSyncFilter(SyncFilter):
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.error('%d %s', id(self), tx)
         if not self.expectation:
             raise IndexError()
         exp = self.expectation[0]

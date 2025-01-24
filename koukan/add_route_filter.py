@@ -23,10 +23,11 @@ def _resp_err(tx : TransactionMetadata) -> bool:
 
 # AddRouteFilter forks a message to another SyncFilter in addition to the
 # primary/upstream. There are 2 likely configurations: chain with...
-# 1: RestEndpoint if you want sync behavior, block on the add-route endpoint
-#    use this if the additional route is local, you own the availability, etc.
+# 1: RestEndpoint if you want sync/cutthrough behavior, block on the
+#    add-route endpoint use this if the additional route is local, you
+#    own the availability, etc.
 # 2: StorageWriterFilter + AsyncFilterWrapper (a la Exploder) for
-#    async, if you don't want to block on the add-route endpoint.
+#    async/store&forward if you don't want to block on the add-route endpoint.
 
 # NOTE store&forward configurations:
 # 1: AsyncFilterWrapper should be configured with 0 upstream timeouts
