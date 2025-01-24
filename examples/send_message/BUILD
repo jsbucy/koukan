@@ -12,6 +12,7 @@ pytype_library(name='trivial_rfc822_sender',
 
 pytype_library(name='send_message',
                srcs=['send_message.py'],
+               deps=['@pypi//requests'],
                visibility=['//visibility:public'])
 
 test_suite(name='all_tests')

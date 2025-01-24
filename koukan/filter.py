@@ -125,13 +125,18 @@ class Mailbox:
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
 class WhichJson(IntEnum):
     ALL = 0
-    REST_READ = 1,
-    REST_CREATE = 2,
-    REST_UPDATE = 3,
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
     DB = 4
     DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
 
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
@@ -187,13 +192,17 @@ _tx_fields = [
             # i.e. the smtp gateway
             validity = set([WhichJson.REST_CREATE,
                             WhichJson.REST_READ,
-                            WhichJson.DB]),
+                            WhichJson.DB,
+                            WhichJson.EXPLODER_CREATE,
+                            WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('local_host',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
             from_json=HostPort.from_seq),
     TxField('mail_from',
@@ -201,7 +210,10 @@ _tx_fields = [
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE,
+                          WhichJson.ADD_ROUTE]),
             from_json=Mailbox.from_json,
             to_json=Mailbox.to_json),
     TxField('mail_response',
@@ -215,7 +227,8 @@ _tx_fields = [
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB]),
+                          WhichJson.DB,
+                          WhichJson.ADD_ROUTE]),
             to_json=Mailbox.to_json,
             from_json=Mailbox.from_json),
     TxField('rcpt_response',
@@ -244,22 +257,34 @@ _tx_fields = [
     TxField('notification',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB])),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE])),
     TxField('retry',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
-                          WhichJson.DB])),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE])),
     TxField('smtp_meta',
             validity=set([WhichJson.REST_CREATE,
-                          WhichJson.DB])),
-    TxField('body_blob', validity=None),
+                          WhichJson.DB,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.ADD_ROUTE])),
+    TxField('body_blob',
+            validity=set([WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE,
+                          WhichJson.ADD_ROUTE])),
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
     TxField('tx_db_id', validity=None),
     TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
-                                       WhichJson.DB])),
+                                       WhichJson.DB,
+                                       WhichJson.EXPLODER_CREATE,
+                                       WhichJson.EXPLODER_UPDATE,
+                                       WhichJson.ADD_ROUTE])),
     TxField('parsed_blobs', validity=None),
     TxField('parsed_json', validity=None),
 
@@ -369,6 +394,7 @@ class TransactionMetadata:
 
     def __repr__(self):
         out = ''
+        out += 'version=%s ' % self.version
         out += 'mail_from=%s mail_response=%s ' % (
             self.mail_from, self.mail_response)
         out += 'rcpt_to=%s rcpt_response=%s ' % (
@@ -648,8 +674,10 @@ class TransactionMetadata:
                 if old_v[i] is None and new_v[i] is not None:
                     pass  #ok   XXX why would old_v be None?
                 if old_v[i] is not None and new_v[i] is None:
+                    logging.debug('tx.delta %s ->None', f)
                     return None  # bad
                 if old_v[i] != new_v[i]:
+                    logging.debug('tx.delta %s !=', f)
                     return None  # bad
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)
@@ -659,7 +687,7 @@ class TransactionMetadata:
     # NOTE this copies the rcpt req/resp lists which we know we mutate
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
-    def copy(self):
+    def copy(self) -> 'TransactionMetadata':
         # TODO probably this should use tx_json_fields?
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
@@ -741,62 +769,14 @@ class AsyncFilter(ABC):
     def version(self) -> Optional[int]:
         pass
 
-    # true -> version changed, false -> timeout
-
+    # postcondition: true -> version() != version
+    # false -> timeout
     @abstractmethod
-    def wait(self, version, timeout) -> bool:
+    def wait(self, version : int, timeout : float) -> bool:
         pass
 
-    # wait until version() would return a different value from the
-    # previous call
     @abstractmethod
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, version : int, timeout : float) -> bool:
         pass
 
 
-# TODO this is the beginning of a AsyncToSyncFilterWrapper
-# RestEndpoint should probably be AsyncFilter and wrapped for the sync
-# output chain
-# ditto for Exploder->StorageWriterFilter
-# and OutputHandler->StorageWriterFilter
-#   _maybe_send_notification() though that's basically fire&forget
-
-# async_filter.update(tx, tx_delta) and loop up to deadline
-# on tx.req_inflight()
-# returns
-def update_wait_inflight(async_filter : AsyncFilter,
-                         tx : TransactionMetadata,
-                         tx_delta : TransactionMetadata,
-                         deadline : Deadline
-                         ) -> TransactionMetadata:
-    tx_orig = tx.copy()
-    upstream_tx = tx.copy()
-    upstream_delta = async_filter.update(upstream_tx, tx_delta)
-    while deadline.remaining() and upstream_tx.req_inflight():
-        logging.debug('update_wait_inflight version %s', upstream_tx.version)
-        if not async_filter.wait(upstream_tx.version,
-                                 deadline.deadline_left()):
-            break
-        upstream_tx = async_filter.get()
-
-    # TODO: we have a few of these hacks due to the way body/body_blob
-    # get swapped around in and out of storage
-    if tx_orig.body_blob:
-        del tx_orig.body_blob
-
-    # e.g. with rest, the client may
-    # PUT /tx/123/body
-    # GET /tx/123
-    # and expect to see {...'body': {}}
-
-    # however in internal call sites (i.e. Exploder), it's updating with
-    # body_blob and not expecting to get body back
-    # so only do this if tx_orig.body_blob?
-    if upstream_tx.body:
-        del upstream_tx.body
-    if tx_orig.version:
-        del tx_orig.version
-    upstream_delta = tx_orig.delta(upstream_tx)
-    # TODO one would expect merge_from()?
-    tx.replace_from(upstream_tx)
-    return upstream_delta

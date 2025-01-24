@@ -1,13 +1,14 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Callable, Dict, Optional, Tuple
-import logging
 import json
+import logging
 import secrets
 import time
 
+from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
-from koukan.storage_schema import InvalidActionException, VersionConflictException
+from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 from koukan.filter import (
     AsyncFilter,
@@ -19,7 +20,6 @@ from koukan.filter import (
 from koukan.dsn import read_headers, generate_dsn
 from koukan.blob import InlineBlob
 from koukan.rest_schema import BlobUri
-
 from koukan.message_builder import MessageBuilder
 
 def default_notification_factory():
@@ -174,7 +174,7 @@ class OutputHandler:
                     if getattr(t, field) is not None:
                         delattr(t, field)
 
-            while True:
+            for i in range(0,5):
                 try:
                     self.cursor.write_envelope(upstream_delta)
                     assert last_tx.merge_from(upstream_delta) is not None
@@ -183,6 +183,9 @@ class OutputHandler:
                     logging.info(
                         'OutputHandler._output() VersionConflictException %s ',
                         self.rest_id)
+                    if i == 4:
+                        raise
+                    backoff(i)
                     self.cursor.load()
 
             if (upstream_delta.mail_response is not None and
@@ -216,7 +219,7 @@ class OutputHandler:
             self._maybe_send_notification(final_attempt_reason)
             notification_done = True
 
-        while True:
+        for i in range(0,5):
             try:
                 # TODO it probably wouldn't be hard to merge this
                 # write with the one at the end of _output()
@@ -228,6 +231,9 @@ class OutputHandler:
                     notification_done=notification_done)
                 break
             except VersionConflictException:
+                if i == 4:
+                    raise
+                backoff(i)
                 self.cursor.load()
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:

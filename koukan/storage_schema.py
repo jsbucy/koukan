@@ -4,9 +4,6 @@ from enum import IntEnum
 from typing import Dict, Optional
 from koukan.rest_schema import BlobUri
 
-class InvalidActionException(Exception):
-    pass
-
 class VersionConflictException(Exception):
     pass
 

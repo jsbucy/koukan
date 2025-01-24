@@ -1,15 +1,15 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Callable, Dict, List, Optional, Tuple
-import logging
 import json
+import logging
 import secrets
-import time
 from functools import partial
 from threading import Lock, Condition
 
+from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
-from koukan.storage_schema import InvalidActionException, VersionConflictException
+from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 from koukan.filter import (
     AsyncFilter,
@@ -121,7 +121,8 @@ class StorageWriterFilter(AsyncFilter):
             return None
         if isinstance(tx.body_blob, BlobCursor):
             self.body_blob_uri = True
-            return tx.body_blob.blob_uri
+            # drop internal blob id
+            return BlobUri(tx.body_blob.blob_uri.tx_id, tx_body=True)
         elif tx.body:
             self.body_blob_uri = True
             uri = parse_blob_uri(tx.body)
@@ -152,7 +153,7 @@ class StorageWriterFilter(AsyncFilter):
 
         # refs into tx
         blob_writer = self.get_blob_writer(
-            create=True, blob_rest_id=self.rest_id_factory(), tx_body=True)
+            create=True, blob_rest_id=None, tx_body=True)
         if blob_writer is None:
             return Response(400, 'StorageWriterFilter: internal error')
         off = 0
@@ -168,6 +169,7 @@ class StorageWriterFilter(AsyncFilter):
             if (not appended or length != (off + len(d)) or
                 content_length_out != content_length):
                 return Response(400, 'StorageWriterFilter: internal error')
+
             off = length
             if last:
                 break
@@ -229,7 +231,7 @@ class StorageWriterFilter(AsyncFilter):
         reuse_blob_rest_id : Optional[List[BlobUri]] = None
 
         if tx_delta.cancelled:
-            while True:
+            for i in range(0,5):
                 assert self.tx_cursor is not None
                 try:
                     # storage has special-case logic to noop if
@@ -238,7 +240,11 @@ class StorageWriterFilter(AsyncFilter):
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
                 except VersionConflictException:
+                    if i == 4:
+                        raise
+                    backoff(i)
                     self.tx_cursor.load()
+            assert self.tx_cursor is not None
             version = TransactionMetadata(version=self.tx_cursor.version)
             tx.merge_from(version)
             return version
@@ -307,6 +313,13 @@ class StorageWriterFilter(AsyncFilter):
                 tx.merge_from(err_delta)
                 return err_delta
             assert not downstream_delta.body
+            # TODO kludge: blob append pings tx, avoid version
+            # conflict on subsequent write_envelope(). Possibly
+            # BlobCursor should be more integrated with
+            # TransactionCursor since a blob is always created/written
+            # ancillary to a specific tx now.
+            if self.tx_cursor is not None:
+                self.tx_cursor.load()
 
         # reuse_blob_rest_id is only
         # POST /tx/123/message_builder  ?
@@ -344,7 +357,7 @@ class StorageWriterFilter(AsyncFilter):
         assert tx_body or blob_rest_id
 
         if create:
-            while True:
+            for i in range(0,5):
                 try:
                     blob_uri = BlobUri(tx_id=self.rest_id,
                                        blob=blob_rest_id,
@@ -352,7 +365,9 @@ class StorageWriterFilter(AsyncFilter):
                     blob = self.storage.create_blob(blob_uri)
                     break
                 except VersionConflictException:
-                    pass
+                    if i == 4:
+                        raise
+                    backoff(i)
         else:
             blob = self.storage.get_blob_for_append(
                 BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))

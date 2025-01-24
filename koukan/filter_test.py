@@ -7,8 +7,7 @@ from koukan.filter import (
     HostPort,
     Mailbox,
     TransactionMetadata,
-    WhichJson,
-    update_wait_inflight )
+    WhichJson )
 from koukan.response import Response
 from koukan.blob import InlineBlob
 from koukan.deadline import Deadline
@@ -241,25 +240,6 @@ class FilterTest(unittest.TestCase):
         merged = tx.merge(delta)
         self.assertEqual([r.code for r in merged.rcpt_response], [201,202])
         self.assertIsNone(merged.merge(delta))
-
-    def test_update_wait_inflight(self):
-        async_filter = MockAsyncFilter()
-
-        def exp(tx, tx_delta):
-            return TransactionMetadata()
-        async_filter.expect_update(exp)
-
-        # TODO see comment in implementation, this is what you
-        # actually get with StorageWriterFilter today
-        async_filter.expect_get(TransactionMetadata(
-            mail_from=Mailbox('alice')))
-
-        tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            body_blob=InlineBlob(b'hello', last=True))
-        upstream_delta = update_wait_inflight(
-            async_filter, tx, tx.copy(), Deadline(1))
-        self.assertIsNotNone(upstream_delta)
 
 
 if __name__ == '__main__':

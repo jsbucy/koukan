@@ -5,6 +5,7 @@ import logging
 import sys
 import secrets
 import importlib
+from functools import partial
 
 from yaml import load, CLoader as Loader
 from koukan.address_list_policy import AddressListPolicy
@@ -29,11 +30,12 @@ from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
 from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.executor import Executor
+from koukan.async_filter_wrapper import AsyncFilterWrapper
+from koukan.add_route_filter import AddRouteFilter
 
 class FilterSpec:
-    def __init__(self, builder, t):
+    def __init__(self, builder):
         self.builder = builder
-        self.t = t
 
 StorageWriterFactory = Callable[[str],Optional[StorageWriterFilter]]
 
@@ -54,16 +56,17 @@ class Config:
             'dest_domain': self.router_policy_dest_domain,
             'address_list': self.router_policy_address_list }
         self.filters = {
-            'rest_output': FilterSpec(self.rest_output, SyncFilter),
-            'router': FilterSpec(self.router, SyncFilter),
-            'dkim': FilterSpec(self.dkim, SyncFilter),
-            'exploder': FilterSpec(self.exploder, SyncFilter),
-            'message_builder': FilterSpec(self.message_builder, SyncFilter),
-            'message_parser': FilterSpec(self.message_parser, SyncFilter),
-            'remote_host': FilterSpec(self.remote_host, SyncFilter),
-            'received_header': FilterSpec(self.received_header, SyncFilter),
-            'relay_auth': FilterSpec(self.relay_auth, SyncFilter),
-            'dns_resolution': FilterSpec(self.dns_resolution, SyncFilter),
+            'rest_output': FilterSpec(self.rest_output),
+            'router': FilterSpec(self.router),
+            'dkim': FilterSpec(self.dkim),
+            'exploder': FilterSpec(self.exploder),
+            'message_builder': FilterSpec(self.message_builder),
+            'message_parser': FilterSpec(self.message_parser),
+            'remote_host': FilterSpec(self.remote_host),
+            'received_header': FilterSpec(self.received_header),
+            'relay_auth': FilterSpec(self.relay_auth),
+            'dns_resolution': FilterSpec(self.dns_resolution),
+            'add_route': FilterSpec(self.add_route),
         }
 
     def _load_user_module(self, name, mod, add_factory):
@@ -81,7 +84,7 @@ class Config:
 
     def add_filter(self, name, fn):
         assert name not in self.filters
-        self.filters[name] = FilterSpec(fn, SyncFilter)
+        self.filters[name] = FilterSpec(fn)
 
     def add_router_policy(self, name, fn):
         assert name not in self.router_policies
@@ -100,8 +103,8 @@ class Config:
     def set_storage(self, storage : Storage):
         self.storage = storage
 
-    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any], t):
-        self.filters[name] = FilterSpec(fac, t)
+    def inject_filter(self, name : str, fac : Callable[[Any, Any], Any]):
+        self.filters[name] = FilterSpec(fac)
 
     def inject_yaml(self, root_yaml):
         self.root_yaml = root_yaml
@@ -116,6 +119,18 @@ class Config:
             root_yaml = load(yaml_file, Loader=Loader)
             self.inject_yaml(root_yaml)
 
+    def exploder_upstream(self, http_host : str,
+                          rcpt_timeout : float,
+                          data_timeout : float,
+                          store_and_forward : bool,
+                          notification : Optional[dict],
+                          retry : Optional[dict]):
+        return AsyncFilterWrapper(
+            self.exploder_output_factory(http_host),
+            rcpt_timeout,
+            store_and_forward=store_and_forward,
+            default_notification=notification, retry_params=retry)
+
     def exploder(self, yaml, next):
         assert next is None
         msa = msa=yaml.get('msa', False)
@@ -124,14 +139,30 @@ class Config:
         if msa:
             rcpt_timeout = 5
             data_timeout = 30
+        notification = yaml.get('default_notification', None)
         return Exploder(
             yaml['output_chain'],
-            self.exploder_output_factory,
-            self.executor,
-            msa=msa,
+            partial(self.exploder_upstream, yaml['output_chain'],
+                    rcpt_timeout, data_timeout, msa, notification,
+                    retry={}),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
-            default_notification=yaml.get('default_notification', None))
+            default_notification=notification)
+
+    def add_route(self, yaml, next):
+        if yaml.get('store_and_forward', None):
+            add_route = self.exploder_upstream(
+                yaml['output_chain'],
+                0, 0,  # 0 upstream timeout ~ effectively swallow errors
+                store_and_forward=True,
+                notification=yaml.get('notification', None),
+                retry=yaml.get('retry_params', None))
+        else:
+            output = self.get_endpoint(yaml['output_chain'])
+            if output is None:
+                return None
+            add_route, output_yaml = output
+        return AddRouteFilter(add_route, yaml['output_chain'], next)
 
     def rest_id_factory(self):
         entropy = self.root_yaml.get('global', {}).get('rest_id_entropy', 16)
@@ -225,7 +256,7 @@ class Config:
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
-    def get_endpoint(self, host) -> Optional[Tuple[SyncFilter, bool]]:
+    def get_endpoint(self, host) -> Optional[Tuple[SyncFilter, dict]]:
         if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
             return None
         next : Optional[SyncFilter] = None
@@ -234,7 +265,7 @@ class Config:
             logging.debug('config.get_endpoint %s', filter_name)
             spec = self.filters[filter_name]
             endpoint = spec.builder(filter_yaml, next)
-            assert isinstance(endpoint, spec.t)
+            assert isinstance(endpoint, SyncFilter)
             next = endpoint
         assert next is not None
         return next, endpoint_yaml

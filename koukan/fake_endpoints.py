@@ -17,11 +17,13 @@ from koukan.storage_schema import VersionConflictException
 
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
                              Optional[TransactionMetadata]]
+GetExpectation = Callable[[],Optional[TransactionMetadata]]
 class MockAsyncFilter(AsyncFilter):
     update_expectation : List[UpdateExpectation]
-    get_expectation : List[TransactionMetadata]
+    get_expectation : List[GetExpectation]
     body_blob : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
+    _version : Optional[int] = None
 
     def __init__(self):
         self.update_expectation = []
@@ -31,7 +33,9 @@ class MockAsyncFilter(AsyncFilter):
     def expect_update(self, exp : UpdateExpectation):
         self.update_expectation.append(exp)
     def expect_get(self, tx : TransactionMetadata):
-        self.get_expectation.append(tx)
+        self.get_expectation.append(lambda: tx)
+    def expect_get_cb(self, exp : GetExpectation):
+        self.get_expectation.append(exp)
 
     def update(self,
                tx : TransactionMetadata,
@@ -42,11 +46,15 @@ class MockAsyncFilter(AsyncFilter):
         self.update_expectation.pop(0)
         upstream_delta = exp(tx, tx_delta)
         assert upstream_delta is not None
+        self._version = tx.version
         return upstream_delta
 
     def get(self) -> TransactionMetadata:
-        tx = self.get_expectation[0]
+        cb = self.get_expectation[0]
         self.get_expectation.pop(0)
+        tx = cb()
+        assert tx is not None
+        self._version = tx.version
         return tx
 
     def get_blob_writer(
@@ -61,7 +69,7 @@ class MockAsyncFilter(AsyncFilter):
         return self.blob[blob_rest_id]
 
     def version(self) -> Optional[int]:
-        pass
+        return self._version
 
     def wait(self, version, timeout) -> bool:
         return bool(self.get_expectation)
@@ -86,6 +94,8 @@ class FakeSyncFilter(SyncFilter):
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
+        if not self.expectation:
+            raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
         upstream_delta = exp(tx, tx_delta)
