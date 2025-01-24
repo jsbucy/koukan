@@ -927,7 +927,7 @@ class RouterServiceTest(unittest.TestCase):
         dsn_endpoint.add_expectation(exp_dsn_env)
         dsn_endpoint.add_expectation(exp_dsn_body)
         self.add_endpoint(dsn_endpoint)
-        # no_final_notification + dsn output
+        # no_final_notification(bob2) + dsn output
         self._dequeue(2)
 
         # xxx kludge, fix SyncEndpoint to wait on this

@@ -1,7 +1,6 @@
 from typing import Optional
 import logging
 
-
 from koukan.filter import (
     AsyncFilter,
     SyncFilter,
@@ -13,7 +12,7 @@ from koukan.backoff import backoff
 
 # AsyncFilterWrapper provdes store&forward business logic on top of
 # StorageWriterFilter for Exploder and related workflows
-# e.g. AddRouteFilter. This consists of ~4 things:
+# (AddRouteFilter). This consists of ~4 things:
 # 1: version conflict retries
 # 2: populate a temp error response for upstream timeout
 # 3: populate "smtp precondition" failure responses e.g. rcpt fails if
@@ -48,7 +47,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         raise NotImplementedError()
 
     def wait(self, version : int, timeout : float) -> bool:
-        # TODO don't wait if self.do_store_and_forward
         if rv := self.filter.wait(version, timeout):
             self.tx = None
         else:
@@ -63,20 +61,14 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         return await self.filter.wait_async(version, timeout)
 
     def version(self) -> Optional[int]:
-        # XXX self.tx.version?
         return self.filter.version()
 
     def update(self, tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        logging.debug('%s %s', tx, tx_delta)
-
-        # xxx noop if prev temp err and not store&forward?
-
         tx_orig = tx.copy()
         upstream_tx : TransactionMetadata = tx.copy()
         for i in range(0,5):
-            logging.debug('%s', upstream_tx)
             try:
                 # StorageWriterFilter write body_blob -> body (placeholder)
                 if upstream_tx.body:
@@ -85,7 +77,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)
                 break
             except VersionConflictException:
-                logging.exception('version conflict')
                 if i == 4:
                     raise
                 backoff(i)
@@ -104,16 +95,12 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
 
 
     def get(self) -> Optional[TransactionMetadata]:
-        # XXX maybe this should read from the underlying filter every
-        # time and keep state that it has timed out some other way
         if self.tx is not None:
-            logging.debug('get noop')
             return self.tx
 
         t = self.filter.get()
         assert t is not None
         self.tx = t
-        logging.debug('%s', self.tx)
 
         self._check_preconditions(self.tx)
         return self.tx
@@ -127,7 +114,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 'RCPT failed precondition MAIL (AsyncFilterWrapper)')
             for i in range(len(tx.rcpt_response), len(tx.rcpt_to)):
                 tx.rcpt_response.append(rcpt_err)
-        logging.debug(tx)
         if (tx.body_blob and tx.body_blob.finalized() and
             (not tx.data_response) and
             (len([r for r in tx.rcpt_response if r is not None]) ==
@@ -147,7 +133,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     250, 'MAIL ok (AsyncFilterWrapper store and forward)')
             rcpt_response = Response(
                 250, 'RCPT ok (AsyncFilterWrapper store and forward)')
-            logging.debug(tx)
             for i, resp in enumerate(tx.rcpt_response):
                 if resp.temp():
                     tx.rcpt_response[i] = rcpt_response
@@ -160,8 +145,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     self.do_store_and_forward = True
 
                 if (tx.body_blob.finalized() and
-                    ( #tx.data_response is None
-                     self.do_store_and_forward or
+                    (self.do_store_and_forward or
                         (tx.data_response is not None and
                          tx.data_response.temp()))):
                     data_last = True
@@ -169,9 +153,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     tx.data_response = Response(
                         250, 'DATA ok (AsyncFilterWrapper store and forward)')
 
-            logging.debug(tx)
             if data_last and self.do_store_and_forward and tx.retry is None:
-                logging.debug('retry')
                 retry_delta = TransactionMetadata(
                     retry = self.retry_params,
                     # XXX this will blackhole if unset!
@@ -190,7 +172,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
-            logging.debug(upstream_tx)
         del tx_orig.version
         upstream_delta = tx_orig.delta(upstream_tx)
         assert tx.merge_from(upstream_delta) is not None
