@@ -68,7 +68,9 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         async_filter.expect_update(exp_conflict)
 
         def exp(tx, tx_delta):
-            return TransactionMetadata(version=2)
+            delta = TransactionMetadata(version=2)
+            tx.merge_from(delta)
+            return delta
         async_filter.expect_update(exp)
         async_filter.expect_get(TransactionMetadata(version=2))
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
@@ -91,8 +93,11 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         self.assertEqual(1, tx.version)
 
         self.assertFalse(wrapper.wait(1, 1))
+        async_filter.expect_get(
+            TransactionMetadata(mail_from=Mailbox('alice'), version=2))
+
         upstream_tx = wrapper.get()
-        self.assertEqual(1, upstream_tx.version)
+        self.assertEqual(2, upstream_tx.version)
         self.assertEqual(450, upstream_tx.mail_response.code)
         self.assertEqual('upstream timeout (AsyncFilterWrapper)',
                          upstream_tx.mail_response.message)

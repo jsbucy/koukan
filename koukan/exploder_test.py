@@ -11,7 +11,7 @@ from koukan.deadline import Deadline
 from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
-from koukan.filter import Mailbox, TransactionMetadata
+from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -29,6 +29,7 @@ class Rcpt:
     # TODO this is a little bit of a hack, maybe we want more of a
     # fake async filter here that remembers the last update, etc.
     tx : Optional[TransactionMetadata]
+    endpoint : Optional[AsyncFilter] = None
 
     def __init__(self, addr,  # rcpt_to
                  m=None, r=None, d=None,
@@ -58,13 +59,24 @@ class Rcpt:
     def set_data_response(self, parent, i):
         logging.debug('Rcpt.set_data_response %d %d', i, len(self.data_resp))
         def exp(tx, tx_delta):
+            assert self.tx.merge_from(tx_delta) is not None
             parent.assertIsNotNone(tx.body_blob)
             upstream_delta = TransactionMetadata()
+            # XXX only return early errors here
+            # return final success from get (below)
             if i < len(self.data_resp) and self.data_resp[i]:
                 upstream_delta.data_response = self.data_resp[i]
-            tx.merge_from(upstream_delta)
+            assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
+
         self.endpoint.expect_update(exp)
+
+        def exp_get():
+            upstream_tx = self.tx.copy()
+            upstream_tx.data_response = self.data_resp[i]
+            return upstream_tx
+        if i == (len(self.data_resp) - 1):
+            self.endpoint.expect_get_cb(exp_get)
 
     def expect_store_and_forward(self, parent):
         if not self.store_and_forward:
@@ -94,13 +106,6 @@ class Test:
 class ExploderTest(unittest.TestCase):
     def setUp(self):
         self.upstream_endpoints = []
-
-    #def tearDown(self):
-        #self.db_dir.cleanup()
-
-    def dump_db(self):
-        for l in self.storage.db.iterdump():
-            print(l)
 
     def add_endpoint(self):
         endpoint = MockAsyncFilter()

@@ -780,9 +780,8 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob@example.com'])
-            # set upstream responses so output (retry) succeeds
-            # upstream success, retry succeeds, propagates down to rest
+            self.assertEqual([m.mailbox for m in tx.rcpt_to],
+                             ['bob@example.com'])
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
             rcpt_response = [Response(402)])
@@ -818,9 +817,8 @@ class RouterServiceTest(unittest.TestCase):
             upstream_endpoint = FakeSyncFilter()
             def exp(tx, tx_delta):
                 self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
-                self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob@example.com'])
-                # set upstream responses so output (retry) succeeds
-                # upstream success, retry succeeds, propagates down to rest
+                self.assertEqual([m.mailbox for m in tx.rcpt_to],
+                                 ['bob@example.com'])
                 upstream_delta = TransactionMetadata(
                     mail_response = Response(201),
                     rcpt_response = [Response(402)])
@@ -835,7 +833,8 @@ class RouterServiceTest(unittest.TestCase):
                 dsn_endpoint = FakeSyncFilter()
                 def exp_dsn(tx, tx_delta):
                     self.assertEqual(tx.mail_from.mailbox, '')
-                    self.assertEqual([m.mailbox for m in tx.rcpt_to], ['alice@example.com'])
+                    self.assertEqual([m.mailbox for m in tx.rcpt_to],
+                                     ['alice@example.com'])
                     dsn = tx.body_blob.pread(0)
                     logging.debug('test_notification %s', dsn)
                     self.assertIn(b'subject: Delivery Status Notification', dsn)

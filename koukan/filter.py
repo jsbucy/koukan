@@ -615,10 +615,6 @@ class TransactionMetadata:
     def merge_from(self, delta):
         return self.merge(delta, self)
 
-    def replace_from(self, tx):
-        for f in tx_json_fields.keys():
-            setattr(self, f, getattr(tx, f, None))
-
     # compute a delta from self to successor
     def delta(self, successor : "TransactionMetadata",
               which_json : Optional[WhichJson] = None
