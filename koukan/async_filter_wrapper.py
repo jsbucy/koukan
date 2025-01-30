@@ -112,36 +112,30 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         return tx
 
     def _update_responses(self, tx):
-        self._set_timeout_resp(tx)
+        # don't overwrite upstream responses with timeouts on the
+        # first pass so they can flow into precondition errors
+        # cf test_upstream_resp_after_timeout for an edge case where
+        # this makes a difference
+        self._set_timeout_resp(tx, overwrite=False)
         self._set_precondition_resp(tx)
+        # ...but the responses must be stable so put the timeouts back here
+        self._set_timeout_resp(tx, overwrite=True)
         if not self.store_and_forward:
             return
         self._store_and_forward(tx)
 
-    def _set_timeout_resp(self, tx):
-        # NOTE the following scenario may be possible to clash with
-        # these asserts:
-        # msa with relatively short exploder rcpt timeout (say 5-10s)
-        # upstream takes 30s to return rcpt_resp
-        # exploder times out and returns s&f rcpt resp downstream
-        # downstream may finish sending the data before or after
-        # upstream/OH rcpt resp
-        # if before: accept&bounce (expected/unavoidable)
-        # if after: clash with this assert
-        #   prefer to get rcpt err as precondition failure for data instead
-        #   of a&b
-
+    def _set_timeout_resp(self, tx, overwrite : bool):
         # if upstream/OH times out, no problem: won't be retried until
         # input_done
         if self.timeout_resp.mail_response:
-            assert tx.mail_response is None
-            tx.mail_response = self.timeout_resp.mail_response
+            if overwrite or tx.mail_response is None:
+                tx.mail_response = self.timeout_resp.mail_response
         if self.timeout_resp.rcpt_response:
-            assert not tx.rcpt_response  # single rcpt
-            tx.rcpt_response = self.timeout_resp.rcpt_response
+            if overwrite or not tx.rcpt_response:  # single rcpt
+                tx.rcpt_response = self.timeout_resp.rcpt_response
         if self.timeout_resp.data_response:
-            assert tx.data_response is None
-            tx.data_response = self.timeout_resp.data_response
+            if overwrite or tx.data_response is None:
+                tx.data_response = self.timeout_resp.data_response
 
     def _set_precondition_resp(self, tx):
         # smtp preconditions: rcpt and no rcpt resp after mail err, etc.
