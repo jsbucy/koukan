@@ -67,7 +67,6 @@ class Recipient:
             del ti.body_blob
         assert orig.delta(tt) is not None  # check buggy filter
         self.tx = t
-        logging.debug('%s', self.tx.version)
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
@@ -118,7 +117,6 @@ class Exploder(SyncFilter):
                   tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        logging.debug(tx)
         tx_orig = tx.copy()
         tx_delta = tx_delta.copy()
 
@@ -143,7 +141,6 @@ class Exploder(SyncFilter):
             self.data_timeout if tx.body_blob and tx.body_blob.finalized()
             else self.rcpt_timeout)
         while rcpts and deadline.remaining():
-            logging.debug('loop')
             rcpt_next = []
             for rcpt in rcpts:
                 rcpt.wait(deadline.deadline_left())

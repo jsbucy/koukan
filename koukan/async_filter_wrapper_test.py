@@ -102,7 +102,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         self.assertEqual('upstream timeout (AsyncFilterWrapper)',
                          upstream_tx.mail_response.message)
 
-    # the following scenario is unlikely:
+    # the following scenario is unlikely but not impossible:
     # msa with relatively short exploder rcpt timeout (say 5-10s)
     # upstream takes 30s to return 500 rcpt_resp
     # exploder times out and returns 250 s&f rcpt resp downstream

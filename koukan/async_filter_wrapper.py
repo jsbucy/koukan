@@ -49,14 +49,11 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         raise NotImplementedError()
 
     def wait(self, version : int, timeout : float) -> bool:
-        logging.debug('version %s timeout %s', version, timeout)
         if not self.timeout_resp:
             rv = self.filter.wait(version, timeout)
-            logging.debug('%s', rv)
         else:
             rv = True
-            logging.debug('prev sf')
-        if (not rv):  # or self.timeout_resp:
+        if not rv:
             self.tx.fill_inflight_responses(
                 Response(450, 'upstream timeout (AsyncFilterWrapper)'),
                 self.timeout_resp)
@@ -73,6 +70,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 tx_delta : TransactionMetadata
                 ) -> Tuple[TransactionMetadata, TransactionMetadata]:
         upstream_tx = tx.copy()
+        upstream_delta = None
         for i in range(0,5):
             try:
                 # StorageWriterFilter write body_blob -> body (placeholder)
@@ -89,6 +87,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 assert t is not None
                 upstream_tx = t
                 assert upstream_tx.merge_from(tx_delta) is not None
+        assert upstream_delta is not None
         return upstream_tx, upstream_delta
 
     def update(self, tx : TransactionMetadata,
@@ -106,6 +105,8 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
 
     def get(self) -> Optional[TransactionMetadata]:
         tx = self.filter.get()
+        if tx is None:
+            return None
         logging.debug(tx)
         self.tx = tx.copy()
         self._update_responses(tx)
@@ -193,7 +194,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 notification=self.default_notification)
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
-        logging.debug(tx)
 
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
