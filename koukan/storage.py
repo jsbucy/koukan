@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import CursorResult, Engine, Transaction
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
-from sqlalchemy.sql.expression import Select
+from sqlalchemy.sql.expression import Select, exists
 from sqlalchemy import event
 
 from sqlalchemy import (
@@ -1151,22 +1151,18 @@ class Storage():
             self.tx_table.c.inflight_session_id == None,
             or_(self.tx_table.c.input_done.is_not(sa_true()),
                 self.tx_table.c.final_attempt_reason.is_not(None)),
-            (self._current_timestamp_epoch() - self.tx_table.c.last_update) > ttl.total_seconds())
+            (self._current_timestamp_epoch() - self.tx_table.c.last_update) >
+            ttl.total_seconds())
         res = db_tx.execute(del_tx)
         deleted_tx = rowcount(res)
 
         # If you wanted to reuse a blob for longer than the ttl
         # (unlikely?), you might need tx creation reusing the
         # blob to bump the blob last_update so it stays live?
-        j = join(self.blob_table, self.tx_blobref_table,
-             self.blob_table.c.id == self.tx_blobref_table.c.blob_id,
-             isouter=True)
-        sel = (select(self.blob_table.c.id).select_from(j)
-               .where(self.tx_blobref_table.c.transaction_id == None))
         del_blob = delete(self.blob_table).where(
-            (self._current_timestamp_epoch() - self.blob_table.c.last_update) > ttl.total_seconds(),
-            self.blob_table.c.id.in_(sel)
-        )
+            ~exists().where(
+                self.tx_blobref_table.c.blob_id == self.blob_table.c.id))
+
         res = db_tx.execute(del_blob)
         deleted_blob = rowcount(res)
         return deleted_tx, deleted_blob
