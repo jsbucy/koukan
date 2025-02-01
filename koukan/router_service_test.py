@@ -769,7 +769,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(205, tx.data_response.code)
-        self.assertEqual('exploder same response',
+        self.assertEqual('upstream data 0 (Exploder same response)',
                          tx.data_response.message)
 
 

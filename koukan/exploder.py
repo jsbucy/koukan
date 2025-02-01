@@ -151,20 +151,37 @@ class Exploder(SyncFilter):
         assert not rcpts
         assert not any([r.tx.req_inflight() for r in self.recipients])
 
+        # The only fields we directly propagate from the upstream
+        # per-rcpt tx to the downstream is rcpt_response and
+        # data_response if single-rcpt.
         for i,rcpt in enumerate(self.recipients):
-            # The only field we directly propagate from the
-            # upstream per-rcpt tx to the downstream is rcpt_response.
             if i >= len(tx.rcpt_response):
                 tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
+        # common case: 1 rcpt, return the upstream data response directly
+        if (tx.body_blob is not None and tx.data_response is None and
+            len(self.recipients) == 1):
+            rcpt = self.recipients[0]
+            if rcpt.tx.data_response is not None:
+                tx.data_response = rcpt.tx.data_response
         if tx.body_blob is None or tx.data_response is not None:
             return tx_orig.delta(tx)
 
-        # if all rcpts with rcpt_response.ok() have the same
-        # data_response.major_code(), return that
+        # If all rcpts with rcpt_response.ok() have the same
+        # data_response.major_code(), return that.  The most likely
+        # result is that they're all "250 accpted" or "550 message
+        # content rejected". It's possible though probably unlikely
+        # that the upstream responses might be different in spite of
+        # having the same major code e.g. one recipient is over quota
+        # and another recipient doesn't like the content. This may
+        # obscure that from the person trying to troubleshoot from the
+        # logs though the net result is the same. We could cat them
+        # all together but that could be large and I don't think
+        # aiosmtpd in the gateway will re-wrap responses automatically.
         rcpt = reduce(Exploder.reduce_data_response, self.recipients)
         if rcpt is not None and rcpt.tx.data_response is not None:
             tx.data_response = Response(
-                rcpt.tx.data_response.code, 'exploder same response')
+                rcpt.tx.data_response.code,
+                rcpt.tx.data_response.message + ' (Exploder same response)')
         elif tx.body_blob.finalized():
             retry_delta = TransactionMetadata(
                 retry = {},
