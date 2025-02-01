@@ -11,7 +11,7 @@ from koukan.deadline import Deadline
 from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
-from koukan.filter import Mailbox, TransactionMetadata
+from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -29,6 +29,7 @@ class Rcpt:
     # TODO this is a little bit of a hack, maybe we want more of a
     # fake async filter here that remembers the last update, etc.
     tx : Optional[TransactionMetadata]
+    endpoint : Optional[AsyncFilter] = None
 
     def __init__(self, addr,  # rcpt_to
                  m=None, r=None, d=None,
@@ -55,16 +56,41 @@ class Rcpt:
             return self.tx
         self.endpoint.expect_get_cb(exp_get)
 
-    def set_data_response(self, parent, i):
+    # discussion:
+    # AsyncFilter.update() is supposed to return immediately so you
+    # should not expect to get upstream responses from it; only after
+    # wait() and get(). Moreover Exploder.on_update() will not
+    # wait/get if !body_blob.finalized() since !tx.req_inflight(). So
+    # the "early data error" tests here aren't a perfect analogue of what
+    # would happen in practice: you would get the previous error in
+    # response to the next update. Though this is probably all moot anyway
+    # since something downstream probably buffers the whole blob and
+    # you will only see one update with the finalized blob.
+    def set_data_response(self, parent, i : int, last : bool):
         logging.debug('Rcpt.set_data_response %d %d', i, len(self.data_resp))
+        if i < len(self.data_resp):
+            data_resp = self.data_resp[i]
+        else:
+            data_resp = None
         def exp(tx, tx_delta):
+            assert self.tx.merge_from(tx_delta) is not None
             parent.assertIsNotNone(tx.body_blob)
             upstream_delta = TransactionMetadata()
-            if i < len(self.data_resp) and self.data_resp[i]:
-                upstream_delta.data_response = self.data_resp[i]
-            tx.merge_from(upstream_delta)
+            # return an early data err from update()...
+            if (not last) and (data_resp is not None) and data_resp.err():
+                upstream_delta.data_response = data_resp
+            assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
+
         self.endpoint.expect_update(exp)
+
+        # ... but return the final response from get()
+        def exp_get():
+            upstream_tx = self.tx.copy()
+            upstream_tx.data_response = data_resp
+            return upstream_tx
+        if last:
+            self.endpoint.expect_get_cb(exp_get)
 
     def expect_store_and_forward(self, parent):
         if not self.store_and_forward:
@@ -94,13 +120,6 @@ class Test:
 class ExploderTest(unittest.TestCase):
     def setUp(self):
         self.upstream_endpoints = []
-
-    #def tearDown(self):
-        #self.db_dir.cleanup()
-
-    def dump_db(self):
-        for l in self.storage.db.iterdump():
-            print(l)
 
     def add_endpoint(self):
         endpoint = MockAsyncFilter()
@@ -156,7 +175,7 @@ class ExploderTest(unittest.TestCase):
             tx_delta = TransactionMetadata(body_blob=blob)
             tx.merge_from(tx_delta)
             for r in t.rcpt:
-                r.set_data_response(self, i)
+                r.set_data_response(self, i, i == (len(t.data) - 1))
                 if t.expected_data_resp[i] is not None:
                     r.expect_store_and_forward(self)
             exploder.on_update(tx, tx_delta)

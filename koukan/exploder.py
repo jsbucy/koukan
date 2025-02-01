@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Callable, List, Optional, Union
-from threading import Thread
+import logging
 import time
 from functools import partial, reduce
 

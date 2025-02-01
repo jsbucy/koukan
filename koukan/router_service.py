@@ -24,6 +24,7 @@ from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
 
 from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.storage_schema import VersionConflictException
+from koukan.deadline import Deadline
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
@@ -68,9 +69,16 @@ class Service:
             self.daemon_executor = Executor(10, watchdog_timeout=300,
                                             debug_futures=True)
 
-    def wait_shutdown(self, timeout):
-        with self.lock:
-            self.cv.wait_for(lambda: self._shutdown, timeout)
+    def wait_shutdown(self, timeout : float, executor : Executor) -> bool:
+        deadline = Deadline(timeout)
+        while deadline.remaining():
+            executor.ping_watchdog()
+            with self.lock:
+                self.cv.wait_for(lambda: self._shutdown,
+                                 min(deadline.deadline_left(), 30))
+                if self._shutdown:
+                    return True
+        return False
 
     def shutdown(self) -> bool:
         logging.info("router_service shutdown()")
@@ -294,11 +302,12 @@ class Service:
         return True
 
     def dequeue(self, executor):
-        while not self._shutdown:
+        while True:
             executor.ping_watchdog()
             deq = [None]
             if self.executor.submit(partial(self._dequeue, deq)) is None:
-                self.wait_shutdown(1)
+                if self.wait_shutdown(1, executor):
+                    return
                 continue
             with self.lock:
                 # Wait 1s for _dequeue() including executor queueing.
@@ -308,16 +317,18 @@ class Service:
             # there's another
             if deq[0]:
                 continue
-            self.wait_shutdown(1)
+            if self.wait_shutdown(1, executor):
+                return
 
     def gc(self, executor):
         storage_yaml = self.config.root_yaml['storage']
         ttl = timedelta(seconds=storage_yaml.get('gc_ttl', 86400))
         interval = storage_yaml.get('gc_interval', 300)
-        while not self._shutdown:
+        while True:
             executor.ping_watchdog()
             self._gc(ttl)
-            self.wait_shutdown(interval)
+            if self.wait_shutdown(interval, executor):
+                return
 
     def _refresh(self, ref : List[bool], session_ttl : timedelta):
         if self.storage._refresh_session():
@@ -329,7 +340,7 @@ class Service:
     def refresh_storage_session(self, executor, interval : int,
                                 session_ttl : timedelta):
         last_refresh = time.monotonic()
-        while not self._shutdown:
+        while True:
             delta = time.monotonic() - last_refresh
             if delta > (5 * interval):
                 logging.error('stale storage session')
@@ -339,13 +350,15 @@ class Service:
             ref = [False]
             if self.daemon_executor.submit(
                     partial(self._refresh, ref, session_ttl)) is None:
-                self.wait_shutdown(1)
+                if self.wait_shutdown(1, executor):
+                    return
                 continue
             with self.lock:
                 self.cv.wait_for(lambda: ref[0] or self._shutdown, 1)
                 if ref[0]:
                     last_refresh = time.monotonic()
-            self.wait_shutdown(interval)
+            if self.wait_shutdown(interval, executor):
+                return
 
     def _gc(self, gc_ttl : timedelta):
         logging.info('router_service _gc %s', gc_ttl)

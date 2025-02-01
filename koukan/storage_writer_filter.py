@@ -355,7 +355,7 @@ class StorageWriterFilter(AsyncFilter):
                         tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
         assert tx_body or blob_rest_id
-
+        blob = None
         if create:
             for i in range(0,5):
                 try:

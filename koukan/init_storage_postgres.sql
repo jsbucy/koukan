@@ -21,7 +21,7 @@ CREATE TABLE Transactions (
   rest_id TEXT UNIQUE,
 
   -- tag/queue/service/host
-  json JSON,
+  json JSONB,
 
   -- bool, basically payload is completely written
   input_done boolean,
@@ -44,7 +44,7 @@ CREATE TABLE Transactions (
 
   next_attempt_time INTEGER,  -- unix secs
 
-  message_builder JSON,
+  message_builder JSONB,
 
   -- json.notification is present and non-empty
   notification BOOL,
@@ -86,7 +86,7 @@ CREATE TABLE TransactionAttempts (
   transaction_id INTEGER,
   attempt_id INTEGER NOT NULL,
 
-  responses JSON,
+  responses JSONB,
 
   creation INTEGER NOT NULL,
   last_update INTEGER NOT NULL,
