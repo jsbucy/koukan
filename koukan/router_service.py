@@ -340,8 +340,13 @@ class Service:
     def refresh_storage_session(self, executor, interval : int,
                                 session_ttl : timedelta):
         last_refresh = time.monotonic()
+        # start _refresh() on daemon_executor every interval
+        # wait up to interval for it to succeed
+        # if 5 consecutive failures/timeouts, abort program
+        # another instance can gc our stale session after 10*interval
         while True:
-            delta = time.monotonic() - last_refresh
+            start = time.monotonic()
+            delta = start - last_refresh
             if delta > (5 * interval):
                 logging.error('stale storage session')
                 self.shutdown()
@@ -354,10 +359,11 @@ class Service:
                     return
                 continue
             with self.lock:
-                self.cv.wait_for(lambda: ref[0] or self._shutdown, 1)
+                self.cv.wait_for(lambda: ref[0] or self._shutdown, interval)
                 if ref[0]:
                     last_refresh = time.monotonic()
-            if self.wait_shutdown(interval, executor):
+            if self.wait_shutdown(interval - (time.monotonic() - start),
+                                  executor):
                 return
 
     def _gc(self, gc_ttl : timedelta):

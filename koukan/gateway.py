@@ -3,10 +3,9 @@
 from typing import Callable, Dict, List, Optional, Tuple
 import sys
 import logging
-from threading import Thread
 import time
 import secrets
-from threading import Lock
+from threading import Condition, Lock, Thread
 import asyncio
 
 from koukan.rest_endpoint import RestEndpoint
@@ -30,6 +29,7 @@ class SmtpGateway(EndpointFactory):
     shutdown_gc = False
     executor : Executor
     lock : Lock
+    cv: Condition
     rest_id_factory : Optional[Callable[[], str]]
     hypercorn_shutdown : Optional[asyncio.Event] = None
     smtp_services : List[object]
@@ -42,7 +42,7 @@ class SmtpGateway(EndpointFactory):
         self.inflight = {}
 
         self.lock = Lock()
-
+        self.cv = Condition(self.lock)
         self.smtp_services = []
 
     def shutdown(self) -> bool:
@@ -58,7 +58,9 @@ class SmtpGateway(EndpointFactory):
                 pass
 
         if self.gc_thread:
-            self.shutdown_gc = True
+            with self.lock:
+                self.shutdown_gc = True
+                self.cv.notify_all()
             self.gc_thread.join()
             self.gc_thread = None
 
@@ -142,7 +144,9 @@ class SmtpGateway(EndpointFactory):
             delta = now - last_gc
             gc_interval = rest_yaml.get('gc_interval', 5)
             if delta < gc_interval:
-                time.sleep(gc_interval - delta)
+                with self.lock:
+                    self.cv.wait_for(lambda: self.shutdown_gc,
+                                     gc_interval - delta)
             last_gc = now
             self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600),
                               rest_yaml.get('gc_done_ttl', 10))
