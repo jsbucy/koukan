@@ -122,10 +122,15 @@ class SyncFilterAdapter(AsyncFilter):
 
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
-            if self.inflight:
-                return False
             t = done_ttl if self.done else ttl
-            return (now - self._last_update) > t
+            idle = now - self._last_update
+            timedout = idle > t
+            if self.inflight:
+                if timedout:
+                    logging.warning('maybe stuck %s idle %d',
+                                    self.rest_id, idle)
+                return False
+            return timedout
 
     def version(self):
         return self.id_version.get()
@@ -146,7 +151,6 @@ class SyncFilterAdapter(AsyncFilter):
             logging.exception('SyncFilterAdapter._update_once() %s',
                               self.rest_id)
             with self.mu:
-                self.inflight = False
                 # TODO an exception here is unexpected so
                 # it's probably good enough to guarantee that callers
                 # fail quickly. Though it might be more polite to
@@ -155,6 +159,10 @@ class SyncFilterAdapter(AsyncFilter):
                 self.prev_tx = self.tx = None
                 self.cv.notify_all()
             raise
+        finally:
+            with self.mu:
+                self.inflight = False
+                self.cv.notify_all()
 
     def _update_once(self):
         with self.mu:
@@ -182,7 +190,6 @@ class SyncFilterAdapter(AsyncFilter):
                 self.blob_writer.q = []
 
             if not self.tx.req_inflight() and not delta.cancelled:
-                self.inflight = False
                 return False
             tx = self.tx.copy()
         upstream_delta = self.filter.on_update(tx, delta)
