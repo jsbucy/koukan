@@ -687,14 +687,6 @@ class RestHandler(Handler):
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
-    def _put_blob(self, request):
-        while b := request.stream.read(self.chunk_size):
-            logging.debug('RestHandler._put_blob %d', len(b))
-            chunk_resp = self._put_blob_chunk(request, b)
-            if chunk_resp.status_code != 200:
-                return chunk_resp
-        return self._put_blob_chunk(request, b'', last=True)
-
     # populate self.blob or return http err
     def _get_blob_writer(self, request : HttpRequest,
                          blob_rest_id : Optional[str] = None,
