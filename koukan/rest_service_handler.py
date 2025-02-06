@@ -4,25 +4,17 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from abc import ABC, abstractmethod
 
-from flask import (
-    Request as FlaskRequest,
-    Response as FlaskResponse)
-
 from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
-HttpRequest = Union[FlaskRequest, FastApiRequest]
-HttpResponse = Union[FlaskResponse, FastApiResponse]
+HttpRequest = FastApiRequest
+HttpResponse = FastApiResponse
 
 class Handler(ABC):
     @abstractmethod
     def create_tx(self, request : HttpRequest, req_json: dict
                   ) -> HttpResponse:
-        pass
-
-    @abstractmethod
-    def get_tx(self, request : HttpRequest) -> HttpResponse:
         pass
 
     @abstractmethod
@@ -33,19 +25,6 @@ class Handler(ABC):
     def patch_tx(self, request : HttpRequest,
                  req_json : dict,
                  message_builder : bool = False) -> HttpResponse:
-        pass
-
-    @abstractmethod
-    def create_blob(self, request : HttpRequest,
-                    tx_body : bool = False,
-                    req_upload : Optional[str] = None
-                    ) -> HttpResponse:
-        pass
-
-    @abstractmethod
-    def put_blob(self, request : HttpRequest,
-                 blob_rest_id : Optional[str] = None,
-                 tx_body : bool = False) -> HttpResponse:
         pass
 
     @abstractmethod

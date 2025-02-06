@@ -198,7 +198,6 @@ class RouterServiceTest(unittest.TestCase):
             self.port = s.server_address[1]
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         root_yaml['rest_listener']['session_uri'] = 'http://localhost:%d' % self.port
-        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
         router_url = 'http://localhost:%d' % self.port
         config = Config()
         config.inject_yaml(root_yaml)
@@ -1259,14 +1258,10 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 205)
 
 
-class RouterServiceTestFlask(RouterServiceTest):
-    use_fastapi = False
-
 class RouterServiceTestFastApi(RouterServiceTest):
-    use_fastapi = True
+    pass
 
 class RouterServiceTestSqlite(RouterServiceTest):
-    use_fastapi = True
     use_postgres = False
 
     # having multiple routers accessing the same sqlite causes

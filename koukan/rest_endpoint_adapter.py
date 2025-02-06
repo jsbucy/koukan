@@ -19,10 +19,6 @@ from functools import partial
 
 from urllib.parse import urljoin
 
-from flask import (
-    Request as FlaskRequest,
-    Response as FlaskResponse,
-    jsonify )
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
@@ -33,8 +29,8 @@ from fastapi.responses import (
     JSONResponse as FastApiJsonResponse,
     PlainTextResponse )
 
-HttpRequest = Union[FlaskRequest, FastApiRequest]
-HttpResponse = Union[FlaskResponse, FastApiResponse]
+HttpRequest = FastApiRequest
+HttpResponse = FastApiResponse
 
 from httpx import Client, Response as HttpxResponse
 
@@ -350,21 +346,6 @@ class RestHandler(Handler):
                  headers : Optional[List[Tuple[str,str]]] = None,
                  etag : Optional[str] = None
                  ) -> HttpResponse:
-        if isinstance(req, FlaskRequest):
-            resp = FlaskResponse(status=code)
-            if etag:
-                resp.set_etag(etag)
-            if headers:
-                for k,v in headers:
-                    resp.headers.set(k,v)
-            if resp_json is not None:
-                resp.content_type = 'application/json'
-                resp.set_data(json.dumps(resp_json))
-            if msg is not None:
-                resp.content_type = 'text/plain'
-                resp.content = msg
-            return resp
-
         headers_dict={}
         if headers:
             headers_dict.update({k:str(v) for k,v in headers})
@@ -479,42 +460,6 @@ class RestHandler(Handler):
         logging.debug('RestHandler._create %s', resp)
         return resp
 
-    def get_tx(self, request : HttpRequest) -> HttpResponse:
-        timeout, err = self._get_timeout(request)
-        if err is not None:
-            return err
-        if self.async_filter is None:
-            return self.response(
-                request, code=404, msg='transaction not found')
-
-        tx = self._get_tx()
-        if tx is None:
-            return self.response(request, code=404, msg='unknown tx'), None
-
-        etag = request.headers.get('if-none-match', None)
-        if (timeout is None or etag is None or
-            not self._check_etag(etag, tx.version)):
-            return self._get_tx_resp(request, tx)
-        elif (timeout is not None and etag is not None and
-              tx.session_uri is not None):
-            return self.response(
-                request, code=307, headers=[
-                    ('location', urljoin(tx.session_uri,
-                                         make_tx_uri(self._tx_rest_id)))])
-
-        deadline = Deadline(timeout)
-
-        wait_result = self.async_filter.wait(
-            tx.version, deadline.deadline_left())
-        if not wait_result:
-            return self.response(request, code=304, msg='unchanged',
-                                 headers=[('etag', self._etag(tx.version))])
-
-        tx = self._get_tx()
-        if tx is None:
-            return self.response(request, code=500, msg='get tx')
-        return self._get_tx_resp(request, tx)
-
     def _get_tx(self) -> Optional[TransactionMetadata]:
         tx = self.async_filter.get()
         if tx is None:
@@ -533,8 +478,6 @@ class RestHandler(Handler):
             resp_json=tx.to_json(WhichJson.REST_READ))
 
     def _check_etag(self, etag, cached_version) -> bool:
-        # ugh the presence of these quotes is a difference between
-        # flask and fastapi :/
         etag = etag.strip('"')
         logging.debug(
             'RestHandler._check_etag %s etag %s cached_version %s',
@@ -673,27 +616,6 @@ class RestHandler(Handler):
         assert(range.stop - range.start == content_length)
         return None, range
 
-    def create_blob(self, request : HttpRequest,
-                    tx_body : bool = False,
-                    req_upload : Optional[str] = None) -> HttpResponse:
-        logging.debug('RestHandler.create_blob')
-        resp = self._create_blob(request, tx_body, req_upload)
-        logging.debug('RestHandler.create_blob %s', resp.status)
-        if resp.status_code != 201:
-            return resp
-
-        if req_upload is None:
-            self.bytes_read = 0
-            chunk_resp = self._put_blob(request)
-            if chunk_resp.status_code != 200:
-                return chunk_resp
-
-        if (err := self._maybe_schedule_ping(
-                request, self.blob.session_uri(), self._tx_rest_id)):
-            return err
-
-        return resp
-
     def _create_blob(self, request : HttpRequest,
                      tx_body : bool = False,
                      req_upload : Optional[str] = None) -> HttpResponse:
@@ -772,24 +694,6 @@ class RestHandler(Handler):
             if chunk_resp.status_code != 200:
                 return chunk_resp
         return self._put_blob_chunk(request, b'', last=True)
-
-    def put_blob(self, request : HttpRequest,
-                 blob_rest_id : Optional[str] = None,
-                 tx_body : bool = False) -> HttpResponse:
-        logging.debug('RestHandler.put_blob %s', request.headers)
-        err = self._get_blob_writer(request, blob_rest_id, tx_body)
-        if err:
-            return err
-        self.bytes_read = 0
-        resp = self._put_blob(request)
-        if resp.status_code != 200:
-            return resp
-
-        if (err := self._maybe_schedule_ping(
-                request, self.blob.session_uri(), self._tx_rest_id)):
-            return err
-
-        return resp
 
     # populate self.blob or return http err
     def _get_blob_writer(self, request : HttpRequest,

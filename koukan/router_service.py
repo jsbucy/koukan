@@ -8,7 +8,6 @@ from functools import partial
 import asyncio
 from datetime import timedelta
 
-import koukan.rest_service as rest_service
 import koukan.fastapi_service as fastapi_service
 import koukan.hypercorn_main as hypercorn_main
 
@@ -179,10 +178,7 @@ class Service:
             self.started = True
             self.cv.notify_all()
 
-        if listener_yaml.get('use_fastapi', True):
-            app = fastapi_service.create_app(self.rest_handler_factory)
-        else:
-            app = rest_service.create_app(self.rest_handler_factory)
+        app = fastapi_service.create_app(self.rest_handler_factory)
         self.hypercorn_shutdown = asyncio.Event()
         try:
             hypercorn_main.run(
