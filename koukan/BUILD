@@ -564,6 +564,7 @@ py_test(name='end2end_test',
               ':postgres_test_utils',
               '//examples/send_message:send_message',
               '//examples/receiver:receiver',
+              '//examples/receiver:fastapi_receiver',
               '@pypi//dkimpy'])
 
 py_binary(name='router',
