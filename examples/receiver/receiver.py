@@ -1,9 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# gunicorn3 -b localhost:8002 --access-logfile - --log-level debug
-#   'examples.receiver.receiver:create_app(path='/tmp/my_messages')'
-
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 import logging
 import json
