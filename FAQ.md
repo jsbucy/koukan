@@ -87,15 +87,11 @@ All data between the input and output sides flows through the Storage module. Th
 1. I have tried to limit myself to things that I’m familiar with and am confident are a good fit for this.  
 2. I have tried to keep the dependency footprint small. I think we have all had the experience of failing to get some software working that depends on the head-of-tree version of 10 different packages.
 
-## Koukan supports both Flask and FastAPI?
-
-I started with Flask which I was already familiar with from other projects and discovered FastAPI more recently. I didn’t want to burn the bridge on Flask when I integrated FastAPI. FastAPI is specifically tailored to this use case and has been working well and ASGI is a major upgrade over WSGI. So I expect to drop Flask at some point.
-
 # Deployment
 
 ## Can I run Koukan on Kubernetes k8s or other multi-node/cluster environment?
 
-YES! Basic support for this was added in ccff073f.
+YES! Basic support for this was added in ccff073fc686b40c96d50d03a79665e715b49a23.
 
 All replicas share the same underlying database.
 

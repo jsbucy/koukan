@@ -6,7 +6,6 @@ from koukan.executor import Executor
 import time
 from functools import partial
 
-from flask import Request as FlaskRequest
 from werkzeug.datastructures import ContentRange
 
 from koukan.storage import Storage, TransactionCursor

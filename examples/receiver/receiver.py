@@ -1,23 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# gunicorn3 -b localhost:8002 --access-logfile - --log-level debug
-#   'examples.receiver.receiver:create_app(path='/tmp/my_messages')'
-
-from typing import Dict, List, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 import logging
 import json
-from io import IOBase
+from io import IOBase, TextIOBase
 import os
 import time
-
-from flask import (
-    Flask,
-    Request as FlaskRequest,
-    Response as FlaskResponse,
-    jsonify,
-    make_response,
-    request )
 
 import secrets
 import copy
@@ -53,7 +42,7 @@ class Transaction:
         self.ping()
 
     def ping(self):
-        self.last_update = time.monotonic()
+        self.last_update = int(time.monotonic())
 
     def get_json(self):
         json_out = copy.copy(self.tx_json)
@@ -93,16 +82,18 @@ class Transaction:
         return True
 
 
-    def update_message_builder(self, message_json):
+    def update_message_builder(self, message_json) -> Optional[Tuple[int, str]]:
         assert not self.cancelled
         logging.debug('Tx.update_message_json %s', message_json)
         self.message_json = message_json
         if not self._check_blobs(self.message_json['parts']):
-            return FlaskResponse(400, 'bad blob in message builder json')
+            return 400, 'bad blob in message builder json'
         with self._create_file('msg.json', 't') as f:
+            assert isinstance(f, TextIOBase)
             json.dump(message_json, f)
             self.message_json_path = f.name
 
+    # wsgi/flask-only
     def create_tx_body(self, stream : IOBase):
         assert not self.cancelled
         assert self.body_path is None
@@ -116,12 +107,41 @@ class Transaction:
         self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
         self.log()
 
-    def put_blob(self, blob_id, stream : IOBase) -> int:
+    # asgi/fastapi-only
+    async def create_tx_body_async(self, stream : AsyncGenerator[bytes, None]):
+        assert not self.cancelled
+        assert self.body_path is None
+
+        with self._create_file('msg') as file:
+            assert isinstance(file, IOBase)
+            async for b in stream:
+                file.write(b)
+            self.body_path = file.name
+
+        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+        self.log()
+
+    # wsgi/flask-only
+    def put_blob(self, blob_id : str, stream : IOBase) -> int:
         assert not self.cancelled
         assert blob_id in self.blobs
         logging.debug('put_blob %s', blob_id)
         blob_file = self.blobs[blob_id]
         while b := stream.read(self.CHUNK_SIZE):
+            blob_file.write(b)
+        self.blob_paths[blob_id] = blob_file.name
+        del self.blobs[blob_id]
+        blob_file.close()
+        return 200
+
+    # asgi/fastapi-only
+    async def put_blob_async(
+            self, blob_id : str, stream : AsyncGenerator[bytes, None]) -> int:
+        assert not self.cancelled
+        assert blob_id in self.blobs
+        logging.debug('put_blob %s', blob_id)
+        blob_file = self.blobs[blob_id]
+        async for b in stream:
             blob_file.write(b)
         self.blob_paths[blob_id] = blob_file.name
         del self.blobs[blob_id]
@@ -153,6 +173,7 @@ class Transaction:
             output_json['body_path'] = self.body_path
 
         with self._create_file('tx.json', 't') as f:
+            assert isinstance(f, TextIOBase)
             json.dump(output_json, f)
             self.tx_json_path = f.name
 
@@ -178,7 +199,7 @@ class Receiver:
                  gc_interval = 30):
         self.transactions = {}
         self.dir = dir
-        self.last_gc = time.monotonic()
+        self.last_gc = int(time.monotonic())
         self.gc_ttl = gc_ttl
         self.gc_interval = gc_interval
 
@@ -190,7 +211,7 @@ class Receiver:
         return tx
 
     def _gc(self):
-        now = time.monotonic()
+        now = int(time.monotonic())
         if (now - self.last_gc) <= self.gc_interval:
             return
         self.last_gc = now
@@ -219,62 +240,32 @@ class Receiver:
         tx = self._get_tx(tx_rest_id)
         return tx.update_message_builder(message_json)
 
+    # wsgi/flask-only
     def create_tx_body(self,
                        tx_rest_id : str,
                        stream : IOBase):
         tx = self._get_tx(tx_rest_id)
         return tx.create_tx_body(stream)
 
-    def put_blob(self, tx_rest_id: str, blob_id : str, stream):
+    # asgi/fastapi-only
+    def put_blob(self, tx_rest_id: str, blob_id : str, stream : IOBase) -> int:
         tx = self._get_tx(tx_rest_id)
-        status = tx.put_blob(blob_id, stream)
-        return FlaskResponse(status=status)
+        return tx.put_blob(blob_id, stream)
+
+    # wsgi/flask-only
+    async def create_tx_body_async(self,
+                       tx_rest_id : str,
+                       stream : AsyncGenerator[bytes, None]):
+        tx = self._get_tx(tx_rest_id)
+        return await tx.create_tx_body_async(stream)
+
+    # asgi/fastapi-only
+    async def put_blob_async(self, tx_rest_id: str, blob_id : str,
+                             stream : AsyncGenerator[bytes, None]
+                             ) -> int:
+        tx = self._get_tx(tx_rest_id)
+        return await tx.put_blob_async(blob_id, stream)
 
     def cancel_tx(self, tx_rest_id : str):
         tx = self._get_tx(tx_rest_id)
         tx.cancel()
-        return FlaskResponse()
-
-
-def create_app(receiver = None, path = None):
-    app = Flask(__name__)
-
-    if receiver is None:
-        receiver = Receiver(path)
-
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s [%(thread)d] '
-                        '%(filename)s:%(lineno)d %(message)s')
-
-    @app.route('/transactions', methods=['POST'])
-    def create_transaction() -> FlaskResponse:
-        tx_id, tx_json = receiver.create_tx(request.json)
-        resp = FlaskResponse(status=201)
-        resp.headers.set('location', '/transactions/' + tx_id)
-        resp.content_type = 'application/json'
-        resp.set_data(json.dumps(tx_json))
-        return resp
-
-    @app.route('/transactions/<tx_rest_id>', methods=['GET'])
-    def get_transaction(tx_rest_id) -> FlaskResponse:
-        return jsonify(receiver.get_tx(tx_rest_id))
-
-    @app.route('/transactions/<tx_rest_id>/message_builder', methods=['POST'])
-    def update_message_builder(tx_rest_id) -> FlaskResponse:
-        receiver.update_tx_message_builder(tx_rest_id, request.json)
-        return FlaskResponse(status = 200)
-
-    @app.route('/transactions/<tx_rest_id>/body', methods=['POST'])
-    def create_tx_body(tx_rest_id) -> FlaskResponse:
-        receiver.create_tx_body(tx_rest_id, request.stream)
-        return FlaskResponse(status=201)
-
-    @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
-    def put_blob(tx_rest_id, blob_id) -> FlaskResponse:
-        return receiver.put_blob(tx_rest_id, blob_id, request.stream)
-
-    @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
-    def cancel_tx(tx_rest_id) -> FlaskResponse:
-        return receiver.cancel_tx(tx_rest_id)
-
-    return app

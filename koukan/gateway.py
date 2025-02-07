@@ -11,7 +11,6 @@ import asyncio
 from koukan.rest_endpoint import RestEndpoint
 from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from koukan.smtp_service import service as smtp_service
-import koukan.rest_service as rest_service
 import koukan.fastapi_service as fastapi_service
 from koukan.filter import AsyncFilter
 from koukan.rest_endpoint_adapter import (
@@ -207,10 +206,7 @@ class SmtpGateway(EndpointFactory):
             service_uri=rest_listener_yaml.get('service_uri', None))
 
         rest_listener_yaml = root_yaml['rest_listener']
-        if rest_listener_yaml.get('use_fastapi', True):
-            app = fastapi_service.create_app(self.adapter_factory)
-        else:
-            app=rest_service.create_app(self.adapter_factory)
+        app = fastapi_service.create_app(self.adapter_factory)
 
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)

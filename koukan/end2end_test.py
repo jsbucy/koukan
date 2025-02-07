@@ -22,7 +22,8 @@ from koukan.hypercorn_main import run
 import koukan.postgres_test_utils as postgres_test_utils
 
 from examples.send_message.send_message import Sender
-from examples.receiver.receiver import Receiver, create_app
+from examples.receiver.receiver import Receiver
+from examples.receiver.fastapi_receiver import create_app
 
 def setUpModule():
     postgres_test_utils.setUpModule()
