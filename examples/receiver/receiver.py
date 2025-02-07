@@ -4,7 +4,7 @@
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 import logging
 import json
-from io import IOBase
+from io import IOBase, TextIOBase
 import os
 import time
 
@@ -42,7 +42,7 @@ class Transaction:
         self.ping()
 
     def ping(self):
-        self.last_update = time.monotonic()
+        self.last_update = int(time.monotonic())
 
     def get_json(self):
         json_out = copy.copy(self.tx_json)
@@ -82,13 +82,14 @@ class Transaction:
         return True
 
 
-    def update_message_builder(self, message_json) -> Tuple[int, str]:
+    def update_message_builder(self, message_json) -> Optional[Tuple[int, str]]:
         assert not self.cancelled
         logging.debug('Tx.update_message_json %s', message_json)
         self.message_json = message_json
         if not self._check_blobs(self.message_json['parts']):
             return 400, 'bad blob in message builder json'
         with self._create_file('msg.json', 't') as f:
+            assert isinstance(f, TextIOBase)
             json.dump(message_json, f)
             self.message_json_path = f.name
 
@@ -172,6 +173,7 @@ class Transaction:
             output_json['body_path'] = self.body_path
 
         with self._create_file('tx.json', 't') as f:
+            assert isinstance(f, TextIOBase)
             json.dump(output_json, f)
             self.tx_json_path = f.name
 
@@ -197,7 +199,7 @@ class Receiver:
                  gc_interval = 30):
         self.transactions = {}
         self.dir = dir
-        self.last_gc = time.monotonic()
+        self.last_gc = int(time.monotonic())
         self.gc_ttl = gc_ttl
         self.gc_interval = gc_interval
 
@@ -209,7 +211,7 @@ class Receiver:
         return tx
 
     def _gc(self):
-        now = time.monotonic()
+        now = int(time.monotonic())
         if (now - self.last_gc) <= self.gc_interval:
             return
         self.last_gc = now

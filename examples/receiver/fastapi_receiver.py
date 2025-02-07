@@ -42,7 +42,9 @@ def create_app(receiver = None, path = None):
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
                                      ) -> FastApiResponse:
         builder_json = await request.json()
-        receiver.update_tx_message_builder(tx_rest_id, builder_json)
+        if err := receiver.update_tx_message_builder(tx_rest_id, builder_json):
+            code, msg = err
+            return FastApiResponse(status_code=code, content=msg)
         return FastApiResponse()
 
     @app.post('/transactions/{tx_rest_id}/body')

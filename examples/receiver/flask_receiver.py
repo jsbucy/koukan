@@ -44,8 +44,10 @@ def create_app(receiver = None, path = None):
 
     @app.route('/transactions/<tx_rest_id>/message_builder', methods=['POST'])
     def update_message_builder(tx_rest_id) -> FlaskResponse:
-        receiver.update_tx_message_builder(tx_rest_id, request.json)
-        return FlaskResponse(status = 200)
+        if err := receiver.update_tx_message_builder(tx_rest_id, request.json):
+            code, msg = err
+            return FlaskResponse(status=code, response=msg)
+        return FlaskResponse()
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['POST'])
     def create_tx_body(tx_rest_id) -> FlaskResponse:

@@ -44,10 +44,11 @@ runs the gateway listening on 1025 (mx/receive) and 1587 (submission/send) for s
 `bash config/local-test/run_router.sh`
 listens on 8000 for rest  
 ```
-PYTHONPATH=. gunicorn3 -b localhost:8002 --access-logfile - --log-level debug\ 
-'examples.receiver.receiver:create_app()'
+PYTHONPATH=. hypercorn -b localhost:8002 -w0 --access-logfile - \
+--log-level debug \
+'examples.receiver.fastapi_receiver:create_app(path="/tmp/my_messages")'
 ```
-listens on 8002 for rest
+listens on 8002 for rest and drops files in `/tmp/my_messages`
 
 `python3 koukan/fake_smtpd.py 3025`
 listens on 3025 for smtp  
