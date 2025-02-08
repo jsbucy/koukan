@@ -264,6 +264,13 @@ class Service:
         handler.handle()
         assert not storage_tx.in_attempt
 
+        # TODO possibly we should
+        # finally:
+        #   tx.fill_inflight_responses(Response(450, 'internal error'))
+        # in case OH was aborted by an exception becaues otherwise the
+        # downstream will hang up to some timeout waiting for the
+        # response.
+
         # we tried
         # finally:
         #   storage_tx.write_envelope(TransactionMetadata(),
