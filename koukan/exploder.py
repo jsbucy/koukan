@@ -126,6 +126,14 @@ class Exploder(SyncFilter):
 
         for i in range(0, len(tx.rcpt_to)):
             if i >= len(self.recipients):
+                # XXX sync_factory can return None but pytype isn't
+                # flagging it. This happens if
+                # router_service.Service.create_storage_writer() can't
+                # start the OH because the executor is full. mx should
+                # return a 4xx 'server busy' rcpt_response in that
+                # case.  msa is debatable whether it should s&f this
+                # error depending on the application, possibly
+                # depending on the number of recipients?
                 rcpt = Recipient(self.sync_factory())
                 self.recipients.append(rcpt)
                 rcpt.first_update(tx_orig, self.output_chain, i)
