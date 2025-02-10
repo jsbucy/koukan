@@ -111,9 +111,9 @@ class End2EndTest(unittest.TestCase):
         self.receiver_rest_port = self._find_free_port()
         self.receiver_base_url = 'http://localhost:%d' % self.receiver_rest_port
 
-        self.gateway_config = Config()
-        self.gateway_config.load_yaml('config/local-test/gateway.yaml')
-        gateway_yaml = self.gateway_config.root_yaml
+        with open('config/local-test/gateway.yaml', 'r') as f:
+            self.gateway_config_yaml =  yaml.load(f, Loader=yaml.CLoader)
+        gateway_yaml = self.gateway_config_yaml
         gateway_listener_yaml = gateway_yaml['rest_listener']
         gateway_listener_yaml['addr'] = ['localhost', self.gateway_rest_port]
         gateway_listener_yaml['session_uri'] = 'http://localhost:%d' % self.gateway_rest_port
@@ -170,7 +170,7 @@ class End2EndTest(unittest.TestCase):
 
 
     def _run(self):
-        self.gateway = SmtpGateway(self.gateway_config)
+        self.gateway = SmtpGateway(self.gateway_config_yaml)
         self.router_config = Config()
         self.router_config.inject_yaml(self.router_yaml)
         self.router = Service(config=self.router_config)

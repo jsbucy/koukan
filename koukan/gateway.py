@@ -18,13 +18,13 @@ from koukan.rest_endpoint_adapter import (
     EndpointFactory,
     RestHandlerFactory )
 import koukan.hypercorn_main as hypercorn_main
-from koukan.config import Config
+import yaml
 from koukan.executor import Executor
 
 
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SyncFilterAdapter]
-    config : Optional[Config] = None
+    config_yaml : Optional[dict] = None
     shutdown_gc = False
     executor : Executor
     lock : Lock
@@ -33,8 +33,8 @@ class SmtpGateway(EndpointFactory):
     hypercorn_shutdown : Optional[asyncio.Event] = None
     smtp_services : List[object]
 
-    def __init__(self, config : Optional[Config] = None):
-        self.config = config
+    def __init__(self, config_yaml : Optional[dict] = None):
+        self.config_yaml = config_yaml
 
         self.smtp_factory = SmtpFactory()
 
@@ -78,16 +78,16 @@ class SmtpGateway(EndpointFactory):
             verify=yaml.get('verify', True))
 
     def rest_endpoint_yaml(self, name):
-        for endpoint_yaml in self.config.root_yaml['rest_output']:
+        for endpoint_yaml in self.config_yaml['rest_output']:
             if endpoint_yaml['name'] == name:
                 return endpoint_yaml
         return None
 
     # EndpointFactory
     def create(self, host) -> Optional[Tuple[AsyncFilter, dict]]:
-        rest_yaml = self.config.root_yaml['rest_listener']
+        rest_yaml = self.config_yaml['rest_listener']
 
-        smtp_yaml = self.config.root_yaml['smtp_output']
+        smtp_yaml = self.config_yaml['smtp_output']
         if not(host_yaml := smtp_yaml.get(host, None)):
             return None
 
@@ -138,7 +138,7 @@ class SmtpGateway(EndpointFactory):
     def gc_inflight(self):
         last_gc = 0
         while not self.shutdown_gc:
-            rest_yaml = self.config.root_yaml['rest_listener']
+            rest_yaml = self.config_yaml['rest_listener']
             now = time.monotonic()
             delta = now - last_gc
             gc_interval = rest_yaml.get('gc_interval', 5)
@@ -151,11 +151,11 @@ class SmtpGateway(EndpointFactory):
                               rest_yaml.get('gc_done_ttl', 10))
 
     def main(self, alive=None):
-        if self.config is None:
-            self.config = Config()
-            self.config.load_yaml(sys.argv[1])
+        if self.config_yaml is None:
+            with open(sys.argv[1], 'r') as yaml_file:
+                self.config_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
 
-        global_yaml = self.config.root_yaml.get('global', {})
+        global_yaml = self.config_yaml.get('global', {})
         executor_yaml = global_yaml.get('executor', {})
 
         self.executor = Executor(
@@ -166,11 +166,11 @@ class SmtpGateway(EndpointFactory):
                                 daemon=True)
         self.gc_thread.start()
 
-        rest_listener_yaml = self.config.root_yaml['rest_listener']
+        rest_listener_yaml = self.config_yaml['rest_listener']
         self.rest_id_factory = lambda: secrets.token_urlsafe(
             rest_listener_yaml.get('rest_id_entropy', 16))
 
-        root_yaml = self.config.root_yaml
+        root_yaml = self.config_yaml
         logging_yaml = root_yaml.get('logging', None)
         if logging_yaml:
             logging.config.dictConfig(logging_yaml)

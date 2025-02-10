@@ -512,8 +512,7 @@ pytype_library(name='gateway_lib',
                      ':rest_endpoint',
                      ':smtp_service',
                      ':fastapi_service',
-                     ':hypercorn_main',
-                     ':config'])
+                     ':hypercorn_main'])
 
 pytype_library(name='hello_policy',
                srcs=['hello_policy.py'],
@@ -535,7 +534,6 @@ py_test(name='gateway_test',
               ':rest_endpoint',
               ':fake_smtpd',
               ':blob',
-              ':config',
               '@pypi//parameterized',
               '@pypi//requests'])
 

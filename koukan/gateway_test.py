@@ -7,7 +7,6 @@ from threading import Thread
 import time
 from parameterized import parameterized_class
 
-from koukan.config import Config
 from koukan.gateway import SmtpGateway
 from koukan.fake_smtpd import FakeSmtpd
 from koukan.blob import InlineBlob
@@ -48,10 +47,7 @@ class GatewayTest(unittest.TestCase):
         root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
         root_yaml['smtp_output']['outbound']['protocol'] = self.protocol
 
-        self.config = Config()
-        self.config.inject_yaml(root_yaml)
-
-        self.gw = SmtpGateway(self.config)
+        self.gw = SmtpGateway(root_yaml)
 
         self.fake_smtpd_port = self.find_unused_port()
 
