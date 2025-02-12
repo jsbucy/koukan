@@ -164,6 +164,11 @@ root_yaml_template = {
         'max_inflight': 10,
         'watchdog_timeout': 10,
         'testonly_debug_futures': True
+    },
+    'modules': {
+        'sync_filter': {
+            'hello': 'koukan.hello_filter'
+        }
     }
 }
 

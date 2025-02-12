@@ -25,6 +25,9 @@ from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.storage_schema import VersionConflictException
 from koukan.deadline import Deadline
 
+from koukan.message_builder_filter import MessageBuilderFilter
+
+
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
@@ -148,7 +151,9 @@ class Service:
 
         self.storage.recover(session_ttl=session_ttl)
 
-        self.config.set_storage(self.storage)
+        self.config.inject_filter(
+            'message_builder',
+            lambda yaml, next: MessageBuilderFilter(self.storage, next))
 
         if global_yaml.get('dequeue', True):
             self.daemon_executor.submit(
@@ -170,7 +175,7 @@ class Service:
         self.rest_handler_factory = RestHandlerFactory(
             self.executor,
             endpoint_factory = self.endpoint_factory,
-            rest_id_factory = self.config.rest_id_factory(),
+            rest_id_factory = self.config.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
             service_uri=listener_yaml.get('service_uri', None))
 
@@ -221,7 +226,7 @@ class Service:
 
         writer = StorageWriterFilter(
             storage=self.storage,
-            rest_id_factory=self.config.rest_id_factory(),
+            rest_id_factory=self.config.rest_id_factory,
             create_leased=True)
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml))
@@ -233,7 +238,7 @@ class Service:
     def get_storage_writer(self, rest_id : str) -> StorageWriterFilter:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.config.rest_id_factory())
+            rest_id_factory=self.config.rest_id_factory)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
                        endpoint : SyncFilter,
@@ -247,6 +252,12 @@ class Service:
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
 
+    def _notification_endpoint(self):
+        return StorageWriterFilter(
+            self.storage,
+            rest_id_factory=self.config.rest_id_factory,
+            create_leased=False)
+
     def handle_tx(self, storage_tx : TransactionCursor,
                   endpoint : SyncFilter,
                   endpoint_yaml):
@@ -257,7 +268,7 @@ class Service:
             output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
             output_yaml.get('downstream_data_timeout', 60),
-            notification_factory=self.config.notification_endpoint,
+            notification_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.config.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', {}))

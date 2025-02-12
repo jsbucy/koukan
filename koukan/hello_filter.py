@@ -13,5 +13,5 @@ class HelloFilter(SyncFilter):
         logging.debug('HelloFilter.on_update %s', tx)
         return self.next.on_update(tx, tx_delta)
 
-def factory(yaml, next):
+def factory(yaml, next : SyncFilter) -> SyncFilter:
     return HelloFilter(next)
