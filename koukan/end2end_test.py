@@ -12,7 +12,6 @@ from dkim import dknewkey
 import tempfile
 import yaml
 
-from koukan.config import Config
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
 from koukan.fake_smtpd import FakeSmtpd
@@ -171,9 +170,7 @@ class End2EndTest(unittest.TestCase):
 
     def _run(self):
         self.gateway = SmtpGateway(self.gateway_config_yaml)
-        self.router_config = Config()
-        self.router_config.inject_yaml(self.router_yaml)
-        self.router = Service(config=self.router_config)
+        self.router = Service(root_yaml=self.router_yaml)
         self.fake_smtpd = FakeSmtpd("localhost", self.fake_smtpd_port)
 
         self.gateway_main_fut = self.executor.submit(

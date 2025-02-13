@@ -7,6 +7,8 @@ from threading import Lock, Condition
 from functools import partial
 import asyncio
 from datetime import timedelta
+import yaml
+import secrets
 
 import koukan.fastapi_service as fastapi_service
 import koukan.hypercorn_main as hypercorn_main
@@ -18,7 +20,7 @@ from koukan.rest_endpoint_adapter import (
 from koukan.output_handler import OutputHandler
 from koukan.response import Response
 from koukan.executor import Executor
-from koukan.config import Config
+from koukan.config import FilterChainFactory
 from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
 
 from koukan.storage_writer_filter import StorageWriterFilter
@@ -49,7 +51,7 @@ class Service:
 
     _shutdown = False
 
-    config : Optional[Config] = None
+    config : Optional[FilterChainFactory] = None
 
     started = False
     executor : Optional[Executor] = None
@@ -57,12 +59,15 @@ class Service:
     daemon_executor : Optional[Executor] = None
 
     hypercorn_shutdown : Optional[asyncio.Event] = None
+    _rest_id_entropy : int = 16
+    root_yaml : Optional[dict] = None
 
-    def __init__(self, config=None):
+
+    def __init__(self, root_yaml=None):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        self.config = config
+        self.root_yaml = root_yaml
 
         if self.config:
             self.config.exploder_output_factory = self.create_exploder_output
@@ -117,16 +122,23 @@ class Service:
 
     def main(self, config_filename=None, alive=None):
         if config_filename:
-            config = Config(
-                exploder_output_factory = self.create_exploder_output)
-            config.load_yaml(config_filename)
-            self.config = config
+            with open(config_filename, 'r') as yaml_file:
+                self.root_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
+        self.config = FilterChainFactory(
+            self.root_yaml,
+            exploder_output_factory = self.create_exploder_output)
 
-        logging_yaml = self.config.root_yaml.get('logging', None)
+        if 'global' in self.root_yaml:
+            if 'rest_id_entropy' in self.root_yaml['global']:
+                e = self.root_yaml['global']['rest_id_entropy']
+                assert isinstance(e, int)
+                self._rest_id_entropy = e
+
+        logging_yaml = self.root_yaml.get('logging', None)
         if logging_yaml:
             logging.config.dictConfig(logging_yaml)
 
-        global_yaml = self.config.root_yaml.get('global', {})
+        global_yaml = self.root_yaml.get('global', {})
 
         if self.executor is None:
             executor_yaml = global_yaml.get('executor', {})
@@ -135,11 +147,9 @@ class Service:
                 executor_yaml.get('watchdog_timeout', 30),
                 debug_futures=executor_yaml.get(
                     'testonly_debug_futures', False))
-        # ick dependency cycle
-        self.config.executor = self.executor
 
-        storage_yaml = self.config.root_yaml['storage']
-        listener_yaml = self.config.root_yaml['rest_listener']
+        storage_yaml = self.root_yaml['storage']
+        listener_yaml = self.root_yaml['rest_listener']
 
         if self.storage is None:
             self.storage=Storage.connect(
@@ -175,7 +185,7 @@ class Service:
         self.rest_handler_factory = RestHandlerFactory(
             self.executor,
             endpoint_factory = self.endpoint_factory,
-            rest_id_factory = self.config.rest_id_factory,
+            rest_id_factory = self.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
             service_uri=listener_yaml.get('service_uri', None))
 
@@ -211,6 +221,9 @@ class Service:
         self.hypercorn_shutdown.set()
         return False
 
+    def rest_id_factory(self):
+        return secrets.token_urlsafe(self._rest_id_entropy)
+
     def create_exploder_output(self, http_host : str
                                ) -> Optional[StorageWriterFilter]:
         if (endp := self.create_storage_writer(http_host)) is None:
@@ -226,7 +239,7 @@ class Service:
 
         writer = StorageWriterFilter(
             storage=self.storage,
-            rest_id_factory=self.config.rest_id_factory,
+            rest_id_factory=self.rest_id_factory,
             create_leased=True)
         fut = self.executor.submit(
             lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml))
@@ -238,7 +251,7 @@ class Service:
     def get_storage_writer(self, rest_id : str) -> StorageWriterFilter:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.config.rest_id_factory)
+            rest_id_factory=self.rest_id_factory)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
                        endpoint : SyncFilter,
@@ -255,7 +268,7 @@ class Service:
     def _notification_endpoint(self):
         return StorageWriterFilter(
             self.storage,
-            rest_id_factory=self.config.rest_id_factory,
+            rest_id_factory=self.rest_id_factory,
             create_leased=False)
 
     def handle_tx(self, storage_tx : TransactionCursor,
@@ -269,7 +282,7 @@ class Service:
             downstream_data_timeout =
             output_yaml.get('downstream_data_timeout', 60),
             notification_factory=self._notification_endpoint,
-            mailer_daemon_mailbox=self.config.root_yaml['global'].get(
+            mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', {}))
         handler.handle()
@@ -335,7 +348,7 @@ class Service:
                 return
 
     def gc(self, executor):
-        storage_yaml = self.config.root_yaml['storage']
+        storage_yaml = self.root_yaml['storage']
         ttl = timedelta(seconds=storage_yaml.get('gc_ttl', 86400))
         interval = storage_yaml.get('gc_interval', 300)
         while True:

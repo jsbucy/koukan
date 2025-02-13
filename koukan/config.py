@@ -1,19 +1,17 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple
 import logging
-import sys
-import secrets
 import importlib
 from functools import partial
 import inspect
 
-from yaml import load, CLoader as Loader
 from koukan.address_list_policy import AddressListPolicy
 from koukan.dest_domain_policy import DestDomainPolicy
 from koukan.recipient_router_filter import (
     Destination,
-    RecipientRouterFilter )
+    RecipientRouterFilter,
+    RoutingPolicy )
 from koukan.rest_endpoint import RestEndpoint
 from koukan.dkim_endpoint import DkimEndpoint
 from koukan.mx_resolution import DnsResolutionFilter
@@ -37,32 +35,37 @@ class FilterSpec:
 
 StorageWriterFactory = Callable[[str],Optional[AsyncFilter]]
 
-class Config:
+class FilterChainFactory:
     endpoint_yaml : Optional[dict] = None
     exploder_output_factory : Optional[StorageWriterFactory] = None
-    _rest_id_entropy : int = 16
+    filters : Dict[str, FilterSpec]
+    root_yaml : dict
+    router_policies : Dict[str, RoutingPolicy]
 
     def __init__(
             self,
+            root_yaml : dict,
             exploder_output_factory : Optional[StorageWriterFactory] = None):
         self.exploder_output_factory = exploder_output_factory
-        self.router_policies = {
-            'dest_domain': self.router_policy_dest_domain,
-            'address_list': self.router_policy_address_list }
-        self.filters = {
-            'rest_output': FilterSpec(self.rest_output),
-            'router': FilterSpec(self.router),
-            'dkim': FilterSpec(self.dkim),
-            # router handle_new_tx()
-            'exploder': FilterSpec(self.exploder),
-            'message_parser': FilterSpec(self.message_parser),
-            'remote_host': FilterSpec(self.remote_host),
-            'received_header': FilterSpec(self.received_header),
-            'relay_auth': FilterSpec(self.relay_auth),
-            'dns_resolution': FilterSpec(self.dns_resolution),
-            # router handle_new_tx()
-            'add_route': FilterSpec(self.add_route),
-        }
+        self.router_policies = {}
+        self.add_router_policy('dest_domain', self.router_policy_dest_domain)
+        self.add_router_policy('address_list', self.router_policy_address_list)
+        self.filters = {}
+        self.add_filter('rest_output', self.rest_output)
+        self.add_filter('router', self.router)
+        self.add_filter('dkim', self.dkim)
+        # router handle_new_tx()
+        self.add_filter('exploder', self.exploder)
+        self.add_filter('message_parser', self.message_parser)
+        self.add_filter('remote_host', self.remote_host)
+        self.add_filter('received_header', self.received_header)
+        self.add_filter('relay_auth', self.relay_auth)
+        self.add_filter('dns_resolution', self.dns_resolution)
+        # router handle_new_tx()
+        self.add_filter('add_route', self.add_route)
+
+        self._inject_yaml(root_yaml)
+
 
     def _load_user_module(self, name, mod):
         colon = mod.find(':')
@@ -113,7 +116,7 @@ class Config:
                       fac : Callable[[Any, SyncFilter], SyncFilter]):
         self.filters[name] = FilterSpec(fac)
 
-    def inject_yaml(self, root_yaml):
+    def _inject_yaml(self, root_yaml):
         self.root_yaml = root_yaml
         self.endpoint_yaml = {}
         for endpoint_yaml in self.root_yaml.get('endpoint', []):
@@ -121,17 +124,6 @@ class Config:
 
         if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
             self.load_user_modules(modules_yaml)
-
-        if 'global' in self.root_yaml:
-            if 'rest_id_entropy' in self.root_yaml['global']:
-                e = self.root_yaml['global']['rest_id_entropy']
-                assert isinstance(e, int)
-                self._rest_id_entropy = e
-
-    def load_yaml(self, filename):
-        with open(filename, 'r') as yaml_file:
-            root_yaml = load(yaml_file, Loader=Loader)
-            self.inject_yaml(root_yaml)
 
     def exploder_upstream(self, http_host : str,
                           rcpt_timeout : float,
@@ -181,9 +173,6 @@ class Config:
                 return None
             add_route, output_yaml = output
         return AddRouteFilter(add_route, yaml['output_chain'], next)
-
-    def rest_id_factory(self):
-        return secrets.token_urlsafe(self._rest_id_entropy)
 
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)

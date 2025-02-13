@@ -381,8 +381,7 @@ pytype_library(name='config',
                      ':exploder',
                      ':remote_host_filter',
                      ':received_header_filter',
-                     ':relay_auth_filter',
-                     '@pypi//pyyaml'])
+                     ':relay_auth_filter'])
 
 pytype_library(name='executor',
                srcs=['executor.py'])
@@ -419,7 +418,8 @@ pytype_library(name='router_service',
                      ':fastapi_service',
                      ':hypercorn_main',
                      ':rest_endpoint_adapter',
-                     ':message_builder_filter'])
+                     ':message_builder_filter',
+                     '@pypi//pyyaml'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
@@ -430,7 +430,6 @@ py_test(name='router_service_test_fastapi',
               ':rest_endpoint',
               ':response',
               ':blob',
-              ':config',
               ':fake_endpoints',
               ':filter',
               ':postgres_test_utils',
@@ -447,7 +446,6 @@ py_test(name='router_service_test_sqlite',
               ':rest_endpoint',
               ':response',
               ':blob',
-              ':config',
               ':fake_endpoints',
               ':filter',
               ':postgres_test_utils',
@@ -512,7 +510,8 @@ pytype_library(name='gateway_lib',
                      ':rest_endpoint',
                      ':smtp_service',
                      ':fastapi_service',
-                     ':hypercorn_main'])
+                     ':hypercorn_main',
+                     '@pypi//pyyaml'])
 
 pytype_library(name='hello_policy',
                srcs=['hello_policy.py'],
@@ -553,7 +552,6 @@ py_test(name='end2end_test',
               '//testdata:trivial.msg'],
         deps=[':router_service',
               ':gateway_lib',
-              ':config',
               ':executor',
               ':hello_policy',
               ':hello_filter',
@@ -563,7 +561,8 @@ py_test(name='end2end_test',
               '//examples/send_message:send_message',
               '//examples/receiver:receiver',
               '//examples/receiver:fastapi_receiver',
-              '@pypi//dkimpy'])
+              '@pypi//dkimpy',
+              '@pypi//pyyaml'])
 
 py_binary(name='router',
           main='router_service_main.py',

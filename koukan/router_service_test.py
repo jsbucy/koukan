@@ -17,7 +17,6 @@ from koukan.router_service import Service
 from koukan.rest_endpoint import RestEndpoint
 from koukan.response import Response
 from koukan.blob import CompositeBlob, InlineBlob
-from koukan.config import Config
 from koukan.fake_endpoints import FakeSyncFilter
 from koukan.filter import (
     HostPort,
@@ -204,14 +203,15 @@ class RouterServiceTest(unittest.TestCase):
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         root_yaml['rest_listener']['session_uri'] = 'http://localhost:%d' % self.port
         router_url = 'http://localhost:%d' % self.port
-        config = Config()
-        config.inject_yaml(root_yaml)
-        config.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint())
-        service = Service(config=config)
+        service = Service(root_yaml=root_yaml)
+
         service.start_main()
         self.assertTrue(service.wait_started(5))
-        return config, router_url, service
+        # XXX
+        service.config.inject_filter(
+            'sync', lambda yaml, next: self.get_endpoint())
+
+        return router_url, service
 
     def setUp(self):
         logging.basicConfig(
@@ -234,7 +234,7 @@ class RouterServiceTest(unittest.TestCase):
             self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
 
         # find a free port
-        self.config, self.router_url, self.service = self._setup_router()
+        self.router_url, self.service = self._setup_router()
 
         # probe for startup
         def exp(tx, tx_delta):
@@ -1105,7 +1105,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_multi_node(self):
-        config2, url2, service2 = self._setup_router()
+        url2, service2 = self._setup_router()
 
         # start a tx on self.service
         rest_endpoint = RestEndpoint(
