@@ -194,7 +194,7 @@ class RouterServiceTest(unittest.TestCase):
             self.cv.notify_all()
 
     def _setup_router(self):
-        root_yaml = copy.deepcopy(root_yaml_template)
+        self.root_yaml = root_yaml = copy.deepcopy(root_yaml_template)
         root_yaml['storage']['url'] = self.storage_url
 
         # find a free port
@@ -208,7 +208,7 @@ class RouterServiceTest(unittest.TestCase):
         service.start_main()
         self.assertTrue(service.wait_started(5))
         # XXX
-        service.config.inject_filter(
+        service.filter_chain_factory.inject_filter(
             'sync', lambda yaml, next: self.get_endpoint())
 
         return router_url, service
@@ -355,7 +355,7 @@ class RouterServiceTest(unittest.TestCase):
         else:
             self.fail('didn\'t get expected transaction %s' % tx_json)
 
-        self.service.config.root_yaml['storage']['gc_interval'] = 1
+        self.root_yaml['storage']['gc_interval'] = 1
         self.service.daemon_executor.submit(
             partial(self.service.gc, self.service.daemon_executor))
 

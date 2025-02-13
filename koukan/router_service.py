@@ -20,7 +20,8 @@ from koukan.rest_endpoint_adapter import (
 from koukan.output_handler import OutputHandler
 from koukan.response import Response
 from koukan.executor import Executor
-from koukan.config import FilterChainFactory
+from koukan.filter_chain_factory import FilterChainFactory
+from koukan.filter_chain_wiring import FilterChainWiring
 from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
 
 from koukan.storage_writer_filter import StorageWriterFilter
@@ -51,7 +52,7 @@ class Service:
 
     _shutdown = False
 
-    config : Optional[FilterChainFactory] = None
+    filter_chain_factory : Optional[FilterChainFactory] = None
 
     started = False
     executor : Optional[Executor] = None
@@ -68,9 +69,6 @@ class Service:
         self.cv = Condition(self.lock)
 
         self.root_yaml = root_yaml
-
-        if self.config:
-            self.config.exploder_output_factory = self.create_exploder_output
 
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300,
@@ -124,9 +122,9 @@ class Service:
         if config_filename:
             with open(config_filename, 'r') as yaml_file:
                 self.root_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
-        self.config = FilterChainFactory(
-            self.root_yaml,
-            exploder_output_factory = self.create_exploder_output)
+        self.filter_chain_factory = FilterChainFactory(self.root_yaml)
+        self.wiring = FilterChainWiring(self.create_exploder_output)
+        self.wiring.wire(self.root_yaml, self.filter_chain_factory)
 
         if 'global' in self.root_yaml:
             if 'rest_id_entropy' in self.root_yaml['global']:
@@ -161,7 +159,7 @@ class Service:
 
         self.storage.recover(session_ttl=session_ttl)
 
-        self.config.inject_filter(
+        self.filter_chain_factory.inject_filter(
             'message_builder',
             lambda yaml, next: MessageBuilderFilter(self.storage, next))
 
@@ -233,7 +231,8 @@ class Service:
     def create_storage_writer(self, http_host : str
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert http_host is not None
-        if (endp := self.config.get_endpoint(http_host)) is None:
+        if (endp := self.filter_chain_factory.build_filter_chain(http_host)
+            ) is None:
             return None
         endpoint, endpoint_yaml = endp
 
@@ -320,7 +319,8 @@ class Service:
         if storage_tx is None:
             return False
 
-        endpoint, endpoint_yaml = self.config.get_endpoint(storage_tx.tx.host)
+        endpoint, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
+            storage_tx.tx.host)
         logging.debug('_dequeue %s %s',
                       storage_tx.id, storage_tx.rest_id)
 

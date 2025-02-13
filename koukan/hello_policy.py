@@ -9,5 +9,5 @@ class HelloPolicy(RoutingPolicy):
         logging.debug('HelloPolicy.endpoint_for_rcpt %s', rcpt)
         return None, None
 
-def factory(yaml):
+def factory(yaml) -> RoutingPolicy:
     return HelloPolicy()

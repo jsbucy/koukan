@@ -30,11 +30,13 @@ def setUpModule():
 def tearDownModule():
     postgres_test_utils.tearDownModule()
 
-def _get_router_endpoint_yaml(router_yaml : dict, name : str) -> Optional[dict]:
+def _get_router_endpoint_yaml(router_yaml : dict, name : str
+                              ) -> Optional[dict]:
     for endpoint in router_yaml['endpoint']:
         if endpoint['name'] == name:
             return endpoint
     return None
+
 def _add_filter_after(endpoint_yaml : dict, filter_name : str,
                       filter_yaml : dict):
     for i,filter in enumerate(endpoint_yaml['chain']):
