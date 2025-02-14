@@ -97,8 +97,6 @@ class TransactionCursor:
                message_builder_blobs_done : bool = False):
         parent = self.parent
         with self.parent.begin_transaction() as db_tx:
-            # xxx dead?
-            self.last = False
             self.version = 0
 
             db_json = tx.to_json(WhichJson.DB)
@@ -108,7 +106,6 @@ class TransactionCursor:
                 creation = self.parent._current_timestamp_epoch(),
                 last_update = self.parent._current_timestamp_epoch(),
                 version = self.version,
-                last = self.last,
                 json = db_json,
                 creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id,
@@ -488,7 +485,6 @@ class TransactionCursor:
                      self.parent.tx_table.c.creation,
                      self.parent.tx_table.c.json,
                      self.parent.tx_table.c.version,
-                     self.parent.tx_table.c.last,
                      self.parent.tx_table.c.input_done,
                      self.parent.tx_table.c.final_attempt_reason,
                      self.parent.tx_table.c.message_builder,
@@ -522,7 +518,6 @@ class TransactionCursor:
          self.creation,
          trans_json,
          self.version,
-         self.last,
          self.input_done,
          self.final_attempt_reason,
          self.message_builder,

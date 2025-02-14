@@ -26,11 +26,6 @@ CREATE TABLE Transactions (
   -- the presence of this field gates recovery
   final_attempt_reason TEXT,
 
-  -- XXX dead?
-  -- append(last=True) has been called, guarantees that TransactionContent
-  -- not growing but not that all blobs are finalized
-  last bool,
-
   -- session that created this
   creation_session_id INTEGER,
   -- session that output attempt is currently active in
