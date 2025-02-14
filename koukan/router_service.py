@@ -55,7 +55,8 @@ class Service:
     filter_chain_factory : Optional[FilterChainFactory] = None
 
     started = False
-    executor : Optional[Executor] = None
+    rest_executor : Optional[Executor] = None
+    output_executor : Optional[Executor] = None
     # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
@@ -102,12 +103,9 @@ class Service:
 
         # tests schedule main() on daemon executor
         success = True
-        if self.daemon_executor is not None:
-            if not self.daemon_executor.shutdown(timeout=10):
-                success = False
-
-        if self.executor is not None:
-            if not self.executor.shutdown(timeout=10):
+        for executor in [self.daemon_executor, self.rest_executor,
+                         self.output_executor]:
+            if not executor.shutdown(timeout=10):
                 success = False
 
         self.storage._del_session()
@@ -138,13 +136,15 @@ class Service:
 
         global_yaml = self.root_yaml.get('global', {})
 
-        if self.executor is None:
-            executor_yaml = global_yaml.get('executor', {})
-            self.executor = Executor(
-                executor_yaml.get('max_inflight', 10),
-                executor_yaml.get('watchdog_timeout', 30),
-                debug_futures=executor_yaml.get(
+        executor_yaml = global_yaml.get('executor', {})
+        def executor(yaml):
+            return Executor(
+                yaml.get('max_inflight', 10),
+                yaml.get('watchdog_timeout', 30),
+                debug_futures=yaml.get(
                     'testonly_debug_futures', False))
+        self.rest_executor = executor(executor_yaml.get('rest', {}))
+        self.output_executor = executor(executor_yaml.get('output', {}))
 
         storage_yaml = self.root_yaml['storage']
         listener_yaml = self.root_yaml['rest_listener']
@@ -181,7 +181,7 @@ class Service:
 
         self.endpoint_factory = StorageWriterFactory(self)
         self.rest_handler_factory = RestHandlerFactory(
-            self.executor,
+            self.rest_executor,
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
@@ -213,22 +213,25 @@ class Service:
             partial(self.main, alive=self.daemon_executor.ping_watchdog))
 
     def heartbeat(self):
-        if (self.executor.check_watchdog() and
-            self.daemon_executor.check_watchdog()):
-            return True
-        self.hypercorn_shutdown.set()
-        return False
+        for ex in [self.rest_executor, self.output_executor,
+                   self.daemon_executor]:
+            if not self.daemon_executor.check_watchdog():
+                self.hypercorn_shutdown.set()
+                return False
+        return True
 
     def rest_id_factory(self):
         return secrets.token_urlsafe(self._rest_id_entropy)
 
-    def create_exploder_output(self, http_host : str
+    def create_exploder_output(self, http_host : str, block_upstream
                                ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(http_host)) is None:
+        if (endp := self.create_storage_writer(http_host, block_upstream)
+            ) is None:
             return None
         return endp[0]
 
-    def create_storage_writer(self, http_host : str
+    def create_storage_writer(self, http_host : str,
+                              block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert http_host is not None
         if (endp := self.filter_chain_factory.build_filter_chain(http_host)
@@ -240,9 +243,10 @@ class Service:
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=True)
-        fut = self.executor.submit(
-            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml))
-        if fut is None:
+        fut = self.output_executor.submit(
+            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
+            0)
+        if block_upstream and fut is None:
             # XXX leaves db tx leased?
             return None
         return writer, endpoint_yaml
@@ -332,12 +336,15 @@ class Service:
         while True:
             executor.ping_watchdog()
             deq = [None]
-            if self.executor.submit(partial(self._dequeue, deq)) is None:
+            # fine to wait forever on this submit()
+            if (self.output_executor.submit(partial(self._dequeue, deq))
+                is None):
+                logging.error('unexpected executor overflow')
                 if self.wait_shutdown(1, executor):
                     return
                 continue
             with self.lock:
-                # Wait 1s for _dequeue() including executor queueing.
+                # Wait 1s for _dequeue()
                 self.cv.wait_for(
                     lambda: (deq[0] is not None) or self._shutdown, 1)
             # if we dequeued something, try again immediately in case
@@ -380,6 +387,7 @@ class Service:
                 return
             executor.ping_watchdog()
             ref = [False]
+
             if self.daemon_executor.submit(
                     partial(self._refresh, ref, session_ttl)) is None:
                 if self.wait_shutdown(1, executor):

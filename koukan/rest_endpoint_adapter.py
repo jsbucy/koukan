@@ -236,7 +236,7 @@ class SyncFilterAdapter(AsyncFilter):
             self.id_version.update(version)
 
             if not self.inflight:
-                fut = self.executor.submit(lambda: self._update())
+                fut = self.executor.submit(lambda: self._update(), 0)
                 # TODO we need a better way to report this error but
                 # throwing here will -> http 500
                 assert fut is not None

@@ -33,11 +33,24 @@ from koukan.storage_schema import VersionConflictException
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    filter : AsyncFilter
+    filter : Optional[AsyncFilter]
     tx :  Optional[TransactionMetadata] = None
 
-    def __init__(self, filter : AsyncFilter):
+    def __init__(self, filter : Optional[AsyncFilter]):
         self.filter = filter
+
+    def _maybe_err(self) -> Optional[TransactionMetadata]:
+        if self.filter is not None:
+            return None
+        err = TransactionMetadata()
+        # 453-4.3.2 "system not accepting network messages" is also
+        # plausible here but maybe more likely for the client to abort
+        # the whole transaction rather than do what we want: stop
+        # sending rcpts and continue to data.
+        self.tx.fill_inflight_responses(
+            Response(451, '4.5.3 too many recipients'), err)
+        self.tx.merge_from(err)
+        return err
 
     def first_update(self,
                      tx : TransactionMetadata,
@@ -46,10 +59,25 @@ class Recipient:
         self.tx.host = output_chain
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
+        # TODO FilterChainWiring.exploder() passes block_upstream=True to
+        # router_service.Service.create_storage_writer() which
+        # returns None if _handle_new_tx() couldn't be scheduled on
+        # the executor. FilterChainWiring then returns None instead of
+        # wrapping the writer with AsyncFilterWrapper. That results in
+        # this downstream error. It is possible sites with bursty
+        # load and/or msa clients that are very averse to temporary
+        # errors may want to store&forward in that situation. In that
+        # case create_storage_writer wouldn't error out on the
+        # executor overflow and AsyncFilterWrapper probably also wants
+        # a hint to set the upstream response -> s&f timeout to 0.
+        if (err := self._maybe_err()) is not None:
+            return err
         return self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        if (err := self._maybe_err()) is not None:
+            return err
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
         assert self.tx.merge_from(delta) is not None
         if not delta:
@@ -71,7 +99,7 @@ class Recipient:
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
 class Exploder(SyncFilter):
-    sync_factory : FilterFactory
+    upstream_factory : FilterFactory
     output_chain : str
     # TODO these timeouts move to AsyncFilterWrapper
     rcpt_timeout : Optional[float] = None
@@ -85,11 +113,11 @@ class Exploder(SyncFilter):
 
     def __init__(self,
                  output_chain : str,
-                 sync_factory : FilterFactory,
+                 upstream_factory : FilterFactory,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None,
                  default_notification : Optional[dict] = None):
-        self.sync_factory = sync_factory
+        self.upstream_factory = upstream_factory
         self.output_chain = output_chain
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
@@ -126,15 +154,7 @@ class Exploder(SyncFilter):
 
         for i in range(0, len(tx.rcpt_to)):
             if i >= len(self.recipients):
-                # XXX sync_factory can return None but pytype isn't
-                # flagging it. This happens if
-                # router_service.Service.create_storage_writer() can't
-                # start the OH because the executor is full. mx should
-                # return a 4xx 'server busy' rcpt_response in that
-                # case.  msa is debatable whether it should s&f this
-                # error depending on the application, possibly
-                # depending on the number of recipients?
-                rcpt = Recipient(self.sync_factory())
+                rcpt = Recipient(self.upstream_factory())
                 self.recipients.append(rcpt)
                 rcpt.first_update(tx_orig, self.output_chain, i)
             else:

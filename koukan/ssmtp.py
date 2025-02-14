@@ -32,6 +32,7 @@ def main(host, port, ehlo, mail_from, rcpt_to, data):
         try:
             resp = s.sendmail(mail_from, rcpt_to, m.as_bytes())
             logging.info('done %s', resp)
+            return resp
         except:
             logging.exception('sendmail exception')
 

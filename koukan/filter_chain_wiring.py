@@ -31,7 +31,7 @@ from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 
-StorageWriterFactory = Callable[[str],Optional[AsyncFilter]]
+StorageWriterFactory = Callable[[str, bool],Optional[AsyncFilter]]
 
 class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
@@ -67,11 +67,12 @@ class FilterChainWiring:
                           data_timeout : float,
                           store_and_forward : bool,
                           notification : Optional[dict],
-                          retry : Optional[dict]):
+                          retry : Optional[dict],
+                          block_upstream : bool):
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            http_host)
-        # TODO this is expected if the router can't start the upstream OH
-        #assert upstream is not None
+            http_host, block_upstream)
+        if upstream is None:
+            return None
         return AsyncFilterWrapper(
             upstream,
             rcpt_timeout,
@@ -87,11 +88,17 @@ class FilterChainWiring:
             rcpt_timeout = 5
             data_timeout = 30
         notification = yaml.get('default_notification', None)
+        # if one wanted to store&forward on executor overflow
+        # (i.e. pass block_upstream=False below),
+        # exploder_output_factory probably needs to return an extra
+        # bool here to tell you that that happened to set these
+        # timeouts to 0 like add-route.
+        # cf exploder.Recipient.first_update()
         return Exploder(
             yaml['output_chain'],
             partial(self.exploder_upstream, yaml['output_chain'],
                     rcpt_timeout, data_timeout, msa, notification,
-                    retry={}),
+                    retry={}, block_upstream=True),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout),
             default_notification=notification)
@@ -103,7 +110,8 @@ class FilterChainWiring:
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors
                 store_and_forward=True,
                 notification=yaml.get('notification', None),
-                retry=yaml.get('retry_params', None))
+                retry=yaml.get('retry_params', None),
+                block_upstream=False)
         else:
             output = self.filter_chain_factory.build_filter_chain(
                 yaml['output_chain'])

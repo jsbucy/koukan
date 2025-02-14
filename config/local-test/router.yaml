@@ -1,8 +1,12 @@
 global:
   dequeue: true
   executor:
-    max_inflight: 100
-    watchdog_timeout: 60
+    rest:
+      max_inflight: 10
+      watchdog_timeout: 10
+    output:
+      max_inflight: 100
+      watchdog_timeout: 60
   mailer_daemon_mailbox: mailer-daemon@example.com
   rest_id_entropy: 4
 
