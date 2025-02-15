@@ -83,6 +83,7 @@ root_yaml_template = {
                     'max_attempt_time': 1,
                     'backoff_factor': 0,
                     'deadline': 300,
+                    'bug_retry': 1,
                 }
             },
             'chain': [
@@ -1261,6 +1262,51 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertRcptCodesEqual([203], tx.rcpt_response)
         self.assertEqual(tx.data_response.code, 205)
+
+
+    def test_output_handler_exception(self):
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url,
+            static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = 'hello, world!'
+        tx = TransactionMetadata(
+            retry={},
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')],
+            inline_body=body)
+
+        def exp(tx, tx_delta):
+            raise ValueError('bad')
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+        rest_endpoint.on_update(tx, tx.copy())
+
+        def check_response():
+            for i in range(0,5):
+                tx_json = rest_endpoint.get_json(timeout=2)
+                logging.debug(
+                    'RouterServiceTest.test_output_handler_exception %s',
+                    tx_json)
+                tx = TransactionMetadata.from_json(tx_json, WhichJson.REST_READ)
+                if (tx.mail_response is None or not tx.rcpt_response or
+                    tx.data_response is None):
+                    time.sleep(1)
+                    continue
+                self.assertEqual(tx.mail_response.code, 450)
+                self.assertRcptCodesEqual([450], tx.rcpt_response)
+                self.assertEqual(tx.data_response.code, 450)
+                break
+            else:
+                self.fail('no response')
+        check_response()
+
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+        self._dequeue(1)
+        check_response()
 
 
 class RouterServiceTestFastApi(RouterServiceTest):

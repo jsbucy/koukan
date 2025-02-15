@@ -31,6 +31,7 @@ class OutputHandler:
     rest_id : str
     notification_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
+    retry_params : dict
 
     def __init__(self,
                  cursor : TransactionCursor,
@@ -39,7 +40,7 @@ class OutputHandler:
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 retry_params : Optional[dict] = {}):
+                 retry_params : dict = {}):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
@@ -202,39 +203,74 @@ class OutputHandler:
     def handle(self):
         logging.info('OutputHandler.handle() %s', self.rest_id)
 
-        final_attempt_reason = None
-        next_attempt_time = None
-        delta = TransactionMetadata()
-        if not self.cursor.no_final_notification:
-            final_attempt_reason, next_attempt_time = self._cursor_to_endpoint()
-            # xxx why is this here?
-            delta.attempt_count = self.cursor.attempt_id
-        else:
-            # post facto notification
-            # leave the existing value
+        try:
             final_attempt_reason = None
+            # _cursor_to_endpoint() could be terminated by an uncaught
+            # exception due to a bug. We don't know whether this is
+            # due to something in the tx deterministically tickling a
+            # bug in the code or due to a bug handling a transient
+            # failure (e.g. the executor overflow thing w/exploder
+            # which we handled in 2eb7a4f0 but there are undoubtedly
+            # others) that would succeed if you retry. To try to split
+            # the difference on this, preload next_attempt_time with
+            # 1h so that transient errors will eventually get retried
+            # but we won't crashloop excessively on a bad tx. This is
+            # a last resort against bugs.
+            next_attempt_time = time.time() + self.retry_params.get(
+                'bug_retry', 3600)
+            delta = TransactionMetadata()
+            notification_done = False
 
-        notification_done = False
-        if self.cursor.tx.notification:
-            self._maybe_send_notification(final_attempt_reason)
-            notification_done = True
+            if not self.cursor.no_final_notification:
+                final_attempt_reason, next_attempt_time = (
+                    self._cursor_to_endpoint())
+                # xxx why is this here?
+                delta.attempt_count = self.cursor.attempt_id
+            else:
+                # post facto notification
+                # leave the existing value
+                final_attempt_reason = None
 
-        for i in range(0,5):
-            try:
-                # TODO it probably wouldn't be hard to merge this
-                # write with the one at the end of _output()
-                self.cursor.write_envelope(
-                    delta,
-                    final_attempt_reason=final_attempt_reason,
-                    next_attempt_time=next_attempt_time,
-                    finalize_attempt=True,
-                    notification_done=notification_done)
-                break
-            except VersionConflictException:
-                if i == 4:
-                    raise
-                backoff(i)
-                self.cursor.load()
+            if self.cursor.tx.notification:
+                self._maybe_send_notification(final_attempt_reason)
+                notification_done = True
+        except Exception as e:
+            logging.exception('OutputHandler.handle(): _cursor_to_endpoint()')
+        finally:
+            for i in range(0,5):
+                try:
+                    # TODO it probably wouldn't be hard to merge this
+                    # write with the one at the end of _output()
+
+                    # postcondition of _cursor_to_endpoint() is that all
+                    # reqs have responses. Populate with a temp err here
+                    # in case of a bug, otherwise the downstream will hang
+                    # up to some timeout waiting for a response that will
+                    # never come.
+                    err = TransactionMetadata()
+                    err_resp = Response(
+                        450, 'internal error: OutputHandler failed '
+                        'to populate response')
+                    self.cursor.tx.fill_inflight_responses(err_resp, err)
+
+                    if (self.cursor.tx.body and self.cursor.input_done and
+                        self.cursor.tx.data_response is None):
+                        self.cursor.tx.data_response = err_resp
+                    if err:
+                        logging.warning('missing responses %s', self.cursor.tx)
+                        delta.merge_from(err)
+                    self.cursor.write_envelope(
+                        delta,
+                        final_attempt_reason=final_attempt_reason,
+                        next_attempt_time=next_attempt_time,
+                        finalize_attempt=True,
+                        notification_done=notification_done)
+                    break
+                except VersionConflictException:
+                    if i == 4:
+                        raise
+                    backoff(i)
+                    self.cursor.load()
 
     def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
         logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)

@@ -278,6 +278,7 @@ class Service:
                   endpoint : SyncFilter,
                   endpoint_yaml):
         output_yaml = endpoint_yaml.get('output_handler', {})
+
         handler = OutputHandler(
             storage_tx, endpoint,
             downstream_env_timeout =
@@ -288,30 +289,14 @@ class Service:
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', {}))
-        handler.handle()
-        assert not storage_tx.in_attempt
-
-        # TODO possibly we should
-        # finally:
-        #   tx.fill_inflight_responses(Response(450, 'internal error'))
-        # in case OH was aborted by an exception becaues otherwise the
-        # downstream will hang up to some timeout waiting for the
-        # response.
-
-        # we tried
-        # finally:
-        #   storage_tx.write_envelope(TransactionMetadata(),
-        #                             finalize_attempt=True)
-        # here but it seems more likely than not that exiting
-        # OututHandler with an open tx attempt or exception means
-        # something in the tx tickled a bug in the code and will
-        # deterministically do so again if we retry it.
-
-        # TODO set next_attempt_time so we don't crashloop?  but don't
-        # catch this in tests so they fail with the uncaught
-        # exception. Probably we need an explicit "quarantine" state
-        # for the db tx that prevents recovery/loading but is
-        # queryable for visibility.
+        try:
+            handler.handle()
+        except Exception as e:
+            logging.exception('Service.handle_tx(): OutputHandler.handle')
+        finally:
+            if storage_tx.in_attempt:
+                logging.error(
+                    'BUG: OutputHandler.handle() returned with open attempt')
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         storage_tx = self.storage.load_one()
