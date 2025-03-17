@@ -315,11 +315,11 @@ py_test(name='exploder_test',
         srcs=['exploder_test.py'],
         deps=[':exploder',
               ':async_filter_wrapper',
-              ':fake_endpoints',
               ':blob',
               ':filter',
+              ':postgres_test_utils',
               ':response',
-              ':sqlite_test_utils',
+              ':storage_writer_filter',
               ':storage'])
 
 pytype_library(name='add_route_filter',

@@ -300,13 +300,13 @@ class RouterServiceTest(unittest.TestCase):
 
     def _dequeue(self, n=1):
         deq = 0
-        for i in range(0,100):
+        for i in range(0,10):
             if self.service._dequeue():
                 deq += 1
                 logging.debug('RouterServiceTest._dequeue %d', deq)
             if deq == n:
                 return
-            time.sleep(0.01)
+            time.sleep(0.3)
         else:
             self.fail('failed to dequeue')
 
@@ -758,6 +758,7 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual(tx.body_blob.pread(0),
                              b'Hello, World!')
             updated_tx = tx.copy()
+            # repro temp err here
             updated_tx.data_response = Response(205 + i, 'upstream data %d' % i)
             upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None

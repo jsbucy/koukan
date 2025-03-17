@@ -321,6 +321,7 @@ class TransactionMetadata:
     # suffix of the blob url
     body : Optional[str] = None
 
+    # XXX update comment
     # filter chain only
     # this object will not change across successive calls to
     # Filter.on_update() but may grow

@@ -219,7 +219,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         t = self.start_update(filter, tx, tx_delta)
 
         for i in range(0,5):
-            if tx_cursor.tx.body is not None:
+            if tx_cursor.tx.body_blob is not None:
                 break
             tx_cursor.wait(1)
             tx_cursor.load()

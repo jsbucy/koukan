@@ -53,6 +53,7 @@ class OutputHandler:
     def _wait_downstream(self, delta : TransactionMetadata,
                          ok_rcpt : bool
                          ) -> Tuple[Optional[bool], Optional[Response]]:
+        # xxx req_inflight()?
         if ((delta.mail_from is not None) or
             bool(delta.rcpt_to) or
             self.cursor.input_done):
@@ -81,20 +82,38 @@ class OutputHandler:
         last_tx = None
         upstream_tx = None
 
+        # TODO this control flow no longer makes sense to me, I would expect
+        # while True:
+        #   # 1st req or possible for write_envelope() to return new
+        #   # downstream reqs?
+        #   if not cursor.tx.req_inflight():
+        #     prev = cursor.tx.copy()
+        #     wait_downstream()
+        #   delta = prev.delta(cursor.tx)
+        #   upstream_delta = output_chain.on_update(tx, delta)
+        #   if tx.req_inflight():
+        #     # bug
+        #   write_envelope(upstream_delta)
+        #   if final resp:
+        #     break
+
         while True:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
                           self.rest_id, self.cursor.tx, self.cursor.input_done)
 
-            if not self.cursor.input_done and self.cursor.tx.message_builder:
-                del self.cursor.tx.message_builder
-
+            cursor_tx = self.cursor.tx.copy()
+            # NOTE: possible to read finalized body_blob but input_done == False
+            if not self.cursor.input_done:
+                if cursor_tx.message_builder:
+                    del cursor_tx.message_builder
+                cursor_tx.body_blob = None
             if last_tx is None:
-                last_tx = self.cursor.tx.copy()
-                upstream_tx = self.cursor.tx.copy()
+                last_tx = cursor_tx.copy()
+                upstream_tx = cursor_tx.copy()
                 delta = last_tx.copy()
             else:
-                delta = last_tx.delta(self.cursor.tx)
-                last_tx = self.cursor.tx.copy()
+                delta = last_tx.delta(cursor_tx)
+                last_tx = cursor_tx.copy()
                 assert delta is not None
                 assert upstream_tx.merge_from(delta) is not None
 
@@ -109,8 +128,9 @@ class OutputHandler:
                     if getattr(obj, field) is not None:
                         delattr(obj, field)
 
+            # xxx ick
             # have_body here is really a proxy for "envelope done"
-            have_body = (((self.cursor.tx.body is not None) or
+            have_body = (((self.cursor.tx.body_blob is not None) or
                           (self.cursor.tx.message_builder is not None)))
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
                     delta.cancelled):
@@ -134,15 +154,8 @@ class OutputHandler:
             elif waited:
                 continue
 
-            body_blob = None
-            if self.cursor.input_done and self.cursor.tx.body:
-                logging.info('OutputHandler._output() %s load body blob',
-                             self.rest_id)
-                blob_reader = self.cursor.parent.get_blob_for_read(
-                    BlobUri(tx_id=self.rest_id, tx_body=True))
-                assert blob_reader
-                assert blob_reader.finalized()
-                upstream_tx.body_blob = delta.body_blob = blob_reader
+            logging.info('OutputHandler._output() %s body blob %s',
+                         self.rest_id, upstream_tx.body_blob)
 
             if upstream_tx.body:
                 del upstream_tx.body
@@ -249,8 +262,7 @@ class OutputHandler:
                     # never come.
                     err = TransactionMetadata()
                     err_resp = Response(
-                        450, 'internal error: OutputHandler failed '
-                        'to populate response')
+                        450, 'internal error: OutputHandler failed to populate response')
                     self.cursor.tx.fill_inflight_responses(err_resp, err)
 
                     if (self.cursor.tx.body and self.cursor.input_done and

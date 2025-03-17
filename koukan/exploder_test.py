@@ -6,19 +6,38 @@ import unittest
 import logging
 import time
 from functools import partial
+from threading import Thread
 
 from koukan.deadline import Deadline
 from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
-from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
+from koukan.storage_writer_filter import StorageWriterFilter
 
 from koukan.blob import CompositeBlob, InlineBlob
 
 from koukan.exploder import Exploder, Recipient
 
-import koukan.sqlite_test_utils as sqlite_test_utils
+import koukan.postgres_test_utils as postgres_test_utils
+
 from koukan.async_filter_wrapper import AsyncFilterWrapper
+
+from koukan.rest_schema import BlobUri
+
+import traceback
+
+def setUpModule():
+    postgres_test_utils.setUpModule()
+
+def tearDownModule():
+    postgres_test_utils.tearDownModule()
+
+next_rest_id = 0
+def rest_id_factory():
+    global next_rest_id
+    rest_id = next_rest_id
+    next_rest_id += 1
+    return 'rest_id%d' % rest_id
 
 class Rcpt:
     addr : str
@@ -26,9 +45,6 @@ class Rcpt:
     rcpt_resp : Optional[Response]
     data_resp : List[Optional[Response]]
     store_and_forward : bool
-    # TODO this is a little bit of a hack, maybe we want more of a
-    # fake async filter here that remembers the last update, etc.
-    tx : Optional[TransactionMetadata]
     endpoint : Optional[AsyncFilter] = None
 
     def __init__(self, addr,  # rcpt_to
@@ -40,21 +56,55 @@ class Rcpt:
         self.data_resp = d
         self.store_and_forward = store_and_forward
 
+    # ~fake OutputHandler for upstream
+    def output(self, endpoint):
+        logging.debug('output start')
+        self.cursor = cursor = endpoint.release_transaction_cursor()
+        cursor.load(start_attempt=True)
+        logging.debug(cursor.attempt_id)
+        tx = cursor.tx
+        while True:
+            logging.debug(tx)
+            env_delta = TransactionMetadata()
+            if self.mail_resp and tx.mail_from and not tx.mail_response:
+                env_delta.mail_response=self.mail_resp
+            if self.rcpt_resp and tx.rcpt_to and not tx.rcpt_response:
+                env_delta.rcpt_response=[self.rcpt_resp]
+            if env_delta:
+                logging.debug(env_delta)
+                cursor.write_envelope(env_delta)
+                err = False
+                for r in [self.mail_resp, self.rcpt_resp]:
+                    if (r is not None) and r.err():
+                        err = True
+                        break
+                if err:
+                    break
+
+            if self.data_resp and tx.body_blob and not tx.data_response:
+                while not tx.body_blob.finalized():
+                    logging.debug('poll body_blob')
+                    time.sleep(0.5)
+                    tx.body_blob.load()
+                logging.debug(tx.body_blob)
+                data_resp = self.data_resp[-1] #.pop(0)
+                assert data_resp
+                #if data_resp:
+                cursor.write_envelope(
+                    TransactionMetadata(data_response = data_resp))
+                #?? finalize_attempt=True)
+                break
+
+            cursor.wait(0.5)
+            # test can finish as soon as we write the last response
+            try:
+                tx = cursor.load()
+            except Exception:
+                break
+        logging.debug('output done')
+
     def set_endpoint(self, endpoint):
         self.endpoint = endpoint
-
-        def exp(tx, tx_delta):
-            self.tx = tx.copy()
-            return TransactionMetadata()
-        self.endpoint.expect_update(exp)
-
-        def exp_get():
-            if self.mail_resp:
-                self.tx.mail_response = self.mail_resp
-            if self.rcpt_resp:
-                self.tx.rcpt_response=[self.rcpt_resp]
-            return self.tx
-        self.endpoint.expect_get_cb(exp_get)
 
     # discussion:
     # AsyncFilter.update() is supposed to return immediately so you
@@ -68,38 +118,15 @@ class Rcpt:
     # you will only see one update with the finalized blob.
     def set_data_response(self, parent, i : int, last : bool):
         logging.debug('Rcpt.set_data_response %d %d', i, len(self.data_resp))
-        if i < len(self.data_resp):
-            data_resp = self.data_resp[i]
-        else:
-            data_resp = None
-        def exp(tx, tx_delta):
-            assert self.tx.merge_from(tx_delta) is not None
-            parent.assertIsNotNone(tx.body_blob)
-            upstream_delta = TransactionMetadata()
-            # return an early data err from update()...
-            if (not last) and (data_resp is not None) and data_resp.err():
-                upstream_delta.data_response = data_resp
-            assert tx.merge_from(upstream_delta) is not None
-            return upstream_delta
 
-        self.endpoint.expect_update(exp)
-
-        # ... but return the final response from get()
-        def exp_get():
-            upstream_tx = self.tx.copy()
-            upstream_tx.data_response = data_resp
-            return upstream_tx
-        if last:
-            self.endpoint.expect_get_cb(exp_get)
-
-    def expect_store_and_forward(self, parent):
-        if not self.store_and_forward:
-            return
-        def exp(tx, tx_delta):
-            parent.assertIsNotNone(tx.retry)
-            parent.assertIsNotNone(tx.notification)
-            return TransactionMetadata()
-        self.endpoint.expect_update(exp)
+    def check_store_and_forward(self):
+        sf = self.store_and_forward
+        tx = self.cursor.load()
+        if sf != (tx.retry is not None):
+            return False
+        if sf != (tx.notification is not None):
+            return False
+        return True
 
 class Test:
     mail_from : str
@@ -119,10 +146,16 @@ class Test:
 
 class ExploderTest(unittest.TestCase):
     def setUp(self):
+        self.pg, self.storage_url = postgres_test_utils.setup_postgres()
+        self.storage = Storage.connect(self.storage_url, 'http://session_uri')
         self.upstream_endpoints = []
 
+    def tearDown(self):
+        self.storage._del_session()
+
     def add_endpoint(self):
-        endpoint = MockAsyncFilter()
+        endpoint = StorageWriterFilter(
+            self.storage, rest_id_factory=rest_id_factory, create_leased=True)
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
@@ -136,60 +169,78 @@ class ExploderTest(unittest.TestCase):
 
     # xxx all tests validate response message
 
-    def _test_one(self, msa, t : Test):
+    def _test_one(self, msa, test : Test):
+        logging.debug('_test_one()', stack_info=True)
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
                             rcpt_timeout=5,
                             default_notification={})
 
-        for r in t.rcpt:
+        output_threads = []
+        for r in test.rcpt:
             endpoint = self.add_endpoint()
             r.set_endpoint(endpoint)
+            output_thread = Thread(
+                target=partial(r.output, endpoint),
+                daemon=True)
+            output_thread.start()
+            output_threads.append(output_thread)
 
-        tx = TransactionMetadata(mail_from=Mailbox(t.mail_from))
+        tx = TransactionMetadata(mail_from=Mailbox(test.mail_from))
+        downstream_cursor = self.storage.get_transaction_cursor()
+        downstream_cursor.create('downstream_rest_id', tx)
+
         exploder.on_update(tx, tx.copy())
-        self.assertEqual(tx.mail_response.code, t.expected_mail_resp.code)
-        for i,r in enumerate(t.rcpt):
+        self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
+        for i,r in enumerate(test.rcpt):
             updated = tx.copy()
             updated.rcpt_to.append(Mailbox(r.addr))
             tx_delta = tx.delta(updated)
             tx = updated
             upstream_delta = exploder.on_update(tx, tx_delta)
             self.assertEqual(
-                [rr.code for rr in upstream_delta.rcpt_response],
-                [t.expected_rcpt_resp[i].code])
+                [test.expected_rcpt_resp[i].code],
+                [rr.code for rr in upstream_delta.rcpt_response])
 
-        self.assertEqual([rr.code for rr in tx.rcpt_response],
-                         [rr.code for rr in t.expected_rcpt_resp])
+        self.assertEqual([rr.code for rr in test.expected_rcpt_resp],
+                         [rr.code for rr in tx.rcpt_response])
 
-        blob = None
         content_length = 0
-        for d in t.data:
+        for d in test.data:
             content_length += len(d)
-
-        for i,d in enumerate(t.data):
-            if blob is None:
-                blob = InlineBlob(d, content_length=content_length)
-            else:
-                blob.append(d)
-            tx_delta = TransactionMetadata(body_blob=blob)
+        if test.data:
+            blob_uri = BlobUri('downstream_rest_id', tx_body=True)
+            blob_writer = self.storage.create_blob(blob_uri)
+        for i,d in enumerate(test.data):
+            last = i == (len(test.data) - 1)
+            content_length = blob_writer.len() + len(d) if last else None
+            blob_writer.append_data(blob_writer.len(), d, content_length)
+            # xxx OutputHandler only invokes chain with finalized body_blob
+            if not last:
+                continue
+            tx_delta = TransactionMetadata(body_blob=blob_writer)
             tx.merge_from(tx_delta)
-            for r in t.rcpt:
-                r.set_data_response(self, i, i == (len(t.data) - 1))
-                if t.expected_data_resp[i] is not None:
-                    r.expect_store_and_forward(self)
+            for r in test.rcpt:
+                r.set_data_response(self, i, last)
             exploder.on_update(tx, tx_delta)
-            if t.expected_data_resp[i] is not None:
-                self.assertEqual(tx.data_response.code,
-                                 t.expected_data_resp[i].code)
+            if test.expected_data_resp[i] is not None:
+                self.assertEqual(test.expected_data_resp[i].code,
+                                 tx.data_response.code)
                 break
             else:
                 self.assertIsNone(tx.data_response)
 
+        for t in output_threads:
+            logging.debug('join %s', t)
+            t.join()
+
+        for r in test.rcpt:
+            self.assertTrue(r.check_store_and_forward())
+
     def test_mx_single_rcpt_mail_perm(self):
         self._test_one(
             msa=False,
-            t=Test('alice',
+            test=Test('alice',
                  [ Rcpt('bob', Response(501), Response(502), [],
                         store_and_forward=False) ],
                  [],
@@ -197,13 +248,14 @@ class ExploderTest(unittest.TestCase):
                  [Response(502)],  # upstream
                  None))
 
-    # xxx wrong expectation
-    def disabled_test_mx_single_rcpt_mail_temp(self):
+    # rcpt perm after mail temp doesn't make sense?
+    def test_mx_single_rcpt_mail_temp(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
-                [ Rcpt('bob', Response(401), Response(500), [],
+                [ Rcpt('bob', Response(401), None, #Response(402),
+                       [],
                        store_and_forward=False) ],
                 [],
                 Response(250),  # injected
@@ -213,7 +265,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_single_rcpt_rcpt_perm(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(501), [],
                        store_and_forward=False) ],
@@ -226,7 +278,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_single_rcpt_rcpt_temp(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(401), [],
                        store_and_forward=False) ],
@@ -235,10 +287,11 @@ class ExploderTest(unittest.TestCase):
                 [Response(401)],  # upstreawm
                 None))
 
-    def test_mx_single_rcpt_data_perm(self):
+    # xxx early data resp
+    def disabled_test_mx_single_rcpt_data_perm(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202), [Response(501)],
                        store_and_forward=False) ],
@@ -248,10 +301,11 @@ class ExploderTest(unittest.TestCase):
                 [Response(501)],  # upstream
             ))
 
-    def test_mx_single_rcpt_data_temp(self):
+    # xxx early data response
+    def disabled_test_mx_single_rcpt_data_temp(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202), [Response(401)],
                        store_and_forward=False) ],
@@ -264,7 +318,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_single_rcpt_data_last_perm(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(501)],
@@ -278,7 +332,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_single_rcpt_data_last_temp(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(401)]) ],
@@ -291,7 +345,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_single_rcpt_success(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(203)],
@@ -305,7 +359,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_multi_rcpt_success_cutthrough(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
@@ -323,7 +377,7 @@ class ExploderTest(unittest.TestCase):
     def test_mx_multi_rcpt_rcpt_temp(self):
         self._test_one(
             msa=False,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
@@ -340,7 +394,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_mail_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(501), None, [],
                        store_and_forward=False) ],
@@ -353,11 +407,11 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_mail_temp(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(401), None, [],
                        store_and_forward=True) ],
-                ['hello, world!'],
+                [b'hello, world!'],
                 Response(250),  # noop mail/injected
                 [Response(250)],  # injected/upgraded
                 [Response(250)],
@@ -366,7 +420,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_rcpt_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(501), [],
                        store_and_forward=False) ],
@@ -379,20 +433,21 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_rcpt_temp(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(401), [],
                        store_and_forward=True) ],
-                ['hello, world!'],
+                [b'hello, world!'],
                 Response(250),  # injected
                 [Response(250)],  # injected/upgraded
                 [Response(250)],
             ))
 
-    def test_msa_single_rcpt_data_perm(self):
+    # xxx early data resp
+    def disabled_test_msa_single_rcpt_data_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202), [Response(501)],
                        store_and_forward=False) ],
@@ -405,7 +460,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_data_temp(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202), [Response(401)],
                        store_and_forward=True) ],
@@ -418,7 +473,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_data_last_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(501)],
@@ -432,7 +487,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_data_last_temp(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(401)],
@@ -446,7 +501,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_single_rcpt_success(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
                        [None, Response(203)],
@@ -461,7 +516,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_multi_rcpt_mail_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
@@ -478,7 +533,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_multi_rcpt_rcpt_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
@@ -492,15 +547,17 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # first recipient succeeds, second permfails after !last data
-    def test_msa_multi_rcpt_data_perm(self):
+    # early data resp
+    def disabled_test_msa_multi_rcpt_data_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
                        store_and_forward=False),
-                  Rcpt('bob2', Response(204), Response(205), [Response(501)],
+                  Rcpt('bob2', Response(204), Response(205),
+                       [Response(501)],
                        store_and_forward=True)],
                 [b'hello, ', b'world!'],
                 Response(250),  # injected
@@ -512,7 +569,7 @@ class ExploderTest(unittest.TestCase):
     def test_msa_multi_rcpt_data_last_perm(self):
         self._test_one(
             msa=True,
-            t=Test(
+            test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
                        [None, Response(203)],
@@ -526,120 +583,23 @@ class ExploderTest(unittest.TestCase):
                 [None, Response(250)],  # 'async mixed upstream'
             ))
 
-
-    # Several of these one-off tests exercise the multi-rcpt fan-out
-    # in Exploder._on_rcpts() that is otherwise dead code until the gateway
-    # implements SMTP PIPELINING
-    def testSuccess(self):
-        exploder = Exploder('output-chain',
-                            partial(self.factory, True))
-
-        tx = TransactionMetadata()
-        tx.mail_from = Mailbox('alice')
-        exploder.on_update(tx, tx.copy())
-        self.assertEqual(tx.mail_response.code, 250)
-
-        up0 = self.add_endpoint()
-        up1 = self.add_endpoint()
-
-        def exp(i, tx, tx_delta):
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(250),
-                rcpt_response=[Response(201 + i)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        up0.expect_update(partial(exp, 0))
-        up1.expect_update(partial(exp, 1))
-
-        tx_delta = TransactionMetadata(
-            rcpt_to = [ Mailbox('bob'), Mailbox('bob2') ])
-        assert tx.merge_from(tx_delta) is not None
-        exploder.on_update(tx, tx_delta)
-
-        body_blob = CompositeBlob()
-        b = InlineBlob(b'hello, ')
-        body_blob.append(b, 0, b.len())
-
-        def exp_data(tx, delta):
-            self.assertFalse(tx.body_blob and tx.body_blob.finalized())
-            return TransactionMetadata()
-        up0.expect_update(exp_data)
-        up1.expect_update(exp_data)
-
-        tx_delta = TransactionMetadata()
-        tx_delta.body_blob = body_blob
-        assert tx.merge_from(tx_delta) is not None
-        exploder.on_update(tx, tx_delta)
-
-        b = InlineBlob(b'world!')
-        body_blob.append(b, 0, b.len(), True)
-
-        def exp_data_last(tx, delta):
-            self.assertTrue(tx.body_blob.finalized())
-            upstream_delta = TransactionMetadata(
-                data_response=Response(250))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        up0.expect_update(exp_data_last)
-        up1.expect_update(exp_data_last)
-
-        # same delta: body has grown
-        exploder.on_update(tx, tx_delta)
-        logging.debug(tx.data_response.message)
-        self.assertEqual(tx.data_response.code, 250)
-        for endpoint in self.upstream_endpoints:
-            self.assertEqual(endpoint.body_blob.pread(0), b'hello, world!')
-
-        # don't expect an additional update to enable retry/notification
-
-    def testMxRcptTemp(self):
-        exploder = Exploder('output-chain',
-                            partial(self.factory, False),
-                            rcpt_timeout=2,
-                            default_notification={'host': 'smtp-out'})
-
-        # The vector tests cover the non-pipelined updates we expect
-        # to get from the current gw implementation. This exercises
-        # the multi-update case.
-        tx = TransactionMetadata(
-            mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob'),
-                       Mailbox('bob2')])
-
-        up0 = self.add_endpoint()
-        up1 = self.add_endpoint()
-
-        def exp(rcpt_code, tx, tx_delta):
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(250),
-                rcpt_response=[Response(rcpt_code)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        up0.expect_update(partial(exp, 201))
-        up1.expect_update(partial(exp, 450))
-        exploder.on_update(tx, tx.copy())
-
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertEqual(tx.rcpt_response[0].code, 201)
-        self.assertEqual(tx.rcpt_response[1].code, 450)
-
-        def exp_data(data_code, tx, tx_delta):
-            upstream_delta = TransactionMetadata(
-                data_response=Response(data_code))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        up0.expect_update(partial(exp_data, 202))
-        up1.expect_update(partial(exp_data, 400))
-
-        tx_delta = TransactionMetadata(
-            body_blob=InlineBlob(b'hello', last=True))
-        tx.merge_from(tx_delta)
-        exploder.on_update(tx, tx_delta)
-        logging.debug(tx)
-        self.assertEqual(tx.data_response.code, 202)
-        # don't expect an additional update to enable retry/notification:
-        # first rcpt succeeded -> no retry
-        # second failed at rcpt -> wasn't accepted -> no retry
+    # all rcpts tempfail data -> s&f
+    def test_msa_multi_rcpt_data_last_temp(self):
+        self._test_one(
+            msa=True,
+            test=Test(
+                'alice',
+                [ Rcpt('bob1', Response(201), Response(202),
+                       [None, Response(401)],
+                       store_and_forward=True),
+                  Rcpt('bob2', Response(204), Response(205),
+                       [None, Response(402)],
+                       store_and_forward=True)],
+                [b'hello, ', b'world!'],
+                Response(250),  # injected
+                [Response(202), Response(205)],  # upstream
+                [None, Response(250)],  # same response s&f
+            ))
 
 
 

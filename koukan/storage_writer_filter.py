@@ -281,9 +281,6 @@ class StorageWriterFilter(AsyncFilter):
             logging.debug('body_blob_uri %s', body_blob_uri)
             assert not reuse_blob_rest_id
             reuse_blob_rest_id = [body_blob_uri]
-            # XXX
-            if not downstream_delta.body:
-                downstream_delta.body = 'b'
 
         if downstream_tx.body_blob is not None:
             del downstream_tx.body_blob

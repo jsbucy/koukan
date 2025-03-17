@@ -532,15 +532,16 @@ class TransactionCursor:
         if self.final_attempt_reason != 'oneshot':
             self.tx.final_attempt_reason = self.final_attempt_reason
 
-        sel_body = select(self.parent.tx_blobref_table.c.blob_id).where(
+        # TODO body_blob should be monotonic, maybe save (above), restore here?
+        sel_body = select(self.parent.tx_blobref_table.c.rest_id).where(
             self.parent.tx_blobref_table.c.transaction_id == self.id,
             self.parent.tx_blobref_table.c.rest_id == TX_BODY)
         res = db_tx.execute(sel_body)
-        if res and res.fetchone():
-            # TODO this is a minor kludge, this needs to be any
-            # non-empty string to be converted to a placeholder in the
-            # rest read path
-            self.tx.body = 'b'
+        if res and (row := res.fetchone()):
+            (blob_rest_id,) = row
+            self.tx.body_blob = BlobCursor(self.parent)
+            self.tx.body_blob.load(
+                body_blob_uri(BlobUri(self.rest_id, tx_body=True)))
         self.tx.message_builder = self.message_builder
         self.tx.tx_db_id = self.id
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
@@ -686,6 +687,11 @@ class BlobCursor(Blob, WritableBlob):
         self.parent = storage
         self.update_tx = update_tx
 
+    def __eq__(self, x):
+        if not isinstance(x, BlobCursor):
+            return False
+        return self.id == x.id
+
     def len(self):
         return self.length
     def content_length(self):
@@ -813,6 +819,9 @@ class BlobCursor(Blob, WritableBlob):
             cursor = self.parent.get_transaction_cursor()
             for i in range(0,5):
                 try:
+                    # TODO should this be in the same db_tx as the
+                    # blob write? as it is, possible for a reader to
+                    # see finalized body_blob but input_done == False
                     with self.parent.begin_transaction() as db_tx:
                         cursor._load_db(db_tx, rest_id=self.update_tx)
                         kwargs = {}
@@ -855,6 +864,8 @@ class BlobCursor(Blob, WritableBlob):
                 return bytes()
             return row[0]
 
+    def __repr__(self):
+        return 'BlobCursor uri=%s length=%d content_length=%s' % (str(self.blob_uri), self.length, self._content_length)
 
 class Storage():
     session_id : Optional[int] = None
@@ -1018,6 +1029,8 @@ class Storage():
 
     # TODO these blob methods should move into TransactionCursor?
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
+        # TODO possible/better to get blob and tx writes into the same db tx?
+        # blob is created initially unref'd...
         with self.begin_transaction() as db_tx:
             writer = None
             writer = BlobCursor(self)
@@ -1027,6 +1040,7 @@ class Storage():
 
         blob_uri = body_blob_uri(blob_uri)
 
+        # ... then gets ref'd into the tx
         cursor = None
         for i in range(0, 5):
             try:
@@ -1047,6 +1061,7 @@ class Storage():
         assert cursor is not None
         cursor._update_version_cache()
 
+        writer.blob_uri = blob_uri
         writer.update_tx = blob_uri.tx_id
 
         return writer

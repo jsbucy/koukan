@@ -472,10 +472,14 @@ class RestHandler(Handler):
         return tx
 
     def _get_tx_resp(self, request, tx):
+        tx_out = tx.copy()
+        if tx_out.body_blob:
+            # -> rest placeholder
+            tx_out.body = 'b'
         return self.response(
             request,
             etag=self._etag(tx.version) if tx else None,
-            resp_json=tx.to_json(WhichJson.REST_READ))
+            resp_json=tx_out.to_json(WhichJson.REST_READ))
 
     def _check_etag(self, etag, cached_version) -> bool:
         etag = etag.strip('"')

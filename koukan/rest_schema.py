@@ -20,7 +20,7 @@ class BlobUri:
     tx_id : str
     tx_body : bool = False
     blob : Optional[str] = None
-    def __init__(self, tx_id, tx_body : bool = False,
+    def __init__(self, tx_id : str, tx_body : bool = False,
                  blob : Optional[str] = None):
         assert tx_body or blob
         # TODO storage instantiates this with tx_body and __internal_tx_body

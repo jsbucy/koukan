@@ -191,7 +191,9 @@ class Exploder(SyncFilter):
             rcpt = self.recipients[0]
             if rcpt.tx.data_response is not None:
                 tx.data_response = rcpt.tx.data_response
-        if tx.body_blob is None or tx.data_response is not None:
+
+        # xxx OutputHandler only invokes this with body_blob.finalized()
+        if (tx.body_blob is None) or (tx.data_response is not None):
             return tx_orig.delta(tx)
 
         # If all rcpts with rcpt_response.ok() have the same
