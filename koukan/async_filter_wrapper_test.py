@@ -217,6 +217,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         self.assertEqual(1, tx.version)
 
         def exp_data_last(tx, tx_delta):
+            logging.debug(tx)
             self.assertTrue(tx.body_blob.finalized())
             return TransactionMetadata()
         async_filter.expect_update(exp_data_last)

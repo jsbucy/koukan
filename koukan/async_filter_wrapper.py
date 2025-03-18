@@ -73,10 +73,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         upstream_delta = None
         for i in range(0,5):
             try:
-                # StorageWriterFilter write body_blob -> body (placeholder)
-                if upstream_tx.body:
-                    del upstream_tx.body
-
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)
                 break
             except VersionConflictException:

@@ -117,16 +117,16 @@ class FilterTest(unittest.TestCase):
         succ = TransactionMetadata(
             mail_from=None,
             rcpt_to=[None, None],
-            body='xyz')
+            body=InlineBlob(b'xyz', last=True))
 
         delta = merged.delta(succ, WhichJson.REST_READ)
-        self.assertEqual(delta.to_json(), {'body': 'xyz'})
+        self.assertEqual(delta.to_json(), {'body': {'inline': 'xyz'}})
 
         merged = merged.merge(delta)
         self.assertEqual(merged.to_json(), {
             'mail_from': {'m': 'alice'},
             'rcpt_to': [{'m': 'bob'}, {'m': 'bob2'}],
-            'body': 'xyz'})
+            'body': {'inline': 'xyz'}})
 
 
     def testBadRcpt(self):
@@ -137,10 +137,6 @@ class FilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob2'), Mailbox('bob2')])
         # not a prefix
         self.assertIsNone(tx.delta(succ))
-
-    def testEmptyStr(self):
-        tx = TransactionMetadata.from_json({'body': ''}, WhichJson.REST_UPDATE)
-        self.assertEqual(tx.body, '')
 
     def testEmptyDict(self):
         tx = TransactionMetadata(retry = {})

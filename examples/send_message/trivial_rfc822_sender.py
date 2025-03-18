@@ -35,7 +35,7 @@ def send_message_rfc822(base_url : str,
     if notification_host:
         tx_json['notification'] = {'host': notification_host }
 
-    tx_json['inline_body'] = rfc822_message
+    tx_json['body'] = {'inline': rfc822_message}
 
     logging.debug(json.dumps(tx_json, indent=2))
 

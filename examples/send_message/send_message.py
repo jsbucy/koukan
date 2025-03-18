@@ -132,7 +132,7 @@ class Sender:
         if self.notification_host:
             tx_json['notification'] = {'host': self.notification_host }
         if self.body_path is not None:
-            tx_json['body'] = self.body_path
+            tx_json['body'] = {'uri': self.body_path}
         elif self.body_filename is not None:
             pass
         elif (self.message_builder_blobs is None and

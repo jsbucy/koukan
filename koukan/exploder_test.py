@@ -13,6 +13,7 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 from koukan.storage_writer_filter import StorageWriterFilter
+from koukan.storage_schema import VersionConflictException
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -70,30 +71,32 @@ class Rcpt:
                 env_delta.mail_response=self.mail_resp
             if self.rcpt_resp and tx.rcpt_to and not tx.rcpt_response:
                 env_delta.rcpt_response=[self.rcpt_resp]
+            data_resp = None
+            if self.data_resp and tx.body_blob and tx.body_blob.finalized() and not tx.data_response:
+                data_resp = self.data_resp[-1]
+                env_delta.data_response = data_resp
+
             if env_delta:
                 logging.debug(env_delta)
-                cursor.write_envelope(env_delta)
+                try:
+                    # finalize_attempt=True if data_resp ??
+                    cursor.write_envelope(env_delta)
+                except VersionConflictException:
+                    logging.debug('VersionConflictException')
+                    time.sleep(0.3)
+                    cursor.load()
                 err = False
-                for r in [self.mail_resp, self.rcpt_resp]:
+                for r in [self.mail_resp, self.rcpt_resp, data_resp]:
                     if (r is not None) and r.err():
                         err = True
                         break
-                if err:
+                if err or data_resp:
                     break
 
-            if self.data_resp and tx.body_blob and not tx.data_response:
-                while not tx.body_blob.finalized():
-                    logging.debug('poll body_blob')
-                    time.sleep(0.5)
-                    tx.body_blob.load()
-                logging.debug(tx.body_blob)
-                data_resp = self.data_resp[-1] #.pop(0)
-                assert data_resp
-                #if data_resp:
-                cursor.write_envelope(
-                    TransactionMetadata(data_response = data_resp))
-                #?? finalize_attempt=True)
-                break
+            while tx.body_blob and not tx.body_blob.finalized():
+                logging.debug('poll body_blob')
+                time.sleep(0.5)
+                tx.body_blob.load()
 
             cursor.wait(0.5)
             # test can finish as soon as we write the last response

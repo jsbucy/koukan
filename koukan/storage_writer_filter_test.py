@@ -92,8 +92,8 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         tx = TransactionMetadata(
             host = 'outbound-gw',
-            body = '/transactions/123/body',
-            body_blob = InlineBlob(b'wat'))
+            body = InlineBlob(b'hello', last=True),
+            message_builder = {'headers': []})
         upstream_delta = filter.update(tx, tx.copy())
         self.assertEqual(upstream_delta.data_response.code, 550)
 
@@ -345,10 +345,10 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'inline')
-        b = 'hello, world!'
+        b = b'hello, world!'
         tx = TransactionMetadata(
-                host = 'outbound-gw',
-                inline_body = b)
+            host = 'outbound-gw',
+            body = InlineBlob(b, last=True))
         # create w/ tx.inline_body
         filter.update(tx, tx.copy())
 
@@ -357,14 +357,14 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'reuse')
         tx2 = TransactionMetadata(
                 host = 'outbound-gw',
-                body = '/transactions/inline/body')
+                body = BlobUri('inline', tx_body=True))
         # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
 
         blob_reader = self.storage.get_blob_for_read(
             BlobUri(tx_id='reuse', tx_body=True))
         self.assertIsNotNone(blob_reader)
-        self.assertEqual(blob_reader.pread(0), b.encode('utf-8'))
+        self.assertEqual(blob_reader.pread(0), b)
 
     def test_create_leased(self):
         filter = StorageWriterFilter(

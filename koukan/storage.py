@@ -539,8 +539,8 @@ class TransactionCursor:
         res = db_tx.execute(sel_body)
         if res and (row := res.fetchone()):
             (blob_rest_id,) = row
-            self.tx.body_blob = BlobCursor(self.parent)
-            self.tx.body_blob.load(
+            self.tx.body = BlobCursor(self.parent)
+            self.tx.body.load(
                 body_blob_uri(BlobUri(self.rest_id, tx_body=True)))
         self.tx.message_builder = self.message_builder
         self.tx.tx_db_id = self.id

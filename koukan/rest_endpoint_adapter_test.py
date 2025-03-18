@@ -343,7 +343,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             mail_response=Response(201),
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
             rcpt_response=[Response(202), Response(203)],
-            body='',  # placeholder
+            body=InlineBlob(body, last=True),
             version=7))
 
         scope = {'type': 'http',
@@ -365,7 +365,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             mail_response=Response(201),
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
             rcpt_response=[Response(202), Response(203)],
-            body='',  # placeholder
+            body=InlineBlob(body, last=True),
             data_response=Response(204),
             version=8))
 

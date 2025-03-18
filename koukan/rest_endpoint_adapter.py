@@ -465,17 +465,10 @@ class RestHandler(Handler):
         if tx is None:
             return None
         logging.debug('_get_tx %s', tx)
-        # xxx when does this have body_blob?
-        if tx.body_blob is not None:
-            tx.body = ''
-            del tx.body_blob
         return tx
 
     def _get_tx_resp(self, request, tx):
         tx_out = tx.copy()
-        if tx_out.body_blob:
-            # -> rest placeholder
-            tx_out.body = 'b'
         return self.response(
             request,
             etag=self._etag(tx.version) if tx else None,

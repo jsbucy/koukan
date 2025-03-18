@@ -1,15 +1,16 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias, Union
 from abc import ABC, abstractmethod
 import logging
 import copy
 
 from koukan.response import Response
 
-from koukan.blob import Blob, WritableBlob
+from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
+from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
 
 class HostPort:
     host : str
@@ -181,6 +182,25 @@ class TxField:
         assert self.is_list
         return self.json_field + '_list_offset'
 
+def body_from_json(body_json):
+    if 'inline' in body_json:
+        # xxx utf8/bytes roundtrip
+        return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
+    elif 'uri' in body_json:
+        return parse_blob_uri(body_json['uri'])
+    return None
+
+def body_to_json(body : Union[BlobUri, InlineBlob, None]):
+    if isinstance(body, InlineBlob):
+        # assert body.finalized() ?
+        # xxx can we eliminate this unicode<->bytes round trip?
+        # xxx max inline
+        return {'inline': body.pread(0).decode('utf-8') }
+    elif isinstance(body, BlobUri):
+        return {'uri': make_blob_uri(body.tx_id,
+                                     tx_body=body.tx_body, blob=body.blob) }
+    return None
+
 _tx_fields = [
     # downstream http host
     TxField('host',
@@ -248,7 +268,12 @@ _tx_fields = [
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
-                          WhichJson.REST_READ])),
+                          WhichJson.REST_READ,
+                          WhichJson.EXPLODER_CREATE,
+                          WhichJson.EXPLODER_UPDATE,
+                          WhichJson.ADD_ROUTE]),
+            to_json=body_to_json,
+            from_json=body_from_json),
     TxField('message_builder',
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
@@ -271,15 +296,10 @@ _tx_fields = [
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.ADD_ROUTE])),
-    TxField('body_blob',
-            validity=set([WhichJson.EXPLODER_CREATE,
-                          WhichJson.EXPLODER_UPDATE,
-                          WhichJson.ADD_ROUTE])),
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
     TxField('tx_db_id', validity=None),
-    TxField('inline_body', validity=set([WhichJson.REST_CREATE])),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB,
                                        WhichJson.EXPLODER_CREATE,
@@ -317,15 +337,20 @@ class TransactionMetadata:
 
     attempt_count : Optional[int] = None
 
-    # in rest, this is the url to the body blob, in-memory, it is the id
-    # suffix of the blob url
-    body : Optional[str] = None
+    body : Union[BlobUri, InlineBlob, Blob, None] = None
 
-    # XXX update comment
-    # filter chain only
-    # this object will not change across successive calls to
-    # Filter.on_update() but may grow
-    body_blob : Optional[Blob] = None
+    # TODO cut all callers off of these transitional shims and remove
+    @property
+    def body_blob(self):
+        return self.body
+
+    @body_blob.setter
+    def body_blob(self, value):
+        self.body = value
+
+    @body_blob.deleter
+    def body_blob(self):
+        del self.body
 
     message_builder : Optional[dict] = None
 
@@ -339,7 +364,6 @@ class TransactionMetadata:
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
     tx_db_id : Optional[int] = None
-    inline_body : Optional[str] = None
     cancelled : Optional[bool] = None
     parsed_blobs : Optional[List[Blob]] = None
     parsed_json : Optional[dict] = None
@@ -361,14 +385,13 @@ class TransactionMetadata:
                  rcpt_to : Optional[List[Mailbox]] = None,
                  rcpt_response : Optional[List[Response]] = None,
                  host : Optional[str] = None,
-                 body : Optional[str] = None,
+                 body : Union[BlobUri, InlineBlob, Blob, None] = None,
                  body_blob : Optional[Blob] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,
                  smtp_meta : Optional[dict] = None,
                  message_builder : Optional[dict] = None,
-                 inline_body : Optional[str] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
                  rest_id : Optional[str] = None,
@@ -380,14 +403,12 @@ class TransactionMetadata:
         self.rcpt_to = rcpt_to if rcpt_to else []
         self.rcpt_response = rcpt_response if rcpt_response else []
         self.host = host
-        self.body = body
-        self.body_blob = body_blob
+        self.body = body if body else body_blob
         self.data_response = data_response
         self.notification = notification
         self.retry = retry
         self.smtp_meta = smtp_meta
         self.message_builder = message_builder
-        self.inline_body = inline_body
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
@@ -401,7 +422,6 @@ class TransactionMetadata:
         out += 'rcpt_to=%s rcpt_response=%s ' % (
             self.rcpt_to, self.rcpt_response)
         out += 'body=%s ' % (self.body)
-        out += 'body_blob=%s ' % (self.body_blob)
         out += 'message_builder=%s ' % (self.message_builder)
         out += 'data_response=%s ' % self.data_response
         if self.rest_endpoint:
@@ -503,9 +523,8 @@ class TransactionMetadata:
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
         body_blob_last = self.body_blob is not None and (
-            self.body_blob.finalized())
-        if (self.inline_body or self.body or body_blob_last or
-            self.message_builder):
+            isinstance(self.body_blob, Blob) and self.body_blob.finalized())
+        if (self.body or body_blob_last or self.message_builder):
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward
             # progress.
@@ -529,7 +548,7 @@ class TransactionMetadata:
         dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
         body_blob_last = self.body_blob is not None and (
-            self.body_blob.finalized())
+            isinstance(self.body_blob, Blob) and self.body_blob.finalized())
         if body_blob_last and self.data_response is None:
             dest.data_response = resp
 

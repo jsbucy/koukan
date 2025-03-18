@@ -21,6 +21,8 @@ from koukan.filter import (
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
+from koukan.rest_schema import BlobUri
+
 # these are artificially low for testing
 TIMEOUT_START=5
 TIMEOUT_DATA=5
@@ -242,6 +244,7 @@ class RestEndpoint(SyncFilter):
             timeout = self.timeout_start
         deadline = Deadline(timeout)
         data_last = tx_delta.body_blob is not None and (
+            isinstance(tx_delta.body_blob, Blob) and
             tx_delta.body_blob.finalized())
 
         logging.debug('RestEndpoint.on_update start %s '
@@ -268,6 +271,10 @@ class RestEndpoint(SyncFilter):
             self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
+        # xxx some tests send BlobUri here?
+        # otherwise clear so it doesn't trip req_inflight() during get
+        if not isinstance(self.upstream_tx.body, BlobUri):
+            self.upstream_tx.body = None
         upstream_tx = self.upstream_tx.copy()
 
         logging.debug('RestEndpoint.on_update merged tx %s', self.upstream_tx)

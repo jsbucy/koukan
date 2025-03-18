@@ -157,19 +157,11 @@ class OutputHandler:
             logging.info('OutputHandler._output() %s body blob %s',
                          self.rest_id, upstream_tx.body_blob)
 
-            if upstream_tx.body:
-                del upstream_tx.body
-            if delta.body:
-                del delta.body
-
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
             if delta.mail_from is None and not delta.rcpt_to and not self.cursor.input_done:
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
-
-            assert not upstream_tx.body
-            assert not delta.body
 
             upstream_delta = self.endpoint.on_update(upstream_tx, delta)
             logging.info('OutputHandler._output() %s '

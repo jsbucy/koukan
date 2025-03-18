@@ -117,15 +117,15 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('_get_body_blob_uri')
         if self.body_blob_uri:
             return None
-        if not tx.body and (not tx.body_blob or not tx.body_blob.finalized()):
+        if not tx.body and (not isinstance(tx.body, Blob) or not tx.body.finalized()):
             return None
         if isinstance(tx.body_blob, BlobCursor):
             self.body_blob_uri = True
             # drop internal blob id
             return BlobUri(tx.body_blob.blob_uri.tx_id, tx_body=True)
-        elif tx.body:
+        elif isinstance(tx.body, BlobUri):
             self.body_blob_uri = True
-            uri = parse_blob_uri(tx.body)
+            uri = tx.body
             logging.debug('_get_body_blob_uri %s %s', tx.body, uri)
             # xxx parse error -> err Response
             assert uri and uri.tx_body
@@ -136,18 +136,11 @@ class StorageWriterFilter(AsyncFilter):
     def _maybe_write_body_blob(self, tx) -> Optional[Response]:
         # XXX maybe RestHandler should deal with inline_body before it
         # gets here?
-        logging.debug('_maybe_write_body_blob inline %s blob %s',
-                      len(tx.inline_body) if tx.inline_body else None,
-                      tx.body_blob)
-        if tx.inline_body:
-            # TODO need to worry about roundtripping
-            # utf8 -> python str -> utf8 is ever lossy?
-            body_utf8 = tx.inline_body.encode('utf-8')
-            body_blob = InlineBlob(body_utf8, len(body_utf8))
-            # xxx downstream_tx/delta in caller
-            del tx.inline_body
-        elif tx.body_blob and tx.body_blob.finalized():
-            body_blob = tx.body_blob
+        logging.debug('_maybe_write_body_blob body %s blob %s',
+                      tx.body, tx.body_blob)
+        if isinstance(tx.body, Blob) and tx.body.finalized():
+            body_blob = tx.body
+            del tx.body
         else:
             return
 
@@ -159,7 +152,7 @@ class StorageWriterFilter(AsyncFilter):
         off = 0
         while True:
             CHUNK_SIZE = 1048576
-            d = body_blob.pread(0, CHUNK_SIZE)
+            d = body_blob.pread(off, CHUNK_SIZE)
             last = len(d) < CHUNK_SIZE
             content_length = off + len(d) if last else None
             logging.debug('_maybe_write_body_blob %s %d %s',
@@ -223,9 +216,9 @@ class StorageWriterFilter(AsyncFilter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        logging.debug('StorageWriterFilter.update tx %s %s',
+        logging.debug('StorageWriterFilter._update tx %s %s',
                       self.rest_id, tx)
-        logging.debug('StorageWriterFilter.update tx_delta %s %s',
+        logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
         reuse_blob_rest_id : Optional[List[BlobUri]] = None
@@ -256,13 +249,12 @@ class StorageWriterFilter(AsyncFilter):
 
         # TODO move to TransactionMetadata.from_json()?
         body_fields = 0
-        for body_field in [
-                'body', 'body_blob', 'inline_body', 'message_builder']:
+        for body_field in [ 'body', 'message_builder']:
             if getattr(tx, body_field):
                 body_fields += 1
         if body_fields > 1:
             err_delta = TransactionMetadata(data_response=Response(
-                550, 'internal error (StorageWriterFilter)'))
+                550, 'invalid tx: multiple body fields (StorageWriterFilter)'))
             tx.merge_from(err_delta)
             return err_delta
 
@@ -281,11 +273,6 @@ class StorageWriterFilter(AsyncFilter):
             logging.debug('body_blob_uri %s', body_blob_uri)
             assert not reuse_blob_rest_id
             reuse_blob_rest_id = [body_blob_uri]
-
-        if downstream_tx.body_blob is not None:
-            del downstream_tx.body_blob
-        if downstream_delta.body_blob is not None:
-            del downstream_delta.body_blob
 
         created = False
         if self.rest_id is None:
@@ -309,7 +296,7 @@ class StorageWriterFilter(AsyncFilter):
                 err_delta = TransactionMetadata(data_response=err)
                 tx.merge_from(err_delta)
                 return err_delta
-            assert not downstream_delta.body
+            #xxx assert not downstream_delta.body
             # TODO kludge: blob append pings tx, avoid version
             # conflict on subsequent write_envelope(). Possibly
             # BlobCursor should be more integrated with
