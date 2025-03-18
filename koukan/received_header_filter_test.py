@@ -52,10 +52,10 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
                 b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
                 b'\r\n'
                 b'hello\r\n')
-        tx.body_blob = InlineBlob(body[0:20], len(body))
+        tx.body = InlineBlob(body[0:20], len(body))
         tx_delta = TransactionMetadata(
             rcpt_to = [tx.rcpt_to[0]],
-            body_blob = tx.body_blob)
+            body = tx.body)
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             self.assertEqual(len(tx.rcpt_to), 1)
@@ -63,13 +63,13 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(202)])
             self.assertIsNotNone(tx.merge_from(delta))
-            self.assertIsNone(tx.body_blob)
+            self.assertIsNone(tx.body)
             return delta
         upstream.add_expectation(exp)
         filter.on_update(tx, tx_delta)
 
-        tx.body_blob = InlineBlob(body[0:30], len(body))
-        tx_delta = TransactionMetadata(body_blob = tx.body_blob)
+        tx.body = InlineBlob(body[0:30], len(body))
+        tx_delta = TransactionMetadata(body = tx.body)
 
         def exp_none(tx, tx_delta):
             logging.debug(tx)
@@ -80,11 +80,11 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         self.assertTrue(upstream.expectation)
         upstream.expectation=[]
 
-        tx.body_blob = tx_delta.body_blob = InlineBlob(body, len(body))
+        tx.body = tx_delta.body = InlineBlob(body, len(body))
         def exp(tx, tx_delta):
-            logging.debug(tx_delta.body_blob.pread(0).decode('us-ascii'))
+            logging.debug(tx_delta.body.pread(0).decode('us-ascii'))
             self.assertEqual(
-                tx_delta.body_blob.pread(0),
+                tx_delta.body.pread(0),
                 b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
                 b'\tby gargantua1\r\n'
                 b'\twith ESMTPS\r\n'
@@ -115,7 +115,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx = TransactionMetadata(
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice', [EsmtpParam('smtputf8')]),
-            body_blob=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n',
+            body=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n',
                                  last=True))
         tx.remote_hostname = 'gargantua1'
         tx.fcrdns = True
@@ -133,7 +133,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             self.assertEqual(
-                tx.body_blob.pread(0),
+                tx.body.pread(0),
                 b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
                 b'\tby gargantua1\r\n'
                 b'\twith UTF8SMTPS;\r\n'
@@ -162,7 +162,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@domain')])
         tx.remote_hostname = 'gargantua1'
         tx.fcrdns = True
-        tx.body_blob = InlineBlob(
+        tx.body = InlineBlob(
             b'Received: from time-becomes-a-loop.example.com with ESMTP;\r\n'
             b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
             b'Received: from somewhere-else.example.com with ESMTP;\r\n'
@@ -174,7 +174,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             self.assertEqual(len(tx.rcpt_to), 1)
-            self.assertIsNone(tx.body_blob)
+            self.assertIsNone(tx.body)
             delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)])

@@ -19,7 +19,7 @@ class MessageParserFilterTest(unittest.TestCase):
         with open('testdata/multipart.msg', 'rb') as f:
             b = f.read()
         tx=TransactionMetadata(
-            body_blob=InlineBlob(b, len(b)))
+            body=InlineBlob(b, len(b)))
         tx.options = {'receive_parsing': None}
 
         upstream = FakeSyncFilter()

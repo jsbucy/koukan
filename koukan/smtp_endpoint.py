@@ -198,15 +198,15 @@ class SmtpEndpoint(SyncFilter):
         if tx_delta.message_builder is not None:
             upstream_delta.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
-        elif not tx.data_response and tx.body_blob is not None and tx.body_blob.finalized():
+        elif not tx.data_response and tx.body is not None and tx.body.finalized():
             logging.info('SmtpEndpoint %s append_data len=%d',
-                         tx.rest_id, tx.body_blob.len())
+                         tx.rest_id, tx.body.len())
             if not self.good_rcpt:
                 upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
             else:
                 upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(tx.body_blob.pread(0)))
+                    self.smtp.data(tx.body.pread(0)))
             logging.info('SmtpEndpoint %s data_response %s',
                          tx.rest_id, upstream_delta.data_response)
 

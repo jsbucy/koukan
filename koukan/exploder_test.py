@@ -72,7 +72,7 @@ class Rcpt:
             if self.rcpt_resp and tx.rcpt_to and not tx.rcpt_response:
                 env_delta.rcpt_response=[self.rcpt_resp]
             data_resp = None
-            if self.data_resp and tx.body_blob and tx.body_blob.finalized() and not tx.data_response:
+            if self.data_resp and tx.body and tx.body.finalized() and not tx.data_response:
                 data_resp = self.data_resp[-1]
                 env_delta.data_response = data_resp
 
@@ -93,10 +93,10 @@ class Rcpt:
                 if err or data_resp:
                     break
 
-            while tx.body_blob and not tx.body_blob.finalized():
-                logging.debug('poll body_blob')
+            while tx.body and not tx.body.finalized():
+                logging.debug('poll body')
                 time.sleep(0.5)
-                tx.body_blob.load()
+                tx.body.load()
 
             cursor.wait(0.5)
             # test can finish as soon as we write the last response
@@ -113,7 +113,7 @@ class Rcpt:
     # AsyncFilter.update() is supposed to return immediately so you
     # should not expect to get upstream responses from it; only after
     # wait() and get(). Moreover Exploder.on_update() will not
-    # wait/get if !body_blob.finalized() since !tx.req_inflight(). So
+    # wait/get if !body.finalized() since !tx.req_inflight(). So
     # the "early data error" tests here aren't a perfect analogue of what
     # would happen in practice: you would get the previous error in
     # response to the next update. Though this is probably all moot anyway
@@ -218,10 +218,10 @@ class ExploderTest(unittest.TestCase):
             last = i == (len(test.data) - 1)
             content_length = blob_writer.len() + len(d) if last else None
             blob_writer.append_data(blob_writer.len(), d, content_length)
-            # xxx OutputHandler only invokes chain with finalized body_blob
+            # xxx OutputHandler only invokes chain with finalized body
             if not last:
                 continue
-            tx_delta = TransactionMetadata(body_blob=blob_writer)
+            tx_delta = TransactionMetadata(body=blob_writer)
             tx.merge_from(tx_delta)
             for r in test.rcpt:
                 r.set_data_response(self, i, last)

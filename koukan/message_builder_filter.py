@@ -15,7 +15,7 @@ from koukan.rest_schema import BlobUri
 
 class MessageBuilderFilter(SyncFilter):
     upstream : Optional[SyncFilter] = None
-    body_blob : Optional[Blob] = None
+    body : Optional[Blob] = None
 
     def __init__(self, storage : Storage, upstream):
         self.storage = storage
@@ -34,7 +34,7 @@ class MessageBuilderFilter(SyncFilter):
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata] :
-        if self.body_blob is None and tx.message_builder is None:
+        if self.body is None and tx.message_builder is None:
             return self.upstream.on_update(tx, tx_delta)
 
         built = False
@@ -47,9 +47,9 @@ class MessageBuilderFilter(SyncFilter):
             assert isinstance(file, IOBase)
             builder.build(file)
             file.flush()
-            self.body_blob = FileLikeBlob(file, finalized=True)
+            self.body = FileLikeBlob(file, finalized=True)
             logging.debug('MessageBuilderFilter.on_update %d %s',
-                          self.body_blob.len(), self.body_blob.content_length())
+                          self.body.len(), self.body.content_length())
             built = True
 
         downstream_tx = tx.copy()
@@ -60,8 +60,8 @@ class MessageBuilderFilter(SyncFilter):
         if downstream_delta.message_builder:
             downstream_delta.message_builder = None
 
-        downstream_tx.body_blob = self.body_blob
-        downstream_delta.body_blob = self.body_blob if built else None
+        downstream_tx.body = self.body
+        downstream_delta.body = self.body if built else None
 
         upstream_delta = self.upstream.on_update(
             downstream_tx, downstream_delta)

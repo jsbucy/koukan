@@ -339,19 +339,6 @@ class TransactionMetadata:
 
     body : Union[BlobUri, InlineBlob, Blob, None] = None
 
-    # TODO cut all callers off of these transitional shims and remove
-    @property
-    def body_blob(self):
-        return self.body
-
-    @body_blob.setter
-    def body_blob(self, value):
-        self.body = value
-
-    @body_blob.deleter
-    def body_blob(self):
-        del self.body
-
     message_builder : Optional[dict] = None
 
     # arbitrary json for now
@@ -386,7 +373,6 @@ class TransactionMetadata:
                  rcpt_response : Optional[List[Response]] = None,
                  host : Optional[str] = None,
                  body : Union[BlobUri, InlineBlob, Blob, None] = None,
-                 body_blob : Optional[Blob] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,
@@ -403,7 +389,7 @@ class TransactionMetadata:
         self.rcpt_to = rcpt_to if rcpt_to else []
         self.rcpt_response = rcpt_response if rcpt_response else []
         self.host = host
-        self.body = body if body else body_blob
+        self.body = body
         self.data_response = data_response
         self.notification = notification
         self.retry = retry
@@ -522,9 +508,9 @@ class TransactionMetadata:
             # XXX rcpt_response should never be None now?
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
-        body_blob_last = self.body_blob is not None and (
-            isinstance(self.body_blob, Blob) and self.body_blob.finalized())
-        if (self.body or body_blob_last or self.message_builder):
+        body_last = self.body is not None and (
+            isinstance(self.body, Blob) and self.body.finalized())
+        if (self.body or body_last or self.message_builder):
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward
             # progress.
@@ -547,9 +533,9 @@ class TransactionMetadata:
             dest.mail_response = resp
         dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
-        body_blob_last = self.body_blob is not None and (
-            isinstance(self.body_blob, Blob) and self.body_blob.finalized())
-        if body_blob_last and self.data_response is None:
+        body_last = self.body is not None and (
+            isinstance(self.body, Blob) and self.body.finalized())
+        if body_last and self.data_response is None:
             dest.data_response = resp
 
     def _field_to_json(self, name : str, field : TxField,

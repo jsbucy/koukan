@@ -22,7 +22,7 @@ class ReceivedHeaderFilter(SyncFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
-    body_blob : Optional[Blob] = None
+    body : Optional[Blob] = None
     data_err : Optional[Response] = None
 
     def __init__(self, upstream : Optional[SyncFilter] = None,
@@ -103,8 +103,8 @@ class ReceivedHeaderFilter(SyncFilter):
             email.utils.format_datetime(datetime))
         return received
 
-    def _check_max_received_headers(self, body_blob : Blob):
-        body = body_blob.pread(0, 65536)
+    def _check_max_received_headers(self, body : Blob):
+        body = body.pread(0, 65536)
         parser = BytesHeaderParser(policy=policy.SMTP)
         parsed = parser.parsebytes(body)
         received_count = 0
@@ -120,32 +120,32 @@ class ReceivedHeaderFilter(SyncFilter):
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         built = False
-        if (self.body_blob is None and
-            tx.body_blob is not None
-            and tx.body_blob.finalized()):
+        if (self.body is None and
+            tx.body is not None
+            and tx.body.finalized()):
             # TODO in this case, since the received header that's being
             # prepended onto the body doesn't depend on the body contents,
             # we could trickle out the body as it comes through rather than
             # effectively buffering it all like this. However something
             # else in the chain is likely to do that anyway so it's
             # probably moot.
-            self.data_err = self._check_max_received_headers(tx.body_blob)
+            self.data_err = self._check_max_received_headers(tx.body)
             # don't return data_err immediately in case e.g. we don't
             # already have rcpt_response to get an authoritative
             # result from upstream
             if self.data_err is None:
-                self.body_blob = CompositeBlob()
+                self.body = CompositeBlob()
                 received = InlineBlob(self._format_received(tx).encode('ascii'))
-                self.body_blob.append(received, 0, received.len())
-                self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+                self.body.append(received, 0, received.len())
+                self.body.append(tx.body, 0, tx.body.len(), True)
             built = True
 
-        assert not(self.data_err and self.body_blob)
+        assert not(self.data_err and self.body)
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-        downstream_tx.body_blob = self.body_blob
-        downstream_delta.body_blob = self.body_blob if built else None
+        downstream_tx.body = self.body
+        downstream_delta.body = self.body if built else None
         if bool(downstream_delta):
             upstream_delta = self.upstream.on_update(
                 downstream_tx, downstream_delta)

@@ -15,7 +15,7 @@ from koukan.filter import (
 class DkimEndpoint(SyncFilter):
     data : bytes = None
     upstream : SyncFilter
-    body_blob : Optional[Blob] = None
+    body : Optional[Blob] = None
     err = False
 
     def __init__(self, domain : str, selector : str, privkey,
@@ -30,12 +30,12 @@ class DkimEndpoint(SyncFilter):
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         built = False
-        if (self.body_blob is None and
+        if (self.body is None and
             not self.err and
-            tx.body_blob is not None
-            and tx.body_blob.finalized()):
-            self.body_blob = CompositeBlob()
-            sig = self.sign(tx.body_blob)
+            tx.body is not None
+            and tx.body.finalized()):
+            self.body = CompositeBlob()
+            sig = self.sign(tx.body)
             if sig is None:
                 self.err = True
                 err = TransactionMetadata(data_response=Response(
@@ -43,14 +43,14 @@ class DkimEndpoint(SyncFilter):
                 tx.merge_from(err)
                 return err
             sig_blob = InlineBlob(sig)
-            self.body_blob.append(sig_blob, 0, sig_blob.len())
-            self.body_blob.append(tx.body_blob, 0, tx.body_blob.len(), True)
+            self.body.append(sig_blob, 0, sig_blob.len())
+            self.body.append(tx.body, 0, tx.body.len(), True)
             built = True
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-        downstream_tx.body_blob = self.body_blob
-        downstream_delta.body_blob = self.body_blob if built else None
+        downstream_tx.body = self.body
+        downstream_delta.body = self.body if built else None
 
         if bool(downstream_delta):
             upstream_delta = self.upstream.on_update(

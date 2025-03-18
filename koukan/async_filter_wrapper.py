@@ -143,7 +143,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 'RCPT failed precondition MAIL (AsyncFilterWrapper)')
             for i in range(len(tx.rcpt_response), len(tx.rcpt_to)):
                 tx.rcpt_response.append(rcpt_err)
-        if (tx.body_blob and tx.body_blob.finalized() and
+        if (tx.body and tx.body.finalized() and
             (not tx.data_response) and
             (len([r for r in tx.rcpt_response if r is not None]) ==
              len(tx.rcpt_to)) and
@@ -167,13 +167,13 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 tx.rcpt_response[i] = rcpt_response
                 self.do_store_and_forward = True
 
-        if tx.body_blob is not None:
-            if (not tx.body_blob.finalized() and
+        if tx.body is not None:
+            if (not tx.body.finalized() and
                 tx.data_response and tx.data_response.temp()):
                 tx.data_response = None
                 self.do_store_and_forward = True
 
-            if (tx.body_blob.finalized() and
+            if (tx.body.finalized() and
                 (self.do_store_and_forward or
                     (tx.data_response is not None and
                      tx.data_response.temp()))):

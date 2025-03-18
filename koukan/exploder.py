@@ -92,7 +92,7 @@ class Recipient:
         tt = t.copy()
         for ti in [orig, tt]:
             del ti.version
-            del ti.body_blob
+            del ti.body
         assert orig.delta(tt) is not None  # check buggy filter
         self.tx = t
 
@@ -166,7 +166,7 @@ class Exploder(SyncFilter):
         rcpts = [ r for r in self.recipients if r.tx.req_inflight() ]
 
         deadline = Deadline(
-            self.data_timeout if tx.body_blob and tx.body_blob.finalized()
+            self.data_timeout if tx.body and tx.body.finalized()
             else self.rcpt_timeout)
         while rcpts and deadline.remaining():
             rcpt_next = []
@@ -186,14 +186,14 @@ class Exploder(SyncFilter):
             if i >= len(tx.rcpt_response):
                 tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
         # common case: 1 rcpt, return the upstream data response directly
-        if (tx.body_blob is not None and tx.data_response is None and
+        if (tx.body is not None and tx.data_response is None and
             len(self.recipients) == 1):
             rcpt = self.recipients[0]
             if rcpt.tx.data_response is not None:
                 tx.data_response = rcpt.tx.data_response
 
-        # xxx OutputHandler only invokes this with body_blob.finalized()
-        if (tx.body_blob is None) or (tx.data_response is not None):
+        # xxx OutputHandler only invokes this with body.finalized()
+        if (tx.body is None) or (tx.data_response is not None):
             return tx_orig.delta(tx)
 
         # If all rcpts with rcpt_response.ok() have the same
@@ -212,7 +212,7 @@ class Exploder(SyncFilter):
             tx.data_response = Response(
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
-        elif tx.body_blob.finalized():
+        elif tx.body.finalized():
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!

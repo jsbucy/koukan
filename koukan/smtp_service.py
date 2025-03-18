@@ -253,7 +253,7 @@ class SmtpHandler:
         blob = InlineBlob(envelope.content, last=True)
 
         updated_tx = self.tx.copy()
-        updated_tx.body_blob = blob
+        updated_tx.body = blob
         tx_delta = self.tx.delta(updated_tx)
         self.tx = updated_tx
         fut = self.executor.submit(

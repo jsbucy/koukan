@@ -64,7 +64,7 @@ class SyncFilterAdapter(AsyncFilter):
         parent : "SyncFilterAdapter"
         offset : int = 0
         # queue of staged appends, these are propagated to
-        # parent.body_blob in _update_once()
+        # parent.body in _update_once()
         q : List[bytes]
         content_length : Optional[int] = None
         def __init__(self, parent):
@@ -98,7 +98,7 @@ class SyncFilterAdapter(AsyncFilter):
     rest_id : str
     _last_update : float
     blob_writer : Optional[BlobWriter] = None
-    body_blob : Optional[InlineBlob] = None
+    body : Optional[InlineBlob] = None
     # transaction has reached a final status: data response or cancelled
     # (used for gc)
     done : bool = False
@@ -170,19 +170,19 @@ class SyncFilterAdapter(AsyncFilter):
                           len(self.blob_writer.q) if self.blob_writer else None)
             self.prev_tx = self.tx.copy()
 
-            # propagate staged appends from blob_writer to body_blob
+            # propagate staged appends from blob_writer to body
             if self.blob_writer is not None and self.blob_writer.q:
                 # this may be moot because we early-return
                 # if the blob isn't finalized anyway but: we haven't
-                # really spelled out whether body_blob is only in the
+                # really spelled out whether body is only in the
                 # delta the first time or every time that it grows?
-                delta.body_blob = self.body_blob
+                delta.body = self.body
                 for b in self.blob_writer.q:
-                    self.body_blob.append_data(
-                        self.body_blob.len(), b,
+                    self.body.append_data(
+                        self.body.len(), b,
                         self.blob_writer.content_length)
-                    logging.debug('append %d %s', self.body_blob.len(),
-                                  self.body_blob.content_length())
+                    logging.debug('append %d %s', self.body.len(),
+                                  self.body.content_length())
                 self.blob_writer.q = []
 
             if not self.tx.req_inflight() and not delta.cancelled:
@@ -263,10 +263,10 @@ class SyncFilterAdapter(AsyncFilter):
             raise NotImplementedError()
         if create and self.blob_writer is None:
             with self.mu:
-                assert self.body_blob is None
+                assert self.body is None
                 assert self.blob_writer is None
-                self.body_blob = InlineBlob(b'')
-                self.tx.body_blob = self.body_blob
+                self.body = InlineBlob(b'')
+                self.tx.body = self.body
                 self.blob_writer = SyncFilterAdapter.BlobWriter(self)
         return self.blob_writer
 
@@ -277,7 +277,7 @@ class SyncFilterAdapter(AsyncFilter):
         tx = self.get()
         assert tx is not None
         # shenanigans: empty update, _update_once() will dequeue from
-        # BlobWriter.q to self.body_blob
+        # BlobWriter.q to self.body
         tx_delta = TransactionMetadata()
         self.update(tx, tx_delta)
 
@@ -443,7 +443,6 @@ class RestHandler(Handler):
         self._tx_rest_id = tx.rest_id
 
         tx.body = body
-        del tx.body_blob
         # return uri qualified to session or service per self.endpoint_yaml
         tx_path = make_tx_uri(tx.rest_id)
         if self.endpoint_yaml.get('rest_lro', False) is False:
@@ -592,7 +591,6 @@ class RestHandler(Handler):
             return err
 
         tx.body = body
-        del tx.body_blob
         return self.response(
             request, etag=self._etag(upstream_delta.version),
             resp_json=tx.to_json(WhichJson.REST_READ))

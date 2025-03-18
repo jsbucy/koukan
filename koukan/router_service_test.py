@@ -444,7 +444,7 @@ class RouterServiceTest(unittest.TestCase):
             #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
-            body_blob=InlineBlob(body, last=True))
+            body=InlineBlob(body, last=True))
 
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata(
@@ -601,7 +601,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
         def exp_body(tx, tx_delta):
-            self.assertEqual(data, tx.body_blob.pread(0))
+            self.assertEqual(data, tx.body.pread(0))
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
@@ -643,7 +643,7 @@ class RouterServiceTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_body(tx, tx_delta):
-            self.assertEqual(tx.body_blob.pread(0), body_utf8)
+            self.assertEqual(tx.body.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
@@ -671,8 +671,8 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint = FakeSyncFilter()
         def exp2(tx, tx_delta):
             logging.debug(tx)
-            self.assertTrue(isinstance(tx.body_blob, Blob))
-            self.assertEqual(tx.body_blob.pread(0), body_utf8)
+            self.assertTrue(isinstance(tx.body, Blob))
+            self.assertEqual(tx.body.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
@@ -768,7 +768,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual('upstream rcpt 2', tx.rcpt_response[1].message)
 
         def exp_body(i, tx, tx_delta):
-            self.assertEqual(tx.body_blob.pread(0),
+            self.assertEqual(tx.body.pread(0),
                              b'Hello, World!')
             updated_tx = tx.copy()
             # repro temp err here
@@ -780,10 +780,10 @@ class RouterServiceTest(unittest.TestCase):
         for i,upstream in enumerate([upstream_endpoint, upstream_endpoint2]):
             upstream.add_expectation(partial(exp_body, i))
 
-        logging.info('testExploderMultiRcpt patch body_blob')
+        logging.info('testExploderMultiRcpt patch body')
 
         tx_delta = TransactionMetadata(
-            body_blob=InlineBlob(b'Hello, World!', last=True))
+            body=InlineBlob(b'Hello, World!', last=True))
         self.assertIsNotNone(tx.merge_from(tx_delta))
         rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_exploder_multi_rcpt %s', tx)
@@ -819,7 +819,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
-            body_blob=InlineBlob(b'Hello, World!', last=True),
+            body=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
         rest_endpoint.on_update(tx, tx.copy(), 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
@@ -854,7 +854,7 @@ class RouterServiceTest(unittest.TestCase):
                     self.assertEqual(tx.mail_from.mailbox, '')
                     self.assertEqual([m.mailbox for m in tx.rcpt_to],
                                      ['alice@example.com'])
-                    dsn = tx.body_blob.pread(0)
+                    dsn = tx.body.pread(0)
                     logging.debug('test_notification %s', dsn)
                     self.assertIn(b'subject: Delivery Status Notification', dsn)
 
@@ -880,7 +880,7 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob1@example.com'),
                      Mailbox('bob2@example.com')],
-            body_blob=InlineBlob(b'Hello, World!', last=True),
+            body=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
 
         def exp_rcpt(tx, tx_delta):
@@ -934,7 +934,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_dsn_body(tx, tx_delta):
             logging.error(tx)
-            dsn = tx.body_blob.pread(0)
+            dsn = tx.body.pread(0)
             logging.debug('test_notification %s', dsn)
             self.assertIn(b'subject: Delivery Status Notification', dsn)
 
@@ -1012,7 +1012,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body(tx, tx_delta):
             logging.debug('test_message_builder.exp_body %s', tx)
-            body = tx.body_blob.pread(0)
+            body = tx.body.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
             #self.assertIn(b, body)  # base64
@@ -1050,7 +1050,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp2_body(tx, tx_delta):
             logging.debug('test_message_builder.exp2_body %s', tx)
-            body = tx.body_blob.pread(0)
+            body = tx.body.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
 
@@ -1085,13 +1085,13 @@ class RouterServiceTest(unittest.TestCase):
                 upstream_delta.mail_response=Response(201)
             if tx_delta.rcpt_to:
                 upstream_delta.rcpt_response=[Response(202)]
-            if tx_delta.body_blob:
+            if tx_delta.body:
                 logging.debug('test_receive_parsing json %s',
                               tx_delta.parsed_json)
                 logging.debug('test_receive_parsing blobs %s',
                               tx_delta.parsed_blobs)
                 logging.debug('test_receive_parsing body %s',
-                              tx_delta.body_blob)
+                              tx_delta.body)
 
                 self.assertIn(['subject', 'hello'],
                               tx_delta.parsed_json['parts']['headers'])
@@ -1178,7 +1178,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp_body)
 
         tx_delta = TransactionMetadata(
-            body_blob=InlineBlob(body, last=True))
+            body=InlineBlob(body, last=True))
         tx.merge_from(tx_delta)
         upstream_delta = endpoint2.on_update(tx, tx_delta)
         logging.debug('%s %s', tx, upstream_delta)

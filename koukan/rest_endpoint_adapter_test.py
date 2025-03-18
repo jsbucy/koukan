@@ -77,10 +77,10 @@ class SyncFilterAdapterTest(unittest.TestCase):
         body = b'hello, world!'
 
         def exp_body(tx, tx_delta):
-            logging.debug(tx.body_blob)
-            if not tx.body_blob.finalized():
+            logging.debug(tx.body)
+            if not tx.body.finalized():
                 return
-            self.assertEqual(body, tx.body_blob.pread(0))
+            self.assertEqual(body, tx.body.pread(0))
             upstream_delta=TransactionMetadata(
                 data_response = Response(203))
             self.assertIsNotNone(tx.merge_from(upstream_delta))
@@ -311,13 +311,13 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         tx_etag = resp.headers['etag']
 
 
-        endpoint.body_blob = InlineBlob(b'')
+        endpoint.body = InlineBlob(b'')
         body = b'hello, world!'
         async def input():
             return {'type': 'http.request',
                     'body': body,
                     'more_body': False}
-        endpoint.body_blob = InlineBlob(b'')
+        endpoint.body = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -333,8 +333,8 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         resp = await handler.create_blob_async(req, tx_body=True)
         logging.debug('test_create_tx create blob resp %s', resp.body)
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(endpoint.body_blob.d, body)
-        self.assertEqual(endpoint.body_blob.content_length(), len(body))
+        self.assertEqual(endpoint.body.d, body)
+        self.assertEqual(endpoint.body.content_length(), len(body))
 
 
         endpoint.expect_get(TransactionMetadata(
@@ -429,7 +429,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 400)
 
 
-        endpoint.body_blob = InlineBlob(b'')
+        endpoint.body = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -503,7 +503,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
     async def test_chunked_blob(self):
         endpoint = MockAsyncFilter()
 
-        endpoint.body_blob = InlineBlob(b'')
+        endpoint.body = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -547,7 +547,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn('content-range', resp.headers)
 
-        self.assertEqual(b+b2, endpoint.body_blob.d)
+        self.assertEqual(b+b2, endpoint.body.d)
 
 
     async def _test_uri_qualification(

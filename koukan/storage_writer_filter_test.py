@@ -201,7 +201,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         # update w/incomplete blob ->noop
         tx_delta = TransactionMetadata()
-        tx_delta.body_blob = blob_reader
+        tx_delta.body = blob_reader
         tx.merge_from(tx_delta)
         t = self.start_update(filter, tx, tx_delta)
         self.join(t)
@@ -214,12 +214,12 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         blob_reader.load()
 
-        tx_delta = TransactionMetadata(body_blob=blob_reader)
+        tx_delta = TransactionMetadata(body=blob_reader)
         tx.merge_from(tx_delta)
         t = self.start_update(filter, tx, tx_delta)
 
         for i in range(0,5):
-            if tx_cursor.tx.body_blob is not None:
+            if tx_cursor.tx.body is not None:
                 break
             tx_cursor.wait(1)
             tx_cursor.load()

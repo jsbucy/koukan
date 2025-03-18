@@ -52,7 +52,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
 
-        tx.body_blob = InlineBlob(
+        tx.body = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
@@ -75,7 +75,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
 
-        tx.body_blob = InlineBlob(
+        tx.body = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'

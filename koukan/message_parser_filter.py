@@ -40,11 +40,11 @@ class MessageParserFilter(SyncFilter):
         parsed = False
         if (not self.parsed and
             (tx.options and 'receive_parsing' in tx.options) and
-            tx.body_blob is not None and tx.body_blob.finalized()):
+            tx.body is not None and tx.body.finalized()):
             parse_options = tx.options.get('receive_parsing', {})
             parse_options = parse_options if parse_options else {}
             file = TemporaryFile('w+b')
-            file.write(tx.body_blob.pread(0))
+            file.write(tx.body.pread(0))
             file.flush()
             file.seek(0)
             parser = MessageParser(

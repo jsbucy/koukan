@@ -21,7 +21,7 @@ GetExpectation = Callable[[],Optional[TransactionMetadata]]
 class MockAsyncFilter(AsyncFilter):
     update_expectation : List[UpdateExpectation]
     get_expectation : List[GetExpectation]
-    body_blob : Optional[WritableBlob] = None
+    body : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
     _version : Optional[int] = None
 
@@ -64,7 +64,7 @@ class MockAsyncFilter(AsyncFilter):
             tx_body : Optional[bool] = None
     ) -> Optional[WritableBlob]:
         if tx_body:
-            return self.body_blob
+            return self.body
         #assert blob_rest_id and blob_rest_id in self.blob
         return self.blob[blob_rest_id]
 

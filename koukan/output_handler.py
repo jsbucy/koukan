@@ -102,11 +102,11 @@ class OutputHandler:
                           self.rest_id, self.cursor.tx, self.cursor.input_done)
 
             cursor_tx = self.cursor.tx.copy()
-            # NOTE: possible to read finalized body_blob but input_done == False
+            # NOTE: possible to read finalized body but input_done == False
             if not self.cursor.input_done:
                 if cursor_tx.message_builder:
                     del cursor_tx.message_builder
-                cursor_tx.body_blob = None
+                cursor_tx.body = None
             if last_tx is None:
                 last_tx = cursor_tx.copy()
                 upstream_tx = cursor_tx.copy()
@@ -130,7 +130,7 @@ class OutputHandler:
 
             # xxx ick
             # have_body here is really a proxy for "envelope done"
-            have_body = (((self.cursor.tx.body_blob is not None) or
+            have_body = (((self.cursor.tx.body is not None) or
                           (self.cursor.tx.message_builder is not None)))
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
                     delta.cancelled):
@@ -155,7 +155,7 @@ class OutputHandler:
                 continue
 
             logging.info('OutputHandler._output() %s body blob %s',
-                         self.rest_id, upstream_tx.body_blob)
+                         self.rest_id, upstream_tx.body)
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
@@ -443,7 +443,7 @@ class OutputHandler:
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
-            body_blob = InlineBlob(dsn, last=True),
+            body = InlineBlob(dsn, last=True),
             retry={})
         notification_endpoint = self.notification_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream

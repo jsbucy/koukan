@@ -19,7 +19,7 @@ class AddRouteFilterTest(unittest.TestCase):
 
         b = 'hello, world!'
         def exp(i, tx, tx_delta):
-            self.assertEqual(b, tx.body_blob.pread(0))
+            self.assertEqual(b, tx.body.pread(0))
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201 + i),
                 rcpt_response=[Response(203 + i)],
@@ -34,7 +34,7 @@ class AddRouteFilterTest(unittest.TestCase):
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')],
-                                 body_blob=InlineBlob(b, len(b)))
+                                 body=InlineBlob(b, len(b)))
         filter.on_update(tx, tx.copy())
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([203], [r.code for r in tx.rcpt_response])
@@ -69,7 +69,7 @@ class AddRouteFilterTest(unittest.TestCase):
         b = 'hello, world!'
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')],
-                                 body_blob=InlineBlob(b, len(b)))
+                                 body=InlineBlob(b, len(b)))
         filter.on_update(tx, tx.copy())
         self.assertEqual(401, tx.mail_response.code)
         self.assertEqual([403], [r.code for r in tx.rcpt_response])

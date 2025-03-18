@@ -169,7 +169,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         b = b'hello, world!'
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')],
-                                 body_blob=InlineBlob(b, len(b)))
+                                 body=InlineBlob(b, len(b)))
         def exp_update(tx, delta):
             return TransactionMetadata(version=1)
         async_filter.expect_update(exp_update)
@@ -177,7 +177,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             mail_response=Response(450),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(b, len(b)),
+            body=InlineBlob(b, len(b)),
             version=2)
         async_filter.expect_get(upstream_tx)
         def exp_sf(tx, delta):
@@ -211,14 +211,14 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body_blob=InlineBlob(b[0:7], len(b)))
+            body=InlineBlob(b[0:7], len(b)))
 
         upstream_delta = wrapper.update(tx, tx.copy())
         self.assertEqual(1, tx.version)
 
         def exp_data_last(tx, tx_delta):
             logging.debug(tx)
-            self.assertTrue(tx.body_blob.finalized())
+            self.assertTrue(tx.body.finalized())
             return TransactionMetadata()
         async_filter.expect_update(exp_data_last)
 
@@ -227,9 +227,9 @@ class AsyncFilterWrapperTest(unittest.TestCase):
             return TransactionMetadata()
         async_filter.expect_update(exp_retry)
 
-        tx.body_blob = InlineBlob(b, len(b))
+        tx.body = InlineBlob(b, len(b))
         upstream_delta = wrapper.update(
-            tx, TransactionMetadata(body_blob=tx.body_blob))
+            tx, TransactionMetadata(body=tx.body))
 
     def test_sync_smoke(self):
         async_filter = MockAsyncFilter()

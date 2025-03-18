@@ -119,10 +119,10 @@ class StorageWriterFilter(AsyncFilter):
             return None
         if not tx.body and (not isinstance(tx.body, Blob) or not tx.body.finalized()):
             return None
-        if isinstance(tx.body_blob, BlobCursor):
+        if isinstance(tx.body, BlobCursor):
             self.body_blob_uri = True
             # drop internal blob id
-            return BlobUri(tx.body_blob.blob_uri.tx_id, tx_body=True)
+            return BlobUri(tx.body.blob_uri.tx_id, tx_body=True)
         elif isinstance(tx.body, BlobUri):
             self.body_blob_uri = True
             uri = tx.body
@@ -136,8 +136,7 @@ class StorageWriterFilter(AsyncFilter):
     def _maybe_write_body_blob(self, tx) -> Optional[Response]:
         # XXX maybe RestHandler should deal with inline_body before it
         # gets here?
-        logging.debug('_maybe_write_body_blob body %s blob %s',
-                      tx.body, tx.body_blob)
+        logging.debug('_maybe_write_body_blob body %s', tx.body)
         if isinstance(tx.body, Blob) and tx.body.finalized():
             body_blob = tx.body
             del tx.body

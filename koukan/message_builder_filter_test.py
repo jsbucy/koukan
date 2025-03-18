@@ -56,9 +56,9 @@ class MessageBuilderFilterTest(unittest.TestCase):
         tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=[blob_uri])
 
         def exp(tx, delta):
-            self.assertTrue(delta.body_blob.finalized())
+            self.assertTrue(delta.body.finalized())
             self.assertNotEqual(
-                delta.body_blob.pread(0).find(b'MIME-Version'), -1)
+                delta.body.pread(0).find(b'MIME-Version'), -1)
             self.assertIsNone(tx.message_builder)
             self.assertIsNone(delta.message_builder)
             upstream_delta = TransactionMetadata(
@@ -79,18 +79,18 @@ class MessageBuilderFilterTest(unittest.TestCase):
         upstream = FakeSyncFilter()
         message_builder = MessageBuilderFilter(self.storage, upstream)
 
-        body_blob = InlineBlob(b'hello, world!')
+        body = InlineBlob(b'hello, world!')
         tx = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body_blob=body_blob)
+            body=body)
 
         def exp(tx, delta):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
-            self.assertEqual(tx.body_blob, body_blob)
-            self.assertEqual(delta.body_blob, body_blob)
+            self.assertEqual(tx.body, body)
+            self.assertEqual(delta.body, body)
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],

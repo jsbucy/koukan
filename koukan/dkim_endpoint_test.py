@@ -37,7 +37,7 @@ class DkimEndpointTest(unittest.TestCase):
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
-        tx.body_blob = InlineBlob(
+        tx.body = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
@@ -45,8 +45,8 @@ class DkimEndpointTest(unittest.TestCase):
             last=True)
 
         def exp(tx, delta):
-            logging.debug(delta.body_blob.pread(0))
-            self.assertTrue(delta.body_blob.pread(0).startswith(
+            logging.debug(delta.body.pread(0))
+            self.assertTrue(delta.body.pread(0).startswith(
                 b'DKIM-Signature:'))
 
             upstream_delta = TransactionMetadata(
@@ -72,7 +72,7 @@ class DkimEndpointTest(unittest.TestCase):
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
-        tx.body_blob = InlineBlob(
+        tx.body = InlineBlob(
             b'definitely not valid rfc822\r\n', last=True)
         upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.data_response.code, 500)

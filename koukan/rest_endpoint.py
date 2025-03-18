@@ -243,17 +243,17 @@ class RestEndpoint(SyncFilter):
         if timeout is None:
             timeout = self.timeout_start
         deadline = Deadline(timeout)
-        data_last = tx_delta.body_blob is not None and (
-            isinstance(tx_delta.body_blob, Blob) and
-            tx_delta.body_blob.finalized())
+        data_last = tx_delta.body is not None and (
+            isinstance(tx_delta.body, Blob) and
+            tx_delta.body.finalized())
 
         logging.debug('RestEndpoint.on_update start %s '
                       ' data_last=%s timeout=%s downstream tx %s',
                       self.transaction_url, data_last, timeout, tx)
 
         downstream_delta = tx_delta.copy()
-        if downstream_delta.body_blob:
-            del downstream_delta.body_blob
+        if downstream_delta.body:
+            del downstream_delta.body
         if downstream_delta.parsed_json:
             del downstream_delta.parsed_json
         if downstream_delta.parsed_blobs:
@@ -262,7 +262,7 @@ class RestEndpoint(SyncFilter):
             del downstream_delta.attempt_count
 
         # We are going to send a slightly different delta upstream per
-        # remote_host (discovery in _create()) and body_blob (below).
+        # remote_host (discovery in _create()) and body (below).
         # When we look at the delta of what we got back, these fields
         # should not appear so it will merge cleanly with the original input.
         if self.upstream_tx is None:
@@ -363,7 +363,7 @@ class RestEndpoint(SyncFilter):
                 tx.merge_from(delta)
                 return  delta
 
-        if tx.body_blob is None and not(tx_delta.parsed_blobs):
+        if tx.body is None and not(tx_delta.parsed_blobs):
             return upstream_delta
 
         err = None
@@ -397,7 +397,7 @@ class RestEndpoint(SyncFilter):
 
         put_blob_resp = None
         if data_last:
-            put_blob_resp = self._put_blob(tx_delta.body_blob)
+            put_blob_resp = self._put_blob(tx_delta.body)
             logging.debug('RestEndpoint.on_update() put_blob_resp %s',
                           put_blob_resp)
             if not put_blob_resp.ok():

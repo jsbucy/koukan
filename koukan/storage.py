@@ -532,7 +532,7 @@ class TransactionCursor:
         if self.final_attempt_reason != 'oneshot':
             self.tx.final_attempt_reason = self.final_attempt_reason
 
-        # TODO body_blob should be monotonic, maybe save (above), restore here?
+        # TODO body should be monotonic, maybe save (above), restore here?
         sel_body = select(self.parent.tx_blobref_table.c.rest_id).where(
             self.parent.tx_blobref_table.c.transaction_id == self.id,
             self.parent.tx_blobref_table.c.rest_id == TX_BODY)
@@ -821,7 +821,7 @@ class BlobCursor(Blob, WritableBlob):
                 try:
                     # TODO should this be in the same db_tx as the
                     # blob write? as it is, possible for a reader to
-                    # see finalized body_blob but input_done == False
+                    # see finalized body but input_done == False
                     with self.parent.begin_transaction() as db_tx:
                         cursor._load_db(db_tx, rest_id=self.update_tx)
                         kwargs = {}
