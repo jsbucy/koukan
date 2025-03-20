@@ -36,7 +36,9 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
 
-    body_blob_uri : bool = False
+    # xxx this seems dead but it's possible it's here to make the
+    # exploder flow only ref the blob once?
+    # body_blob_uri : bool = False
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -115,16 +117,17 @@ class StorageWriterFilter(AsyncFilter):
 
     def _get_body_blob_uri(self, tx) -> Optional[BlobUri]:
         logging.debug('_get_body_blob_uri')
-        if self.body_blob_uri:
-            return None
-        if not tx.body and (not isinstance(tx.body, Blob) or not tx.body.finalized()):
-            return None
-        if isinstance(tx.body, BlobCursor):
-            self.body_blob_uri = True
+        # if self.body_blob_uri:
+        #     return None
+        if isinstance(tx.body, BlobCursor) and tx.body.finalized():  # ~Exploder
+            # self.body_blob_uri = True
             # drop internal blob id
+            # TODO -> method on BlobCursor
+            # or allow passing BlobCursor directly to
+            # cursor.write_envelope(reuse_blob_rest_id=[...]
             return BlobUri(tx.body.blob_uri.tx_id, tx_body=True)
-        elif isinstance(tx.body, BlobUri):
-            self.body_blob_uri = True
+        elif isinstance(tx.body, BlobUri):  # ~rest body reuse
+            # self.body_blob_uri = True
             uri = tx.body
             logging.debug('_get_body_blob_uri %s %s', tx.body, uri)
             # xxx parse error -> err Response
@@ -137,34 +140,18 @@ class StorageWriterFilter(AsyncFilter):
         # XXX maybe RestHandler should deal with inline_body before it
         # gets here?
         logging.debug('_maybe_write_body_blob body %s', tx.body)
-        if isinstance(tx.body, Blob) and tx.body.finalized():
-            body_blob = tx.body
-            del tx.body
-        else:
+        if not isinstance(tx.body, Blob) or not tx.body.finalized():
             return
+        body_blob = tx.body
+        # XXX wat
+        del tx.body
 
         # refs into tx
         blob_writer = self.get_blob_writer(
             create=True, blob_rest_id=None, tx_body=True)
         if blob_writer is None:
             return Response(400, 'StorageWriterFilter: internal error')
-        off = 0
-        while True:
-            CHUNK_SIZE = 1048576
-            d = body_blob.pread(off, CHUNK_SIZE)
-            last = len(d) < CHUNK_SIZE
-            content_length = off + len(d) if last else None
-            logging.debug('_maybe_write_body_blob %s %d %s',
-                          off, len(d), content_length)
-            appended, length, content_length_out = blob_writer.append_data(
-                off, d, content_length)
-            if (not appended or length != (off + len(d)) or
-                content_length_out != content_length):
-                return Response(400, 'StorageWriterFilter: internal error')
-
-            off = length
-            if last:
-                break
+        blob_writer.append_blob(body_blob)
 
     # -> blobs to reuse, blobs to create in tx
     def _get_message_builder_blobs(

@@ -48,6 +48,33 @@ class WritableBlob(ABC):
         return None
 
 
+    def append_blob(self, src : Blob, start : int = 0, length : int = 0,
+                    set_content_length = True,
+                    chunk_size : int = 2**16) -> int:
+        if length == 0:
+            length = src.content_length()
+        off = start
+        dstart = doff = self.len()
+        while off < (length + start):
+            left = ((start + length) - off)
+            last = False
+            if left < chunk_size:
+                last = True
+            else:
+                left = chunk_size
+            d = src.pread(off, left)
+            content_length = None
+            if set_content_length and last:
+                content_length = off + len(d)
+            appended, dlength, content_length_out = self.append_data(
+                doff, d, content_length)
+            if (not appended or dlength != (doff + len(d)) or
+                content_length_out != content_length):
+                return dlength - dstart
+            off += (dlength - doff)
+            doff = self.len()
+        return (off - start)
+
 class InlineBlob(Blob, WritableBlob):
     d : bytes
     _content_length : Optional[int] = None
