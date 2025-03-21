@@ -21,7 +21,7 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+                            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
         self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
         self.storage = Storage.connect(self.db_url, 'http://storage_writer_filter_test')
 
@@ -39,6 +39,8 @@ class StorageWriterFilterTest(unittest.TestCase):
                         len(tx.rcpt_to))
 
     def start_update(self, filter, tx, tx_delta):
+        logging.debug('start_update', stack_info=True)
+
         # xxx executor
         t = Thread(target=lambda: self.update(filter, tx, tx_delta),
                    daemon=True)
@@ -351,6 +353,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             body = InlineBlob(b, last=True))
         # create w/ tx.inline_body
         filter.update(tx, tx.copy())
+
+        self.dump_db()
 
         filter2 = StorageWriterFilter(
             self.storage,

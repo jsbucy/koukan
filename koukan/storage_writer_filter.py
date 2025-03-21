@@ -9,7 +9,7 @@ from threading import Lock, Condition
 
 from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
-from koukan.storage_schema import VersionConflictException
+from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import (
     AsyncFilter,
@@ -87,15 +87,12 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata,
-                reuse_blob_rest_id : Optional[List[BlobUri]] = None,
-                message_builder_blobs_done=False):
+                blobs : Optional[List[BlobSpec]] = None):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
         self.tx_cursor.create(
-            rest_id, tx, reuse_blob_rest_id=reuse_blob_rest_id,
-            create_leased=self.create_leased,
-            message_builder_blobs_done=message_builder_blobs_done)
+            rest_id, tx, blobs=blobs, create_leased=self.create_leased)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -115,70 +112,31 @@ class StorageWriterFilter(AsyncFilter):
         tx.version = self.tx_cursor.version
         return tx
 
-    def _get_body_blob_uri(self, tx) -> Optional[BlobUri]:
-        logging.debug('_get_body_blob_uri')
-        # if self.body_blob_uri:
-        #     return None
-        if isinstance(tx.body, BlobCursor) and tx.body.finalized():  # ~Exploder
-            # self.body_blob_uri = True
-            # drop internal blob id
-            # TODO -> method on BlobCursor
-            # or allow passing BlobCursor directly to
-            # cursor.write_envelope(reuse_blob_rest_id=[...]
-            return BlobUri(tx.body.blob_uri.tx_id, tx_body=True)
-        elif isinstance(tx.body, BlobUri):  # ~rest body reuse
-            # self.body_blob_uri = True
-            uri = tx.body
-            logging.debug('_get_body_blob_uri %s %s', tx.body, uri)
-            # xxx parse error -> err Response
-            assert uri and uri.tx_body
-            return uri
-        return None
-
-    # -> data err
-    def _maybe_write_body_blob(self, tx) -> Optional[Response]:
-        # XXX maybe RestHandler should deal with inline_body before it
-        # gets here?
-        logging.debug('_maybe_write_body_blob body %s', tx.body)
-        if not isinstance(tx.body, Blob) or not tx.body.finalized():
-            return
-        body_blob = tx.body
-        # XXX wat
-        del tx.body
-
-        # refs into tx
-        blob_writer = self.get_blob_writer(
-            create=True, blob_rest_id=None, tx_body=True)
-        if blob_writer is None:
-            return Response(400, 'StorageWriterFilter: internal error')
-        blob_writer.append_blob(body_blob)
-
     # -> blobs to reuse, blobs to create in tx
     def _get_message_builder_blobs(
-            self, tx) -> Tuple[List[BlobUri], List[str]]:
+            self, tx) -> List[BlobSpec]:
         blobs = []
-        create_blobs = []
         def tx_blob_id(uri) -> Optional[str]:
             blob_uri = parse_blob_uri(uri)
             # xxx not uri.startswith('/')
             # other limits? ascii printable, etc?
             if blob_uri is None:
-                create_blobs.append(uri)
+                blobs.append(BlobSpec(uri=BlobUri('', blob=uri)))
                 return uri
-            if blob_uri.tx_body:
+            if blob_uri.tx_body:  # xxx bad?
                 return None
-            blobs.append(blob_uri)
+            blobs.append(BlobSpec(uri=blob_uri))
             return blob_uri.blob
 
         if not tx.message_builder:
-            return [], []
+            return []
 
         # TODO maybe this should this blob-ify larger inline content in
         # message_builder a la _maybe_write_body_blob() with inline_body?
 
         MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
 
-        return blobs, create_blobs
+        return blobs
 
     # AsyncFilter
     def update(self,
@@ -206,8 +164,6 @@ class StorageWriterFilter(AsyncFilter):
                       self.rest_id, tx)
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
-
-        reuse_blob_rest_id : Optional[List[BlobUri]] = None
 
         if tx_delta.cancelled:
             for i in range(0,5):
@@ -244,65 +200,34 @@ class StorageWriterFilter(AsyncFilter):
             tx.merge_from(err_delta)
             return err_delta
 
-        # TODO move message builder blob creation into
-        # cursor.create/write_env w/message builder?
-        reuse_blob_rest_id, create_blobs = (
-            self._get_message_builder_blobs(tx_delta))
-        logging.debug('StorageWriterFilter.update reuse_blob_rest_id %s',
-                      reuse_blob_rest_id)
-
-        # finalized body_blob w/uri:
-        # rest body reuse (body is uri)
-        # exploder (body_blob is storage.BlobCursor)
-
-        if body_blob_uri := self._get_body_blob_uri(downstream_tx):
-            logging.debug('body_blob_uri %s', body_blob_uri)
-            assert not reuse_blob_rest_id
-            reuse_blob_rest_id = [body_blob_uri]
+        blobs = []
+        if tx_delta.message_builder:
+            blobs = self._get_message_builder_blobs(tx_delta)
+            logging.debug('StorageWriterFilter.update blobs %s', blobs)
+        elif tx.body:
+            spec = BlobSpec()
+            if isinstance(tx.body, BlobUri):
+                spec.uri = tx.body
+            elif isinstance(tx.body, Blob):
+                if not isinstance(tx.body, BlobCursor):
+                    spec.uri = BlobUri(tx_id='', tx_body=True)  # create
+                else:  # xxx
+                    spec.uri = tx.body.blob_uri
+                spec.blob = tx.body
+            blobs = [spec]
 
         created = False
         if self.rest_id is None:
             created = True
-            self._create(downstream_tx,
-                         reuse_blob_rest_id=reuse_blob_rest_id,
-                         message_builder_blobs_done=not bool(create_blobs))
-            reuse_blob_rest_id = None
+            self._create(downstream_tx, blobs=blobs))
             tx.rest_id = self.rest_id
-
-        for blob in create_blobs:
-            self.get_blob_writer(create=True, blob_rest_id = blob)
-
-        # blobs w/o uri:
-        # notification/dsn: InlineBlob w/dsn,
-        # exploder currently sends downstream BlobCursor verbatim but
-        # could chain received header which would send us CompositeBlob
-        if body_blob_uri is None:
-            err = self._maybe_write_body_blob(tx_delta)
-            if err:
-                err_delta = TransactionMetadata(data_response=err)
-                tx.merge_from(err_delta)
-                return err_delta
-            #xxx assert not downstream_delta.body
-            # TODO kludge: blob append pings tx, avoid version
-            # conflict on subsequent write_envelope(). Possibly
-            # BlobCursor should be more integrated with
-            # TransactionCursor since a blob is always created/written
-            # ancillary to a specific tx now.
-            if self.tx_cursor is not None:
-                self.tx_cursor.load()
-
-        # reuse_blob_rest_id is only
-        # POST /tx/123/message_builder  ?
-        # new body upload handled via get_blob_reader()
-        if not created or reuse_blob_rest_id:
+        else:
             if self.tx_cursor is None:
                 self._load()
             # caller handles VersionConflictException
-            self.tx_cursor.write_envelope(
-                downstream_delta, reuse_blob_rest_id=reuse_blob_rest_id)
+            self.tx_cursor.write_envelope(downstream_delta, blobs=blobs)
 
-        logging.debug('StorageWriterFilter.update %s result %s '
-                      'input tx %s',
+        logging.debug('StorageWriterFilter.update %s result %s input tx %s',
                       self.rest_id, self.tx_cursor.tx, tx)
 
         version = TransactionMetadata(version=self.tx_cursor.version)

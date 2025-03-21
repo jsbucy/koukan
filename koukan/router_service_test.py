@@ -884,8 +884,10 @@ class RouterServiceTest(unittest.TestCase):
             remote_host=HostPort('1.2.3.4', 12345))
 
         def exp_rcpt(tx, tx_delta):
+            logging.debug(tx)
             rcpt = tx_delta.rcpt_to[0].mailbox
             self.assertIn(rcpt, ['bob1@example.com', 'bob2@example.com'])
+            # XXX if tx.body and tx.body.finalized()
             data_resp = 550 if rcpt == 'bob2@example.com' else 250
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
@@ -967,7 +969,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
 
-        logging.info('test_notification start tx')
+        logging.info('test_message_builder start 1st tx')
         tx = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob1@example.com')],

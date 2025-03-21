@@ -91,6 +91,7 @@ class OutputHandler:
         #     wait_downstream()
         #   delta = prev.delta(cursor.tx)
         #   upstream_delta = output_chain.on_update(tx, delta)
+        #   rcpt/data precondition check -> set data response
         #   if tx.req_inflight():
         #     # bug
         #   write_envelope(upstream_delta)

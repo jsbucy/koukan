@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta
 
 from koukan.storage import BlobCursor, Storage, TransactionCursor
-from koukan.storage_schema import VersionConflictException
+from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
@@ -80,7 +80,7 @@ class StorageTestBase(unittest.TestCase):
 
         with self.s.begin_transaction() as db_tx:
             self.assertFalse(downstream.check_input_done(db_tx))
-
+        logging.debug(blob_writer.blob_uri)
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
 
@@ -201,15 +201,15 @@ class StorageTestBase(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         with self.assertRaises(ValueError):
-            tx_writer2.create('tx_rest_id2', tx, reuse_blob_rest_id=[
-                BlobUri(tx_id='tx_rest_id', tx_body=True)])
+            tx_writer2.create('tx_rest_id2', tx, blobs=[
+                BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
 
         # non-finalized blobs cannot be reused
         with self.assertRaises(ValueError):
             tx.body = 'body_rest_id'
             tx_writer2 = self.s.get_transaction_cursor()
-            tx_writer2.create('tx_rest_id2', tx, reuse_blob_rest_id=[
-                BlobUri(tx_id='tx_rest_id', tx_body=True)])
+            tx_writer2.create('tx_rest_id2', tx, blobs=[
+                BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
 
         # shouldn't have been ref'd into tx2
         self.assertIsNone(self.s.get_blob_for_read(
@@ -221,8 +221,8 @@ class StorageTestBase(unittest.TestCase):
 
         tx_writer.load()
         tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id2', tx, reuse_blob_rest_id=[
-            BlobUri(tx_id='tx_rest_id', tx_body=True)])
+        tx_writer.create('tx_rest_id2', tx, blobs=[
+            BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
         self.assertTrue(tx_writer.input_done)
 
         blob_reader = self.s.get_blob_for_read(
@@ -253,14 +253,14 @@ class StorageTestBase(unittest.TestCase):
         b2 = b'another blob'
         blob_writer2.append_data(0, b2, len(b2))
         tx_writer2.load()
-        reuse_blob_rest_id=[blob1]  # create_blob(blob2) refs into tx
+        blobs=[BlobSpec(uri=blob1)]  # create_blob(blob2) refs into tx
         tx_writer2.write_envelope(
-            TransactionMetadata(message_builder={}),
-            reuse_blob_rest_id=reuse_blob_rest_id)
-
-        for blob in reuse_blob_rest_id:
+            TransactionMetadata(message_builder={}), blobs=blobs)
+        # verify blobs were ref'd into tx_rest_id2
+        for blob in blobs:
             blob_reader = BlobCursor(self.s)
-            self.assertIsNotNone(blob_reader.load(blob2))
+            self.assertIsNotNone(blob_reader.load(
+                BlobUri(tx_id='tx_rest_id2', blob=blob.uri.blob)))
 
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -269,15 +269,13 @@ class StorageTestBase(unittest.TestCase):
             host='host')
         tx.message_builder = { "headers": [ ["subject", "hello"] ] }
         tx_writer.create('tx_rest_id', tx)
-        self.assertFalse(tx_writer.input_done)
-
-        tx_writer = self.s.get_transaction_cursor()
-        tx = TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525),
-            host='host')
-        tx.message_builder = { "headers": [ ["subject", "hello"] ] }
-        tx_writer.create('tx_rest_id2', tx, message_builder_blobs_done=True)
         self.assertTrue(tx_writer.input_done)
+
+        # add test
+        # create tx w/message_builder that creates a blob
+        # verify !input_done
+        # write blob to completion
+        # verify input_done
 
     def test_sessions(self):
         stale_session = self.s.session_id

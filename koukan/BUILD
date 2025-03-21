@@ -69,7 +69,8 @@ pytype_library(name='rest_service_handler',
 
 pytype_library(name='storage_schema',
                srcs=['storage_schema.py'],
-               deps=[':rest_schema'])
+               deps=[':rest_schema',
+                     ':blob'])
 
 pytype_library(name='backoff',
                srcs=['backoff.py'])
@@ -180,7 +181,8 @@ py_test(name='message_builder_filter_test',
               ':response',
               ':rest_schema',
               ':sqlite_test_utils',
-              ':storage'])
+              ':storage',
+              ':storage_schema'])
 
 pytype_library(name='message_parser',
                srcs=['message_parser.py'],

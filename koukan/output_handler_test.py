@@ -220,10 +220,10 @@ class OutputHandlerTest(unittest.TestCase):
 
 
 
-    def write_envelope(self, cursor, tx, reuse_blob_rest_id=None):
+    def write_envelope(self, cursor, tx):
         for i in range(1,3):
             try:
-                cursor.write_envelope(tx, reuse_blob_rest_id=reuse_blob_rest_id)
+                cursor.write_envelope(tx)
                 break
             except VersionConflictException:
                 time.sleep(0.1)
@@ -276,6 +276,12 @@ class OutputHandlerTest(unittest.TestCase):
 
         self.write_envelope(tx_cursor, tx.delta(updated_tx))
 
+        # XXX blob write races with upstream, may get 2nd rcpt and
+        # body in same read now
+        while tx_cursor.tx.req_inflight():
+            tx_cursor.wait(0.3)
+            tx_cursor.load()
+        time.sleep(1) # more xxx
 
         # no additional expectation on endpoint, should not send blob
         # upstream since all rcpts failed
@@ -540,7 +546,6 @@ class OutputHandlerTest(unittest.TestCase):
             retry={'max_attempts': 1})
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
-                         #reuse_blob_rest_id=['blob_rest_id'])
         tx_id = tx_cursor.id
 
         blob_writer = self.storage.create_blob(

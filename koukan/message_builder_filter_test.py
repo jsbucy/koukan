@@ -10,6 +10,7 @@ from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
 from koukan.storage import Storage
+from koukan.storage_schema import BlobSpec
 from koukan.rest_schema import BlobUri
 
 from koukan.message_builder_filter import MessageBuilderFilter
@@ -53,7 +54,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             ]
         }
         tx_cursor.load()
-        tx_cursor.write_envelope(tx_delta, reuse_blob_rest_id=[blob_uri])
+        tx_cursor.write_envelope(tx_delta, blobs=[BlobSpec(uri=blob_uri)])
 
         def exp(tx, delta):
             self.assertTrue(delta.body.finalized())
