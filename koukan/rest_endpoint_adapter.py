@@ -612,13 +612,13 @@ class RestHandler(Handler):
         return None, range
 
     def _create_blob(self, request : HttpRequest,
-                     tx_body : bool = False,
+                     tx_body : bool = False,  # xxx always true?
                      req_upload : Optional[str] = None) -> HttpResponse:
         logging.debug('RestHandler._create_blob %s tx_body %s %s blob %s tx %s',
                       request, tx_body, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
 
-        if not tx_body:
+        if not tx_body:  # xxx always true?
             self._blob_rest_id = self.rest_id_factory()
 
         if req_upload is not None and req_upload != 'chunked':
@@ -656,7 +656,7 @@ class RestHandler(Handler):
     # still used for tx_body
     async def create_blob_async(
             self, request : FastApiRequest,
-            tx_body : bool = False,
+            tx_body : bool = False,  # xxx always true?
             req_upload : Optional[str] = None
             ) -> FastApiResponse:
         logging.debug('RestHandler.create_blob_async')

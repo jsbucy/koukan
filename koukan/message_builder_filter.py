@@ -8,8 +8,7 @@ from io import IOBase
 from koukan.filter import (
     SyncFilter,
     TransactionMetadata )
-from koukan.message_builder import MessageBuilder
-from koukan.storage import Storage
+from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 from koukan.blob import Blob, FileLikeBlob
 from koukan.rest_schema import BlobUri
 
@@ -17,31 +16,22 @@ class MessageBuilderFilter(SyncFilter):
     upstream : Optional[SyncFilter] = None
     body : Optional[Blob] = None
 
-    def __init__(self, storage : Storage, upstream):
-        self.storage = storage
+    def __init__(self, upstream):
         self.upstream = upstream
-
-    # TODO probably OutputHandler should just load the blobs in the tx
-    # the same as the body
-    def _blob_factory(self, tx_rest_id : str, blob_id : str):
-        logging.debug('message builder %s %s', tx_rest_id, blob_id)
-        blob_reader = self.storage.get_blob_for_read(
-            BlobUri(tx_id=tx_rest_id, blob=blob_id))
-        if blob_reader is None:
-            return None
-        return blob_reader
 
     def on_update(self, tx : TransactionMetadata,
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata] :
-        if self.body is None and tx.message_builder is None:
+        logging.debug(tx.body)
+        if ((tx.body is None) or (not isinstance(tx.body, MessageBuilderSpec))) and (self.body is None):
             return self.upstream.on_update(tx, tx_delta)
 
         built = False
-        if tx_delta.message_builder is not None:
+        if tx_delta.body is not None and isinstance(tx_delta.body, MessageBuilderSpec):
             builder = MessageBuilder(
-                tx_delta.message_builder,
-                lambda blob_id: self._blob_factory(tx.rest_id, blob_id))
+                tx_delta.body.json,
+                # xxx always BlobCursor?
+                { blob.blob_uri.blob: blob for blob in tx_delta.body.blobs })
 
             file = TemporaryFile('w+b')
             assert isinstance(file, IOBase)
@@ -54,11 +44,6 @@ class MessageBuilderFilter(SyncFilter):
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-
-        if downstream_tx.message_builder:
-            downstream_tx.message_builder = None
-        if downstream_delta.message_builder:
-            downstream_delta.message_builder = None
 
         downstream_tx.body = self.body
         downstream_delta.body = self.body if built else None

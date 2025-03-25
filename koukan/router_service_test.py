@@ -29,6 +29,8 @@ from koukan.executor import Executor
 
 import koukan.sqlite_test_utils as sqlite_test_utils
 
+from koukan.message_builder import MessageBuilderSpec
+
 def setUpModule():
     postgres_test_utils.setUpModule()
 
@@ -325,13 +327,21 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(body, last=True))
 
         def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
+            logging.debug(tx)
+            # xxx verify mail/rcpt
+            upstream_delta=TransactionMetadata()
+            if tx_delta.mail_from:
+                upstream_delta.mail_response=Response(201)
+            if tx_delta.rcpt_to:
+                upstream_delta.rcpt_response=[Response(202)]
+            if tx.body and tx.body.finalized():
+                self.assertIn(body, tx.body.pread(0))
+                upstream_delta.data_response=Response(203)
+
             self.assertTrue(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
         upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
 
@@ -355,6 +365,7 @@ class RouterServiceTest(unittest.TestCase):
                 'final_attempt_reason': 'upstream response success'}:
                 break
         else:
+            logging.debug(self.service.storage.debug_dump())
             self.fail('didn\'t get expected transaction %s' % tx_json)
 
         self.root_yaml['storage']['gc_interval'] = 1
@@ -932,20 +943,19 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(250),
                 rcpt_response=[Response(250)])
             tx.merge_from(upstream_delta)
-            return upstream_delta
 
-        def exp_dsn_body(tx, tx_delta):
-            logging.error(tx)
-            dsn = tx.body.pread(0)
-            logging.debug('test_notification %s', dsn)
-            self.assertIn(b'subject: Delivery Status Notification', dsn)
+            # def exp_dsn_body(tx, tx_delta):
+            #     logging.error(tx)
 
-            upstream_delta=TransactionMetadata(
-                data_response=Response(250))
+            if tx.body and tx.body.finalized():
+                dsn = tx.body.pread(0)
+                logging.debug('test_notification %s', dsn)
+                self.assertIn(b'subject: Delivery Status Notification', dsn)
+                upstream_delta.data_response=Response(250)
             tx.merge_from(upstream_delta)
             return upstream_delta
         dsn_endpoint.add_expectation(exp_dsn_env)
-        dsn_endpoint.add_expectation(exp_dsn_body)
+        # dsn_endpoint.add_expectation(exp_dsn_body)
         self.add_endpoint(dsn_endpoint)
         # no_final_notification(bob2) + dsn output
         self._dequeue(2)
@@ -985,10 +995,10 @@ class RouterServiceTest(unittest.TestCase):
             ],
             "text_body": [{
                 "content_type": "text/plain",
-                "content_uri": "my_plain_body"
+                "content": {"create_id": "my_plain_body"}
             }]
         }
-        tx.message_builder = message_builder_spec
+        tx.body = MessageBuilderSpec(message_builder_spec)
         def exp_env(tx, tx_delta):
             updated_tx = tx.copy()
             updated_tx.mail_response = Response(201)
@@ -1026,7 +1036,7 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_body)
 
-        message_builder_spec['text_body'][0]['content_uri'] = rest_endpoint.blob_path
+        message_builder_spec['text_body'][0]['content']['reuse_uri'] = rest_endpoint.blob_path
 
         # send another tx with the same spec to exercise blob reuse
         logging.info('RouterServiceTest.test_message_builder start tx #2')
@@ -1034,7 +1044,7 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob2@example.com')],
             remote_host=HostPort('1.2.3.4', 12345),
-            message_builder=message_builder_spec)
+            body=MessageBuilderSpec(message_builder_spec))
 
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, static_http_host='submission')

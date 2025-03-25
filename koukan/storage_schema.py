@@ -22,10 +22,15 @@ def body_blob_uri(uri : BlobUri) -> BlobUri:
 
 class BlobSpec:
     blob : Optional[Blob] = None
-    # TODO maybe split uri into create vs reuse, currently implicit by
-    # whether uri has tx_id
-    uri : Optional[BlobUri] = None
+    create_id : Optional[str] = None
+    reuse_uri : Optional[BlobUri] = None
+    create_tx_body : bool = False  # xxx temporary hack
+
     def __init__(self, blob : Optional[Blob] = None,
-                 uri : Optional[BlobUri] = None):
+                 create_id : Optional[str] = None,
+                 reuse_uri : Optional[BlobUri] = None,
+                 create_tx_body : bool = False):
         self.blob = blob
-        self.uri = uri
+        self.create_id = create_id
+        self.reuse_uri = reuse_uri
+        self.create_tx_body = create_tx_body

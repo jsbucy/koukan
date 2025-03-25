@@ -12,6 +12,8 @@ from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
 from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
 
+from koukan.message_builder import MessageBuilderSpec
+
 class HostPort:
     host : str
     port : int
@@ -188,6 +190,10 @@ def body_from_json(body_json):
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
     elif 'uri' in body_json:
         return parse_blob_uri(body_json['uri'])
+    elif 'message_builder' in body_json:
+        spec = MessageBuilderSpec(body_json['message_builder'])
+        spec.parse_blob_specs()
+        return spec
     return None
 
 def body_to_json(body : Union[BlobUri, InlineBlob, None]):
@@ -199,6 +205,8 @@ def body_to_json(body : Union[BlobUri, InlineBlob, None]):
     elif isinstance(body, BlobUri):
         return {'uri': make_blob_uri(body.tx_id,
                                      tx_body=body.tx_body, blob=body.blob) }
+    elif isinstance(body, MessageBuilderSpec):
+        return {'message_builder': body.json }
     return None
 
 _tx_fields = [
@@ -274,11 +282,6 @@ _tx_fields = [
                           WhichJson.ADD_ROUTE]),
             to_json=body_to_json,
             from_json=body_from_json),
-    TxField('message_builder',
-            rest_placeholder=True,
-            validity=set([WhichJson.REST_CREATE,
-                          WhichJson.REST_UPDATE,
-                          WhichJson.REST_READ ])),
     TxField('notification',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
@@ -337,9 +340,7 @@ class TransactionMetadata:
 
     attempt_count : Optional[int] = None
 
-    body : Union[BlobUri, InlineBlob, Blob, None] = None
-
-    message_builder : Optional[dict] = None
+    body : Union[BlobUri, InlineBlob, Blob, MessageBuilderSpec, None] = None
 
     # arbitrary json for now
     notification : Optional[dict] = None
@@ -377,7 +378,6 @@ class TransactionMetadata:
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,
                  smtp_meta : Optional[dict] = None,
-                 message_builder : Optional[dict] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
                  rest_id : Optional[str] = None,
@@ -394,7 +394,6 @@ class TransactionMetadata:
         self.notification = notification
         self.retry = retry
         self.smtp_meta = smtp_meta
-        self.message_builder = message_builder
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
@@ -408,7 +407,6 @@ class TransactionMetadata:
         out += 'rcpt_to=%s rcpt_response=%s ' % (
             self.rcpt_to, self.rcpt_response)
         out += 'body=%s ' % (self.body)
-        out += 'message_builder=%s ' % (self.message_builder)
         out += 'data_response=%s ' % self.data_response
         if self.rest_endpoint:
             out += 'rest_endpoint=%s ' % self.rest_endpoint
@@ -510,7 +508,7 @@ class TransactionMetadata:
                 return True
         body_last = self.body is not None and (
             isinstance(self.body, Blob) and self.body.finalized())
-        if (self.body or body_last or self.message_builder):
+        if self.body or body_last:
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward
             # progress.

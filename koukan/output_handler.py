@@ -18,9 +18,9 @@ from koukan.filter import (
     TransactionMetadata,
     WhichJson )
 from koukan.dsn import read_headers, generate_dsn
-from koukan.blob import InlineBlob
+from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
-from koukan.message_builder import MessageBuilder
+from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
 def default_notification_factory():
     raise NotImplementedError()
@@ -56,7 +56,7 @@ class OutputHandler:
         # xxx req_inflight()?
         if ((delta.mail_from is not None) or
             bool(delta.rcpt_to) or
-            self.cursor.input_done):
+            (self.cursor.tx.body and self.cursor.tx.body.finalized())):
             return False, None
 
         timeout = self.env_timeout
@@ -104,9 +104,12 @@ class OutputHandler:
 
             cursor_tx = self.cursor.tx.copy()
             # NOTE: possible to read finalized body but input_done == False
-            if not self.cursor.input_done:
-                if cursor_tx.message_builder:
-                    del cursor_tx.message_builder
+
+            if isinstance(cursor_tx.body, MessageBuilderSpec):
+                logging.debug(cursor_tx.body.json)
+                logging.debug(cursor_tx.body.blobs)
+
+            if cursor_tx.body and not cursor_tx.body.finalized():
                 cursor_tx.body = None
             if last_tx is None:
                 last_tx = cursor_tx.copy()
@@ -131,13 +134,16 @@ class OutputHandler:
 
             # xxx ick
             # have_body here is really a proxy for "envelope done"
-            have_body = (((self.cursor.tx.body is not None) or
-                          (self.cursor.tx.message_builder is not None)))
+            have_body = self.cursor.tx.body is not None
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
                     delta.cancelled):
                 delta = TransactionMetadata(cancelled=True)
                 assert upstream_tx.merge_from(delta) is not None
                 self.endpoint.on_update(upstream_tx, delta)
+
+                # XXX because of the way we clear non-finalized body
+                # (above), won't get data_response precondition err if
+                # all rcpts failed, need to set here?
 
                 # all recipients so far have failed and we aren't
                 # waiting for any more (have_body) -> we're done
@@ -160,7 +166,7 @@ class OutputHandler:
 
             # no new reqs in delta can happen e.g. if blob upload
             # ping'd last_update
-            if delta.mail_from is None and not delta.rcpt_to and not self.cursor.input_done:
+            if delta.mail_from is None and not delta.rcpt_to and not delta.body:
                 logging.info('OutputHandler._output() %s no reqs', self.rest_id)
                 continue
 
@@ -408,15 +414,16 @@ class OutputHandler:
             return
 
         orig_headers : str
-        if self.cursor.tx.message_builder:
-            builder = MessageBuilder(self.cursor.tx.message_builder)
-            orig_headers = builder.build_headers_for_notification().decode(
-                'utf-8')
-        elif self.cursor.tx.body is not None:
-            blob_reader = self.cursor.parent.get_blob_for_read(
-                BlobUri(tx_id = self.cursor.rest_id, tx_body=True))
-            h = read_headers(blob_reader)
-            orig_headers = h if h is not None else ''
+        if self.cursor.tx.body:
+            if isinstance(self.cursor.tx.body, MessageBuilderSpec):
+                builder = MessageBuilder(self.cursor.tx.body.json)
+                orig_headers = builder.build_headers_for_notification().decode(
+                    'utf-8')
+            elif isinstance(self.cursor.tx.body, Blob):
+                h = read_headers(self.cursor.tx.body)
+                orig_headers = h if h is not None else ''
+            else:
+                raise ValueError()
         else:
             logging.warning('OutputHandler._maybe_send_notification '
                             'no source for orig_headers %s', self.rest_id)

@@ -19,9 +19,9 @@ from koukan.filter import (
     TransactionMetadata )
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
-from koukan.message_builder import MessageBuilder
 
 from koukan.rest_schema import BlobUri, parse_blob_uri
+from koukan.message_builder import MessageBuilderSpec
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
@@ -112,32 +112,6 @@ class StorageWriterFilter(AsyncFilter):
         tx.version = self.tx_cursor.version
         return tx
 
-    # -> blobs to reuse, blobs to create in tx
-    def _get_message_builder_blobs(
-            self, tx) -> List[BlobSpec]:
-        blobs = []
-        def tx_blob_id(uri) -> Optional[str]:
-            blob_uri = parse_blob_uri(uri)
-            # xxx not uri.startswith('/')
-            # other limits? ascii printable, etc?
-            if blob_uri is None:
-                blobs.append(BlobSpec(uri=BlobUri('', blob=uri)))
-                return uri
-            if blob_uri.tx_body:  # xxx bad?
-                return None
-            blobs.append(BlobSpec(uri=blob_uri))
-            return blob_uri.blob
-
-        if not tx.message_builder:
-            return []
-
-        # TODO maybe this should this blob-ify larger inline content in
-        # message_builder a la _maybe_write_body_blob() with inline_body?
-
-        MessageBuilder.get_blobs(tx.message_builder, tx_blob_id)
-
-        return blobs
-
     # AsyncFilter
     def update(self,
                tx : TransactionMetadata,
@@ -189,37 +163,25 @@ class StorageWriterFilter(AsyncFilter):
         if getattr(downstream_tx, 'rest_id', None) is not None:
             del downstream_tx.rest_id
 
-        # TODO move to TransactionMetadata.from_json()?
-        body_fields = 0
-        for body_field in [ 'body', 'message_builder']:
-            if getattr(tx, body_field):
-                body_fields += 1
-        if body_fields > 1:
-            err_delta = TransactionMetadata(data_response=Response(
-                550, 'invalid tx: multiple body fields (StorageWriterFilter)'))
-            tx.merge_from(err_delta)
-            return err_delta
-
-        blobs = []
-        if tx_delta.message_builder:
-            blobs = self._get_message_builder_blobs(tx_delta)
-            logging.debug('StorageWriterFilter.update blobs %s', blobs)
-        elif tx.body:
-            spec = BlobSpec()
+        blobs : List[BlobSpec] = []
+        if tx.body:
             if isinstance(tx.body, BlobUri):
-                spec.uri = tx.body
+                blobs = [BlobSpec(reuse_uri = tx.body)]
             elif isinstance(tx.body, Blob):
                 if not isinstance(tx.body, BlobCursor):
-                    spec.uri = BlobUri(tx_id='', tx_body=True)  # create
-                else:  # xxx
-                    spec.uri = tx.body.blob_uri
-                spec.blob = tx.body
-            blobs = [spec]
+                    blobs = [BlobSpec(create_tx_body=True,  # xxx
+                                      blob=tx.body)]
+                else:
+                    blobs = [BlobSpec(reuse_uri = tx.body.blob_uri,
+                                      blob=tx.body)]
+
+            elif isinstance(tx.body, MessageBuilderSpec):
+                blobs = tx.body.blob_specs
 
         created = False
         if self.rest_id is None:
             created = True
-            self._create(downstream_tx, blobs=blobs))
+            self._create(downstream_tx, blobs=blobs)
             tx.rest_id = self.rest_id
         else:
             if self.tx_cursor is None:
@@ -251,6 +213,17 @@ class StorageWriterFilter(AsyncFilter):
                         ) -> Optional[WritableBlob]:
         assert tx_body or blob_rest_id
         blob = None
+        # xxx this always starts from a tx now, move to tx_cursor?
+        # create may not need to be a separate api, should be able to
+        # get by invoking update (tx) w/new
+        # tx_cursor.write_envelope(blobs=[...])
+
+        # now only used to create tx_body, message_builder blobs are
+        # created by way of
+        # tx_cursor.update(
+        #   body=MessageBuilderSpec,
+        #   blobs=MessageBuilderSpec.blobs) etc.
+
         if create:
             for i in range(0,5):
                 try:

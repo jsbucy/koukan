@@ -28,9 +28,6 @@ from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.storage_schema import VersionConflictException
 from koukan.deadline import Deadline
 
-from koukan.message_builder_filter import MessageBuilderFilter
-
-
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
@@ -158,10 +155,6 @@ class Service:
         session_ttl = timedelta(seconds=(session_refresh_interval * 10))
 
         self.storage.recover(session_ttl=session_ttl)
-
-        self.filter_chain_factory.inject_filter(
-            'message_builder',
-            lambda yaml, next: MessageBuilderFilter(self.storage, next))
 
         if global_yaml.get('dequeue', True):
             self.daemon_executor.submit(

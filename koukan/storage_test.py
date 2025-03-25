@@ -7,7 +7,6 @@ import time
 import unittest
 import logging
 import base64
-import tempfile
 import os
 from datetime import datetime, timedelta
 

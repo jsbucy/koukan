@@ -30,6 +30,7 @@ from koukan.received_header_filter import ReceivedHeaderFilter
 from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
+from koukan.message_builder_filter import MessageBuilderFilter
 
 StorageWriterFactory = Callable[[str, bool],Optional[AsyncFilter]]
 
@@ -61,6 +62,7 @@ class FilterChainWiring:
         factory.add_filter('add_route', self.add_route)
 
         factory.add_filter('router', self.router_factory.build_router)
+        factory.add_filter('message_builder', self.message_builder)
 
     def exploder_upstream(self, http_host : str,
                           rcpt_timeout : float,
@@ -169,3 +171,5 @@ class FilterChainWiring:
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
+    def message_builder(self, yaml, next):
+        return MessageBuilderFilter(next)

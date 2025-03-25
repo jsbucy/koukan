@@ -195,7 +195,7 @@ class SmtpEndpoint(SyncFilter):
                 self.good_rcpt = True
             upstream_delta.rcpt_response.append(resp)
 
-        if tx_delta.message_builder is not None:
+        if tx_delta.body and not isinstance(tx_delta.body, Blob):
             upstream_delta.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
         elif not tx.data_response and tx.body is not None and tx.body.finalized():

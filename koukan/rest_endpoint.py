@@ -22,6 +22,7 @@ from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
 from koukan.rest_schema import BlobUri
+from koukan.message_builder import MessageBuilderSpec
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -254,9 +255,9 @@ class RestEndpoint(SyncFilter):
         downstream_delta = tx_delta.copy()
         if downstream_delta.body:
             del downstream_delta.body
-        if downstream_delta.parsed_json:
+        if downstream_delta.parsed_json:  # xxx fold into body/message_builder
             del downstream_delta.parsed_json
-        if downstream_delta.parsed_blobs:
+        if downstream_delta.parsed_blobs:  # xxx fold into message builder spec
             del downstream_delta.parsed_blobs
         if downstream_delta.attempt_count:
             del downstream_delta.attempt_count
@@ -273,7 +274,7 @@ class RestEndpoint(SyncFilter):
             assert self.upstream_tx.merge_from(downstream_delta) is not None
         # xxx some tests send BlobUri here?
         # otherwise clear so it doesn't trip req_inflight() during get
-        if not isinstance(self.upstream_tx.body, BlobUri):
+        if not isinstance(self.upstream_tx.body, BlobUri) and not isinstance(self.upstream_tx.body, MessageBuilderSpec):
             self.upstream_tx.body = None
         upstream_tx = self.upstream_tx.copy()
 
@@ -466,6 +467,7 @@ class RestEndpoint(SyncFilter):
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
         if rest_resp is None or rest_resp.status_code != exp_code:
+            logging.debug(rest_resp)
             return Response(450, 'RestEndpoint blob upload error')
         logging.info('RestEndpoint._put_blob_single %s', rest_resp)
         return Response()

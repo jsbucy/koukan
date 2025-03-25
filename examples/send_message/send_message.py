@@ -89,8 +89,8 @@ class Sender:
             if not (multipart := json.get(multi, [])):
                 continue
             for part in multipart:
-                if 'file_content' in part:
-                    del part['file_content']
+                if 'filename' in part['content']:
+                    del part['content']['filename']
         return json
 
 
@@ -100,23 +100,20 @@ class Sender:
                 continue
             for part in multipart:
                 logging.info('send_body %s', part)
-                if part['content_uri'].startswith('/'):
+                # cf MessageBuilderSpec._add_part_blob()
+                content = part['content']
+                if 'reuse_uri' in content:
                     continue
-                filename = part.get('file_content', None)
-                if filename:
-                    del part['file_content']
-                if not filename:
+                if ('create_id' not in content or
+                    'filename' not in content):
                     continue
-
+                filename = content['filename']
+                del content['filename']
                 if (uri := self.send_part(
-                        tx_url, part['content_uri'],
+                        tx_url, content['create_id'],
                         filename=filename)) is None:
                     return False
-
-                for part_field in ['put_content', 'file_content']:
-                    if part_field in part:
-                        del part[part_field]
-                part['content_uri'] = uri
+                content['reuse_uri'] = uri
 
         return True
 
@@ -137,10 +134,10 @@ class Sender:
             pass
         elif (self.message_builder_blobs is None and
               self.message_builder is not None):
-            tx_json['message_builder'] = self.strip_filenames(
-                copy.deepcopy(self.message_builder))
+            tx_json['body'] = {'message_builder': self.strip_filenames(
+                copy.deepcopy(self.message_builder))}
         else:
-            tx_json['message_builder']: self.message_builder_blobs
+            tx_json['body'] = {'message_builder': self.message_builder_blobs}
 
         logging.debug(json.dumps(tx_json, indent=2))
 

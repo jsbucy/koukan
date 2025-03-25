@@ -38,6 +38,8 @@ from koukan.rest_schema import BlobUri
 
 from koukan.version_cache import IdVersion, IdVersionMap
 
+from koukan.message_builder import MessageBuilderSpec
+
 # the implementation of CursorResult.rowcount apparently involves too
 # much metaprogramming for pytype to infer correctly
 def rowcount(res : CursorResult) -> int:
@@ -247,22 +249,24 @@ class TransactionCursor:
         # reuse directly
         reuse_uris : List[BlobUri] = []
         for blob in blobs:
-            logging.debug('%s %s', blob.uri, blob.blob)
+            logging.debug('%s %s %s', blob.create_id, blob.reuse_uri, blob.blob)
             if isinstance(blob.blob, BlobCursor):
                 reuse_uris.append(blob.blob.blob_uri)
                 continue
-            if blob.uri is None:
-                raise ValueError()
 
-            if blob.uri.tx_id:  # reuse
-                reuse_uris.append(body_blob_uri(blob.uri))
-            else:  # create
+            if blob.reuse_uri:
+                reuse_uris.append(body_blob_uri(blob.reuse_uri))
+            elif blob.create_id or blob.create_tx_body:
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob.blob:
                     blob_cursor.append_blob(blob.blob)
                 logging.debug(blob_cursor)
-                ref_blobs.append((blob_cursor.id, body_blob_uri(blob.uri)))
+                ref_blobs.append((blob_cursor.id,
+                                  body_blob_uri(BlobUri('', blob=blob.create_id, tx_body=blob.create_tx_body))))
+            else:
+                raise ValueError()
+
 
         reuse_blob_id.extend(self._reuse_blob(db_tx, reuse_uris))
         logging.debug('_write_blob reuse_blob_id %s', reuse_blob_id)
@@ -301,9 +305,9 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
-        logging.debug('TxCursor._write %s %s %s',
+        logging.debug('TxCursor._write %s %s %s %s',
                       self.rest_id, tx_delta,
-                      finalize_attempt)
+                      finalize_attempt, blobs)
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
 
@@ -400,14 +404,14 @@ class TransactionCursor:
         if blobs:
             upd, blobs_done = self._write_blob(db_tx, tx_delta, upd, blobs)
 
-        if tx_delta.message_builder:
-            upd = upd.values(message_builder = tx_delta.message_builder)
+        if isinstance(tx_delta.body, MessageBuilderSpec):
+            upd = upd.values(message_builder = tx_delta.body.json)
         if input_done or (
-                blobs_done and (tx_delta.message_builder or (
+                blobs_done and (isinstance(tx_delta.body, MessageBuilderSpec) or (
                     blobs is not None  # xxx mess
                     and len(blobs) == 1 and
-                    blobs[0].uri and
-                    blobs[0].uri.tx_body))):
+                    blobs[0].reuse_uri and
+                    blobs[0].reuse_uri.tx_body))):
             upd = upd.values(input_done = True)
             self.input_done = True
 
@@ -535,16 +539,8 @@ class TransactionCursor:
             self.tx.final_attempt_reason = self.final_attempt_reason
 
         # TODO body should be monotonic, maybe save (above), restore here?
-        sel_body = select(self.parent.tx_blobref_table.c.rest_id).where(
-            self.parent.tx_blobref_table.c.transaction_id == self.id,
-            self.parent.tx_blobref_table.c.rest_id == TX_BODY)
-        res = db_tx.execute(sel_body)
-        if res and (row := res.fetchone()):
-            (blob_rest_id,) = row
-            self.tx.body = BlobCursor(self.parent)
-            self.tx.body.load(
-                body_blob_uri(BlobUri(self.rest_id, tx_body=True)))
-        self.tx.message_builder = self.message_builder
+        self._load_blobs(db_tx)
+
         self.tx.tx_db_id = self.id
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
         self.tx.rest_id = self.rest_id
@@ -586,6 +582,44 @@ class TransactionCursor:
             self.tx.session_uri = self.session_uri
 
         return self.tx
+
+    def _load_blobs(self, db_tx):
+        blobref_cols = self.parent.tx_blobref_table.c
+        sel_blobrefs = select(
+            blobref_cols.blob_id,
+            blobref_cols.rest_id).where(
+                blobref_cols.transaction_id == self.id).subquery()
+        j = join(sel_blobrefs, self.parent.blob_table,
+                 sel_blobrefs.c.blob_id == self.parent.blob_table.c.id)
+        sel_blob = select(
+            sel_blobrefs.c.rest_id,
+            self.parent.blob_table.c.id,
+            self.parent.blob_table.c.length,
+            self.parent.blob_table.c.last_update,
+            func.length(self.parent.blob_table.c.content)).select_from(j)
+
+        res = db_tx.execute(sel_blob)
+        blobs = []
+        for row in res:
+            logging.debug(row)
+            rest_id,blob_id,content_length,last_update,length = row
+            blob = BlobCursor(self.parent)
+            # ish
+            blob.init(blob_id, content_length, last_update, length)
+            # TODO ~body_blob_id()
+            blob.blob_uri = BlobUri(self.rest_id,
+                                    tx_body=(rest_id == TX_BODY),
+                                    blob=rest_id)
+            blobs.append(blob)
+        logging.debug(blobs)
+        if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
+            self.tx.body = blobs[0]
+        elif self.message_builder:
+            logging.debug(self.message_builder)
+            self.tx.body = MessageBuilderSpec(self.message_builder, blobs)
+            self.tx.body.check_ids()
+        elif blobs:
+            raise ValueError()
 
     def _start_attempt_db(self,
                           db_tx : Transaction, db_id : int, version : int):
@@ -683,6 +717,7 @@ class BlobCursor(Blob, WritableBlob):
     blob_uri : Optional[BlobUri] = None
     _session_uri : Optional[str] = None
     db_tx : Optional[Transaction] = None
+    last_update : Optional[int] = None
 
     def __init__(self, storage,
                  update_tx : Optional[str] = None,
@@ -691,6 +726,13 @@ class BlobCursor(Blob, WritableBlob):
         self.parent = storage
         self.update_tx = update_tx
         self.db_tx = db_tx
+
+    def init(self, blob_id, content_length, last_update, length):
+        self.id = blob_id
+        self._content_length = content_length
+        self.length = length
+        self.last_update = last_update
+        self.last = (self.length == self._content_length)
 
     def __eq__(self, x):
         if not isinstance(x, BlobCursor):
@@ -760,8 +802,8 @@ class BlobCursor(Blob, WritableBlob):
 
         if not row:
             return None
-        self.id, self._content_length, self.last_update, self.length = row
-        self.last = (self.length == self._content_length)
+        id, content_length, last_update, length = row
+        self.init(id, content_length, last_update, length)
 
         return self.id
 
@@ -1032,10 +1074,9 @@ class Storage():
     def recover(self, session_ttl=timedelta(seconds=1)) -> Optional[int]:
         return self._gc_session(session_ttl)
 
-    # TODO these blob methods should move into TransactionCursor?
+    # TODO these blob methods should move into TransactionCursor
     def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
-        ref_blob = copy.copy(blob_uri)
-        ref_blob.tx_id = ''  # i.e. create ~MessageBuilder flow
+        assert blob_uri.tx_body
 
         # ... then gets ref'd into the tx
         cursor = None
@@ -1048,7 +1089,7 @@ class Storage():
                     cursor._write(
                         db_tx=db_tx,
                         tx_delta=tx,
-                        blobs=[BlobSpec(uri=ref_blob)])
+                        blobs=[BlobSpec(create_tx_body=True)])
                     break
             except VersionConflictException:
                 if i == 4:
@@ -1063,6 +1104,7 @@ class Storage():
 
         return writer
 
+    # TODO move to tx
     def get_blob_for_append(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
         blob_uri = body_blob_uri(blob_uri)
 
@@ -1073,6 +1115,7 @@ class Storage():
 
         return blob_writer
 
+    # TODO delete
     def get_blob_for_read(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
         blob_uri = body_blob_uri(blob_uri)
         blob_reader = BlobCursor(self)

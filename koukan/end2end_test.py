@@ -328,8 +328,9 @@ class End2EndTest(unittest.TestCase):
             ],
            "text_body": [{
                "content_type": "text/plain",
-               "content_uri": "my_plain_body",
-               "file_content": "examples/send_message/body.txt"
+               "content": {
+                   "create_id": "my_plain_body",
+                   "filename": "examples/send_message/body.txt"}
            }]
         }
 

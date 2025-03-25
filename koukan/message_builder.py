@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import logging
 import datetime
@@ -11,19 +11,71 @@ from email.generator import BytesGenerator
 from email.headerregistry import Address
 from email import policy
 
-from koukan.blob import Blob
+from koukan.blob import Blob, InlineBlob
 
-BlobFactory = Callable[[str],Blob]
+from koukan.rest_schema import parse_blob_uri
+from koukan.storage_schema import BlobSpec
+
+class MessageBuilderSpec:
+    json : dict
+    blob_specs : List[BlobSpec]
+    blobs : List[Blob]
+
+    def __init__(self, json, blobs : Optional[List[Blob]] = None):
+        self.json = json
+        self.blobs = blobs
+
+        self.blob_specs = []
+
+    def check_ids(self):
+        self.ids = set()
+        for multipart in [
+                'text_body', 'related_attachments', 'file_attachments']:
+            parts = self.json.get(multipart, [])
+            for part in parts:
+                if 'id' in part['content']:
+                    self.ids.add(part['content']['id'])
+
+
+    def parse_blob_specs(self):
+        create_blob_id = 0
+        for multipart in [
+                'text_body', 'related_attachments', 'file_attachments']:
+            parts = self.json.get(multipart, [])
+            for part in parts:
+                self._add_part_blob(part, create_blob_id)
+                create_blob_id += 1
+
+    def _add_part_blob(self, part, create_blob_id):
+        # if not present -> invalid spec
+        content = part.get('content')
+        # xxx dedupe w/filter.body_from_json()
+        if 'reuse_uri' in content:
+            reuse_uri = parse_blob_uri(content['reuse_uri'])
+            assert reuse_uri
+            blob_spec = BlobSpec(reuse_uri=reuse_uri)
+        elif 'create_id' in content:
+            blob_spec = BlobSpec(create_id=content['create_id'])
+        elif 'inline' in content:
+            blob_spec = BlobSpec(
+                blob = InlineBlob(content['inline'].encode('utf-8'), last=True),
+                create_id = str(create_blob_id))  # xxx this is fine?
+        else:
+            raise ValueError('bad MessageBuilder entity content')
+        part['content'] = {'id': blob_spec.create_id if blob_spec.create_id
+                           else blob_spec.reuse_uri.blob }
+        self.blob_specs.append(blob_spec)
+
+    def finalized(self):
+        return (len(self.ids) == len(self.blobs) and
+                not any([not b.finalized() for b in self.blobs]))
 
 class MessageBuilder:
-    blob_factory : Optional[BlobFactory]
-
-    def __init__(self, json, blob_factory : Optional[BlobFactory] = None):
+    blobs : Dict[str, Blob]
+    def __init__(self, json, blobs : Dict[str, Blob]):
         self.json = json
+        self.blobs = blobs
         self.header_json = self.json.get('headers', {})
-
-        self.blob_factory = blob_factory
-
         self._header_adders = {
             'from': MessageBuilder._add_address_header,
             'to': MessageBuilder._add_address_header,
@@ -36,25 +88,6 @@ class MessageBuilder:
             # any other header (e.g. subject) will be added verbatim
         }
 
-
-    # replace part 'content_uri' with 'blob_rest_id' per uri_to_id
-    # and return a list of these
-    @staticmethod
-    def get_blobs(json, uri_to_id : Callable[[str], str]) -> List[str]:
-        reuse = []
-
-        for multipart in [
-                'text_body', 'related_attachments', 'file_attachments']:
-            parts = json.get(multipart, [])
-            for part in parts:
-                if not part.get('content_uri', None):
-                    continue
-                blob_rest_id = uri_to_id(part['content_uri'])
-                part['blob_rest_id'] = blob_rest_id
-                del part['content_uri']
-                reuse.append(blob_rest_id)
-        return reuse
-
     def _add_part(self, part_json, multipart,
                   existing_part=None,
                   inline=None):
@@ -62,14 +95,14 @@ class MessageBuilder:
         part = existing_part if existing_part is not None else MIMEPart()
 
         # TODO use str if maintype == 'text'
-        content : Optional[bytes]
-        if 'content' in part_json:
-            content = part_json['content'].encode('utf-8')
-        elif 'blob_rest_id' in part_json:
-            blob = self.blob_factory(part_json['blob_rest_id'])
-            content = blob.pread(0)
-        else:
-            raise ValueError()
+        # content : Optional[bytes]
+        # if 'content' in part_json:
+        #     content = part_json['content'].encode('utf-8')
+        # elif 'blob_rest_id' in part_json:
+        blob = self.blobs[part_json['content']['id']]
+        content = blob.pread(0)
+        # else:
+        #     raise ValueError()
 
         part.set_content(content,
                          maintype=maintype, subtype=subtype)
