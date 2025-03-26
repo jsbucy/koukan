@@ -129,7 +129,7 @@ class MessageParser:
                 self.inline + len(part.get_content()) < self.max_inline):
             utf8_len = len(part.get_content().encode('utf-8'))
             if (self.inline + utf8_len) < self.max_inline:
-                out['content'] = part.get_content()
+                out['content'] = {'inline': part.get_content()}
                 self.inline += utf8_len
                 return
 
@@ -142,7 +142,7 @@ class MessageParser:
             content = part.get_content()
 
         blob.append_data(0, content, len(content))
-        out['blob_rest_id'] = blob.rest_id()
+        out['content'] = { 'create_id': blob.rest_id() }
         self.out.blobs.append(blob)
 
     def _parse_mime_tree(self, part : MIMEPart,
@@ -187,9 +187,8 @@ class MessageParser:
                 out['content_id'] = v
                 break
 
-        for c in ['content', 'blob_rest_id']:
-            if c in part_json:
-                out[c] = part_json[c]
+        if 'content' in part_json:
+            out['content'] = part_json['content']
 
         return out
 

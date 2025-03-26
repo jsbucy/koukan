@@ -739,6 +739,9 @@ class BlobCursor(Blob, WritableBlob):
             return False
         return self.id == x.id
 
+    def rest_id(self):
+        return self.blob_uri.blob
+
     def len(self):
         return self.length
     def content_length(self):

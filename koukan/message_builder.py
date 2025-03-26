@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import logging
 import datetime
@@ -20,6 +20,9 @@ class MessageBuilderSpec:
     json : dict
     blob_specs : List[BlobSpec]
     blobs : List[Blob]
+    body_blob : Optional[Blob] = None
+    # part['content']['create_id']  XXX rename
+    ids : Optional[Set[str]] = None
 
     def __init__(self, json, blobs : Optional[List[Blob]] = None):
         self.json = json
@@ -27,14 +30,15 @@ class MessageBuilderSpec:
 
         self.blob_specs = []
 
+    # xxx needs to walk full mime tree for receive parsing?
     def check_ids(self):
         self.ids = set()
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
             parts = self.json.get(multipart, [])
             for part in parts:
-                if 'id' in part['content']:
-                    self.ids.add(part['content']['id'])
+                if 'create_id' in part['content']:
+                    self.ids.add(part['content']['create_id'])
 
 
     def parse_blob_specs(self):
@@ -62,13 +66,16 @@ class MessageBuilderSpec:
                 create_id = str(create_blob_id))  # xxx this is fine?
         else:
             raise ValueError('bad MessageBuilder entity content')
-        part['content'] = {'id': blob_spec.create_id if blob_spec.create_id
+        part['content'] = {'create_id': blob_spec.create_id if blob_spec.create_id
                            else blob_spec.reuse_uri.blob }
         self.blob_specs.append(blob_spec)
 
     def finalized(self):
         return (len(self.ids) == len(self.blobs) and
                 not any([not b.finalized() for b in self.blobs]))
+
+    def __repr__(self):
+        return '%s %s' % (self.json, self.blobs)
 
 class MessageBuilder:
     blobs : Dict[str, Blob]
@@ -96,16 +103,15 @@ class MessageBuilder:
 
         # TODO use str if maintype == 'text'
         # content : Optional[bytes]
-        # if 'content' in part_json:
-        #     content = part_json['content'].encode('utf-8')
-        # elif 'blob_rest_id' in part_json:
-        blob = self.blobs[part_json['content']['id']]
-        content = blob.pread(0)
-        # else:
-        #     raise ValueError()
+        if 'inline' in part_json['content']:
+            content = part_json['content']['inline'].encode('utf-8')
+        elif 'create_id' in part_json:
+            blob = self.blobs[part_json['content']['create_id']]
+            content = blob.pread(0)
+        else:
+            raise ValueError()
 
-        part.set_content(content,
-                         maintype=maintype, subtype=subtype)
+        part.set_content(content, maintype=maintype, subtype=subtype)
         if maintype == 'text':
             # for now text/* must be utf8 or ascii
             assert content is not None

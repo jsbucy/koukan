@@ -5,63 +5,44 @@ import logging
 from datetime import datetime, timezone
 import tempfile
 
-from koukan.blob import InlineBlob
+from koukan.blob import Blob, InlineBlob
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
-from koukan.storage import Storage
 from koukan.storage_schema import BlobSpec
 from koukan.rest_schema import BlobUri
 
 from koukan.message_builder_filter import MessageBuilderFilter
-
-import koukan.sqlite_test_utils as sqlite_test_utils
+from koukan.message_builder import MessageBuilderSpec
 
 class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-        self.db_dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.storage = Storage.connect(
-            self.db_url, 'http://message_builder_filter_test')
 
-    def tearDown(self):
-        self.db_dir.cleanup()
-
-    def test_basic(self):
+    def test_smoke(self):
         upstream = FakeSyncFilter()
-        message_builder = MessageBuilderFilter(self.storage, upstream)
+        message_builder = MessageBuilderFilter(upstream)
 
         tx = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
-        tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('tx_rest_id', tx)
-        self.assertEqual(tx_cursor.tx.rest_id, 'tx_rest_id')
-        blob_uri = BlobUri(tx_id='tx_rest_id', blob='blob_rest_id')
-        blob_writer = self.storage.create_blob(blob_uri)
-        d = b'hello, world!'
-        blob_writer.append_data(0, d, len(d))
-
         tx_delta = TransactionMetadata()
-        tx.message_builder = {
-            "text_body": [
-                {
-                    "content_type": "text/html",
-                    "blob_rest_id": "blob_rest_id"
-                }
-            ]
-        }
-        tx_cursor.load()
-        tx_cursor.write_envelope(tx_delta, blobs=[BlobSpec(uri=blob_uri)])
+        tx.body = MessageBuilderSpec(
+            {"text_body": [{
+                "content_type": "text/html",
+                "content": {"create_id": "blob_rest_id"}
+                }]},
+            blobs = [InlineBlob(b'hello, world!', last=True,
+                                rest_id='blob_rest_id')]
+        )
 
         def exp(tx, delta):
+            self.assertTrue(isinstance(delta.body, Blob))
             self.assertTrue(delta.body.finalized())
             self.assertNotEqual(
                 delta.body.pread(0).find(b'MIME-Version'), -1)
-            self.assertIsNone(tx.message_builder)
-            self.assertIsNone(delta.message_builder)
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
@@ -70,7 +51,6 @@ class MessageBuilderFilterTest(unittest.TestCase):
             return upstream_delta
 
         upstream.add_expectation(exp)
-        tx.rest_id = tx_cursor.rest_id  # XXX pass tx_cursor.tx instead?
         upstream_delta = message_builder.on_update(tx, tx.copy())
         self.assertEqual(upstream_delta.mail_response.code, 201)
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
@@ -78,7 +58,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
 
     def test_noop(self):
         upstream = FakeSyncFilter()
-        message_builder = MessageBuilderFilter(self.storage, upstream)
+        message_builder = MessageBuilderFilter(upstream)
 
         body = InlineBlob(b'hello, world!')
         tx = TransactionMetadata(

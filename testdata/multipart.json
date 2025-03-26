@@ -76,7 +76,9 @@
                   ]
                 ],
                 "content_type": "text/plain",
-                "content": "hello"
+                "content": {
+                  "inline": "hello"
+                }
               },
               {
                 "headers": [
@@ -89,7 +91,9 @@
                   ]
                 ],
                 "content_type": "text/html",
-                "content": "<b>hello</b>"
+                "content": {
+                  "inline": "<b>hello</b>"
+                }
               }
             ]
           },
@@ -112,7 +116,9 @@
               ]
             ],
             "content_type": "image/png",
-            "blob_rest_id": "0"
+            "content": {
+              "create_id": "0"
+            }
           }
         ]
       },
@@ -140,32 +146,42 @@
           ]
         ],
         "content_type": "image/png",
-        "blob_rest_id": "1"
+        "content": {
+          "create_id": "1"
+        }
       }
     ]
   },
   "text_body": [
     {
       "content_type": "text/plain",
-      "content": "hello"
+      "content": {
+        "inline": "hello"
+      }
     },
     {
       "content_type": "text/html",
-      "content": "<b>hello</b>"
+      "content": {
+        "inline": "<b>hello</b>"
+      }
     }
   ],
   "related_attachments": [
     {
       "content_type": "image/png",
       "content_id": "xyz",
-      "blob_rest_id": "0"
+      "content": {
+        "create_id": "0"
+      }
     }
   ],
   "file_attachments": [
     {
       "content_type": "image/png",
       "filename": "funny cats.png",
-      "blob_rest_id": "1"
+      "content": {
+        "create_id": "1"
+      }
     }
   ]
 }

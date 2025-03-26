@@ -16,6 +16,8 @@ from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
 
+from koukan.message_builder import MessageBuilderSpec
+
 import koukan.postgres_test_utils as postgres_test_utils
 import koukan.sqlite_test_utils as sqlite_test_utils
 
@@ -201,14 +203,14 @@ class StorageTestBase(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             tx_writer2.create('tx_rest_id2', tx, blobs=[
-                BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+                BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
 
         # non-finalized blobs cannot be reused
         with self.assertRaises(ValueError):
             tx.body = 'body_rest_id'
             tx_writer2 = self.s.get_transaction_cursor()
             tx_writer2.create('tx_rest_id2', tx, blobs=[
-                BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+                BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
 
         # shouldn't have been ref'd into tx2
         self.assertIsNone(self.s.get_blob_for_read(
@@ -221,7 +223,7 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.load()
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id2', tx, blobs=[
-            BlobSpec(uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+            BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
         self.assertTrue(tx_writer.input_done)
 
         blob_reader = self.s.get_blob_for_read(
@@ -233,33 +235,45 @@ class StorageTestBase(unittest.TestCase):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id1', TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host'))
-        tx_writer.write_envelope(TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]))
+        tx_writer.write_envelope(
+            TransactionMetadata(
+                mail_from=Mailbox('alice'),
+                rcpt_to=[Mailbox('bob')],
+                body = MessageBuilderSpec({"parts": {}})),  # xxx
+            blobs = [BlobSpec(create_id='blob_rest_id1')]
+        )
         blob1 = BlobUri(tx_id='tx_rest_id1', blob='blob_rest_id1')
-        blob_writer1 = self.s.create_blob(blob1)
+        blob_writer1 = self.s.get_blob_for_append(blob1)
         b1 = b'hello, world!'
         blob_writer1.append_data(0, b1, len(b1))
 
         tx_writer2 = self.s.get_transaction_cursor()
         tx_writer2.create('tx_rest_id2', TransactionMetadata(
             remote_host=HostPort('remote_host', 2525), host='host'))
-        tx_writer2.write_envelope(TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]))
+        tx_writer2.write_envelope(
+            TransactionMetadata(
+                mail_from=Mailbox('alice'),
+                rcpt_to=[Mailbox('bob')],
+                body = MessageBuilderSpec({"parts": {}})),  # xxx
+            blobs=[BlobSpec(reuse_uri=blob1),
+                   BlobSpec(create_id='blob_rest_id2')
+            ])
         blob2 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id2')
-        blob_writer2 = self.s.create_blob(blob2)
+        blob_writer2 = self.s.get_blob_for_append(blob2)
         b2 = b'another blob'
         blob_writer2.append_data(0, b2, len(b2))
         tx_writer2.load()
-        blobs=[BlobSpec(uri=blob1)]  # create_blob(blob2) refs into tx
-        tx_writer2.write_envelope(
-            TransactionMetadata(message_builder={}), blobs=blobs)
+        # blobs=[BlobSpec(uri=blob1)]  # create_blob(blob2) refs into tx
+        # tx_writer2.write_envelope(
+        #     TransactionMetadata(message_builder={}), blobs=blobs)
         # verify blobs were ref'd into tx_rest_id2
-        for blob in blobs:
-            blob_reader = BlobCursor(self.s)
-            self.assertIsNotNone(blob_reader.load(
-                BlobUri(tx_id='tx_rest_id2', blob=blob.uri.blob)))
+        self.assertEqual(2, len(tx_writer2.tx.body.blobs))
+        for blob in tx_writer2.tx.body.blobs:
+            # xxx verify
+            logging.debug(blob.pread(0))
+            # blob_reader = BlobCursor(self.s)
+            # self.assertIsNotNone(blob_reader.load(
+            #     BlobUri(tx_id='tx_rest_id2', blob=blob.uri.blob)))
 
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()

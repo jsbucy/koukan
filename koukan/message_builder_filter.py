@@ -31,7 +31,7 @@ class MessageBuilderFilter(SyncFilter):
             builder = MessageBuilder(
                 tx_delta.body.json,
                 # xxx always BlobCursor?
-                { blob.blob_uri.blob: blob for blob in tx_delta.body.blobs })
+                { blob.rest_id(): blob for blob in tx_delta.body.blobs })
 
             file = TemporaryFile('w+b')
             assert isinstance(file, IOBase)

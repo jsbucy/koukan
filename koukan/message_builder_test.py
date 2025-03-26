@@ -6,7 +6,7 @@ import json
 from tempfile import TemporaryFile
 
 
-from koukan.message_builder import MessageBuilder
+from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
 class MessageBuilderTest(unittest.TestCase):
     def setUp(self):
@@ -14,10 +14,10 @@ class MessageBuilderTest(unittest.TestCase):
                             format='%(asctime)s [%(thread)d] %(message)s')
 
 
-    def test_basic(self):
+    def test_smoke(self):
         with open('testdata/message_builder.json', 'r') as f:
             js = json.loads(f.read())
-        builder = MessageBuilder(js, blob_factory=None)
+        builder = MessageBuilder(js, blobs=[])
         with TemporaryFile('w+b') as out:
             #with open('/tmp/out', 'w+b') as out:
             builder.build(out)
@@ -60,11 +60,16 @@ class MessageBuilderTest(unittest.TestCase):
 
 
     def test_get_blobs(self):
-        json = { 'text_body': [ { 'content_uri': '/blob/xyz' } ] }
-        reuse = MessageBuilder.get_blobs(
-            json, lambda x: x.removeprefix('/blob/'))
-        self.assertEqual(reuse, ['xyz'])
-        self.assertEqual(json, { 'text_body': [ { 'blob_rest_id': 'xyz' } ] } )
+        json = { 'text_body': [ { 'content': {
+            'reuse_uri': '/transactions/123/blob/xyz' }} ] }
+        spec = MessageBuilderSpec(json)
+        spec.parse_blob_specs()
+        self.assertEqual(1, len(spec.blob_specs))
+        blob_spec = spec.blob_specs[0]
+        self.assertEqual('123', blob_spec.reuse_uri.tx_id)
+        self.assertEqual('xyz', blob_spec.reuse_uri.blob)
+        self.assertEqual(json, { 'text_body': [ {
+            'content': {'create_id': 'xyz' }} ] } )
 
 if __name__ == '__main__':
     unittest.main()

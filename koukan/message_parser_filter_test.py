@@ -7,8 +7,10 @@ from koukan.message_parser_filter import MessageParserFilter
 from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
 from koukan.response import Response
+from koukan.message_builder import MessageBuilderSpec
 
 from koukan.fake_endpoints import FakeSyncFilter
+
 
 class MessageParserFilterTest(unittest.TestCase):
     def setUp(self):
@@ -27,12 +29,13 @@ class MessageParserFilterTest(unittest.TestCase):
             upstream_delta = TransactionMetadata()
 
             exp_blobs = [b'yolocat', b'yolocat2']
-            self.assertEqual(len(exp_blobs), len(tx.parsed_blobs))
+            self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
+            self.assertEqual(len(exp_blobs), len(tx.body.blobs))
             for i in range(0, len(exp_blobs)):
-                self.assertEqual(tx.parsed_blobs[i].pread(0), exp_blobs[i])
+                self.assertEqual(tx.body.blobs[i].pread(0), exp_blobs[i])
 
             self.assertEqual(
-                tx.parsed_json['parts']['content_type'],
+                tx.body.json['parts']['content_type'],
                 'multipart/mixed')
             upstream_delta.data_response = Response()
             tx.merge_from(upstream_delta)

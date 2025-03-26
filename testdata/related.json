@@ -48,7 +48,9 @@
           ]
         ],
         "content_type": "text/html",
-        "content": "<b>hello</b>"
+        "content": {
+          "inline": "<b>hello</b>"
+        }
       },
       {
         "headers": [
@@ -69,21 +71,27 @@
           ]
         ],
         "content_type": "image/png",
-        "blob_rest_id": "4"
+        "content": {
+          "create_id": "4"
+        }
       }
     ]
   },
   "text_body": [
     {
       "content_type": "text/html",
-      "content": "<b>hello</b>"
+      "content": {
+        "inline": "<b>hello</b>"
+      }
     }
   ],
   "related_attachments": [
     {
       "content_type": "image/png",
       "content_id": "xyz",
-      "blob_rest_id": "4"
+      "content": {
+        "create_id": "4"
+      }
     }
   ]
 }

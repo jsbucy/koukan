@@ -27,10 +27,12 @@ class MessageParserTest(unittest.TestCase):
                 return parsed
 
     def test_smoke(self):
+        self.maxDiff = None
         for base, blob in [('multipart', [b'yolocat', b'yolocat2']),
                      ('multipart2', [b'yolocat', b'yolocat2']),
                      ('related', [b'yolocat'])
                      ]:
+            logging.debug(base)
             parser = MessageParser(blob_factory=self._blob_factory,
                                    max_inline=1000)
             logging.debug('test_smoke %s', base)
@@ -80,4 +82,9 @@ class MessageParserTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+        '%(message)s')
+
     unittest.main()

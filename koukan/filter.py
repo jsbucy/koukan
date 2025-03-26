@@ -308,9 +308,6 @@ _tx_fields = [
                                        WhichJson.EXPLODER_CREATE,
                                        WhichJson.EXPLODER_UPDATE,
                                        WhichJson.ADD_ROUTE])),
-    TxField('parsed_blobs', validity=None),
-    TxField('parsed_json', validity=None),
-
     TxField('rest_endpoint', validity=None),
     TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
@@ -353,8 +350,6 @@ class TransactionMetadata:
     rest_id : Optional[str] = None
     tx_db_id : Optional[int] = None
     cancelled : Optional[bool] = None
-    parsed_blobs : Optional[List[Blob]] = None
-    parsed_json : Optional[dict] = None
 
     rest_endpoint : Optional[str] = None
     upstream_http_host : Optional[str] = None
@@ -424,10 +419,6 @@ class TransactionMetadata:
             out += 'notification=%s ' % self.notification
         if self.retry is not None:
             out += 'retry=%s ' % self.retry
-        if self.parsed_json is not None:
-            out += 'parsed_json=%s ' % self.parsed_json
-        if self.parsed_blobs is not None:
-            out += 'parsed_blobs=%s ' % self.parsed_blobs
         return out
 
     def empty(self, which_js : WhichJson):

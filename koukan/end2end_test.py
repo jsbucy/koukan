@@ -278,7 +278,7 @@ class End2EndTest(unittest.TestCase):
             parsed['text_body'],
             [ {
                 "content_type": "text/plain",
-                "blob_rest_id": "0"
+                "content": {"create_id": "0"}
             } ])
         self.assertEqual(blob_content['0'], b'hello, world!\n')
 

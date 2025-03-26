@@ -16,6 +16,8 @@ from koukan.message_parser import (
     MessageParser,
     ParsedMessage )
 
+from koukan.message_builder import MessageBuilderSpec
+
 class MessageParserFilter(SyncFilter):
     upstream : Optional[SyncFilter] = None
     _blob_i = 0
@@ -55,8 +57,14 @@ class MessageParserFilter(SyncFilter):
             parsed = self.parsed = True
             if parsed_message is not None:
                 self.parsed_delta = TransactionMetadata()
-                self.parsed_delta.parsed_blobs = parsed_message.blobs
-                self.parsed_delta.parsed_json = parsed_message.json
+                spec = MessageBuilderSpec(
+                    parsed_message.json, parsed_message.blobs)
+                spec.check_ids()
+                spec.body_blob = tx.body
+                self.parsed_delta.body = spec
+
+
+            # XXX else: data err?
 
         if self.parsed_delta is None:
             if self.upstream is None:
@@ -68,10 +76,16 @@ class MessageParserFilter(SyncFilter):
         # when we do the next db read in the OutputHandler
 
         downstream_tx = tx.copy()
-        downstream_tx.merge_from(self.parsed_delta)
+        del downstream_tx.body
+        assert downstream_tx.merge_from(self.parsed_delta) is not None
+
         downstream_delta = tx_delta.copy()
+
         if parsed:
-            downstream_delta.merge_from(self.parsed_delta)
+            del downstream_delta.body
+            assert downstream_delta.merge_from(self.parsed_delta) is not None
+        logging.debug(self.parsed_delta)
+        logging.debug(downstream_tx)
         upstream_delta = self.upstream.on_update(
             downstream_tx, downstream_delta)
         assert upstream_delta is not None

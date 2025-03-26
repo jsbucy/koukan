@@ -24,6 +24,7 @@ from koukan.filter import (
     WhichJson )
 from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
+from koukan.message_builder import MessageBuilderSpec
 
 class Request:
     method = None
@@ -963,15 +964,18 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
         parsed_delta = TransactionMetadata()
-        parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
-        parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, rest_id='blob_rest_id', last=True)
-        ]
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body = InlineBlob(body, last=True)
+        # xxx transparent mime tree "parts" doesn't work
+        parsed_delta.body = MessageBuilderSpec(
+            {'text_body': [{
+                "content": {"create_id": "blob_rest_id"}
+            }]},
+            blobs = [InlineBlob(blob, rest_id='blob_rest_id', last=True)])
+        parsed_delta.body.check_ids()
+        parsed_delta.body.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
@@ -1035,15 +1039,19 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
         parsed_delta = TransactionMetadata()
-        parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
-        parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, rest_id='blob_rest_id', last=True)
-        ]
+        # xxx mime tree/parts
+        parsed_delta.body = MessageBuilderSpec(
+            {'text_body': [{
+                'content': {'create_id': 'blob_rest_id'}
+            }]},
+            blobs=[InlineBlob(
+            blob, rest_id='blob_rest_id', last=True)])
+        parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body = InlineBlob(body, last=True)
+        parsed_delta.body.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
@@ -1086,15 +1094,19 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
 
         parsed_delta = TransactionMetadata()
-        parsed_delta.parsed_json = {'parts': {}}
         blob = b'hello, world!\r\n'
-        parsed_delta.parsed_blobs = [ InlineBlob(
-            blob, rest_id='blob_rest_id', last=True)
-        ]
+
+        # xxx full mime tree doesn't work
+        parsed_delta.body = MessageBuilderSpec(
+            {'text_body': [{
+                'content': {'create_id': 'blob_rest_id'}
+            }]},
+            blobs = [InlineBlob(blob, rest_id='blob_rest_id', last=True)])
+        parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        parsed_delta.body = InlineBlob(body, last=True)
+        parsed_delta.body.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder

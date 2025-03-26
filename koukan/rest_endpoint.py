@@ -203,9 +203,10 @@ class RestEndpoint(SyncFilter):
     def _update_message_builder(self, delta : TransactionMetadata,
                                 deadline : Deadline
                                 ) -> Optional[Response]:
+        assert isinstance(delta.body, MessageBuilderSpec)
         rest_resp = self._post_tx(
-            self.transaction_url + '/message_builder', delta.parsed_json,
-            self.client.post, deadline)
+            self.transaction_url + '/message_builder',
+            delta.body.json, self.client.post, deadline)
         if rest_resp is None or rest_resp.status_code != 200:
             return Response(400, 'RestEndpoint._update_message_builder err')
         return None
@@ -244,21 +245,14 @@ class RestEndpoint(SyncFilter):
         if timeout is None:
             timeout = self.timeout_start
         deadline = Deadline(timeout)
-        data_last = tx_delta.body is not None and (
-            isinstance(tx_delta.body, Blob) and
-            tx_delta.body.finalized())
 
         logging.debug('RestEndpoint.on_update start %s '
-                      ' data_last=%s timeout=%s downstream tx %s',
-                      self.transaction_url, data_last, timeout, tx)
+                      'timeout=%s downstream tx %s',
+                      self.transaction_url, timeout, tx)
 
         downstream_delta = tx_delta.copy()
         if downstream_delta.body:
             del downstream_delta.body
-        if downstream_delta.parsed_json:  # xxx fold into body/message_builder
-            del downstream_delta.parsed_json
-        if downstream_delta.parsed_blobs:  # xxx fold into message builder spec
-            del downstream_delta.parsed_blobs
         if downstream_delta.attempt_count:
             del downstream_delta.attempt_count
 
@@ -305,7 +299,8 @@ class RestEndpoint(SyncFilter):
                 return err_delta
 
             tx_update = True
-        elif not data_last:
+        elif (tx_delta.body is None or
+              not tx_delta.body.finalized()):
             return TransactionMetadata()
 
         upstream_delta = None
@@ -357,15 +352,19 @@ class RestEndpoint(SyncFilter):
                 assert tx.merge_from(errs) is not None
                 return errs
 
-        if tx_delta.parsed_json is not None:
+        if tx_delta.body is None:
+            return upstream_delta
+
+        message_builder = isinstance(tx_delta.body, MessageBuilderSpec)
+        if message_builder:
             err = self._update_message_builder(tx_delta, deadline)
             if err is not None:
                 delta = TransactionMetadata(data_response = err)
                 tx.merge_from(delta)
                 return  delta
 
-        if tx.body is None and not(tx_delta.parsed_blobs):
-            return upstream_delta
+            if not tx_delta.body.blobs:
+                return upstream_delta
 
         err = None
         # delta/merge bugs in the chain downstream from here have been
@@ -386,26 +385,26 @@ class RestEndpoint(SyncFilter):
             assert tx.merge_from(data_err) is not None
             return upstream_delta
 
-        if tx_delta.parsed_blobs:
-            for blob in tx_delta.parsed_blobs:
-                put_blob_resp = self._put_blob(blob, non_body_blob=True)
-                if not put_blob_resp.ok():
-                    upstream_delta = TransactionMetadata(
-                        data_response = put_blob_resp)
-                    assert tx.merge_from(upstream_delta) is not None
-                    return upstream_delta
-                self.blob_url = None
+        blobs : List[Tuple(Blob, bool)]  # bool: non_body_blob
+        if isinstance(tx_delta.body, Blob):
+            blobs = [ (tx_delta.body, False) ]
+        elif message_builder:
+            blobs = [(b, True) for b in tx_delta.body.blobs]
+            blobs.append((tx_delta.body.body_blob, False))
+        elif isinstance(tx_delta.body, BlobUri):
+            return upstream_delta
+        else:
+            raise ValueError()
 
-        put_blob_resp = None
-        if data_last:
-            put_blob_resp = self._put_blob(tx_delta.body)
-            logging.debug('RestEndpoint.on_update() put_blob_resp %s',
-                          put_blob_resp)
+        for blob,non_body_blob in blobs:
+            put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
             if not put_blob_resp.ok():
                 upstream_delta = TransactionMetadata(
                     data_response = put_blob_resp)
                 assert tx.merge_from(upstream_delta) is not None
                 return upstream_delta
+            if non_body_blob:
+                self.blob_url = None  # xxx wat?
 
         self.sent_data_last = True
 

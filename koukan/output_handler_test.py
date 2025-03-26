@@ -16,6 +16,7 @@ from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
 import koukan.sqlite_test_utils as sqlite_test_utils
+from koukan.message_builder import MessageBuilderSpec
 
 class OutputHandlerTest(unittest.TestCase):
     def setUp(self):
@@ -461,7 +462,7 @@ class OutputHandlerTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             retry={'max_attempts': 1},
             notification = {'host': 'smtp-out'},
-            message_builder = {
+            body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
                                "address": "alice@example.com"}]],
@@ -471,13 +472,13 @@ class OutputHandlerTest(unittest.TestCase):
                     ["message-id", ["abc@xyz"]]],
                 'text_body': [{
                     "content_type": "text/plain",
-                    "content": "hello, world!"
+                    "content": {"inline": "hello, world!"}
                 }]
-            }
+            })
         )
 
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx, message_builder_blobs_done=True)
+        tx_cursor.create('rest_tx_id', tx)
 
         endpoint = FakeSyncFilter()
 

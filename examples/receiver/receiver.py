@@ -62,9 +62,10 @@ class Transaction:
     def _check_blobs(self, part_json) -> bool:
         logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
-            if 'blob_rest_id' not in part_json:
+            # xxx inline?
+            if 'create_id' not in part_json['content']:
                 return True
-            blob_id = part_json['blob_rest_id']
+            blob_id = part_json['content']['create_id']
             if blob_id.startswith('/'):
                 return False  # this doesn't support reuse
             logging.debug('check_blobs %s', blob_id)

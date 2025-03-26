@@ -19,6 +19,7 @@ pytype_library(name='filter',
                srcs=['filter.py'],
                deps=[':blob',
                      ':deadline',
+                     ':message_builder',
                      ':response',
                      ':rest_schema'])
 
@@ -157,7 +158,9 @@ py_test(name='output_handler_test',
 
 pytype_library(name='message_builder',
                srcs=['message_builder.py'],
-               deps=[':blob'])
+               deps=[':blob',
+                     ':rest_schema',
+                     ':storage_schema'])
 
 py_test(name='message_builder_test',
         srcs=['message_builder_test.py'],
