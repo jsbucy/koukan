@@ -103,10 +103,11 @@ class MessageBuilder:
 
         # TODO use str if maintype == 'text'
         # content : Optional[bytes]
-        if 'inline' in part_json['content']:
-            content = part_json['content']['inline'].encode('utf-8')
-        elif 'create_id' in part_json:
-            blob = self.blobs[part_json['content']['create_id']]
+        content_json = part_json['content']
+        if 'inline' in content_json:
+            content = content_json['inline'].encode('utf-8')
+        elif 'create_id' in content_json:
+            blob = self.blobs[content_json['create_id']]
             content = blob.pread(0)
         else:
             raise ValueError()

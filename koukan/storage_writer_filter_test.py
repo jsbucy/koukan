@@ -8,15 +8,19 @@ from threading import Thread
 import time
 
 from koukan.storage import Storage, TransactionCursor
+from koukan.storage_schema import BlobSpec
 from koukan.response import Response
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
 
-from koukan.blob import InlineBlob
+from koukan.blob import Blob, InlineBlob
 
 from koukan.storage_writer_filter import StorageWriterFilter
 
 import koukan.sqlite_test_utils as sqlite_test_utils
+
+from koukan.message_builder import MessageBuilderSpec
+
 
 class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):
@@ -74,6 +78,10 @@ class StorageWriterFilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         filter.update(tx, tx.copy())
 
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id = 'tx_rest_id',
+            create_leased = False)
         blob_writer = filter.get_blob_writer(
             create=True, tx_body=True)
         d = b'hello, world!'
@@ -86,18 +94,6 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         tx = filter.get()
         self.assertTrue(filter.tx_cursor.input_done)
-
-    def test_invalid(self):
-        filter = StorageWriterFilter(
-            self.storage,
-            rest_id_factory = lambda: 'tx_rest_id')
-
-        tx = TransactionMetadata(
-            host = 'outbound-gw',
-            body = InlineBlob(b'hello', last=True),
-            message_builder = {'headers': []})
-        upstream_delta = filter.update(tx, tx.copy())
-        self.assertEqual(upstream_delta.data_response.code, 550)
 
     def test_cancel(self):
         filter = StorageWriterFilter(
@@ -136,13 +132,15 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     # representative of Exploder which writes body_blob=BlobReader
     def test_body_blob_reader(self):
+        # TODO would probably be better for this to create orig tx via swf also
         orig_tx_cursor = self.storage.get_transaction_cursor()
         orig_tx = TransactionMetadata(
             host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
-        orig_tx_cursor.create('orig_tx_rest_id', orig_tx, create_leased=True)
-        blob_writer = self.storage.create_blob(
+        orig_tx_cursor.create('orig_tx_rest_id', orig_tx, create_leased=True,
+                              blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = orig_tx_cursor.get_blob_for_append(
             BlobUri(orig_tx_cursor.rest_id, tx_body=True))
 
         d = b'hello, '
@@ -198,15 +196,15 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(
             [rr.code for rr in tx.rcpt_response], [202])
 
-        blob_reader = self.storage.get_blob_for_read(
-            BlobUri('orig_tx_rest_id', tx_body=True))
+        orig_tx_cursor.load()
+        self.assertTrue(isinstance(orig_tx_cursor.tx.body, Blob))
 
         # update w/incomplete blob ->noop
         tx_delta = TransactionMetadata()
-        tx_delta.body = blob_reader
+        tx_delta.body = orig_tx_cursor.tx.body
         tx.merge_from(tx_delta)
-        t = self.start_update(filter, tx, tx_delta)
-        self.join(t)
+        with self.assertRaises(Exception):
+            filter.update(tx, tx_delta)
 
         d = b'world!'
         appended, length, content_length = blob_writer.append_data(
@@ -214,9 +212,9 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertTrue(appended)
         self.assertEqual(length, content_length)
 
-        blob_reader.load()
+        orig_tx_cursor.load()
 
-        tx_delta = TransactionMetadata(body=blob_reader)
+        tx_delta = TransactionMetadata(body=orig_tx_cursor.tx.body)
         tx.merge_from(tx_delta)
         t = self.start_update(filter, tx, tx_delta)
 
@@ -231,81 +229,53 @@ class StorageWriterFilterTest(unittest.TestCase):
             TransactionMetadata(data_response=Response(203)))
 
         self.join(t)
+
         tx = filter.get()
         self.assertEqual(tx.data_response.code, 203)
 
-    def test_message_builder(self):
-        filter = StorageWriterFilter(
-            self.storage,
-            rest_id_factory = lambda: 'test_message_builder')
-        filter._create(TransactionMetadata(host = 'outbound-gw'))
-
-        blob_writer = filter.get_blob_writer(
-            create=True,
-            blob_rest_id='test_message_builder_blob')
-        b1 = b'hello, '
-        blob_writer.append_data(0, b1)
-        blob_writer = filter.get_blob_writer(
-            create=False,
-            blob_rest_id='test_message_builder_blob')
-        b2 = b'world!'
-        blob_writer.append_data(len(b1), b2, len(b1) + len(b2))
-
-        tx = TransactionMetadata(
-            mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob')])
-        tx.message_builder = {
+    def test_message_builder_blob_reuse(self):
+        message_builder_json = {
             "text_body": [{
                 "content_type": "text/plain",
-                "content_uri": "/transactions/test_message_builder/blob/"
-                               "test_message_builder_blob"
+                "content": {"create_id": "test_message_builder_blob"}
             }]
         }
 
-        filter = StorageWriterFilter(
+        orig_filter = StorageWriterFilter(
             self.storage,
-            rest_id = 'test_message_builder')
-        t = self.start_update(filter, tx, tx.copy())
+            rest_id_factory = lambda: 'test_message_builder')
+        orig_tx = TransactionMetadata(host = 'outbound-gw')
+        orig_tx.body = MessageBuilderSpec(message_builder_json)
+        orig_tx.body.parse_blob_specs()
+        orig_filter.update(orig_tx, orig_tx.copy())
 
-        upstream_cursor = self.storage.get_transaction_cursor()
-        upstream_cursor.load(rest_id='test_message_builder')
-        self.assertEqual(upstream_cursor.tx.message_builder,
-                         tx.message_builder)
-        upstream_delta = TransactionMetadata(
-            mail_response=Response(201),
-            rcpt_response=[Response(202)],
-            data_response=Response(203))
-        upstream_cursor.write_envelope(upstream_delta)
-
-        self.join(t, timeout=5)
-
-        blob_reader = self.storage.get_blob_for_read(
-            BlobUri(blob='test_message_builder_blob',
-                    tx_id='test_message_builder'))
-        self.assertIsNotNone(blob_reader)
-
+        blob_writer = orig_filter.get_blob_writer(
+            create=False, blob_rest_id='test_message_builder_blob')
+        b1 = b'hello, '
+        blob_writer.append_data(0, b1)
+        blob_writer = orig_filter.get_blob_writer(
+            create=False, blob_rest_id='test_message_builder_blob')
+        b2 = b'world!'
+        blob_writer.append_data(len(b1), b2, len(b1) + len(b2))
 
         # now do it again reusing the same blob
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'test_message_builder_reuse')
+        message_builder_json['text_body'][0]['content'] = {'reuse_uri': '/transactions/test_message_builder/blob/test_message_builder_blob'}
         tx = TransactionMetadata(
             host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')],
-            message_builder = {
-            "text_body": [{
-                "content_type": "text/plain",
-                "content_uri": "/transactions/test_message_builder/blob/"
-                               "test_message_builder_blob"
-            }]
-            })
+            body = MessageBuilderSpec(message_builder_json))
+        tx.body.parse_blob_specs()
         upstream_delta = filter.update(tx, tx.copy())
         self.assertIsNone(upstream_delta.data_response)
         upstream_cursor = self.storage.get_transaction_cursor()
         upstream_cursor.load(rest_id='test_message_builder_reuse')
+        logging.debug(upstream_cursor.tx.body.json)
         self.assertEqual(
-            upstream_cursor.tx.message_builder['text_body'][0]['blob_rest_id'],
+            upstream_cursor.tx.body.json['text_body'][0]['content']['create_id'],
             'test_message_builder_blob')
 
 
@@ -365,10 +335,10 @@ class StorageWriterFilterTest(unittest.TestCase):
         # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
 
-        blob_reader = self.storage.get_blob_for_read(
-            BlobUri(tx_id='reuse', tx_body=True))
-        self.assertIsNotNone(blob_reader)
-        self.assertEqual(blob_reader.pread(0), b)
+        tx_reader = self.storage.get_transaction_cursor()
+        tx_reader.load(rest_id='inline')
+        self.assertTrue(isinstance(tx_reader.tx.body, Blob))
+        self.assertEqual(tx_reader.tx.body.pread(0), b)
 
     def test_create_leased(self):
         filter = StorageWriterFilter(

@@ -707,6 +707,16 @@ class TransactionCursor:
         row = res.fetchone()
         return row is None
 
+    def get_blob_for_append(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
+        blob_uri = body_blob_uri(blob_uri)
+
+        blob_writer = BlobCursor(self.parent)
+        if blob_writer.load(blob_uri) is None:
+            return None
+        blob_writer.update_tx = blob_uri.tx_id
+
+        return blob_writer
+
 
 class BlobCursor(Blob, WritableBlob):
     id = None
@@ -739,8 +749,8 @@ class BlobCursor(Blob, WritableBlob):
             return False
         return self.id == x.id
 
-    def rest_id(self):
-        return self.blob_uri.blob
+    def rest_id(self) -> Optional[str]:
+        return self.blob_uri.blob if self.blob_uri else None
 
     def len(self):
         return self.length
@@ -1076,56 +1086,6 @@ class Storage():
 
     def recover(self, session_ttl=timedelta(seconds=1)) -> Optional[int]:
         return self._gc_session(session_ttl)
-
-    # TODO these blob methods should move into TransactionCursor
-    def create_blob(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
-        assert blob_uri.tx_body
-
-        # ... then gets ref'd into the tx
-        cursor = None
-        for i in range(0, 5):
-            try:
-                with self.begin_transaction() as db_tx:
-                    cursor = self.get_transaction_cursor()
-                    cursor._load_db(db_tx=db_tx, rest_id=blob_uri.tx_id)
-                    tx = TransactionMetadata()
-                    cursor._write(
-                        db_tx=db_tx,
-                        tx_delta=tx,
-                        blobs=[BlobSpec(create_tx_body=True)])
-                    break
-            except VersionConflictException:
-                if i == 4:
-                    break
-                backoff(i)
-        assert cursor is not None
-        cursor._update_version_cache()
-
-        writer = BlobCursor(self)
-        assert writer.load(body_blob_uri(blob_uri))
-        writer.update_tx = blob_uri.tx_id
-
-        return writer
-
-    # TODO move to tx
-    def get_blob_for_append(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
-        blob_uri = body_blob_uri(blob_uri)
-
-        blob_writer = BlobCursor(self)
-        if blob_writer.load(blob_uri) is None:
-            return None
-        blob_writer.update_tx = blob_uri.tx_id
-
-        return blob_writer
-
-    # TODO delete
-    def get_blob_for_read(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
-        blob_uri = body_blob_uri(blob_uri)
-        blob_reader = BlobCursor(self)
-        if blob_reader.load(blob_uri) is None:
-            return None
-        return blob_reader
-
 
     def get_transaction_cursor(self, db_id : Optional[int] = None,
                                rest_id : Optional[str] = None

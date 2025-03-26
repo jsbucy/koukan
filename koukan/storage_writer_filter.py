@@ -211,33 +211,24 @@ class StorageWriterFilter(AsyncFilter):
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
+        self._load()
         assert tx_body or blob_rest_id
-        blob = None
-        # xxx this always starts from a tx now, move to tx_cursor?
-        # create may not need to be a separate api, should be able to
-        # get by invoking update (tx) w/new
-        # tx_cursor.write_envelope(blobs=[...])
-
-        # now only used to create tx_body, message_builder blobs are
-        # created by way of
-        # tx_cursor.update(
-        #   body=MessageBuilderSpec,
-        #   blobs=MessageBuilderSpec.blobs) etc.
 
         if create:
+            assert tx_body
             for i in range(0,5):
                 try:
-                    blob_uri = BlobUri(tx_id=self.rest_id,
-                                       blob=blob_rest_id,
-                                       tx_body=tx_body)
-                    blob = self.storage.create_blob(blob_uri)
+                    # xxx this is not idempotent, if this
+                    # retries, will create multiple blobs
+                    self.tx_cursor.write_envelope(
+                        TransactionMetadata(),
+                        blobs=[BlobSpec(create_tx_body=True)])
                     break
                 except VersionConflictException:
+                    logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)
-        else:
-            blob = self.storage.get_blob_for_append(
-                BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))
 
-        return blob
+        return self.tx_cursor.get_blob_for_append(
+            BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))

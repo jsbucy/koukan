@@ -9,7 +9,7 @@ from functools import partial
 from werkzeug.datastructures import ContentRange
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.storage_schema import VersionConflictException
+from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.output_handler import OutputHandler
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
@@ -51,10 +51,10 @@ class OutputHandlerTest(unittest.TestCase):
 
         tx_meta = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        tx_cursor.write_envelope(tx_meta)
+        tx_cursor.write_envelope(tx_meta, blobs=[BlobSpec(create_tx_body=True)])
         blob_uri = BlobUri(
             tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
-        blob_writer = self.storage.create_blob(blob_uri)
+        blob_writer = tx_cursor.get_blob_for_append(blob_uri)
         d = b'hello, world!'
         for i in range(0,len(d)):
             blob_writer.append_data(i, d[i:i+1], len(d))
@@ -191,8 +191,9 @@ class OutputHandlerTest(unittest.TestCase):
 
 
         # write & patch blob
-
-        blob_writer = self.storage.create_blob(
+        tx_cursor.write_envelope(TransactionMetadata(),
+                                 blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
         blob_writer.append_data(0, body, len(body))
@@ -287,7 +288,17 @@ class OutputHandlerTest(unittest.TestCase):
         # no additional expectation on endpoint, should not send blob
         # upstream since all rcpts failed
 
-        blob_writer = self.storage.create_blob(
+        for i in range(0,5):
+            try:
+                tx_cursor.load()
+                tx_cursor.write_envelope(TransactionMetadata(),
+                                         blobs=[BlobSpec(create_tx_body=True)])
+                break
+            except VersionConflictException:
+                time.sleep(0.2)
+        else:
+            self.fail('conflict')
+        blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='rest_blob_id'))
         d = b'hello, world!'
         blob_writer.append_data(0, d, len(d))
@@ -398,11 +409,12 @@ class OutputHandlerTest(unittest.TestCase):
             retry={'max_attempts': 1},
             notification = {'host': 'smtp-out'})
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx)
+        tx_cursor.create('rest_tx_id', tx,
+                         blobs=[BlobSpec(create_tx_body=True)])
 
         blob_uri = BlobUri(
             tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
-        blob_writer = self.storage.create_blob(blob_uri)
+        blob_writer = tx_cursor.get_blob_for_append(blob_uri)
         d = (b'from: alice\r\n'
              b'to: bob\r\n'
              b'message-id: <abc@xyz>\r\n'
@@ -546,10 +558,11 @@ class OutputHandlerTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             retry={'max_attempts': 1})
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx)
+        tx_cursor.create('rest_tx_id', tx,
+                         blobs=[BlobSpec(create_tx_body=True)])
         tx_id = tx_cursor.id
 
-        blob_writer = self.storage.create_blob(
+        blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         d = (b'from: alice\r\n'
              b'to: bob\r\n'

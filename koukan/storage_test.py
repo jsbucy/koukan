@@ -10,6 +10,7 @@ import base64
 import os
 from datetime import datetime, timedelta
 
+from koukan.blob import Blob
 from koukan.storage import BlobCursor, Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
@@ -76,7 +77,9 @@ class StorageTestBase(unittest.TestCase):
         with self.s.begin_transaction() as db_tx:
             self.assertTrue(downstream.check_input_done(db_tx))
 
-        blob_writer = self.s.create_blob(
+        downstream.write_envelope(TransactionMetadata(),
+                                  blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
 
         with self.s.begin_transaction() as db_tx:
@@ -94,7 +97,7 @@ class StorageTestBase(unittest.TestCase):
         downstream.load()
         self.assertNotEqual(tx_version, downstream.version)
 
-        blob_writer = self.s.get_blob_for_append(
+        blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         blob_writer.append_data(6, d=b'uvw', content_length=9)
         self.assertTrue(blob_writer.last)
@@ -113,10 +116,10 @@ class StorageTestBase(unittest.TestCase):
             rcpt_response=[Response(456)]))
 
         upstream.write_envelope(TransactionMetadata(),
-                                 finalize_attempt = True)
+                                finalize_attempt = True)
 
-        blob_reader = self.s.get_blob_for_read(
-            BlobUri(tx_id='tx_rest_id', tx_body=True))
+        blob_reader = upstream.tx.body
+        self.assertTrue(isinstance(blob_reader, Blob))
         b = blob_reader.pread(0, 3)
         self.assertEqual(b'abc', b)
         b = blob_reader.pread(3)
@@ -187,8 +190,9 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        tx_writer.write_envelope(TransactionMetadata())
-        blob_writer = self.s.create_blob(
+        tx_writer.write_envelope(TransactionMetadata(),
+                                 blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = tx_writer.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         # incomplete blob
         d = b'hello, world!'
@@ -213,8 +217,8 @@ class StorageTestBase(unittest.TestCase):
                 BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
 
         # shouldn't have been ref'd into tx2
-        self.assertIsNone(self.s.get_blob_for_read(
-            BlobUri(tx_id='tx_rest_id2', tx_body=True)))
+        tx_writer2.load()
+        self.assertIsNone(tx_writer2.tx.body)
 
         blob_writer.append_data(7, d[7:], len(d))
 
@@ -226,9 +230,10 @@ class StorageTestBase(unittest.TestCase):
             BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
         self.assertTrue(tx_writer.input_done)
 
-        blob_reader = self.s.get_blob_for_read(
-            BlobUri(tx_id='tx_rest_id2', tx_body=True))
-        self.assertEqual(blob_reader.content_length(), len(d))
+        tx_writer.load()
+        self.assertTrue(isinstance(tx_writer.tx.body, Blob))
+        self.assertTrue(tx_writer.tx.body.finalized())
+        self.assertEqual(tx_writer.tx.body.content_length(), len(d))
 
 
     def test_blob_reuse(self):
@@ -243,7 +248,7 @@ class StorageTestBase(unittest.TestCase):
             blobs = [BlobSpec(create_id='blob_rest_id1')]
         )
         blob1 = BlobUri(tx_id='tx_rest_id1', blob='blob_rest_id1')
-        blob_writer1 = self.s.get_blob_for_append(blob1)
+        blob_writer1 = tx_writer.get_blob_for_append(blob1)
         b1 = b'hello, world!'
         blob_writer1.append_data(0, b1, len(b1))
 
@@ -259,28 +264,24 @@ class StorageTestBase(unittest.TestCase):
                    BlobSpec(create_id='blob_rest_id2')
             ])
         blob2 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id2')
-        blob_writer2 = self.s.get_blob_for_append(blob2)
+        blob_writer2 = tx_writer2.get_blob_for_append(blob2)
         b2 = b'another blob'
         blob_writer2.append_data(0, b2, len(b2))
         tx_writer2.load()
-        # blobs=[BlobSpec(uri=blob1)]  # create_blob(blob2) refs into tx
-        # tx_writer2.write_envelope(
-        #     TransactionMetadata(message_builder={}), blobs=blobs)
+
         # verify blobs were ref'd into tx_rest_id2
         self.assertEqual(2, len(tx_writer2.tx.body.blobs))
-        for blob in tx_writer2.tx.body.blobs:
-            # xxx verify
-            logging.debug(blob.pread(0))
-            # blob_reader = BlobCursor(self.s)
-            # self.assertIsNotNone(blob_reader.load(
-            #     BlobUri(tx_id='tx_rest_id2', blob=blob.uri.blob)))
+        exp_content = [b1,b2]
+        for i,blob in enumerate(tx_writer2.tx.body.blobs):
+            self.assertEqual(exp_content[i], blob.pread(0))
+
 
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
             remote_host=HostPort('remote_host', 2525),
             host='host')
-        tx.message_builder = { "headers": [ ["subject", "hello"] ] }
+        tx.body = MessageBuilderSpec({ "headers": [ ["subject", "hello"] ] })
         tx_writer.create('tx_rest_id', tx)
         self.assertTrue(tx_writer.input_done)
 
@@ -309,8 +310,9 @@ class StorageTestBase(unittest.TestCase):
         old_tx = old_session.get_transaction_cursor()
         old_tx.create('tx_rest_id', TransactionMetadata(
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]))
-        blob_writer = old_session.create_blob(
+            rcpt_to=[Mailbox('bob')]),
+                      blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = old_tx.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
@@ -358,12 +360,16 @@ class StorageTestBase(unittest.TestCase):
 
     def test_gc(self):
         tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('xyz', TransactionMetadata(
-            host='host',
-            local_host=HostPort('local_host', 25),
-            remote_host=HostPort('remote_host', 2525),
-            retry={}))
-        blob_writer = self.s.create_blob(BlobUri(tx_id='xyz', tx_body=True))
+        tx_writer.create(
+            'xyz',
+            TransactionMetadata(
+                host='host',
+                local_host=HostPort('local_host', 25),
+                remote_host=HostPort('remote_host', 2525),
+                retry={}),
+            blobs=[BlobSpec(create_tx_body=True)])
+        blob_writer = tx_writer.get_blob_for_append(
+            BlobUri(tx_id='xyz', tx_body=True))
         d = b'hello, world!'
         blob_writer.append_data(0, d, len(d))
 
@@ -380,19 +386,18 @@ class StorageTestBase(unittest.TestCase):
         count = self.s.gc(ttl=timedelta(seconds=10))
         self.assertEqual(count, (0, 0))
         self.assertTrue(tx_reader.load())
-        blob_reader = self.s.get_blob_for_read(
-            BlobUri(tx_id='xyz', tx_body=True))
-        self.assertEqual(blob_reader.content_length(), len(d))
+        self.assertTrue(isinstance(tx_reader.tx.body, Blob))
+        self.assertEqual(d, tx_reader.tx.body.pread(0))
+        self.assertEqual(tx_reader.tx.body.content_length(), len(d))
 
         time.sleep(2)
 
         # expired, leased
         self.assertEqual((0, 0), self.s.gc(ttl=timedelta(seconds=1)))
         self.assertTrue(tx_reader.load())
-
-        blob_reader = self.s.get_blob_for_read(
-            BlobUri(tx_id='xyz', tx_body=True))
-        self.assertEqual(blob_reader.content_length(), len(d))
+        self.assertTrue(isinstance(tx_reader.tx.body, Blob))
+        self.assertEqual(d, tx_reader.tx.body.pread(0))
+        self.assertEqual(tx_reader.tx.body.content_length(), len(d))
 
         tx_reader.write_envelope(TransactionMetadata(),
                                  final_attempt_reason = 'upstream success',
@@ -403,8 +408,7 @@ class StorageTestBase(unittest.TestCase):
         # expired, unleased
         self.assertEqual((1,1), self.s.gc(ttl=timedelta(seconds=1)))
 
-        self.assertIsNone(self.s.get_blob_for_read(
-            BlobUri(tx_id='xyz', tx_body=True)))
+        self.assertIsNone(tx_reader.load())
 
     def test_waiting_slowpath(self):
         writer = self.s.get_transaction_cursor()

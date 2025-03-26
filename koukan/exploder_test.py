@@ -13,7 +13,7 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 from koukan.storage_writer_filter import StorageWriterFilter
-from koukan.storage_schema import VersionConflictException
+from koukan.storage_schema import BlobSpec, VersionConflictException
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -212,8 +212,11 @@ class ExploderTest(unittest.TestCase):
         for d in test.data:
             content_length += len(d)
         if test.data:
+            downstream_cursor.write_envelope(
+                TransactionMetadata(),
+                blobs=[BlobSpec(create_tx_body=True)])
             blob_uri = BlobUri('downstream_rest_id', tx_body=True)
-            blob_writer = self.storage.create_blob(blob_uri)
+            blob_writer = downstream_cursor.get_blob_for_append(blob_uri)
         for i,d in enumerate(test.data):
             last = i == (len(test.data) - 1)
             content_length = blob_writer.len() + len(d) if last else None
