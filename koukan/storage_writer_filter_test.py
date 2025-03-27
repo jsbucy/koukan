@@ -43,7 +43,7 @@ class StorageWriterFilterTest(unittest.TestCase):
                         len(tx.rcpt_to))
 
     def start_update(self, filter, tx, tx_delta):
-        logging.debug('start_update', stack_info=True)
+        logging.debug('start_update')
 
         # xxx executor
         t = Thread(target=lambda: self.update(filter, tx, tx_delta),
@@ -132,40 +132,43 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     # representative of Exploder which writes body_blob=BlobReader
     def test_body_blob_reader(self):
-        # TODO would probably be better for this to create orig tx via swf also
-        orig_tx_cursor = self.storage.get_transaction_cursor()
         orig_tx = TransactionMetadata(
             host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
-        orig_tx_cursor.create('orig_tx_rest_id', orig_tx, create_leased=True,
-                              blobs=[BlobSpec(create_tx_body=True)])
-        blob_writer = orig_tx_cursor.get_blob_for_append(
-            BlobUri(orig_tx_cursor.rest_id, tx_body=True))
+
+        orig_filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'orig_tx_rest_id')
+
+        orig_filter.update(orig_tx, orig_tx.copy())
+        blob_writer = orig_filter.get_blob_writer(
+            create=True, tx_body=True)
 
         d = b'hello, '
         blob_writer.append_data(0, d)
 
         filter = StorageWriterFilter(
             self.storage,
-            rest_id_factory = lambda: 'tx_rest_id')
-        filter._create(TransactionMetadata(host = 'outbound-gw'))
+            rest_id_factory = lambda: 'tx_rest_id',
+            create_leased=True)
+        tx = TransactionMetadata(host = 'outbound-gw')
+        filter.update(tx, tx.copy())
 
-        tx = TransactionMetadata()
-        tx_delta = TransactionMetadata(mail_from = Mailbox('alice'))
-        tx.merge_from(tx_delta)
-        t = self.start_update(filter, tx, tx_delta)
+        upstream_cursor = filter.release_transaction_cursor()
+        upstream_cursor.load(start_attempt=True)
 
-        tx_cursor = self.storage.load_one()
-        self.assertIsNotNone(tx_cursor)
+        tx = TransactionMetadata(mail_from = Mailbox('alice'))
+        t = self.start_update(filter, tx, tx.copy())
 
         for i in range(0,5):
-            if tx_cursor.tx.mail_from is not None:
+            if upstream_cursor.tx.mail_from is not None:
                 break
-            tx_cursor.wait()
+            upstream_cursor.wait(1)
+            upstream_cursor.load()
         else:
             self.fail('no mail_from')
-        tx_cursor.write_envelope(
+        upstream_cursor.write_envelope(
             TransactionMetadata(mail_response=Response(201)))
 
         self.join(t)
@@ -178,17 +181,18 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.fail('no mail_response')
         self.assertEqual(tx.mail_response.code, 201)
 
+        tx = filter.get()
         tx_delta = TransactionMetadata(rcpt_to = [Mailbox('bob')])
         tx.merge_from(tx_delta)
         t = self.start_update(filter, tx, tx_delta)
         for i in range(0,5):
-            if len(tx_cursor.tx.rcpt_to) == 1:
+            if len(upstream_cursor.tx.rcpt_to) == 1:
                 break
-            tx_cursor.wait(1)
-            tx_cursor.load()
+            upstream_cursor.wait(1)
+            upstream_cursor.load()
         else:
             self.fail('no rcpt')
-        tx_cursor.write_envelope(
+        upstream_cursor.write_envelope(
             TransactionMetadata(rcpt_response=[Response(202)]))
         self.join(t)
 
@@ -196,36 +200,32 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(
             [rr.code for rr in tx.rcpt_response], [202])
 
-        orig_tx_cursor.load()
-        self.assertTrue(isinstance(orig_tx_cursor.tx.body, Blob))
-
         # update w/incomplete blob ->noop
         tx_delta = TransactionMetadata()
-        tx_delta.body = orig_tx_cursor.tx.body
+        tx_delta.body = orig_filter.get().body
         tx.merge_from(tx_delta)
         with self.assertRaises(Exception):
             filter.update(tx, tx_delta)
 
-        d = b'world!'
+        d2 = b'world!'
         appended, length, content_length = blob_writer.append_data(
-            blob_writer.length, d, blob_writer.length + len(d))
+            blob_writer.length, d2, blob_writer.length + len(d2))
         self.assertTrue(appended)
         self.assertEqual(length, content_length)
 
-        orig_tx_cursor.load()
-
-        tx_delta = TransactionMetadata(body=orig_tx_cursor.tx.body)
+        tx_delta = TransactionMetadata(body=orig_filter.get().body)
         tx.merge_from(tx_delta)
         t = self.start_update(filter, tx, tx_delta)
 
         for i in range(0,5):
-            if tx_cursor.tx.body is not None:
+            if upstream_cursor.tx.body is not None and upstream_cursor.tx.body.finalized():
+                self.assertEqual(d + d2, upstream_cursor.tx.body.pread(0))
                 break
-            tx_cursor.wait(1)
-            tx_cursor.load()
+            upstream_cursor.wait(1)
+            upstream_cursor.load()
         else:
             self.fail('no body')
-        tx_cursor.write_envelope(
+        upstream_cursor.write_envelope(
             TransactionMetadata(data_response=Response(203)))
 
         self.join(t)

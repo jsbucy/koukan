@@ -363,14 +363,23 @@ class TransactionCursor:
                .returning(self.parent.tx_table.c.version))
 
         if attempt_json:
-            upd_att = (update(self.parent.attempt_table)
-                       .where(self.parent.attempt_table.c.transaction_id ==
-                                self.id,
-                              self.parent.attempt_table.c.attempt_id ==
-                                self.attempt_id)
-                       .values(responses = attempt_json,
-                               last_update = self.parent._current_timestamp_epoch()))
-            res = db_tx.execute(upd_att)
+            # TODO downstream writes were accidentally working here,
+            # attempt_id == None was causing sql to
+            # noop. Probably we should figure out that the diff is
+            # empty and skip this update.
+            if self.attempt_id is not None:
+                upd_att = (update(self.parent.attempt_table)
+                           .where(self.parent.attempt_table.c.transaction_id ==
+                                  self.id,
+                                  self.parent.attempt_table.c.attempt_id ==
+                                  self.attempt_id)
+                           .values(responses = attempt_json,
+                                   last_update = self.parent._current_timestamp_epoch()))
+                res = db_tx.execute(upd_att)
+                assert rowcount(res) == 1
+            else:
+                logging.info('no open attempt %d %s skipping attempt update',
+                             self.id, self.rest_id)
 
         upd = upd.values(notification = bool(tx_to_db.notification))
 
