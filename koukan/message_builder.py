@@ -24,11 +24,12 @@ class MessageBuilderSpec:
     # part['content']['create_id']  XXX rename
     ids : Optional[Set[str]] = None
 
-    def __init__(self, json, blobs : Optional[List[Blob]] = None):
+    def __init__(self, json, blobs : Optional[List[Blob]] = None,
+                 blob_specs : Optional[List[BlobSpec]] = None):
         self.json = json
         self.blobs = blobs
 
-        self.blob_specs = []
+        self.blob_specs = blob_specs if blob_specs else []
 
     # xxx needs to walk full mime tree for receive parsing?
     def check_ids(self):
@@ -62,8 +63,7 @@ class MessageBuilderSpec:
             blob_spec = BlobSpec(create_id=content['create_id'])
         elif 'inline' in content:
             blob_spec = BlobSpec(
-                blob = InlineBlob(content['inline'].encode('utf-8'), last=True),
-                create_id = str(create_blob_id))  # xxx this is fine?
+                blob = InlineBlob(content['inline'].encode('utf-8'), last=True))
         else:
             raise ValueError('bad MessageBuilder entity content')
         part['content'] = {'create_id': blob_spec.create_id if blob_spec.create_id

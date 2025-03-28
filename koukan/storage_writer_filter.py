@@ -91,8 +91,7 @@ class StorageWriterFilter(AsyncFilter):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
-        self.tx_cursor.create(
-            rest_id, tx, blobs=blobs, create_leased=self.create_leased)
+        self.tx_cursor.create(rest_id, tx, create_leased=self.create_leased)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -163,31 +162,16 @@ class StorageWriterFilter(AsyncFilter):
         if getattr(downstream_tx, 'rest_id', None) is not None:
             del downstream_tx.rest_id
 
-        blobs : List[BlobSpec] = []
-        if tx.body:
-            if isinstance(tx.body, BlobUri):
-                blobs = [BlobSpec(reuse_uri = tx.body)]
-            elif isinstance(tx.body, Blob):
-                if not isinstance(tx.body, BlobCursor):
-                    blobs = [BlobSpec(create_tx_body=True,  # xxx
-                                      blob=tx.body)]
-                else:
-                    blobs = [BlobSpec(reuse_uri = tx.body.blob_uri,
-                                      blob=tx.body)]
-
-            elif isinstance(tx.body, MessageBuilderSpec):
-                blobs = tx.body.blob_specs
-
         created = False
         if self.rest_id is None:
             created = True
-            self._create(downstream_tx, blobs=blobs)
+            self._create(downstream_tx)
             tx.rest_id = self.rest_id
         else:
             if self.tx_cursor is None:
                 self._load()
             # caller handles VersionConflictException
-            self.tx_cursor.write_envelope(downstream_delta, blobs=blobs)
+            self.tx_cursor.write_envelope(downstream_delta)
 
         logging.debug('StorageWriterFilter.update %s result %s input tx %s',
                       self.rest_id, self.tx_cursor.tx, tx)
@@ -220,15 +204,15 @@ class StorageWriterFilter(AsyncFilter):
                 try:
                     # xxx this is not idempotent, if this
                     # retries, will create multiple blobs
-                    self.tx_cursor.write_envelope(
-                        TransactionMetadata(),
-                        blobs=[BlobSpec(create_tx_body=True)])
+                    self.tx_cursor.write_envelope(TransactionMetadata(),
+                                                  create_body=True)
                     break
                 except VersionConflictException:
                     logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)
+                    self.tx_cursor.load()
 
         return self.tx_cursor.get_blob_for_append(
             BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))

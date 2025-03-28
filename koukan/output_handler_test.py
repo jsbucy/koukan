@@ -51,7 +51,7 @@ class OutputHandlerTest(unittest.TestCase):
 
         tx_meta = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        tx_cursor.write_envelope(tx_meta, blobs=[BlobSpec(create_tx_body=True)])
+        tx_cursor.write_envelope(tx_meta, create_body=True)
         blob_uri = BlobUri(
             tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
         blob_writer = tx_cursor.get_blob_for_append(blob_uri)
@@ -191,8 +191,7 @@ class OutputHandlerTest(unittest.TestCase):
 
 
         # write & patch blob
-        tx_cursor.write_envelope(TransactionMetadata(),
-                                 blobs=[BlobSpec(create_tx_body=True)])
+        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
@@ -292,7 +291,7 @@ class OutputHandlerTest(unittest.TestCase):
             try:
                 tx_cursor.load()
                 tx_cursor.write_envelope(TransactionMetadata(),
-                                         blobs=[BlobSpec(create_tx_body=True)])
+                                         create_body=True)
                 break
             except VersionConflictException:
                 time.sleep(0.2)
@@ -409,11 +408,9 @@ class OutputHandlerTest(unittest.TestCase):
             retry={'max_attempts': 1},
             notification = {'host': 'smtp-out'})
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx,
-                         blobs=[BlobSpec(create_tx_body=True)])
-
-        blob_uri = BlobUri(
-            tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
+        tx_cursor.create('rest_tx_id', tx)
+        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
+        blob_uri = BlobUri(tx_id='rest_tx_id', tx_body=True)
         blob_writer = tx_cursor.get_blob_for_append(blob_uri)
         d = (b'from: alice\r\n'
              b'to: bob\r\n'
@@ -558,12 +555,11 @@ class OutputHandlerTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             retry={'max_attempts': 1})
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', tx,
-                         blobs=[BlobSpec(create_tx_body=True)])
+        tx_cursor.create('rest_tx_id', tx)
         tx_id = tx_cursor.id
-
+        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = tx_cursor.get_blob_for_append(
-            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
+            BlobUri(tx_id='rest_tx_id', tx_body=True))
         d = (b'from: alice\r\n'
              b'to: bob\r\n'
              b'message-id: <abc@xyz>\r\n'

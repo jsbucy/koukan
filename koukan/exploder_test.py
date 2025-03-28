@@ -214,7 +214,7 @@ class ExploderTest(unittest.TestCase):
         if test.data:
             downstream_cursor.write_envelope(
                 TransactionMetadata(),
-                blobs=[BlobSpec(create_tx_body=True)])
+                create_body=True)
             blob_uri = BlobUri('downstream_rest_id', tx_body=True)
             blob_writer = downstream_cursor.get_blob_for_append(blob_uri)
         for i,d in enumerate(test.data):

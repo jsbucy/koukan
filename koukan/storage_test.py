@@ -77,8 +77,7 @@ class StorageTestBase(unittest.TestCase):
         with self.s.begin_transaction() as db_tx:
             self.assertTrue(downstream.check_input_done(db_tx))
 
-        downstream.write_envelope(TransactionMetadata(),
-                                  blobs=[BlobSpec(create_tx_body=True)])
+        downstream.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
 
@@ -190,8 +189,7 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        tx_writer.write_envelope(TransactionMetadata(),
-                                 blobs=[BlobSpec(create_tx_body=True)])
+        tx_writer.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = tx_writer.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         # incomplete blob
@@ -206,15 +204,19 @@ class StorageTestBase(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         with self.assertRaises(ValueError):
-            tx_writer2.create('tx_rest_id2', tx, blobs=[
-                BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
-
+            tx_writer2.create('tx_rest_id2', TransactionMetadata(
+                body=MessageBuilderSpec(
+                    {"text_body": []},
+                    blob_specs=[BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])))
         # non-finalized blobs cannot be reused
         with self.assertRaises(ValueError):
-            tx.body = 'body_rest_id'
+            tx.body = MessageBuilderSpec(
+                {"text_body": []},
+                blob_specs = [BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id',
+                                                         tx_body=True))])
+            #'body_rest_id'
             tx_writer2 = self.s.get_transaction_cursor()
-            tx_writer2.create('tx_rest_id2', tx, blobs=[
-                BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+            tx_writer2.create('tx_rest_id2', tx)
 
         # shouldn't have been ref'd into tx2
         tx_writer2.load()
@@ -226,8 +228,9 @@ class StorageTestBase(unittest.TestCase):
 
         tx_writer.load()
         tx_writer = self.s.get_transaction_cursor()
-        tx_writer.create('tx_rest_id2', tx, blobs=[
+        tx.body = MessageBuilderSpec({"text_body": []}, blob_specs=[
             BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+        tx_writer.create('tx_rest_id2', tx)
         self.assertTrue(tx_writer.input_done)
 
         tx_writer.load()
@@ -244,9 +247,10 @@ class StorageTestBase(unittest.TestCase):
             TransactionMetadata(
                 mail_from=Mailbox('alice'),
                 rcpt_to=[Mailbox('bob')],
-                body = MessageBuilderSpec({"parts": {}})),  # xxx
-            blobs = [BlobSpec(create_id='blob_rest_id1')]
-        )
+                body = MessageBuilderSpec(
+                    {"text_body": []},
+                    blob_specs = [BlobSpec(create_id='blob_rest_id1')])))
+
         blob1 = BlobUri(tx_id='tx_rest_id1', blob='blob_rest_id1')
         blob_writer1 = tx_writer.get_blob_for_append(blob1)
         b1 = b'hello, world!'
@@ -259,10 +263,10 @@ class StorageTestBase(unittest.TestCase):
             TransactionMetadata(
                 mail_from=Mailbox('alice'),
                 rcpt_to=[Mailbox('bob')],
-                body = MessageBuilderSpec({"parts": {}})),  # xxx
-            blobs=[BlobSpec(reuse_uri=blob1),
-                   BlobSpec(create_id='blob_rest_id2')
-            ])
+                body = MessageBuilderSpec(
+                    {"text_body": []},
+                    blob_specs=[BlobSpec(reuse_uri=blob1),
+                                BlobSpec(create_id='blob_rest_id2')])))
         blob2 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id2')
         blob_writer2 = tx_writer2.get_blob_for_append(blob2)
         b2 = b'another blob'
@@ -310,8 +314,8 @@ class StorageTestBase(unittest.TestCase):
         old_tx = old_session.get_transaction_cursor()
         old_tx.create('tx_rest_id', TransactionMetadata(
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')]),
-                      blobs=[BlobSpec(create_tx_body=True)])
+            rcpt_to=[Mailbox('bob')]))
+        old_tx.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = old_tx.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
@@ -366,8 +370,8 @@ class StorageTestBase(unittest.TestCase):
                 host='host',
                 local_host=HostPort('local_host', 25),
                 remote_host=HostPort('remote_host', 2525),
-                retry={}),
-            blobs=[BlobSpec(create_tx_body=True)])
+                retry={}))
+        tx_writer.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = tx_writer.get_blob_for_append(
             BlobUri(tx_id='xyz', tx_body=True))
         d = b'hello, world!'

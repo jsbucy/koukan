@@ -97,7 +97,6 @@ class TransactionCursor:
     def create(self,
                rest_id : str,
                tx : TransactionMetadata,
-               blobs : List[BlobSpec] = [],
                create_leased : bool = False):
         parent = self.parent
         with self.parent.begin_transaction() as db_tx:
@@ -127,7 +126,7 @@ class TransactionCursor:
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
 
-            self._write(db_tx, tx, blobs=blobs)
+            self._write(db_tx, tx)
             self.tx.rest_id = rest_id
 
         self._update_version_cache()
@@ -219,7 +218,7 @@ class TransactionCursor:
 
     def write_envelope(self,
                        tx_delta : TransactionMetadata,
-                       blobs : List[BlobSpec] = [],
+                       create_body : bool = False,
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
@@ -227,28 +226,42 @@ class TransactionCursor:
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
-                        blobs=blobs,
+                        create_body=create_body,
                         final_attempt_reason=final_attempt_reason,
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
         self._update_version_cache()
+        logging.debug(self.parent.debug_dump())
 
-    def _write_blob(self,
+    def _maybe_write_blob(self,
                     db_tx : Transaction,
                     tx,
-                    upd,  # sa update
-                    blobs : List[BlobSpec] = []
-                    ) -> Tuple[Any, bool]:  # SA update
-        assert blobs
-        ref_blobs : List[Tuple[int, BlobUri]] = []
+                    create_body : bool
+                    ) -> bool:  # blobs done
+        blobs : List[BlobSpec]
+        assert not (tx.body and create_body)
+        if create_body:
+            blobs = [BlobSpec(create_tx_body=True)]
+        elif isinstance(tx.body, MessageBuilderSpec):
+            blobs = tx.body.blob_specs
+        elif isinstance(tx.body, BlobUri):
+            blobs = [ BlobSpec(reuse_uri=tx.body) ]
+        elif isinstance(tx.body, Blob):
+            blob_spec = BlobSpec(blob=tx.body)
+            if not isinstance(tx.body, BlobCursor):
+                blob_spec.create_tx_body = True
+            blobs = [blob_spec]
+        else:
+            return True
+
         # blob id, blob rest id, finalized
         reuse_blob_id : List[Tuple[int, str, bool]] = []
 
         # filter out blobs we need to create first vs those we can
         # reuse directly
         reuse_uris : List[BlobUri] = []
-        for blob in blobs:
+        for i,blob in enumerate(blobs):
             logging.debug('%s %s %s', blob.create_id, blob.reuse_uri, blob.blob)
             if isinstance(blob.blob, BlobCursor):
                 reuse_uris.append(blob.blob.blob_uri)
@@ -256,25 +269,20 @@ class TransactionCursor:
 
             if blob.reuse_uri:
                 reuse_uris.append(body_blob_uri(blob.reuse_uri))
-            elif blob.create_id or blob.create_tx_body:
+            elif blob.create_id or blob.create_tx_body or isinstance(blob.blob, Blob):
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob.blob:
                     blob_cursor.append_blob(blob.blob)
+                if not blob.create_id and not blob.create_tx_body:
+                    create_id = str(i)
                 logging.debug(blob_cursor)
-                ref_blobs.append((blob_cursor.id,
-                                  body_blob_uri(BlobUri('', blob=blob.create_id, tx_body=blob.create_tx_body))))
+                blob_rest_id = TX_BODY if blob.create_tx_body else blob.create_id
+                reuse_blob_id.append((blob_cursor.id, blob_rest_id, False))
             else:
                 raise ValueError()
 
-
         reuse_blob_id.extend(self._reuse_blob(db_tx, reuse_uris))
-        logging.debug('_write_blob reuse_blob_id %s', reuse_blob_id)
-        logging.debug('_write_blob ref_blobs %s', ref_blobs)
-
-        # ref_blobs are ones that we just created so done <- False
-        reuse_blob_id.extend([(id, uri.blob, False) for id, uri in ref_blobs])
-
         logging.debug(reuse_blob_id)
 
         blobrefs = []
@@ -292,12 +300,18 @@ class TransactionCursor:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
             res = db_tx.execute(ins)
 
-        return upd, blobs_done
+        if not blobs_done:
+            return False
+        if isinstance(tx.body, MessageBuilderSpec):
+            return True
+        logging.debug(blobs)
+        assert len(blobs) == 1 and reuse_blob_id[0][1] == TX_BODY
+        return True
 
     def _write(self,
                db_tx : Transaction,
                tx_delta : TransactionMetadata,
-               blobs : List[BlobSpec] = [],
+               create_body : bool = False,
                final_attempt_reason : Optional[str] = None,
                finalize_attempt : Optional[bool] = None,
                next_attempt_time : Optional[int] = None,
@@ -305,11 +319,12 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
-        logging.debug('TxCursor._write %s %s %s %s',
+        logging.debug('TxCursor._write %s %s %s',
                       self.rest_id, tx_delta,
-                      finalize_attempt, blobs)
+                      finalize_attempt)
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
+        assert not(tx_delta.body and create_body)
 
         if tx_delta.cancelled and (
                 self.final_attempt_reason is not None and
@@ -325,7 +340,7 @@ class TransactionCursor:
         if (tx_delta.empty(WhichJson.DB) and
             tx_delta.empty(WhichJson.DB_ATTEMPT) and
             (not tx_delta.body) and
-            (not blobs) and
+            (not create_body) and
             (final_attempt_reason is None) and
             (notification_done is None) and
             (not input_done) and
@@ -408,25 +423,18 @@ class TransactionCursor:
                              inflight_session_live = None,
                              next_attempt_time = next_attempt_time)
 
-        blobs_done = True
-
-        if blobs:
-            upd, blobs_done = self._write_blob(db_tx, tx_delta, upd, blobs)
+        input_done |= self._maybe_write_blob(db_tx, tx_delta, create_body)
 
         if isinstance(tx_delta.body, MessageBuilderSpec):
             upd = upd.values(message_builder = tx_delta.body.json)
-        if input_done or (
-                blobs_done and (isinstance(tx_delta.body, MessageBuilderSpec) or (
-                    blobs is not None  # xxx mess
-                    and len(blobs) == 1 and
-                    blobs[0].reuse_uri and
-                    blobs[0].reuse_uri.tx_body))):
+
+        if input_done:
             upd = upd.values(input_done = True)
             self.input_done = True
 
         res = db_tx.execute(upd)
         row = res.fetchone()
-
+        logging.debug(row)
         if row is None or row[0] != new_version:
             logging.info('Storage._write version conflict id=%d '
                          'expected %d db %s', self.id, new_version, row)
@@ -1203,6 +1211,7 @@ class Storage():
                            self.tx_table,
                            self.tx_blobref_table,
                            self.attempt_table ]:
+                out += str(table) + '\n'
                 sel = table.select()
                 res = db_tx.execute(sel)
                 for row in res:

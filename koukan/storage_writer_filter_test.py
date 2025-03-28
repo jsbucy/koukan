@@ -82,8 +82,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id = 'tx_rest_id',
             create_leased = False)
-        blob_writer = filter.get_blob_writer(
-            create=True, tx_body=True)
+        blob_writer = filter.get_blob_writer(create=True, tx_body=True)
         d = b'hello, world!'
         chunk1 = 7
         blob_writer.append_data(0, d[0:chunk1])

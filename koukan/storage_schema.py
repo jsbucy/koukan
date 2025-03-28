@@ -24,12 +24,14 @@ class BlobSpec:
     blob : Optional[Blob] = None
     create_id : Optional[str] = None
     reuse_uri : Optional[BlobUri] = None
-    create_tx_body : bool = False  # xxx temporary hack
+    create_tx_body : Optional[bool] = None
 
     def __init__(self, blob : Optional[Blob] = None,
                  create_id : Optional[str] = None,
                  reuse_uri : Optional[BlobUri] = None,
-                 create_tx_body : bool = False):
+                 create_tx_body : Optional[bool] = None):
+        assert len([x for x in [blob, create_id, reuse_uri, create_tx_body]
+                    if x is not None]) == 1
         self.blob = blob
         self.create_id = create_id
         self.reuse_uri = reuse_uri
