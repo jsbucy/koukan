@@ -218,7 +218,6 @@ class TransactionCursor:
 
     def write_envelope(self,
                        tx_delta : TransactionMetadata,
-                       create_body : bool = False,
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
@@ -226,7 +225,6 @@ class TransactionCursor:
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
-                        create_body=create_body,
                         final_attempt_reason=final_attempt_reason,
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
@@ -237,16 +235,12 @@ class TransactionCursor:
     def _maybe_write_blob(self,
                     db_tx : Transaction,
                     tx,
-                    create_body : bool
                     ) -> bool:  # blobs done
         blobs : List[BlobSpec]
-        assert not (tx.body and create_body)
-        if create_body:
-            blobs = [BlobSpec(create_tx_body=True)]
+        if isinstance(tx.body, BlobSpec):
+            blobs = [tx.body]
         elif isinstance(tx.body, MessageBuilderSpec):
             blobs = tx.body.blob_specs
-        elif isinstance(tx.body, BlobUri):
-            blobs = [ BlobSpec(reuse_uri=tx.body) ]
         elif isinstance(tx.body, Blob):
             blob_spec = BlobSpec(blob=tx.body)
             if not isinstance(tx.body, BlobCursor):
@@ -311,7 +305,6 @@ class TransactionCursor:
     def _write(self,
                db_tx : Transaction,
                tx_delta : TransactionMetadata,
-               create_body : bool = False,
                final_attempt_reason : Optional[str] = None,
                finalize_attempt : Optional[bool] = None,
                next_attempt_time : Optional[int] = None,
@@ -324,7 +317,6 @@ class TransactionCursor:
                       finalize_attempt)
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
-        assert not(tx_delta.body and create_body)
 
         if tx_delta.cancelled and (
                 self.final_attempt_reason is not None and
@@ -340,7 +332,6 @@ class TransactionCursor:
         if (tx_delta.empty(WhichJson.DB) and
             tx_delta.empty(WhichJson.DB_ATTEMPT) and
             (not tx_delta.body) and
-            (not create_body) and
             (final_attempt_reason is None) and
             (notification_done is None) and
             (not input_done) and
@@ -423,7 +414,7 @@ class TransactionCursor:
                              inflight_session_live = None,
                              next_attempt_time = next_attempt_time)
 
-        input_done |= self._maybe_write_blob(db_tx, tx_delta, create_body)
+        input_done |= self._maybe_write_blob(db_tx, tx_delta)
 
         if isinstance(tx_delta.body, MessageBuilderSpec):
             upd = upd.values(message_builder = tx_delta.body.json)

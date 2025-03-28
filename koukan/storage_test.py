@@ -77,7 +77,8 @@ class StorageTestBase(unittest.TestCase):
         with self.s.begin_transaction() as db_tx:
             self.assertTrue(downstream.check_input_done(db_tx))
 
-        downstream.write_envelope(TransactionMetadata(), create_body=True)
+        downstream.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
 
@@ -189,7 +190,8 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        tx_writer.write_envelope(TransactionMetadata(), create_body=True)
+        tx_writer.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = tx_writer.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         # incomplete blob
@@ -315,7 +317,8 @@ class StorageTestBase(unittest.TestCase):
         old_tx.create('tx_rest_id', TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
-        old_tx.write_envelope(TransactionMetadata(), create_body=True)
+        old_tx.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = old_tx.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
@@ -371,7 +374,8 @@ class StorageTestBase(unittest.TestCase):
                 local_host=HostPort('local_host', 25),
                 remote_host=HostPort('remote_host', 2525),
                 retry={}))
-        tx_writer.write_envelope(TransactionMetadata(), create_body=True)
+        tx_writer.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = tx_writer.get_blob_for_append(
             BlobUri(tx_id='xyz', tx_body=True))
         d = b'hello, world!'

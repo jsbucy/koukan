@@ -31,6 +31,8 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 
 from koukan.message_builder import MessageBuilderSpec
 
+from koukan.storage_schema import BlobSpec
+
 def setUpModule():
     postgres_test_utils.setUpModule()
 
@@ -677,7 +679,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob2@example.com')],
-            body=blob_uri)
+            body=BlobSpec(reuse_uri=blob_uri))
 
         upstream_endpoint = FakeSyncFilter()
         def exp2(tx, tx_delta):

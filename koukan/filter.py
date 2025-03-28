@@ -11,6 +11,7 @@ from koukan.response import Response
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
 from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
+from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
 
@@ -189,25 +190,31 @@ def body_from_json(body_json):
         # xxx utf8/bytes roundtrip
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
     elif 'uri' in body_json:
-        return parse_blob_uri(body_json['uri'])
+        return BlobSpec(reuse_uri=parse_blob_uri(body_json['uri']))
     elif 'message_builder' in body_json:
         spec = MessageBuilderSpec(body_json['message_builder'])
         spec.parse_blob_specs()
         return spec
     return None
 
-def body_to_json(body : Union[BlobUri, InlineBlob, None]):
+def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None]):
+    # TODO unify with MessageBuilderSpec._add_part_blob()
     if isinstance(body, InlineBlob):
         # assert body.finalized() ?
         # xxx can we eliminate this unicode<->bytes round trip?
         # xxx max inline
         return {'inline': body.pread(0).decode('utf-8') }
-    elif isinstance(body, BlobUri):
-        return {'uri': make_blob_uri(body.tx_id,
-                                     tx_body=body.tx_body, blob=body.blob) }
+    elif isinstance(body, BlobSpec):
+        if body.reuse_uri is not None:
+            uri = body.reuse_uri
+            return {'uri': make_blob_uri(uri.tx_id, blob=uri.blob, tx_body=uri.tx_body) }
+        else:
+            raise ValueError()
     elif isinstance(body, MessageBuilderSpec):
         return {'message_builder': body.json }
-    return None
+    elif blob is None:
+        return None
+    raise ValueError()
 
 _tx_fields = [
     # downstream http host
@@ -337,7 +344,8 @@ class TransactionMetadata:
 
     attempt_count : Optional[int] = None
 
-    body : Union[BlobUri, InlineBlob, Blob, MessageBuilderSpec, None] = None
+    # BlobSpec only rest -> storage
+    body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None
 
     # arbitrary json for now
     notification : Optional[dict] = None
@@ -368,7 +376,7 @@ class TransactionMetadata:
                  rcpt_to : Optional[List[Mailbox]] = None,
                  rcpt_response : Optional[List[Response]] = None,
                  host : Optional[str] = None,
-                 body : Union[BlobUri, InlineBlob, Blob, None] = None,
+                 body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
                  retry : Optional[dict] = None,

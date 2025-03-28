@@ -204,8 +204,8 @@ class StorageWriterFilter(AsyncFilter):
                 try:
                     # xxx this is not idempotent, if this
                     # retries, will create multiple blobs
-                    self.tx_cursor.write_envelope(TransactionMetadata(),
-                                                  create_body=True)
+                    self.tx_cursor.write_envelope(
+                        TransactionMetadata(body=BlobSpec(create_tx_body=True)))
                     break
                 except VersionConflictException:
                     logging.debug('VersionConflictException')

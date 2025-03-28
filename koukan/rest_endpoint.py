@@ -21,8 +21,8 @@ from koukan.filter import (
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
-from koukan.rest_schema import BlobUri
 from koukan.message_builder import MessageBuilderSpec
+from koukan.storage_schema import BlobSpec
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -268,7 +268,7 @@ class RestEndpoint(SyncFilter):
             assert self.upstream_tx.merge_from(downstream_delta) is not None
         # xxx some tests send BlobUri here?
         # otherwise clear so it doesn't trip req_inflight() during get
-        if not isinstance(self.upstream_tx.body, BlobUri) and not isinstance(self.upstream_tx.body, MessageBuilderSpec):
+        if not isinstance(self.upstream_tx.body, BlobSpec) and not isinstance(self.upstream_tx.body, MessageBuilderSpec):
             self.upstream_tx.body = None
         upstream_tx = self.upstream_tx.copy()
 
@@ -391,7 +391,7 @@ class RestEndpoint(SyncFilter):
         elif message_builder:
             blobs = [(b, True) for b in tx_delta.body.blobs]
             blobs.append((tx_delta.body.body_blob, False))
-        elif isinstance(tx_delta.body, BlobUri):
+        elif isinstance(tx_delta.body, BlobSpec):
             return upstream_delta
         else:
             raise ValueError()

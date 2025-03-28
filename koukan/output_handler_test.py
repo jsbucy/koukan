@@ -50,8 +50,9 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
         tx_meta = TransactionMetadata(
-            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        tx_cursor.write_envelope(tx_meta, create_body=True)
+            mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
+            body=BlobSpec(create_tx_body=True))
+        tx_cursor.write_envelope(tx_meta)
         blob_uri = BlobUri(
             tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id')
         blob_writer = tx_cursor.get_blob_for_append(blob_uri)
@@ -191,7 +192,8 @@ class OutputHandlerTest(unittest.TestCase):
 
 
         # write & patch blob
-        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
+        tx_cursor.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
@@ -290,8 +292,8 @@ class OutputHandlerTest(unittest.TestCase):
         for i in range(0,5):
             try:
                 tx_cursor.load()
-                tx_cursor.write_envelope(TransactionMetadata(),
-                                         create_body=True)
+                tx_cursor.write_envelope(
+                    TransactionMetadata(body=BlobSpec(create_tx_body=True)))
                 break
             except VersionConflictException:
                 time.sleep(0.2)
@@ -406,10 +408,10 @@ class OutputHandlerTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'})
+            notification = {'host': 'smtp-out'},
+            body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
-        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
         blob_uri = BlobUri(tx_id='rest_tx_id', tx_body=True)
         blob_writer = tx_cursor.get_blob_for_append(blob_uri)
         d = (b'from: alice\r\n'
@@ -553,11 +555,11 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1})
+            retry={'max_attempts': 1},
+            body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
         tx_id = tx_cursor.id
-        tx_cursor.write_envelope(TransactionMetadata(), create_body=True)
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True))
         d = (b'from: alice\r\n'
