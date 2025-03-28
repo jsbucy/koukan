@@ -198,7 +198,7 @@ class Exploder(SyncFilter):
 
         # If all rcpts with rcpt_response.ok() have the same
         # data_response.major_code(), return that.  The most likely
-        # result is that they're all "250 accpted" or "550 message
+        # result is that they're all "250 accepted" or "550 message
         # content rejected". It's possible though probably unlikely
         # that the upstream responses might be different in spite of
         # having the same major code e.g. one recipient is over quota

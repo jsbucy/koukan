@@ -208,9 +208,6 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual([rr.code for rr in test.expected_rcpt_resp],
                          [rr.code for rr in tx.rcpt_response])
 
-        content_length = 0
-        for d in test.data:
-            content_length += len(d)
         if test.data:
             downstream_cursor.write_envelope(
                 TransactionMetadata(body=BlobSpec(create_tx_body=True)))
