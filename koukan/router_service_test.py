@@ -941,7 +941,7 @@ class RouterServiceTest(unittest.TestCase):
 
         dsn_endpoint = FakeSyncFilter()
         logging.debug(id(dsn_endpoint))
-        def exp_dsn_env(tx, tx_delta):
+        def exp_dsn(tx, tx_delta):
             logging.error(tx)
             self.assertEqual('', tx.mail_from.mailbox)
             self.assertEqual('alice@example.com', tx.rcpt_to[0].mailbox)
@@ -950,9 +950,6 @@ class RouterServiceTest(unittest.TestCase):
                 rcpt_response=[Response(250)])
             tx.merge_from(upstream_delta)
 
-            # def exp_dsn_body(tx, tx_delta):
-            #     logging.error(tx)
-
             if tx.body and tx.body.finalized():
                 dsn = tx.body.pread(0)
                 logging.debug('test_notification %s', dsn)
@@ -960,8 +957,7 @@ class RouterServiceTest(unittest.TestCase):
                 upstream_delta.data_response=Response(250)
             tx.merge_from(upstream_delta)
             return upstream_delta
-        dsn_endpoint.add_expectation(exp_dsn_env)
-        # dsn_endpoint.add_expectation(exp_dsn_body)
+        dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
         # no_final_notification(bob2) + dsn output
         self._dequeue(2)

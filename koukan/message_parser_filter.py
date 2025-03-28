@@ -63,8 +63,7 @@ class MessageParserFilter(SyncFilter):
                 spec.body_blob = tx.body
                 self.parsed_delta.body = spec
 
-
-            # XXX else: data err?
+            # TODO option to fail/set data err on parse error?
 
         if self.parsed_delta is None:
             if self.upstream is None:

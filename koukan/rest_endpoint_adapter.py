@@ -611,15 +611,11 @@ class RestHandler(Handler):
         assert(range.stop - range.start == content_length)
         return None, range
 
-    def _create_blob(self, request : HttpRequest,
-                     tx_body : bool = False,  # xxx always true?
+    def _create_body(self, request : HttpRequest,
                      req_upload : Optional[str] = None) -> HttpResponse:
-        logging.debug('RestHandler._create_blob %s tx_body %s %s blob %s tx %s',
-                      request, tx_body, request.headers, self._blob_rest_id,
+        logging.debug('RestHandler._create_body %s %s blob %s tx %s',
+                      request, request.headers, self._blob_rest_id,
                       self._tx_rest_id)
-
-        if not tx_body:  # xxx always true?
-            self._blob_rest_id = self.rest_id_factory()
 
         if req_upload is not None and req_upload != 'chunked':
             return self.response(request, code=400, msg='bad param: upload=')
@@ -635,8 +631,7 @@ class RestHandler(Handler):
         logging.debug('RestHandler._create_blob before create')
 
         if (blob := self.async_filter.get_blob_writer(
-                create=True, blob_rest_id=self._blob_rest_id,
-                tx_body=tx_body)) is None:
+                create=True, tx_body=True)) is None:
             return self.response(
                 request, code=500, msg='internal error creating blob')
         self.blob = blob
@@ -646,23 +641,16 @@ class RestHandler(Handler):
                 return range_err
             self.range = range
 
-        blob_uri = make_blob_uri(
-            self._tx_rest_id,
-            blob=self._blob_rest_id if not tx_body else None,
-            tx_body=tx_body)
+        blob_uri = make_blob_uri(self._tx_rest_id, tx_body=True)
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
-    # still used for tx_body
-    async def create_blob_async(
-            self, request : FastApiRequest,
-            tx_body : bool = False,  # xxx always true?
-            req_upload : Optional[str] = None
+    async def create_body_async(
+            self, request : FastApiRequest, req_upload : Optional[str] = None
             ) -> FastApiResponse:
         logging.debug('RestHandler.create_blob_async')
         cfut = self.executor.submit(
-            partial(self._create_blob, request, tx_body, req_upload=req_upload),
-            0)
+            partial(self._create_body, request, req_upload=req_upload), 0)
         if cfut is None:
             return self.response(request, code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -675,10 +663,7 @@ class RestHandler(Handler):
             if resp is not None and resp.status_code != 200:
                 return resp
 
-        blob_uri = make_blob_uri(
-            self._tx_rest_id,
-            blob=self._blob_rest_id if not tx_body else None,
-            tx_body=tx_body)
+        blob_uri = make_blob_uri(self._tx_rest_id, tx_body=True)
         return self.response(request, code=201,
                              headers=[('location', blob_uri)])
 
@@ -696,8 +681,7 @@ class RestHandler(Handler):
         self.range = range
 
         blob = self.async_filter.get_blob_writer(
-            create = False,
-            blob_rest_id=self._blob_rest_id, tx_body=tx_body)
+            create = False, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
         if blob is None:
             return self.response(request, code=404, msg='unknown blob')

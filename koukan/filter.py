@@ -507,6 +507,7 @@ class TransactionMetadata:
                 return True
         body_last = self.body is not None and (
             isinstance(self.body, Blob) and self.body.finalized())
+        # xxx used to have message_builder here?
         if self.body or body_last:
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward

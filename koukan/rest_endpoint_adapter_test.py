@@ -330,7 +330,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                  'headers': self._headers([
                      ('content-length', str(len(body)))])}
         req = FastApiRequest(scope, input)
-        resp = await handler.create_blob_async(req, tx_body=True)
+        resp = await handler.create_body_async(req)
         logging.debug('test_create_tx create blob resp %s', resp.body)
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(endpoint.body.d, body)
@@ -406,7 +406,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                      ('content-range', str(ContentRange('bytes', 0,10,10)))])}
         req = FastApiRequest(scope)
 
-        resp = await handler.create_blob_async(req)
+        resp = await handler.create_body_async(req)
         self.assertEqual(resp.status_code, 400)
 
         # POST ...blob...?upload=chunked may eventually take
@@ -424,8 +424,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                     'body': 'unimplemented params',
                     'more_body': False}
         req = FastApiRequest(scope, input)
-        resp = await handler.create_blob_async(
-            req, req_upload='chunked')
+        resp = await handler.create_body_async(req, req_upload='chunked')
         self.assertEqual(resp.status_code, 400)
 
 
@@ -440,8 +439,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                  'headers': []}
         req = FastApiRequest(scope)
 
-        resp = await handler.create_blob_async(
-            req, tx_body=True, req_upload='chunked')
+        resp = await handler.create_body_async(req, req_upload='chunked')
         logging.debug(resp.body)
         self.assertEqual(resp.status_code, 201)
         self.assertNotIn('content-range', resp.headers)
@@ -513,8 +511,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                  'headers': []}
         req = FastApiRequest(scope)
 
-        resp = await handler.create_blob_async(
-            req, tx_body=True, req_upload='chunked')
+        resp = await handler.create_body_async(req, req_upload='chunked')
         self.assertEqual(resp.status_code, 201)
         self.assertNotIn('content-range', resp.headers)
 

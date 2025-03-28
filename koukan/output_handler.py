@@ -83,7 +83,9 @@ class OutputHandler:
         upstream_tx = None
 
         # TODO this control flow no longer makes sense to me, I would expect
-        # while True:
+        # final_resp: tx cannot make forward progress, mail failed,
+        # rcpts done and all failed, etc
+        # while not tx.final_resp():
         #   # 1st req or possible for write_envelope() to return new
         #   # downstream reqs?
         #   if not cursor.tx.req_inflight():
@@ -95,8 +97,6 @@ class OutputHandler:
         #   if tx.req_inflight():
         #     # bug
         #   write_envelope(upstream_delta)
-        #   if final resp:
-        #     break
 
         while True:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
@@ -132,7 +132,6 @@ class OutputHandler:
                     if getattr(obj, field) is not None:
                         delattr(obj, field)
 
-            # xxx ick
             # have_body here is really a proxy for "envelope done"
             have_body = self.cursor.tx.body is not None
             if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (

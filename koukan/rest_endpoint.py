@@ -266,9 +266,10 @@ class RestEndpoint(SyncFilter):
             self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
-        # xxx some tests send BlobUri here?
+        # some tests send BlobUri here
         # otherwise clear so it doesn't trip req_inflight() during get
-        if not isinstance(self.upstream_tx.body, BlobSpec) and not isinstance(self.upstream_tx.body, MessageBuilderSpec):
+        if (not isinstance(self.upstream_tx.body, BlobSpec) and
+            not isinstance(self.upstream_tx.body, MessageBuilderSpec)):
             self.upstream_tx.body = None
         upstream_tx = self.upstream_tx.copy()
 

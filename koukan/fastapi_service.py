@@ -50,8 +50,7 @@ def create_app(handler_factory : HandlerFactory):
         logging.debug('fastapi_service.create_tx_body %s', request)
         chunked = (upload == "chunked")
         handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.create_blob_async(request, tx_body=True,
-                                               req_upload=upload)
+        return await handler.create_body_async(request, req_upload=upload)
 
     # body stream
     @app.put('/transactions/{tx_rest_id}/body')

@@ -143,8 +143,6 @@ class TransactionCursor:
         refd_blobs = set()
         for row in res:
             refd_blobs.add(row[0])
-        logging.debug(refd_blobs)
-        logging.debug(blob_rest_id)
         unrefd_blobs = [b for b in blob_rest_id
                         if b.blob not in refd_blobs]
 
@@ -206,7 +204,6 @@ class TransactionCursor:
         out : List[Tuple[int, str, bool]] = []
         for rest_id in unrefd_blobs:
             rest_id = rest_id
-            logging.debug(rest_id)
             if rest_id.blob not in ids:
                 raise ValueError()  # invalid rest id
             blob_id, done = ids[rest_id.blob]
@@ -230,7 +227,6 @@ class TransactionCursor:
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done)
         self._update_version_cache()
-        logging.debug(self.parent.debug_dump())
 
     def _maybe_write_blob(self,
                     db_tx : Transaction,
@@ -277,7 +273,6 @@ class TransactionCursor:
                 raise ValueError()
 
         reuse_blob_id.extend(self._reuse_blob(db_tx, reuse_uris))
-        logging.debug(reuse_blob_id)
 
         blobrefs = []
         blobs_done = True
@@ -298,7 +293,6 @@ class TransactionCursor:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
-        logging.debug(blobs)
         assert len(blobs) == 1 and reuse_blob_id[0][1] == TX_BODY
         return True
 
@@ -425,7 +419,6 @@ class TransactionCursor:
 
         res = db_tx.execute(upd)
         row = res.fetchone()
-        logging.debug(row)
         if row is None or row[0] != new_version:
             logging.info('Storage._write version conflict id=%d '
                          'expected %d db %s', self.id, new_version, row)
@@ -546,7 +539,7 @@ class TransactionCursor:
         if self.final_attempt_reason != 'oneshot':
             self.tx.final_attempt_reason = self.final_attempt_reason
 
-        # TODO body should be monotonic, maybe save (above), restore here?
+        # TODO save finalized body above, skip load and restore here
         self._load_blobs(db_tx)
 
         self.tx.tx_db_id = self.id
@@ -619,11 +612,9 @@ class TransactionCursor:
                                     tx_body=(rest_id == TX_BODY),
                                     blob=rest_id)
             blobs.append(blob)
-        logging.debug(blobs)
         if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
             self.tx.body = blobs[0]
         elif self.message_builder:
-            logging.debug(self.message_builder)
             self.tx.body = MessageBuilderSpec(self.message_builder, blobs)
             self.tx.body.check_ids()
         elif blobs:
@@ -718,6 +709,7 @@ class TransactionCursor:
     def get_blob_for_append(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
         blob_uri = body_blob_uri(blob_uri)
 
+        # xxx already loaded in tx.body?
         blob_writer = BlobCursor(self.parent)
         if blob_writer.load(blob_uri) is None:
             return None
@@ -787,6 +779,9 @@ class BlobCursor(Blob, WritableBlob):
             self._create(db_tx)
         return self.id
 
+    # xxx blobs loaded by tx._load_blobs(). Exception is
+    # tx.get_blob_for_append() which ought to be able to reuse the
+    # result of that? and 1 or 2 tests
     def load(self, blob_uri : Optional[BlobUri] = None,
              blob_id : Optional[int] = None):
         with self.parent.begin_transaction() as db_tx:
