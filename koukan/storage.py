@@ -75,6 +75,8 @@ class TransactionCursor:
     # uri of owner session if different from this process
     session_uri : Optional[str] = None
 
+    blobs : Optional[List['BlobCursor']] = None
+
     def __init__(self, storage,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
@@ -132,23 +134,10 @@ class TransactionCursor:
         self._update_version_cache()
         self.created = True
 
-    def _reuse_blob(self, db_tx : Transaction, blob_rest_id : List[BlobUri]
-                    ) -> List[Tuple[int, str, bool]]:
-                    # -> id, rest_id, input_done
-        sel_blobrefs = (
-            select(self.parent.tx_blobref_table.c.rest_id)
-            .where(self.parent.tx_blobref_table.c.transaction_id == self.id))
-
-        res = db_tx.execute(sel_blobrefs)
-        refd_blobs = set()
-        for row in res:
-            refd_blobs.add(row[0])
-        unrefd_blobs = [b for b in blob_rest_id
-                        if b.blob not in refd_blobs]
-
-        if not unrefd_blobs:
+    def _reuse_blob(self, db_tx : Transaction, blob_uris : List[BlobUri]
+                    ) -> List['BlobCursor']:
+        if not blob_uris:
             return []
-        assert isinstance(unrefd_blobs, list)
 
         # sqlite handles some forms of VALUES e.g
         # WITH tt(i) AS (VALUES(2),(3)) SELECT t.i FROM t JOIN tt ON t.i = tt.i;
@@ -165,14 +154,14 @@ class TransactionCursor:
             val = select(
                 values(column('rest_id', String),
                        column('tx_rest_id', String), name='v').data(
-                    [(x.blob, x.tx_id) for x in unrefd_blobs])).cte()
+                    [(x.blob, x.tx_id) for x in blob_uris])).cte()
         else:
             # OTOH chaining up UNION ALL works fine and we don't expect it
             # to be so much worse as to make a difference anywhere you
             # would actually use sqlite!
             literals = [ select(literal(uri.blob).label('rest_id'),
                                 literal(uri.tx_id).label('tx_rest_id'))
-                         for uri in unrefd_blobs ]
+                         for uri in blob_uris ]
             val = reduce(lambda x,y: x.union_all(y),
                          literals[1:], literals[0].cte())
 
@@ -190,26 +179,27 @@ class TransactionCursor:
         sel = select(self.parent.tx_blobref_table.c.blob_id,
                      self.parent.tx_blobref_table.c.rest_id,
                      func.length(self.parent.blob_table.c.content),
-                     self.parent.blob_table.c.length
+                     self.parent.blob_table.c.length,
+                     self.parent.blob_table.c.last_update
                      ).select_from(j2)
 
         res = db_tx.execute(sel)
-        ids : Dict[str, Tuple[int, bool]] = {}
+        ids : Set[str] = set()
+        out : List[BlobCursor] = []
         for row in res:
-            blob_id, rest_id, length, content_length = row
-            done = (length == content_length)
-            ids[rest_id] = (blob_id, done)
-        logging.debug(ids)
-        logging.debug(unrefd_blobs)
-        out : List[Tuple[int, str, bool]] = []
-        for rest_id in unrefd_blobs:
-            rest_id = rest_id
-            if rest_id.blob not in ids:
+            blob_id, blob_rest_id, length, content_length, last_update = row
+            ids.add(blob_rest_id)
+
+            if content_length is None or length != content_length:  # !done
+                raise ValueError()
+            blob_cursor = BlobCursor(self.parent)
+            blob_cursor.init(self.rest_id, blob_id, blob_rest_id,
+                             content_length, last_update, length)
+            out.append(blob_cursor)
+
+        for blob_uri in blob_uris:
+            if blob_uri.blob not in ids:
                 raise ValueError()  # invalid rest id
-            blob_id, done = ids[rest_id.blob]
-            if not done:
-                raise ValueError
-            out.append((blob_id, rest_id.blob, done))
 
         return out
 
@@ -228,30 +218,27 @@ class TransactionCursor:
                         notification_done=notification_done)
         self._update_version_cache()
 
-    def _maybe_write_blob(self,
-                    db_tx : Transaction,
-                    tx,
-                    ) -> bool:  # blobs done
-        blobs : List[BlobSpec]
+    def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata
+                          ) -> bool:  # blobs done
+        blob_specs : List[BlobSpec]
         if isinstance(tx.body, BlobSpec):
-            blobs = [tx.body]
+            blob_specs = [tx.body]
         elif isinstance(tx.body, MessageBuilderSpec):
-            blobs = tx.body.blob_specs
+            blob_specs = tx.body.blob_specs
         elif isinstance(tx.body, Blob):
             blob_spec = BlobSpec(blob=tx.body)
             if not isinstance(tx.body, BlobCursor):
                 blob_spec.create_tx_body = True
-            blobs = [blob_spec]
+            blob_specs = [blob_spec]
         else:
             return True
 
-        # blob id, blob rest id, finalized
-        reuse_blob_id : List[Tuple[int, str, bool]] = []
+        blobs : List[BlobCursor] = []
 
         # filter out blobs we need to create first vs those we can
         # reuse directly
         reuse_uris : List[BlobUri] = []
-        for i,blob in enumerate(blobs):
+        for i,blob in enumerate(blob_specs):
             logging.debug('%s %s %s', blob.create_id, blob.reuse_uri, blob.blob)
             if isinstance(blob.blob, BlobCursor):
                 reuse_uris.append(blob.blob.blob_uri)
@@ -266,34 +253,41 @@ class TransactionCursor:
                     blob_cursor.append_blob(blob.blob)
                 if not blob.create_id and not blob.create_tx_body:
                     create_id = str(i)
-                logging.debug(blob_cursor)
                 blob_rest_id = TX_BODY if blob.create_tx_body else blob.create_id
-                reuse_blob_id.append((blob_cursor.id, blob_rest_id, False))
+                blob_cursor.blob_uri = BlobUri(
+                    self.rest_id, tx_body = (blob_rest_id==TX_BODY),
+                    blob = blob_rest_id)
+                blob_cursor.update_tx = self.rest_id
+                blob_cursor.db_tx = None  # ugh
+                blobs.append(blob_cursor)
             else:
                 raise ValueError()
 
-        reuse_blob_id.extend(self._reuse_blob(db_tx, reuse_uris))
+        blobs.extend(self._reuse_blob(db_tx, reuse_uris))
 
         blobrefs = []
         blobs_done = True
-        for blob_id, rest_id, input_done in reuse_blob_id:
-            if not input_done:
+        for blob_cursor in blobs:
+            if not blob_cursor.finalized():
                 blobs_done = False
             blobrefs.append({ "transaction_id": self.id,
                               "tx_rest_id": self.rest_id,
-                              "blob_id": blob_id,
-                              "rest_id": rest_id })
+                              "blob_id": blob_cursor.id,
+                              "rest_id": blob_cursor.rest_id() })
+
         logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
 
         if blobrefs:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
             res = db_tx.execute(ins)
 
+        self.blobs = blobs
+
         if not blobs_done:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
-        assert len(blobs) == 1 and reuse_blob_id[0][1] == TX_BODY
+        assert len(blobs) == 1 and blobs[0].rest_id() == TX_BODY
         return True
 
     def _write(self,
@@ -603,15 +597,12 @@ class TransactionCursor:
         blobs = []
         for row in res:
             logging.debug(row)
-            rest_id,blob_id,content_length,last_update,length = row
+            blob_rest_id,blob_id,content_length,last_update,length = row
             blob = BlobCursor(self.parent)
-            # ish
-            blob.init(blob_id, content_length, last_update, length)
-            # TODO ~body_blob_id()
-            blob.blob_uri = BlobUri(self.rest_id,
-                                    tx_body=(rest_id == TX_BODY),
-                                    blob=rest_id)
+            blob.init(self.rest_id, blob_id, blob_rest_id,
+                      content_length, last_update, length)
             blobs.append(blob)
+        self.blobs = blobs
         if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
             self.tx.body = blobs[0]
         elif self.message_builder:
@@ -708,14 +699,11 @@ class TransactionCursor:
 
     def get_blob_for_append(self, blob_uri : BlobUri) -> Optional[WritableBlob]:
         blob_uri = body_blob_uri(blob_uri)
-
-        # xxx already loaded in tx.body?
-        blob_writer = BlobCursor(self.parent)
-        if blob_writer.load(blob_uri) is None:
+        if not self.blobs:
             return None
-        blob_writer.update_tx = blob_uri.tx_id
-
-        return blob_writer
+        for b in self.blobs:
+            if b.blob_uri == blob_uri:
+                return b
 
 
 class BlobCursor(Blob, WritableBlob):
@@ -737,12 +725,16 @@ class BlobCursor(Blob, WritableBlob):
         self.update_tx = update_tx
         self.db_tx = db_tx
 
-    def init(self, blob_id, content_length, last_update, length):
+    def init(self, tx_rest_id : str, blob_id : int, blob_rest_id : str,
+             content_length : Optional[int], last_update : int, length : int):
         self.id = blob_id
         self._content_length = content_length
         self.length = length
         self.last_update = last_update
         self.last = (self.length == self._content_length)
+        self.blob_uri = BlobUri(
+            tx_rest_id, tx_body=(blob_rest_id == TX_BODY), blob=blob_rest_id)
+        self.update_tx = tx_rest_id
 
     def __eq__(self, x):
         if not isinstance(x, BlobCursor):
@@ -773,56 +765,6 @@ class BlobCursor(Blob, WritableBlob):
         self.id = row[0]
         return self.id
 
-    # TODO only used in a few tests now?
-    def create(self):
-        with self.parent.begin_transaction() as db_tx:
-            self._create(db_tx)
-        return self.id
-
-    # xxx blobs loaded by tx._load_blobs(). Exception is
-    # tx.get_blob_for_append() which ought to be able to reuse the
-    # result of that? and 1 or 2 tests
-    def load(self, blob_uri : Optional[BlobUri] = None,
-             blob_id : Optional[int] = None):
-        with self.parent.begin_transaction() as db_tx:
-            if self.id is not None:
-                blob_id = self.id
-            elif blob_id is not None:
-                pass
-            elif blob_uri is not None:
-                self.blob_uri = blob_uri
-                # TODO unclear if 2 serial point reads is better/cheaper than
-                # joining blobref/blob
-                sel_blobref = select(
-                    self.parent.tx_blobref_table.c.blob_id
-                ).where(
-                    self.parent.tx_blobref_table.c.tx_rest_id == blob_uri.tx_id,
-                    self.parent.tx_blobref_table.c.rest_id == blob_uri.blob)
-                res = db_tx.execute(sel_blobref)
-                row = res.fetchone()
-                if row is None:
-                    return None
-                blob_id = row[0]
-            else:
-                raise ValueError()
-
-            sel_blob = select(
-                self.parent.blob_table.c.id,
-                self.parent.blob_table.c.length,
-                self.parent.blob_table.c.last_update,
-                func.length(self.parent.blob_table.c.content)).where(
-                    self.parent.blob_table.c.id == blob_id)
-
-            res = db_tx.execute(sel_blob)
-            row = res.fetchone()
-
-        if not row:
-            return None
-        id, content_length, last_update, length = row
-        self.init(id, content_length, last_update, length)
-
-        return self.id
-
     # WritableBlob
     def append_data(self, offset: int, d : bytes,
                     content_length : Optional[int] = None
@@ -836,7 +778,7 @@ class BlobCursor(Blob, WritableBlob):
             content_length >= (offset + len(d)))
 
         tx_version = None
-        with nullcontext(self.db_tx) if self.db_tx else self.parent.begin_transaction() as db_tx:
+        with nullcontext(self.db_tx) if self.db_tx is not None else self.parent.begin_transaction() as db_tx:
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
                 self.parent.blob_table.c.length).where(

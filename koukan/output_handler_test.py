@@ -200,6 +200,7 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer.append_data(0, body, len(body))
 
         def exp_body(tx, tx_delta):
+            logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
             self.assertEqual(tx_delta.body.pread(0), body)
@@ -212,12 +213,12 @@ class OutputHandlerTest(unittest.TestCase):
         # read data resp
         for j in range(0,5):
             tx_cursor.load()
-            if tx_cursor.tx.data_response and tx_cursor.tx.data_response.code == 204:
+            if tx_cursor.tx.data_response:
                 break
             time.sleep(1)
         else:
             self.fail('failed to read data response')
-
+        self.assertEqual(204, tx_cursor.tx.data_response.code)
 
         fut.result(timeout=5)
 

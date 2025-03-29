@@ -193,7 +193,7 @@ class StorageWriterFilter(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : Optional[bool] = None
+                        tx_body : bool = False
                         ) -> Optional[WritableBlob]:
         self._load()
         assert tx_body or blob_rest_id

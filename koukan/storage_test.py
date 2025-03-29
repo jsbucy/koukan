@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
 
+from typing import List
 from threading import Thread
 import time
 import unittest
@@ -170,8 +171,12 @@ class StorageTestBase(unittest.TestCase):
                 notification={'host': 'submission'}))
 
     def test_blob_8bitclean(self):
-        blob_writer = BlobCursor(self.s)
-        blob_writer.create()
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)),
+            create_leased=True)
+        blob_writer = cursor.get_blob_for_append(BlobUri('tx_rest_id', tx_body=True))
         # 32 random bytes, not valid utf8, etc.
         d = base64.b64decode('LNGxKynVCXMDfb6HD4PMryGN7/wb8WoAz1YcDgRBLdc=')
         self.assertEqual(d[23], 0)  # contains null octets
@@ -179,9 +184,10 @@ class StorageTestBase(unittest.TestCase):
             s = d.decode('utf-8')
         blob_writer.append_data(0, d, len(d)*2)
         blob_writer.append_data(len(d), d, len(d)*2)
-        blob_reader = BlobCursor(self.s)
-        blob_reader.load(blob_id=blob_writer.id)
-        self.assertEqual(blob_reader.pread(0), d+d)
+
+        tx_reader = self.s.get_transaction_cursor()
+        tx_reader.load(rest_id='tx_rest_id')
+        self.assertEqual(tx_reader.tx.body.pread(0), d+d)
 
     def test_body_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
@@ -488,24 +494,29 @@ class StorageTestBase(unittest.TestCase):
         t.join(timeout=5)
         self.assertFalse(t.is_alive())
 
-    def reader(self, reader, dd):
+    def reader(self, reader : TransactionCursor, dd : List[bytes]):
         d = bytes()
-        while (reader.content_length() is None or
-               reader.len() < reader.content_length()):
+        while (reader.tx.body.content_length() is None or
+               reader.tx.body.len() < reader.tx.body.content_length()):
             logging.info('reader %d', len(d))
             reader.load()
-            d += reader.pread(len(d))
+            d += reader.tx.body.pread(len(d))
         dd[0] = d
 
     def test_blob_waiting_poll(self):
-        blob_writer = BlobCursor(self.s)
-        blob_writer.create()
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)),
+            create_leased=True)
+        blob_writer = cursor.get_blob_for_append(
+            BlobUri('tx_rest_id', tx_body=True))
 
-        reader = BlobCursor(self.s)
-        reader.load(blob_id=blob_writer.id)
+        tx_reader = self.s.get_transaction_cursor()
+        tx_reader.load(rest_id='tx_rest_id')
 
         dd = [None]
-        t = Thread(target = lambda: self.reader(reader, dd), daemon=True)
+        t = Thread(target = lambda: self.reader(tx_reader, dd), daemon=True)
         t.start()
 
         d = None
@@ -519,9 +530,9 @@ class StorageTestBase(unittest.TestCase):
 
         t.join()
         self.assertFalse(t.is_alive())
-        self.assertEqual(dd[0], d)
-        self.assertEqual(reader.content_length(), len(d))
-        self.assertEqual(reader.len(), len(d))
+        self.assertEqual(d, dd[0])
+        self.assertEqual(len(d), tx_reader.tx.body.content_length())
+        self.assertEqual(len(d), tx_reader.tx.body.len())
 
 
 class StorageTestSqlite(StorageTestBase):

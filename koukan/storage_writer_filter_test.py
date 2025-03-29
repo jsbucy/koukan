@@ -248,6 +248,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         orig_tx.body.parse_blob_specs()
         orig_filter.update(orig_tx, orig_tx.copy())
 
+        logging.debug(orig_filter.tx_cursor.blobs)
         blob_writer = orig_filter.get_blob_writer(
             create=False, blob_rest_id='test_message_builder_blob')
         b1 = b'hello, '

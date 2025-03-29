@@ -415,7 +415,8 @@ class OutputHandler:
         orig_headers : str
         if self.cursor.tx.body:
             if isinstance(self.cursor.tx.body, MessageBuilderSpec):
-                builder = MessageBuilder(self.cursor.tx.body.json)
+                builder = MessageBuilder(self.cursor.tx.body.json,
+                                         blobs={})  # blobs not needed here
                 orig_headers = builder.build_headers_for_notification().decode(
                     'utf-8')
             elif isinstance(self.cursor.tx.body, Blob):
