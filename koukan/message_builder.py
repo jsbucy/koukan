@@ -54,7 +54,6 @@ class MessageBuilderSpec:
     def _add_part_blob(self, part, create_blob_id):
         # if not present -> invalid spec
         content = part.get('content')
-        # xxx dedupe w/filter.body_from_json()
         if 'reuse_uri' in content:
             reuse_uri = parse_blob_uri(content['reuse_uri'])
             assert reuse_uri

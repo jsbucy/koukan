@@ -6,13 +6,13 @@
     "text_body": [
         {
             "content_type": "text/html",
-            "file_content": "examples/send_message/body.html",
-            "content_uri": "my_html_body"
+            "content": {"create_id": "my_html_body",
+                        "filename": "examples/send_message/body.html"}
         },
         {
             "content_type": "text/plain",
-            "file_content": "examples/send_message/body.txt",
-            "content_uri": "my_plain_body"
+            "content": {"create_id": "my_plain_body",
+                        "filename": "examples/send_message/body.txt"}
         }
     ]
 }

@@ -189,8 +189,8 @@ def body_from_json(body_json):
     if 'inline' in body_json:
         # xxx utf8/bytes roundtrip
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
-    elif 'uri' in body_json:
-        return BlobSpec(reuse_uri=parse_blob_uri(body_json['uri']))
+    elif 'reuse_uri' in body_json:
+        return BlobSpec(reuse_uri=parse_blob_uri(body_json['reuse_uri']))
     elif 'message_builder' in body_json:
         spec = MessageBuilderSpec(body_json['message_builder'])
         spec.parse_blob_specs()
@@ -207,7 +207,8 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None]):
     elif isinstance(body, BlobSpec):
         if body.reuse_uri is not None:
             uri = body.reuse_uri
-            return {'uri': make_blob_uri(uri.tx_id, blob=uri.blob, tx_body=uri.tx_body) }
+            return {'reuse_uri': make_blob_uri(
+                uri.tx_id, blob=uri.blob, tx_body=uri.tx_body) }
         else:
             raise ValueError()
     elif isinstance(body, MessageBuilderSpec):
