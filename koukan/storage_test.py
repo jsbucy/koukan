@@ -257,12 +257,15 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs = [BlobSpec(create_id='blob_rest_id1')])))
-
-        blob1 = BlobUri(tx_id='tx_rest_id1', blob='blob_rest_id1')
-        blob_writer1 = tx_writer.get_blob_for_append(blob1)
-        b1 = b'hello, world!'
-        blob_writer1.append_data(0, b1, len(b1))
+                    blob_specs = [BlobSpec(create_id='blob_rest_id1'),
+                                  BlobSpec(create_id='blob_rest_id2'),
+                                  BlobSpec(create_id='blob_rest_id3')])))
+        self.assertEqual(3, len(tx_writer.blobs))
+        contents = []
+        for i, blob in enumerate(tx_writer.blobs):
+            b = b'hello, world %d!' % i
+            contents.append(b)
+            blob.append_data(0, b, last=True)
 
         tx_writer2 = self.s.get_transaction_cursor()
         tx_writer2.create('tx_rest_id2', TransactionMetadata(
@@ -273,17 +276,19 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs=[BlobSpec(reuse_uri=blob1),
-                                BlobSpec(create_id='blob_rest_id2')])))
-        blob2 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id2')
-        blob_writer2 = tx_writer2.get_blob_for_append(blob2)
-        b2 = b'another blob'
-        blob_writer2.append_data(0, b2, len(b2))
+                    blob_specs=[BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri),
+                                BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri),
+                                BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri),
+                                BlobSpec(create_id='blob_rest_id4')])))
+        blob4 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id4')
+        blob_writer4 = tx_writer2.get_blob_for_append(blob4)
+        b4 = b'another blob'
+        blob_writer4.append_data(0, b4, len(b4))
         tx_writer2.load()
 
         # verify blobs were ref'd into tx_rest_id2
-        self.assertEqual(2, len(tx_writer2.tx.body.blobs))
-        exp_content = [b1,b2]
+        self.assertEqual(4, len(tx_writer2.tx.body.blobs))
+        exp_content = contents+[b4]
         for i,blob in enumerate(tx_writer2.tx.body.blobs):
             self.assertEqual(exp_content[i], blob.pread(0))
 

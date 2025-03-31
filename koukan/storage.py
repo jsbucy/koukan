@@ -162,8 +162,7 @@ class TransactionCursor:
             literals = [ select(literal(uri.blob).label('rest_id'),
                                 literal(uri.tx_id).label('tx_rest_id'))
                          for uri in blob_uris ]
-            val = reduce(lambda x,y: x.union_all(y),
-                         literals[1:], literals[0].cte())
+            val = literals[0].union_all(*literals[1:])
 
         j = join(self.parent.blob_table,
                  self.parent.tx_blobref_table,
@@ -767,12 +766,17 @@ class BlobCursor(Blob, WritableBlob):
 
     # WritableBlob
     def append_data(self, offset: int, d : bytes,
-                    content_length : Optional[int] = None
+                    content_length : Optional[int] = None,
+                    # last: set content_length to offset + len(d)
+                    last : Optional[bool] = None
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.id, self.rest_id(), self.length, len(d),
                      self._content_length, content_length)
+
+        if last:
+            content_length = offset + len(d)
 
         assert content_length is None or (
             content_length >= (offset + len(d)))
