@@ -334,7 +334,9 @@ class TransactionCursor:
         # xxx return/throw
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
-        attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
+        attempt_json = None
+        if not tx_delta.empty(WhichJson.DB_ATTEMPT):
+            attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
         # It doesn't make sense to request reliable notifications for
         # an ephemeral transaction: if you want "attempt once and
         # send a notification" use retry={'max_attempts': 1}
@@ -356,23 +358,16 @@ class TransactionCursor:
                .returning(self.parent.tx_table.c.version))
 
         if attempt_json:
-            # TODO downstream writes were accidentally working here,
-            # attempt_id == None was causing sql to
-            # noop. Probably we should figure out that the diff is
-            # empty and skip this update.
-            if self.attempt_id is not None:
-                upd_att = (update(self.parent.attempt_table)
-                           .where(self.parent.attempt_table.c.transaction_id ==
-                                  self.id,
-                                  self.parent.attempt_table.c.attempt_id ==
-                                  self.attempt_id)
-                           .values(responses = attempt_json,
-                                   last_update = self.parent._current_timestamp_epoch()))
-                res = db_tx.execute(upd_att)
-                assert rowcount(res) == 1
-            else:
-                logging.info('no open attempt %d %s skipping attempt update',
-                             self.id, self.rest_id)
+            assert self.attempt_id is not None
+            upd_att = (update(self.parent.attempt_table)
+                       .where(self.parent.attempt_table.c.transaction_id ==
+                              self.id,
+                              self.parent.attempt_table.c.attempt_id ==
+                              self.attempt_id)
+                       .values(responses = attempt_json,
+                               last_update = self.parent._current_timestamp_epoch()))
+            res = db_tx.execute(upd_att)
+            assert rowcount(res) == 1
 
         upd = upd.values(notification = bool(tx_to_db.notification))
 
