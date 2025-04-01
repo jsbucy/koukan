@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 import json
 import logging
 import secrets
@@ -105,8 +105,16 @@ class OutputHandler:
             cursor_tx = self.cursor.tx.copy()
             # NOTE: possible to read finalized body but input_done == False
 
-            if cursor_tx.body and not cursor_tx.body.finalized():
-                cursor_tx.body = None
+
+            if cursor_tx.body is not None:
+                body : Union[Blob, MessageBuilderSpec]
+                b = cursor_tx.body
+                if isinstance(b, Union[Blob, MessageBuilderSpec]):
+                    body = b
+                else:
+                    raise ValueError()
+                if not body.finalized():
+                    cursor_tx.body = None
             if last_tx is None:
                 last_tx = cursor_tx.copy()
                 upstream_tx = cursor_tx.copy()

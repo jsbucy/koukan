@@ -71,6 +71,9 @@ class SyncFilterAdapter(AsyncFilter):
             self.parent = parent
             self.q = []
 
+        def len(self):
+            return self.offset
+
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:

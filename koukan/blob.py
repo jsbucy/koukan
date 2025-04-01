@@ -32,6 +32,10 @@ class Blob(ABC):
 
 
 class WritableBlob(ABC):
+    @abstractmethod
+    def len(self) -> int:
+        pass
+
     # write at offset which must be the current end
     # bool: whether offset was correct/write was applied, resulting range
     @abstractmethod

@@ -213,7 +213,7 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None]):
             raise ValueError()
     elif isinstance(body, MessageBuilderSpec):
         return {'message_builder': body.json }
-    elif blob is None:
+    elif body is None:
         return None
     raise ValueError()
 
@@ -712,6 +712,15 @@ class TransactionMetadata:
             setattr(out, name, v)
         return out
 
+    def body_blob(self) -> Blob:
+        blob = self.body
+        assert isinstance(blob, Blob)
+        return blob
+
+    def maybe_body_blob(self) -> Optional[Blob]:
+        if self.body is None:
+            return None
+        return self.body_blob()
 
 # NOTE Sync and Async here are with respect to the transaction
 # responses, not program execution.

@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Optional, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import json
 import logging
 from threading import Lock, Condition
@@ -220,13 +220,14 @@ class TransactionCursor:
     def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata
                           ) -> bool:  # blobs done
         blob_specs : List[BlobSpec]
-        if isinstance(tx.body, BlobSpec):
-            blob_specs = [tx.body]
-        elif isinstance(tx.body, MessageBuilderSpec):
-            blob_specs = tx.body.blob_specs
-        elif isinstance(tx.body, Blob):
-            blob_spec = BlobSpec(blob=tx.body)
-            if not isinstance(tx.body, BlobCursor):
+        body = tx.body
+        if isinstance(body, BlobSpec):
+            blob_specs = [body]
+        elif isinstance(body, MessageBuilderSpec):
+            blob_specs = body.blob_specs
+        elif isinstance(body, Blob):
+            blob_spec = BlobSpec(blob=body)
+            if not isinstance(body, BlobCursor):
                 blob_spec.create_tx_body = True
             blob_specs = [blob_spec]
         else:
@@ -237,22 +238,22 @@ class TransactionCursor:
         # filter out blobs we need to create first vs those we can
         # reuse directly
         reuse_uris : List[BlobUri] = []
-        for i,blob in enumerate(blob_specs):
-            logging.debug('%s %s %s', blob.create_id, blob.reuse_uri, blob.blob)
-            if isinstance(blob.blob, BlobCursor):
-                reuse_uris.append(blob.blob.blob_uri)
+        for i,blob_spec in enumerate(blob_specs):
+            blob = blob_spec.blob
+            if isinstance(blob, BlobCursor):
+                reuse_uris.append(blob.blob_uri)
                 continue
 
-            if blob.reuse_uri:
-                reuse_uris.append(body_blob_uri(blob.reuse_uri))
-            elif blob.create_id or blob.create_tx_body or isinstance(blob.blob, Blob):
+            if blob_spec.reuse_uri:
+                reuse_uris.append(body_blob_uri(blob_spec.reuse_uri))
+            elif blob_spec.create_id or blob_spec.create_tx_body or isinstance(blob_spec.blob, Blob):
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
-                if blob.blob:
-                    blob_cursor.append_blob(blob.blob)
-                if not blob.create_id and not blob.create_tx_body:
+                if blob_spec.blob:
+                    blob_cursor.append_blob(blob_spec.blob)
+                if not blob_spec.create_id and not blob_spec.create_tx_body:
                     create_id = str(i)
-                blob_rest_id = TX_BODY if blob.create_tx_body else blob.create_id
+                blob_rest_id = TX_BODY if blob_spec.create_tx_body else blob_spec.create_id
                 blob_cursor.blob_uri = BlobUri(
                     self.rest_id, tx_body = (blob_rest_id==TX_BODY),
                     blob = blob_rest_id)
@@ -398,8 +399,9 @@ class TransactionCursor:
 
         input_done |= self._maybe_write_blob(db_tx, tx_delta)
 
-        if isinstance(tx_delta.body, MessageBuilderSpec):
-            upd = upd.values(message_builder = tx_delta.body.json)
+        message_builder = tx_delta.body if isinstance(tx_delta.body, MessageBuilderSpec) else None
+        if message_builder:
+            upd = upd.values(message_builder = message_builder)
 
         if input_done:
             upd = upd.values(input_done = True)
@@ -599,8 +601,9 @@ class TransactionCursor:
         if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
             self.tx.body = blobs[0]
         elif self.message_builder:
-            self.tx.body = MessageBuilderSpec(self.message_builder, blobs)
-            self.tx.body.check_ids()
+            message_builder = MessageBuilderSpec(self.message_builder, blobs)
+            message_builder.check_ids()
+            self.tx.body = message_builder
         elif blobs:
             raise ValueError()
 

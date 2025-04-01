@@ -27,7 +27,7 @@ class MessageBuilderSpec:
     def __init__(self, json, blobs : Optional[List[Blob]] = None,
                  blob_specs : Optional[List[BlobSpec]] = None):
         self.json = json
-        self.blobs = blobs
+        self.blobs = blobs if blobs else []
 
         self.blob_specs = blob_specs if blob_specs else []
 

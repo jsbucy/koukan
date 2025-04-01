@@ -30,12 +30,12 @@ class DkimEndpoint(SyncFilter):
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         built = False
+        body = tx.maybe_body_blob()
         if (self.body is None and
             not self.err and
-            tx.body is not None
-            and tx.body.finalized()):
+            (body is not None) and body.finalized()):
             self.body = CompositeBlob()
-            sig = self.sign(tx.body)
+            sig = self.sign(body)
             if sig is None:
                 self.err = True
                 err = TransactionMetadata(data_response=Response(
@@ -44,7 +44,7 @@ class DkimEndpoint(SyncFilter):
                 return err
             sig_blob = InlineBlob(sig)
             self.body.append(sig_blob, 0, sig_blob.len())
-            self.body.append(tx.body, 0, tx.body.len(), True)
+            self.body.append(tx.body, 0, body.len(), True)
             built = True
 
         downstream_tx = tx.copy()

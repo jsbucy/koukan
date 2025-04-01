@@ -40,13 +40,14 @@ class MessageParserFilter(SyncFilter):
         logging.debug('MessageParserFilter options %s', tx.options)
 
         parsed = False
+        body = tx.maybe_body_blob()
         if (not self.parsed and
             (tx.options and 'receive_parsing' in tx.options) and
-            tx.body is not None and tx.body.finalized()):
+            (body is not None) and body.finalized()):
             parse_options = tx.options.get('receive_parsing', {})
             parse_options = parse_options if parse_options else {}
             file = TemporaryFile('w+b')
-            file.write(tx.body.pread(0))
+            file.write(body.pread(0))
             file.flush()
             file.seek(0)
             parser = MessageParser(

@@ -120,16 +120,15 @@ class ReceivedHeaderFilter(SyncFilter):
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         built = False
-        if (self.body is None and
-            tx.body is not None
-            and tx.body.finalized()):
+        body = tx.maybe_body_blob()
+        if (self.body is None) and (body is not None) and body.finalized():
             # TODO in this case, since the received header that's being
             # prepended onto the body doesn't depend on the body contents,
             # we could trickle out the body as it comes through rather than
             # effectively buffering it all like this. However something
             # else in the chain is likely to do that anyway so it's
             # probably moot.
-            self.data_err = self._check_max_received_headers(tx.body)
+            self.data_err = self._check_max_received_headers(body)
             # don't return data_err immediately in case e.g. we don't
             # already have rcpt_response to get an authoritative
             # result from upstream
@@ -137,7 +136,7 @@ class ReceivedHeaderFilter(SyncFilter):
                 self.body = CompositeBlob()
                 received = InlineBlob(self._format_received(tx).encode('ascii'))
                 self.body.append(received, 0, received.len())
-                self.body.append(tx.body, 0, tx.body.len(), True)
+                self.body.append(tx.body, 0, body.len(), True)
             built = True
 
         assert not(self.data_err and self.body)
