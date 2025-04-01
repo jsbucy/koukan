@@ -192,7 +192,6 @@ class Exploder(SyncFilter):
             if rcpt.tx.data_response is not None:
                 tx.data_response = rcpt.tx.data_response
 
-        # xxx OutputHandler only invokes this with body.finalized()
         if (tx.body is None) or (tx.data_response is not None):
             return tx_orig.delta(tx)
 
@@ -213,6 +212,8 @@ class Exploder(SyncFilter):
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
         elif tx.body.finalized():
+            # OutputHandler currently only sends finalized body so we
+            # always take this branch today.
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!

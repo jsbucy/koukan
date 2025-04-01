@@ -603,6 +603,17 @@ class ExploderTest(unittest.TestCase):
                 [None, Response(250)],  # same response s&f
             ))
 
+    def test_upstream_busy(self):
+        exploder = Exploder('output-chain',
+                            lambda: None,
+                            rcpt_timeout=5,
+                            default_notification={})
+        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+                                 rcpt_to=[Mailbox('bob')])
+        upstream_delta = exploder.on_update(tx, tx.copy())
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertEqual(1, len(tx.rcpt_response))
+        self.assertEqual(451, tx.rcpt_response[0].code)
 
 
 if __name__ == '__main__':
