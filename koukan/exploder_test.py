@@ -276,34 +276,6 @@ class ExploderTest(unittest.TestCase):
                 [Response(401)],  # upstreawm
                 None))
 
-    # xxx early data resp
-    def disabled_test_mx_single_rcpt_data_perm(self):
-        self._test_one(
-            msa=False,
-            test=Test(
-                'alice',
-                [ Rcpt('bob', Response(201), Response(202), Response(501),
-                       store_and_forward=False) ],
-                b'hello, world!',
-                Response(250),  # injected
-                [Response(202)],  # upstream
-                Response(501),  # upstream
-            ))
-
-    # xxx early data response
-    def disabled_test_mx_single_rcpt_data_temp(self):
-        self._test_one(
-            msa=False,
-            test=Test(
-                'alice',
-                [ Rcpt('bob', Response(201), Response(202), Response(401),
-                       store_and_forward=False) ],
-                b'hello, world!',
-                Response(250),  # injected
-                [Response(202)],  # upstream
-                Response(401),  # upstream
-            ))
-
     def test_mx_single_rcpt_data_last_perm(self):
         self._test_one(
             msa=False,
@@ -432,33 +404,6 @@ class ExploderTest(unittest.TestCase):
                 Response(250),
             ))
 
-    # xxx early data resp
-    def disabled_test_msa_single_rcpt_data_perm(self):
-        self._test_one(
-            msa=True,
-            test=Test(
-                'alice',
-                [ Rcpt('bob', Response(201), Response(202), Response(501),
-                       store_and_forward=False) ],
-                b'hello, world!',
-                Response(250),  # injected
-                [Response(202)],  # upstream
-                Response(501),  # upstream
-            ))
-
-    def test_msa_single_rcpt_data_temp(self):
-        self._test_one(
-            msa=True,
-            test=Test(
-                'alice',
-                [ Rcpt('bob', Response(201), Response(202), Response(401),
-                       store_and_forward=True) ],
-                b'hello, world!',
-                Response(250),  # injected
-                [Response(202)],  # upstream
-                Response(250),  # injected/upgraded
-            ))
-
     def test_msa_single_rcpt_data_last_perm(self):
         self._test_one(
             msa=True,
@@ -533,25 +478,6 @@ class ExploderTest(unittest.TestCase):
                 Response(250),  # injected
                 [Response(202), Response(501)],  # upstream
                 Response(203),  # same data resp
-            ))
-
-    # first recipient succeeds, second permfails after !last data
-    # early data resp
-    def disabled_test_msa_multi_rcpt_data_perm(self):
-        self._test_one(
-            msa=True,
-            test=Test(
-                'alice',
-                [ Rcpt('bob1', Response(201), Response(202),
-                       Response(203),
-                       store_and_forward=False),
-                  Rcpt('bob2', Response(204), Response(205),
-                       Response(501),
-                       store_and_forward=True)],
-                b'hello, world!',
-                Response(250),  # injected
-                [Response(202), Response(205)],  # upstream
-                Response(250),  # 'async mixed upstream'
             ))
 
     # first recipient succeeds, second permfails after last data

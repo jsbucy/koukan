@@ -36,10 +36,6 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
 
-    # xxx this seems dead but it's possible it's here to make the
-    # exploder flow only ref the blob once?
-    # body_blob_uri : bool = False
-
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,

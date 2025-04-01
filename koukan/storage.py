@@ -590,7 +590,6 @@ class TransactionCursor:
         res = db_tx.execute(sel_blob)
         blobs = []
         for row in res:
-            logging.debug(row)
             blob_rest_id,blob_id,content_length,last_update,length = row
             blob = BlobCursor(self.parent)
             blob.init(self.rest_id, blob_id, blob_rest_id,

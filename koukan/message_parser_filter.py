@@ -83,8 +83,6 @@ class MessageParserFilter(SyncFilter):
         if parsed:
             del downstream_delta.body
             assert downstream_delta.merge_from(self.parsed_delta) is not None
-        logging.debug(self.parsed_delta)
-        logging.debug(downstream_tx)
         upstream_delta = self.upstream.on_update(
             downstream_tx, downstream_delta)
         assert upstream_delta is not None

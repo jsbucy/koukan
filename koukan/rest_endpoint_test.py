@@ -968,7 +968,6 @@ class RestEndpointTest(unittest.TestCase):
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
-        # xxx transparent mime tree "parts" doesn't work
         parsed_delta.body = MessageBuilderSpec(
             {'text_body': [{
                 "content": {"create_id": "blob_rest_id"}
@@ -1040,7 +1039,6 @@ class RestEndpointTest(unittest.TestCase):
 
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'
-        # xxx mime tree/parts
         parsed_delta.body = MessageBuilderSpec(
             {'text_body': [{
                 'content': {'create_id': 'blob_rest_id'}
@@ -1096,7 +1094,6 @@ class RestEndpointTest(unittest.TestCase):
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'
 
-        # xxx full mime tree doesn't work
         parsed_delta.body = MessageBuilderSpec(
             {'text_body': [{
                 'content': {'create_id': 'blob_rest_id'}

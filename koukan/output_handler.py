@@ -105,10 +105,6 @@ class OutputHandler:
             cursor_tx = self.cursor.tx.copy()
             # NOTE: possible to read finalized body but input_done == False
 
-            if isinstance(cursor_tx.body, MessageBuilderSpec):
-                logging.debug(cursor_tx.body.json)
-                logging.debug(cursor_tx.body.blobs)
-
             if cursor_tx.body and not cursor_tx.body.finalized():
                 cursor_tx.body = None
             if last_tx is None:
