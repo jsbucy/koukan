@@ -364,9 +364,6 @@ class RestEndpoint(SyncFilter):
                 tx.merge_from(delta)
                 return  delta
 
-            if not tx_delta.body.blobs:
-                return upstream_delta
-
         err = None
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use

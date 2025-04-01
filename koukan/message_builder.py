@@ -31,16 +31,22 @@ class MessageBuilderSpec:
 
         self.blob_specs = blob_specs if blob_specs else []
 
-    # xxx needs to walk full mime tree for receive parsing?
     def check_ids(self):
         self.ids = set()
+        if root_part := self.json.get('parts', None):
+            self._check_ids(root_part)
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
             parts = self.json.get(multipart, [])
             for part in parts:
-                if 'create_id' in part['content']:
-                    self.ids.add(part['content']['create_id'])
+                self._check_ids(part)
 
+    def _check_ids(self, part):
+        for p in part.get('parts', []):
+            self._check_ids(p)
+        if content := part.get('content', {}):
+            if 'create_id' in part['content']:
+                self.ids.add(part['content']['create_id'])
 
     def parse_blob_specs(self):
         create_blob_id = 0

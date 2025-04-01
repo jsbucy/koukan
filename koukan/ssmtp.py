@@ -1,5 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+from typing import Optional
 import smtplib
 import sys
 import secrets
@@ -14,23 +15,26 @@ import email.utils
 from email import policy
 from email.headerregistry import Address
 
-def main(host, port, ehlo, mail_from, rcpt_to, data):
+def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
+         raw : Optional[bytes] = None):
     with smtplib.SMTP(host=host, port=int(port), local_hostname=ehlo) as s:
         s.ehlo(ehlo)
         logging.info('remote server esmtp %s', s.esmtp_features)
 
-        m = email.message.EmailMessage(policy=policy.SMTP)
-        m['from'] = Address(addr_spec=mail_from)
-        m['to'] = [Address(addr_spec=t) for t in rcpt_to]
-
-        m.add_header(
-            'Date', email.utils.format_datetime(email.utils.localtime()))
-        m.add_header(
-            'Message-ID', '<' + secrets.token_hex(16) + '@' + ehlo + '>')
-        m.set_content(data)
+        if data is not None:
+            m = email.message.EmailMessage(policy=policy.SMTP)
+            m['from'] = Address(addr_spec=mail_from)
+            m['to'] = [Address(addr_spec=t) for t in rcpt_to]
+            m.add_header(
+                'Date', email.utils.format_datetime(email.utils.localtime()))
+            m.add_header(
+                'Message-ID', '<' + secrets.token_hex(16) + '@' + ehlo + '>')
+            m.set_content(data)
+            raw = m.as_bytes()
+        assert raw
         logging.info('sending smtp')
         try:
-            resp = s.sendmail(mail_from, rcpt_to, m.as_bytes())
+            resp = s.sendmail(mail_from, rcpt_to, raw)
             logging.info('done %s', resp)
             return resp
         except:

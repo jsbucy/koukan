@@ -40,6 +40,7 @@ class Transaction:
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
         self.dir = dir
         self.ping()
+        self.next_inline = 0
 
     def ping(self):
         self.last_update = int(time.monotonic())
@@ -62,19 +63,36 @@ class Transaction:
     def _check_blobs(self, part_json) -> bool:
         logging.debug('check_blobs %s', part_json)
         if 'parts' not in part_json:
-            # xxx inline?
-            if 'create_id' not in part_json['content']:
-                return True
-            blob_id = part_json['content']['create_id']
-            if blob_id.startswith('/'):
+            content = part_json['content']
+            if 'inline' in content:
+                blob_id = 'inline%d' % self.next_inline
+                self.next_inline += 1
+            elif 'create_id' in content:
+                blob_id = content['create_id']
+            else:
                 return False  # this doesn't support reuse
+
             logging.debug('check_blobs %s', blob_id)
-            if blob_id in self.blobs:
-                return None  # bad
-            file = self._create_file(blob_id)
+            created = False
+            if (file := self.blobs.get(blob_id, None)) is None:
+                file = self._create_file(blob_id)
+                created = True
+            content['filename'] = file.name
+            if 'create_id' in content:
+                del content['create_id']
+            if not created:
+                # this is now expected as the same id will usually
+                # appear in both the original mime tree and the
+                # simplified "text_body" fields
+                return True
+
             # a la send_message.py
-            part_json['file_content'] = file.name
             self.blobs[blob_id] = file
+            if inline := content.get('inline', None):
+                file.write(inline.encode('utf-8'))
+                del content['inline']
+                self.blob_paths[blob_id] = file.name
+                file.close()
             return True
 
         for part_i in part_json['parts']:
@@ -89,6 +107,12 @@ class Transaction:
         self.message_json = message_json
         if not self._check_blobs(self.message_json['parts']):
             return 400, 'bad blob in message builder json'
+        for p in ["text_body", "related_attachments", "file_attachments"]:
+            if parts := message_json.get(p, None):
+                for part in parts:
+                    if not self._check_blobs(part):
+                        return 400, 'bad blob in message builder json'
+
         with self._create_file('msg.json', 't') as f:
             assert isinstance(f, TextIOBase)
             json.dump(message_json, f)

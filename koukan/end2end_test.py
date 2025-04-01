@@ -69,7 +69,7 @@ class End2EndTest(unittest.TestCase):
         elif dest['endpoint'] == 'http://localhost:8002':
             dest['endpoint'] = self.receiver_base_url
             dest['options']['receive_parsing'] = {
-                'max_inline': 0 }
+                'max_inline': 8 }
 
     def _update_router(self, filter):
         if filter['filter'] != 'router':
@@ -242,9 +242,12 @@ class End2EndTest(unittest.TestCase):
     def test_rest_receiving(self):
         self._configure_and_run()
 
+        with open('testdata/multipart.msg', 'rb') as f:
+            msg = f.read()
+
         send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
                   'alice@example.com', ['bob@rest-application.example.com'],
-                  'hello, world!\n')
+                  raw=msg)
         for tx_id,tx in self.receiver.transactions.items():
             logging.debug('test_rest_receiving %s', tx_id)
             if tx.tx_json['mail_from']['m'] == 'alice@example.com':
@@ -270,17 +273,44 @@ class End2EndTest(unittest.TestCase):
         parsed = tx.message_json
 
         self.assertIn(
-            [ "from", [{ "display_name": "",
+            [ "from", [{ "display_name": "alice a",
                          "address": "alice@example.com"} ] ],
             parsed['parts']['headers'])
 
-        self.assertEqual(
-            parsed['text_body'],
-            [ {
-                "content_type": "text/plain",
-                "content": {"create_id": "0"}
-            } ])
-        self.assertEqual(blob_content['0'], b'hello, world!\n')
+        # mixed -> related -> alternative
+        self.assertEqual('text/plain', parsed['parts']['parts'][0]['parts'][0]['parts'][0]['content_type'])
+        self.assertTrue(parsed['parts']['parts'][0]['parts'][0]['parts'][0]['content']['filename'].endswith('inline0'))
+
+        self.assertEqual('text/html', parsed['parts']['parts'][0]['parts'][0]['parts'][1]['content_type'])
+        self.assertTrue(parsed['parts']['parts'][0]['parts'][0]['parts'][1]['content']['filename'].endswith('.0'))
+
+        self.assertEqual('image/png', parsed['parts']['parts'][1]['content_type'])
+        self.assertTrue(parsed['parts']['parts'][0]['parts'][1]['content']['filename'].endswith('.1'))
+
+        self.assertEqual('image/png', parsed['parts']['parts'][1]['content_type'])
+        self.assertTrue(parsed['parts']['parts'][1]['content']['filename'].endswith('.2'))
+
+
+        self.assertEqual('text/plain', parsed['text_body'][0]['content_type'])
+        self.assertTrue(parsed['text_body'][0]['content']['filename'].endswith('inline1'))
+
+        self.assertEqual('text/html', parsed['text_body'][1]['content_type'])
+        self.assertTrue(parsed['text_body'][1]['content']['filename'].endswith('.0'))
+
+        self.assertEqual('image/png', parsed['related_attachments'][0]['content_type'])
+        self.assertTrue(parsed['related_attachments'][0]['content']['filename'].endswith('.1'))
+        self.assertEqual('xyz', parsed['related_attachments'][0]['content_id'])
+
+        self.assertEqual('image/png', parsed['file_attachments'][0]['content_type'])
+        self.assertTrue(parsed['file_attachments'][0]['content']['filename'].endswith('.2'))
+        self.assertEqual('funny cats.png', parsed['file_attachments'][0]['filename'])
+
+        self.assertEqual(blob_content['inline0'], b'hello')
+        self.assertEqual(blob_content['inline1'], b'hello')
+        self.assertEqual(blob_content['0'], b'<b>hello</b>')
+        self.assertEqual(blob_content['1'], b'yolocat')
+        self.assertEqual(blob_content['2'], b'yolocat2')
+
 
     # submission smtp -> smtp
 
