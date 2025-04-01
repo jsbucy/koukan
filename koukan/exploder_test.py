@@ -44,7 +44,7 @@ class Rcpt:
     addr : str
     mail_resp : Optional[Response]
     rcpt_resp : Optional[Response]
-    data_resp : List[Optional[Response]]
+    data_resp : Optional[Response]
     store_and_forward : bool
     endpoint : Optional[AsyncFilter] = None
 
@@ -72,8 +72,9 @@ class Rcpt:
             if self.rcpt_resp and tx.rcpt_to and not tx.rcpt_response:
                 env_delta.rcpt_response=[self.rcpt_resp]
             data_resp = None
-            if self.data_resp and tx.body and tx.body.finalized() and not tx.data_response:
-                data_resp = self.data_resp[-1]
+            if self.data_resp and tx.body and not tx.data_response:
+                assert tx.body.finalized()
+                data_resp = self.data_resp
                 env_delta.data_response = data_resp
 
             if env_delta:
@@ -92,11 +93,6 @@ class Rcpt:
                         break
                 if err or data_resp:
                     break
-
-            while tx.body and not tx.body.finalized():
-                logging.debug('poll body')
-                time.sleep(0.5)
-                tx.body.load()
 
             cursor.wait(0.5)
             # test can finish as soon as we write the last response
@@ -134,10 +130,10 @@ class Rcpt:
 class Test:
     mail_from : str
     rcpt : List[Rcpt]
-    data : List[bytes]
+    data : Optional[bytes]
     expected_mail_resp : Response
     expected_rcpt_resp : List[Response]
-    expected_data_resp : List[Optional[Response]]
+    expected_data_resp : Optional[Response]
     def __init__(self, m, r, d, em, er, ed):
         self.mail_from = m
         self.rcpt = r
@@ -208,29 +204,20 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual([rr.code for rr in test.expected_rcpt_resp],
                          [rr.code for rr in tx.rcpt_response])
 
-        if test.data:
+        if test.data is not None:
             downstream_cursor.write_envelope(
                 TransactionMetadata(body=BlobSpec(create_tx_body=True)))
             blob_uri = BlobUri('downstream_rest_id', tx_body=True)
             blob_writer = downstream_cursor.get_blob_for_append(blob_uri)
-        for i,d in enumerate(test.data):
-            last = i == (len(test.data) - 1)
-            content_length = blob_writer.len() + len(d) if last else None
-            blob_writer.append_data(blob_writer.len(), d, content_length)
-            # xxx OutputHandler only invokes chain with finalized body
-            if not last:
-                continue
+            blob_writer.append_data(0, test.data, last=True)
             tx_delta = TransactionMetadata(body=blob_writer)
             tx.merge_from(tx_delta)
-            for r in test.rcpt:
-                r.set_data_response(self, i, last)
             exploder.on_update(tx, tx_delta)
-            if test.expected_data_resp[i] is not None:
-                self.assertEqual(test.expected_data_resp[i].code,
-                                 tx.data_response.code)
-                break
-            else:
-                self.assertIsNone(tx.data_response)
+        if test.expected_data_resp is not None:
+            self.assertEqual(test.expected_data_resp.code,
+                             tx.data_response.code)
+        else:
+            self.assertIsNone(tx.data_response)
 
         for t in output_threads:
             logging.debug('join %s', t)
@@ -243,12 +230,12 @@ class ExploderTest(unittest.TestCase):
         self._test_one(
             msa=False,
             test=Test('alice',
-                 [ Rcpt('bob', Response(501), Response(502), [],
+                [ Rcpt('bob', Response(501), Response(502), None,
                         store_and_forward=False) ],
-                 [],
-                 Response(250),  # noop mail/injected
-                 [Response(502)],  # upstream
-                 None))
+                None,
+                Response(250),  # noop mail/injected
+                [Response(502)],  # upstream
+                None))
 
     # rcpt perm after mail temp doesn't make sense?
     def test_mx_single_rcpt_mail_temp(self):
@@ -257,9 +244,9 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(401), None, #Response(402),
-                       [],
+                       None,
                        store_and_forward=False) ],
-                [],
+                None,
                 Response(250),  # injected
                 [Response(401)],  # upstream
                 None))
@@ -269,9 +256,9 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(501), [],
+                [ Rcpt('bob', Response(201), Response(501), None,
                        store_and_forward=False) ],
-                [],
+                None,
                 Response(250),  # injected
                 [Response(501)],  # upstream
                 None,
@@ -282,9 +269,9 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(401), [],
+                [ Rcpt('bob', Response(201), Response(401), None,
                        store_and_forward=False) ],
-                [],
+                None,
                 Response(250),  # injected
                 [Response(401)],  # upstreawm
                 None))
@@ -295,12 +282,12 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [Response(501)],
+                [ Rcpt('bob', Response(201), Response(202), Response(501),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [Response(501)],  # upstream
+                Response(501),  # upstream
             ))
 
     # xxx early data response
@@ -309,12 +296,12 @@ class ExploderTest(unittest.TestCase):
             msa=False,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [Response(401)],
+                [ Rcpt('bob', Response(201), Response(202), Response(401),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [Response(401)],  # upstream
+                Response(401),  # upstream
             ))
 
     def test_mx_single_rcpt_data_last_perm(self):
@@ -323,12 +310,12 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(501)],
+                       Response(501),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(501)],  # upstream
+                Response(501),  # upstream
             ))
 
     def test_mx_single_rcpt_data_last_temp(self):
@@ -337,11 +324,11 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(401)]) ],
-                [b'hello, ', b'world!'],
+                       Response(401)) ],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(401)],  # upstream
+                Response(401),  # upstream
             ))
 
     def test_mx_single_rcpt_success(self):
@@ -350,12 +337,12 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(203)],  # upstream
+                Response(203),  # upstream
             ))
 
     def test_mx_multi_rcpt_success_cutthrough(self):
@@ -364,15 +351,15 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
                   Rcpt('bob2', Response(204), Response(205),
-                       [None, Response(206)],
+                       Response(206),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(205)],  # upstream
-                [None, Response(203)],  # upstream/cutthrough
+                Response(203),  # upstream/cutthrough
             ))
 
     # first succeeds, second fails at rcpt
@@ -382,14 +369,14 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
-                  Rcpt('bob2', Response(204), Response(405), [],
+                  Rcpt('bob2', Response(204), Response(405), None,
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(405)],  # upstream
-                [None, Response(203)],  # injected
+                Response(203),  # injected
             ))
 
 
@@ -398,9 +385,9 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(501), None, [],
+                [ Rcpt('bob', Response(501), None, None,
                        store_and_forward=False) ],
-                [],
+                None,
                 Response(250),  # noop mail/injected
                 [Response(501)],  # upstream
                 None,
@@ -411,12 +398,12 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(401), None, [],
+                [ Rcpt('bob', Response(401), None, None,
                        store_and_forward=True) ],
-                [b'hello, world!'],
+                b'hello, world!',
                 Response(250),  # noop mail/injected
                 [Response(250)],  # injected/upgraded
-                [Response(250)],
+                Response(250),
             ))
 
     def test_msa_single_rcpt_rcpt_perm(self):
@@ -424,9 +411,9 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(501), [],
+                [ Rcpt('bob', Response(201), Response(501), None,
                        store_and_forward=False) ],
-                [],
+                None,
                 Response(250),  # injected
                 [Response(501)],  # upstream
                 None,
@@ -437,12 +424,12 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(401), [],
+                [ Rcpt('bob', Response(201), Response(401), None,
                        store_and_forward=True) ],
-                [b'hello, world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(250)],  # injected/upgraded
-                [Response(250)],
+                Response(250),
             ))
 
     # xxx early data resp
@@ -451,12 +438,12 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [Response(501)],
+                [ Rcpt('bob', Response(201), Response(202), Response(501),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [Response(501)],  # upstream
+                Response(501),  # upstream
             ))
 
     def test_msa_single_rcpt_data_temp(self):
@@ -464,12 +451,12 @@ class ExploderTest(unittest.TestCase):
             msa=True,
             test=Test(
                 'alice',
-                [ Rcpt('bob', Response(201), Response(202), [Response(401)],
+                [ Rcpt('bob', Response(201), Response(202), Response(401),
                        store_and_forward=True) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(250)],  # injected/upgraded
+                Response(250),  # injected/upgraded
             ))
 
     def test_msa_single_rcpt_data_last_perm(self):
@@ -478,12 +465,12 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(501)],
+                       Response(501),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(501)],  # upstream
+                Response(501),  # upstream
             ))
 
     def test_msa_single_rcpt_data_last_temp(self):
@@ -492,12 +479,12 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(401)],
+                       Response(401),
                        store_and_forward=True) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(250)],  # injected/upgraded
+                Response(250),  # injected/upgraded
             ))
 
     def test_msa_single_rcpt_success(self):
@@ -506,12 +493,12 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False) ],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202)],  # upstream
-                [None, Response(203)],  # upstream
+                Response(203),  # upstream
             ))
 
     # first recipient succeeds, second permfails after MAIL
@@ -521,14 +508,14 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
-                  Rcpt('bob2', Response(501), Response(502), [],
+                  Rcpt('bob2', Response(501), Response(502), None,
                        store_and_forward=False)],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(502)],
-                [None, Response(203)],  # same data resp
+                Response(203),  # same data resp
             ))
 
     # first recipient succeeds, second permfails after RCPT
@@ -538,14 +525,14 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
-                  Rcpt('bob2', Response(201), Response(501), [],
+                  Rcpt('bob2', Response(201), Response(501), None,
                        store_and_forward=False)],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(501)],  # upstream
-                [None, Response(203)],  # same data resp
+                Response(203),  # same data resp
             ))
 
     # first recipient succeeds, second permfails after !last data
@@ -556,15 +543,15 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
                   Rcpt('bob2', Response(204), Response(205),
-                       [Response(501)],
+                       Response(501),
                        store_and_forward=True)],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(205)],  # upstream
-                [None, Response(250)],  # 'async mixed upstream'
+                Response(250),  # 'async mixed upstream'
             ))
 
     # first recipient succeeds, second permfails after last data
@@ -574,15 +561,15 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(203)],
+                       Response(203),
                        store_and_forward=False),
                   Rcpt('bob2', Response(204), Response(205),
-                       [None, Response(501)],
+                       Response(501),
                        store_and_forward=True)],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(205)],  # upstream
-                [None, Response(250)],  # 'async mixed upstream'
+                Response(250),  # 'async mixed upstream'
             ))
 
     # all rcpts tempfail data -> s&f
@@ -592,15 +579,15 @@ class ExploderTest(unittest.TestCase):
             test=Test(
                 'alice',
                 [ Rcpt('bob1', Response(201), Response(202),
-                       [None, Response(401)],
+                       Response(401),
                        store_and_forward=True),
                   Rcpt('bob2', Response(204), Response(205),
-                       [None, Response(402)],
+                       Response(402),
                        store_and_forward=True)],
-                [b'hello, ', b'world!'],
+                b'hello, world!',
                 Response(250),  # injected
                 [Response(202), Response(205)],  # upstream
-                [None, Response(250)],  # same response s&f
+                Response(250),  # same response s&f
             ))
 
     def test_upstream_busy(self):

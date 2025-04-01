@@ -39,7 +39,7 @@ class Recipient:
     def __init__(self, filter : Optional[AsyncFilter]):
         self.filter = filter
 
-    def _maybe_err(self) -> Optional[TransactionMetadata]:
+    def _check_busy_err(self) -> Optional[TransactionMetadata]:
         if self.filter is not None:
             return None
         err = TransactionMetadata()
@@ -70,14 +70,12 @@ class Recipient:
         # case create_storage_writer wouldn't error out on the
         # executor overflow and AsyncFilterWrapper probably also wants
         # a hint to set the upstream response -> s&f timeout to 0.
-        if (err := self._maybe_err()) is not None:
+        if (err := self._check_busy_err()) is not None:
             return err
         return self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
-        if (err := self._maybe_err()) is not None:
-            return err
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
         assert self.tx.merge_from(delta) is not None
         if not delta:
@@ -214,6 +212,9 @@ class Exploder(SyncFilter):
         elif tx.body.finalized():
             # OutputHandler currently only sends finalized body so we
             # always take this branch today.
+            # Moreover, Storage currently does not allow reusing
+            # !finalized blob so even if OH streamed the body out, we
+            # would buffer here it until finalized.
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
