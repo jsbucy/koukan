@@ -399,9 +399,9 @@ class TransactionCursor:
 
         input_done |= self._maybe_write_blob(db_tx, tx_delta)
 
-        message_builder = tx_delta.body if isinstance(tx_delta.body, MessageBuilderSpec) else None
-        if message_builder:
-            upd = upd.values(message_builder = message_builder)
+        body = tx_delta.body
+        if isinstance(body, MessageBuilderSpec):
+            upd = upd.values(message_builder = body.json)
 
         if input_done:
             upd = upd.values(input_done = True)
