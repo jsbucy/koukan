@@ -57,7 +57,7 @@ class MessageBuilderSpec:
                 self._add_part_blob(part, create_blob_id)
                 create_blob_id += 1
 
-    def _add_part_blob(self, part, create_blob_id):
+    def _add_part_blob(self, part, create_blob_id : int):
         # if not present -> invalid spec
         content = part.get('content')
         if 'reuse_uri' in content:
@@ -68,11 +68,17 @@ class MessageBuilderSpec:
             blob_spec = BlobSpec(create_id=content['create_id'])
         elif 'inline' in content:
             blob_spec = BlobSpec(
-                blob = InlineBlob(content['inline'].encode('utf-8'), last=True))
+                blob = InlineBlob(content['inline'].encode('utf-8'), last=True),
+                create_id='inline%d' % create_blob_id)
         else:
             raise ValueError('bad MessageBuilder entity content')
-        part['content'] = {'create_id': blob_spec.create_id if blob_spec.create_id
-                           else blob_spec.reuse_uri.blob }
+        # cf MessageBuilder._add_part(), reusing 'create_id' for both
+        # create and reuse, maybe should be separate tag '_internal_blob_id'
+        if blob_spec.create_id:
+            blob_id = blob_spec.create_id
+        else:
+            blob_id = blob_spec.reuse_uri.blob
+        part['content'] = {'create_id': blob_id}
         self.blob_specs.append(blob_spec)
 
     def finalized(self):

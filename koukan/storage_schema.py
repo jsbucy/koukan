@@ -30,8 +30,7 @@ class BlobSpec:
                  create_id : Optional[str] = None,
                  reuse_uri : Optional[BlobUri] = None,
                  create_tx_body : Optional[bool] = None):
-        assert len([x for x in [blob, create_id, reuse_uri, create_tx_body]
-                    if x is not None]) == 1
+        # TODO put back assert, blob and create_id can both be present if inline
         self.blob = blob
         self.create_id = create_id
         self.reuse_uri = reuse_uri

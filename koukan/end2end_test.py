@@ -361,7 +361,11 @@ class End2EndTest(unittest.TestCase):
                "content": {
                    "create_id": "my_plain_body",
                    "filename": "examples/send_message/body.txt"}
-           }]
+             },
+             {
+               "content_type": "text/html",
+               "content": {"inline": "<b>hello</b>" }
+             }]
         }
 
         sender = Sender(self.router_base_url,
