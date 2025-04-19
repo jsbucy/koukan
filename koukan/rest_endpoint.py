@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Generator, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 from threading import Lock, Condition
 import logging
 import time
@@ -404,7 +404,7 @@ class RestEndpoint(SyncFilter):
             assert tx.merge_from(data_err) is not None
             return upstream_delta
 
-        blobs : List[Tuple(Blob, bool)]  # bool: non_body_blob
+        blobs : List[Tuple[Blob, bool]]  # bool: non_body_blob
         if isinstance(tx_delta.body, Blob):
             blobs = [ (tx_delta.body, False) ]
         elif message_builder:
