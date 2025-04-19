@@ -175,8 +175,8 @@ class Transaction:
 
     def _file_size(self, path):
         with open(path, 'rb') as file:
-            file.seek(-1, os.SEEK_END)
-            return file.tell() + 1
+            file.seek(0, os.SEEK_END)
+            return file.tell()
 
     def log(self):
         logging.debug('received tx %s', self.tx_json)
