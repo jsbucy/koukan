@@ -666,6 +666,10 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
+
         blob_uri = parse_blob_uri(rest_endpoint.transaction_path + '/body')
         logging.debug(blob_uri)
 
@@ -684,14 +688,19 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint = FakeSyncFilter()
         def exp2(tx, tx_delta):
             logging.debug(tx)
-            self.assertTrue(isinstance(tx.body, Blob))
-            self.assertEqual(tx.body.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
-                rcpt_response = [Response(202)],
-                data_response = Response(203))
+                rcpt_response = [Response(202)])
+
+            if tx.body is not None:
+                self.assertTrue(isinstance(tx.body, Blob))
+                if tx.body.finalized():
+                    self.assertEqual(tx.body.pread(0), body_utf8)
+                    upstream_delta.data_response = Response(203)
+
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
+        upstream_endpoint.add_expectation(exp2)
         upstream_endpoint.add_expectation(exp2)
         self.add_endpoint(upstream_endpoint)
 
@@ -1000,23 +1009,23 @@ class RouterServiceTest(unittest.TestCase):
                 "content": {"create_id": "my_plain_body"}
             }]
         }
-        tx.body = MessageBuilderSpec(message_builder_spec)
+        b = b"hello, world!"
+        blob = InlineBlob(b, rest_id='my_plain_body', last=True)
+        tx.body = MessageBuilderSpec(message_builder_spec, blobs=[blob])
+        tx.body.check_ids()
         def exp_env(tx, tx_delta):
-            updated_tx = tx.copy()
-            updated_tx.mail_response = Response(201)
-            updated_tx.rcpt_response.append(Response(202))
-            upstream_delta = tx.delta(updated_tx)
+            logging.debug('test_message_builder.exp_env %s', tx)
+            self.assertEqual("alice@example.com", tx.mail_from.mailbox)
+            self.assertEqual(["bob1@example.com"],
+                              [m.mailbox for m in tx.rcpt_to])
+            self.assertIsNone(tx.body)
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response=[Response(202)])
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
 
         upstream_endpoint.add_expectation(exp_env)
-        rest_endpoint.on_update(tx, tx.copy(), 1)
-
-        def exp_wakeup(tx, tx_delta):
-            logging.debug('test_message_builder.exp_wakeup %s', tx)
-            return TransactionMetadata()
-        upstream_endpoint.add_expectation(exp_wakeup)
-
 
         def exp_body(tx, tx_delta):
             logging.debug('test_message_builder.exp_body %s', tx)
@@ -1032,21 +1041,28 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_body)
 
-        b = b"hello, world!"
-        blob = InlineBlob(b, rest_id='my_plain_body', last=True)
-        blob_resp = rest_endpoint._put_blob(blob, non_body_blob=True)
-        self.assertEqual(blob_resp.code, 200)
+        rest_endpoint.on_update(tx, tx.copy(), 1)
+        logging.debug(tx)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
+
+
+        logging.debug('start second tx')
 
         message_builder_spec['text_body'][0]['content'] = {
-            'reuse_uri': rest_endpoint.blob_path }
+            'reuse_uri': rest_endpoint.transaction_path + '/blob/my_plain_body'
+        }
 
         # send another tx with the same spec to exercise blob reuse
         logging.info('RouterServiceTest.test_message_builder start tx #2')
+        spec = MessageBuilderSpec(message_builder_spec)
+        spec.check_ids()
         tx2 = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob2@example.com')],
             remote_host=HostPort('1.2.3.4', 12345),
-            body=MessageBuilderSpec(message_builder_spec))
+            body=spec)
 
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, static_http_host='submission')
@@ -1056,22 +1072,27 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp2(tx, tx_delta):
             logging.debug('test_message_builder.exp2 %s', tx)
-            self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to],
-                             ['bob2@example.com'])
-            if tx_delta.body and tx_delta.body.finalized():
-                body = tx.body.pread(0)
-                logging.debug(body)
-                self.assertIn(b'subject: hello\r\n', body)
-                upstream_delta.data_response = Response(206)
-
-            return TransactionMetadata(
+            self.assertEqual('alice@example.com', tx.mail_from.mailbox)
+            self.assertEqual(['bob2@example.com'],
+                             [m.mailbox for m in tx.rcpt_to])
+            upstream_delta = TransactionMetadata(
                 mail_response = Response(204),
                 rcpt_response = [Response(205)])
+            self.assertTrue(tx_delta.body.finalized())
+            body = tx.body.pread(0)
+            logging.debug(body)
+            self.assertIn(b'subject: hello\r\n', body)
+            upstream_delta.data_response = Response(206)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
 
         upstream_endpoint.add_expectation(exp2)
 
         rest_endpoint.on_update(tx2, tx2.copy(), 10)
+        logging.debug(tx2)
+        self.assertEqual(204, tx2.mail_response.code)
+        self.assertEqual([205], [r.code for r in tx2.rcpt_response])
+        self.assertEqual(206, tx2.data_response.code)
 
 
     def test_receive_parsing(self):

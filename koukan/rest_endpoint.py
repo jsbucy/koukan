@@ -5,6 +5,7 @@ from threading import Lock, Condition
 import logging
 import time
 import json.decoder
+import copy
 from urllib.parse import urljoin, urlparse
 
 from httpx import Client, Request, RequestError, Response as HttpResponse
@@ -266,16 +267,26 @@ class RestEndpoint(SyncFilter):
             self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
-        # some tests send BlobUri here
-        # otherwise clear so it doesn't trip req_inflight() during get
-        if (not isinstance(self.upstream_tx.body, BlobSpec) and
-            not isinstance(self.upstream_tx.body, MessageBuilderSpec)):
+
+        # router_service_test uses this for submission and sends
+        # BlobSpec for body reuse here.  Otherwise clear blobs so the
+        # _get() after POST doesn't wait on
+        # data_response/req_inflight() (cf below)
+        if isinstance(self.upstream_tx.body, MessageBuilderSpec):
+            self.upstream_tx.body = copy.copy(self.upstream_tx.body)
+            self.upstream_tx.body.blobs = []
+        elif isinstance(self.upstream_tx.body, Blob):
             self.upstream_tx.body = None
+        elif isinstance(self.upstream_tx.body, BlobSpec):
+            pass
+        elif self.upstream_tx.body is not None:
+            raise ValueError()
         upstream_tx = self.upstream_tx.copy()
 
         logging.debug('RestEndpoint.on_update merged tx %s', self.upstream_tx)
 
         tx_update = False
+        created = False
         if not self.transaction_url:
             rest_resp = self._create(tx.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
@@ -286,6 +297,7 @@ class RestEndpoint(SyncFilter):
                 tx.merge_from(err)
                 return err
             tx_update = True
+            created = True
         # the precondition is that the delta isn't empty but it might
         # only contain internal fields
         elif not downstream_delta.empty(WhichJson.REST_UPDATE):
@@ -327,6 +339,9 @@ class RestEndpoint(SyncFilter):
                 tx.merge_from(err_delta)
                 return err_delta
 
+            # NOTE we cleared blobs from upstream_tx (above) to
+            # prevent this for waiting for data_response since we
+            # don't send the blobs until later.
             if self.upstream_tx.req_inflight(tx_out):
                 tx_out = self._get(deadline)
             err = None
@@ -337,7 +352,7 @@ class RestEndpoint(SyncFilter):
             if err:
                 err_delta = TransactionMetadata()
                 tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint bad resp_json'), err_delta)
+                    Response(450, 'RestEndpoint ' + err), err_delta)
                 tx.merge_from(err_delta)
                 return err_delta
 
@@ -356,8 +371,14 @@ class RestEndpoint(SyncFilter):
         if tx_delta.body is None:
             return upstream_delta
 
+        # rest receiving with message parsing sends message builder
+        # spec out the back. Without pipelining, this will always be
+        # in a separate update from the initial creation. However rest
+        # submission could send an inline body in which case you'll
+        # get it all in the initial on_update() so don't send it again
+        # here.
         message_builder = isinstance(tx_delta.body, MessageBuilderSpec)
-        if message_builder:
+        if not created and message_builder:
             err = self._update_message_builder(tx_delta, deadline)
             if err is not None:
                 delta = TransactionMetadata(data_response = err)
@@ -388,11 +409,16 @@ class RestEndpoint(SyncFilter):
             blobs = [ (tx_delta.body, False) ]
         elif message_builder:
             blobs = [(b, True) for b in tx_delta.body.blobs]
-            blobs.append((tx_delta.body.body_blob, False))
+            if tx_delta.body.body_blob is not None:
+                blobs.append((tx_delta.body.body_blob, False))
         elif isinstance(tx_delta.body, BlobSpec):
             return upstream_delta
         else:
             raise ValueError()
+
+        # NOTE _get() will wait on tx version even if nothing inflight
+        if not blobs:
+            return upstream_delta
 
         for blob,non_body_blob in blobs:
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
@@ -599,7 +625,8 @@ class RestEndpoint(SyncFilter):
             rest_resp = self.client.get(self.transaction_url,
                                         headers=req_headers,
                                         timeout=timeout)
-            logging.debug('RestEndpoint.get_json %s %s', rest_resp, [r.headers for r in rest_resp.history])
+            logging.debug('RestEndpoint.get_json %s %s',
+                          rest_resp, [r.headers for r in rest_resp.history])
         except RequestError as e:
             logging.debug('RestEndpoint.get_json() timeout %s',
                           self.transaction_url)

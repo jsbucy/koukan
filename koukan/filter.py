@@ -506,10 +506,17 @@ class TransactionMetadata:
             # XXX rcpt_response should never be None now?
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
-        body_last = self.body is not None and (
-            isinstance(self.body, Blob) and self.body.finalized())
-        # xxx used to have message_builder here?
-        if self.body or body_last:
+
+        # at least router_service_test uses RestEndpoint to submit
+        # with BlobSpec for payload reuse
+        body_last = False
+        if isinstance(self.body, BlobSpec):
+            body_last = True
+        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+            body_last = self.body.finalized()
+        elif self.body is not None:
+            raise ValueError()
+        if body_last:
             # if we have the body, then we aren't getting any more
             # rcpts. If they all failed, then we can't make forward
             # progress.

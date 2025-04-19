@@ -158,6 +158,12 @@ class FilterTest(unittest.TestCase):
         logging.debug('testRespFields %s', json)
         self.assertEqual(json['mail_from'], {})
         self.assertEqual(json['rcpt_to'], [{}, {}])
+        tx.body = InlineBlob(b'hello')
+        self.assertFalse(tx.req_inflight())
+        tx.body = InlineBlob(b'hello', last=True)
+        self.assertTrue(tx.req_inflight())
+        tx.data_response = Response(250)
+        self.assertFalse(tx.req_inflight())
 
     def test_fill_inflight_responses(self):
         tx = TransactionMetadata(
