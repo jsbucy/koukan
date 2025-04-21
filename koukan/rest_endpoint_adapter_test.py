@@ -114,6 +114,21 @@ class SyncFilterAdapterTest(unittest.TestCase):
             self.fail('expected done')
         self.assertTrue(sync_filter_adapter.idle(time.time(), 0, 0))
 
+    def test_upstream_filter_exceptions(self):
+        upstream = FakeSyncFilter()
+        sync_filter_adapter = SyncFilterAdapter(
+            self.executor, upstream, 'rest_id')
+
+        def exp(tx,delta):
+            raise ValueError()
+        upstream.add_expectation(exp)
+
+        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        sync_filter_adapter.update(tx, tx.copy())
+        sync_filter_adapter.wait(tx.version, 1)
+        upstream_tx = sync_filter_adapter.get()
+        self.assertEqual(450, upstream_tx.mail_response.code)
+        self.assertIn('unexpected exception', upstream_tx.mail_response.message)
 
 class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

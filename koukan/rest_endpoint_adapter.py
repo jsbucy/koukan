@@ -150,12 +150,14 @@ class SyncFilterAdapter(AsyncFilter):
             logging.exception('SyncFilterAdapter._update_once() %s',
                               self.rest_id)
             with self.mu:
-                # TODO an exception here is unexpected so
-                # it's probably good enough to guarantee that callers
-                # fail quickly. Though it might be more polite to
-                # populate responses for infligt req fields here with
-                # a temp/internal error.
-                self.prev_tx = self.tx = None
+                # The upstream SyncFilter is supposed to return tx
+                # error responses and not throw
+                # exceptions. i.e. SmtpEndpoint is supposed to convert
+                # all smtplib/socket exceptions to error responses but there
+                # may be bugs.
+                self.tx.fill_inflight_responses(MailResponse(
+                    450, 'internal error: unexpected exception in '
+                    'SyncFilterAdapter'))
                 self.cv.notify_all()
             raise
         finally:
