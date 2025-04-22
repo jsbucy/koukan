@@ -114,14 +114,16 @@ class MessageBuilder:
 
         # TODO use str if maintype == 'text'
         # content : Optional[bytes]
-        content_json = part_json['content']
-        if 'inline' in content_json:
-            content = content_json['inline'].encode('utf-8')
-        elif 'create_id' in content_json:
-            blob = self.blobs[content_json['create_id']]
+        if (content_json := part_json.get('content', None)) is None:
+            raise ValueError('no part content')
+        if inline_content := content_json.get('inline', None):
+            content = inline_content.encode('utf-8')
+        elif create_id := content_json.get('create_id', None):
+            if not (blob := self.blobs.get(create_id, None)):
+                raise ValueError('invalid blob id')
             content = blob.pread(0)
         else:
-            raise ValueError()
+            raise ValueError('invalid part content')
 
         part.set_content(content, maintype=maintype, subtype=subtype)
         if maintype == 'text':
@@ -132,11 +134,11 @@ class MessageBuilder:
 
         if inline:
             part.add_header('content-disposition', 'inline')
-        elif 'filename' in part_json:
+        elif filename := part_json.get('filename', None):
             part.add_header('content-disposition', 'attachment',
-                            filename=part_json['filename'])
-        if 'content_id' in part_json:
-            part.add_header('content-id', part_json['content_id'])
+                            filename=filename)
+        if content_id := part_json.get('content_id', None):
+            part.add_header('content-id', content_id)
 
         if existing_part is None:
             multipart.attach(part)
@@ -164,9 +166,10 @@ class MessageBuilder:
             tz = datetime.timezone(datetime.timedelta(seconds=tz_json))
         else:
             tz = datetime.timezone.utc  # tz=None -> system timezone?
-
-        builder[field] = datetime.datetime.fromtimestamp(
-            field_json['unix_secs'], tz=tz)
+        if date := field_json.get('unix_secs', None):
+            builder[field] = datetime.datetime.fromtimestamp(date, tz=tz)
+        else:
+            raise ValueError('invalid date')
 
     def _add_headers(self, builder):
         for header in self.header_json:

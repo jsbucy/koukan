@@ -172,6 +172,7 @@ pytype_library(name='message_builder_filter',
                deps=[':blob',
                      ':filter',
                      ':message_builder',
+                     ':response',
                      ':rest_schema',
                      ':storage'])
 

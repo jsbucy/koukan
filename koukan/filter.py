@@ -489,6 +489,14 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
+    def _body_last(self):
+        if isinstance(self.body, BlobSpec):
+            return True
+        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+            return self.body.finalized()
+        elif self.body is not None:
+            raise ValueError()
+
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
     # xxx cancelled?
@@ -509,22 +517,16 @@ class TransactionMetadata:
 
         # at least router_service_test uses RestEndpoint to submit
         # with BlobSpec for payload reuse
-        body_last = False
-        if isinstance(self.body, BlobSpec):
-            body_last = True
-        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
-            body_last = self.body.finalized()
-        elif self.body is not None:
-            raise ValueError()
-        if body_last:
-            # if we have the body, then we aren't getting any more
-            # rcpts. If they all failed, then we can't make forward
-            # progress.
-            if not any([r.ok() for r in tx.rcpt_response]):
-                return False
-            if tx.data_response is None:
-                return True
-        return False
+        if not self._body_last():
+            return False
+
+        # if we have the body, then we aren't getting any more
+        # rcpts. If they all failed, then we can't make forward
+        # progress.
+        if not any([r.ok() for r in tx.rcpt_response]):
+            return False
+        if tx.data_response is None:
+            return True
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs
@@ -539,9 +541,7 @@ class TransactionMetadata:
             dest.mail_response = resp
         dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
-        body_last = self.body is not None and (
-            isinstance(self.body, Blob) and self.body.finalized())
-        if body_last and self.data_response is None:
+        if self._body_last() and self.data_response is None:
             dest.data_response = resp
 
     def _field_to_json(self, name : str, field : TxField,
