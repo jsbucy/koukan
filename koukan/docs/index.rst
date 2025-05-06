@@ -107,8 +107,50 @@ Content-type: application/json
 
 Receiving
 
+Receiving is a little more complicated due to the need to be
+compatible with gatewaying from interactive (non-pipelined) SMTP.
+
+cf examples/receiver
+
+Your application must expose the following routes/endpoints:
+POST /transactions
+create a new transaction and return the path in location:
+GET /transactions/<tx id>
+
+POST /transactions/<tx id>/body
+upload the rfc822 message
+
+additionally, if you enable receive parsing:
+POST /transactions/<tx id>/message_builder
+PUT /transactions<tx id>/blob/<blob id>
+for each blob in the message builder spec json
+
 
 Koukan Implementation
+
+Overview
+
+Koukan has 2 main components:
+- SMTP gateway
+  smtp <-> http/json rest protocol
+  stateless protocol proxy, no business logic
+- router
+  http/json rest protocol only
+  stateful/store-and-forward
+
+The router has 2 main control flows
+RestHandler: http route -> storage
+OutputHandler: storage -> RestEndpoint
+
+The OutputHandler passes the transaction through a filter chain on the
+way to RestEndpoint. Filters can make arbitrary transformations of the
+transaction including modifying the message, routing on destination
+address, etc.
+
+In order to be compatible with interactive/non-pipelined SMTP,
+gateway->router uses a specialized dialect of the rest protocol to
+support building up a transaction incrementally.
+
 
 
 Extending Koukan with Filters
