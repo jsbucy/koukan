@@ -134,6 +134,9 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             if overwrite or tx.data_response is None:
                 tx.data_response = self.timeout_resp.data_response
 
+    # TODO this may be effectively dead code since OH has fallthrough
+    # fill_inflight_responses(
+    #   'internal error: OutputHandler failed to populate response')
     def _set_precondition_resp(self, tx):
         # smtp preconditions: rcpt and no rcpt resp after mail err, etc.
         if tx.mail_response and tx.mail_response.err():

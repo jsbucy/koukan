@@ -118,20 +118,25 @@ class RemoteHostFilterTest(unittest.TestCase):
             self.assertEqual(exp_hostname, tx_delta.remote_hostname)
             self.assertEqual(exp_fcrdns, tx_delta.fcrdns)
 
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201))
+            resp = Response(201)
+            upstream_delta = TransactionMetadata()
+            tx.fill_inflight_responses(resp, upstream_delta)
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream.add_expectation(exp)
 
         tx = TransactionMetadata(
-                remote_host=HostPort(addr, 12345),
-                mail_from=Mailbox('alice'))
+            remote_host=HostPort(addr, 12345),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
         filter = RemoteHostFilter(upstream, resolver)
         upstream_delta = filter.on_update(tx, tx.copy())
         logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
         self.assertEqual(exp_resp, tx.mail_response.code)
         self.assertEqual(exp_resp, upstream_delta.mail_response.code)
+        self.assertEqual([exp_resp],
+                         [r.code for r in upstream_delta.rcpt_response])
+
 
     def test_success_ipv4(self):
         self._test(
