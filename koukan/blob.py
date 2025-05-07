@@ -30,6 +30,10 @@ class Blob(ABC):
         cl = self.content_length()
         return cl is not None and cl == self.len()
 
+    # returns True if rhs is a proper superset of self,
+    # False if they are the same, else None
+    def delta(self, rhs) -> Optional[bool]:
+        raise NotImplementedError()
 
 class WritableBlob(ABC):
     @abstractmethod
@@ -92,6 +96,13 @@ class InlineBlob(Blob, WritableBlob):
         self.d = d
         self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
+
+    def delta(self, rhs) -> Optional[bool]:
+        if not isinstance(rhs, InlineBlob):
+            return None
+        if not rhs.d.startswith(self.d):
+            return None
+        return rhs.d != self.d
 
     def len(self):
         return len(self.d)

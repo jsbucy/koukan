@@ -231,7 +231,7 @@ class TransactionCursor:
                 blob_spec.create_tx_body = True
             blob_specs = [blob_spec]
         else:
-            return True
+            raise ValueError()
 
         blobs : List[BlobCursor] = []
 
@@ -275,7 +275,8 @@ class TransactionCursor:
                               "blob_id": blob_cursor.id,
                               "rest_id": blob_cursor.rest_id() })
 
-        logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
+        logging.debug('TransactionCursor._write_blob %d %s all done %s',
+                      self.id, blobrefs, blobs_done)
 
         if blobrefs:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
@@ -397,7 +398,8 @@ class TransactionCursor:
                              inflight_session_live = None,
                              next_attempt_time = next_attempt_time)
 
-        input_done |= self._maybe_write_blob(db_tx, tx_delta)
+        if tx_delta.body is not None:
+            input_done |= self._maybe_write_blob(db_tx, tx_delta)
 
         body = tx_delta.body
         if isinstance(body, MessageBuilderSpec):
@@ -587,7 +589,8 @@ class TransactionCursor:
             self.parent.blob_table.c.id,
             self.parent.blob_table.c.length,
             self.parent.blob_table.c.last_update,
-            func.length(self.parent.blob_table.c.content)).select_from(j)
+            func.length(self.parent.blob_table.c.content)
+        ).order_by(self.parent.blob_table.c.id).select_from(j)
 
         res = db_tx.execute(sel_blob)
         blobs = []
@@ -720,6 +723,17 @@ class BlobCursor(Blob, WritableBlob):
         self.parent = storage
         self.update_tx = update_tx
         self.db_tx = db_tx
+
+    def delta(self, rhs):
+        if not isinstance(rhs, BlobCursor):
+            return None
+        if self.id != rhs.id:
+            return None
+        if self.length > rhs.length:
+            return None
+        if self._content_length is not None and self._content_length != rhs._content_length:
+            return None
+        return self.length < rhs.length
 
     def init(self, tx_rest_id : str, blob_id : int, blob_rest_id : str,
              content_length : Optional[int], last_update : int, length : int):

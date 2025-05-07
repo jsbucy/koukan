@@ -85,6 +85,26 @@ class MessageBuilderSpec:
         return (len(self.ids) == len(self.blobs) and
                 not any([not b.finalized() for b in self.blobs]))
 
+    def delta(self, rhs) -> Optional[bool]:
+        if not isinstance(rhs, MessageBuilderSpec):
+            return None
+        if self.json != rhs.json:
+            return None
+        if len(self.blobs) != len(rhs.blobs):
+            logging.debug('blobs len')
+            return None
+        out = False
+        for i,blob in enumerate(self.blobs):
+            blob_delta = blob.delta(rhs.blobs[i])
+            if blob_delta is None:
+                logging.debug(i)
+                logging.debug(self.blobs)
+                logging.debug(rhs.blobs)
+                return None
+            out |= blob_delta
+        return out
+
+
     def __repr__(self):
         return '%s %s' % (self.json, self.blobs)
 

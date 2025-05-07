@@ -1029,16 +1029,18 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body(tx, tx_delta):
             logging.debug('test_message_builder.exp_body %s', tx)
+            if tx.body is None:
+                return TransactionMetadata()
             body = tx.body.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
             #self.assertIn(b, body)  # base64
-            updated_tx = tx.copy()
-            updated_tx.data_response = Response(203)
-            upstream_delta = tx.delta(updated_tx)
+            upstream_delta = TransactionMetadata(
+                data_response = Response(203))
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
 
+        upstream_endpoint.add_expectation(exp_body)
         upstream_endpoint.add_expectation(exp_body)
 
         rest_endpoint.on_update(tx, tx.copy(), 1)

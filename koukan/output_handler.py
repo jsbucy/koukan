@@ -54,9 +54,12 @@ class OutputHandler:
                          ok_rcpt : bool
                          ) -> Tuple[Optional[bool], Optional[Response]]:
         # xxx req_inflight()?
+        # xxx delta vs cursor.tx?
+        body = self.cursor.tx.body
+        assert isinstance(body, Union[None, Blob, MessageBuilderSpec])
         if ((delta.mail_from is not None) or
             bool(delta.rcpt_to) or
-            (self.cursor.tx.body and self.cursor.tx.body.finalized())):
+            ((body is not None) and body.finalized())):
             return False, None
 
         timeout = self.env_timeout
@@ -113,8 +116,6 @@ class OutputHandler:
                     body = b
                 else:
                     raise ValueError()
-                if not body.finalized():
-                    cursor_tx.body = None
             if last_tx is None:
                 last_tx = cursor_tx.copy()
                 upstream_tx = cursor_tx.copy()
@@ -144,10 +145,6 @@ class OutputHandler:
                 assert upstream_tx.merge_from(delta) is not None
                 self.endpoint.on_update(upstream_tx, delta)
 
-                # XXX because of the way we clear non-finalized body
-                # (above), won't get data_response precondition err if
-                # all rcpts failed, need to set here?
-
                 # all recipients so far have failed and we aren't
                 # waiting for any more (have_body) -> we're done
                 if len(self.cursor.tx.rcpt_to) == 1:
@@ -164,7 +161,7 @@ class OutputHandler:
             elif waited:
                 continue
 
-            logging.info('OutputHandler._output() %s body blob %s',
+            logging.info('OutputHandler._output() %s body %s',
                          self.rest_id, upstream_tx.body)
 
             # no new reqs in delta can happen e.g. if blob upload
@@ -177,7 +174,8 @@ class OutputHandler:
             logging.info('OutputHandler._output() %s '
                          'tx after upstream update %s',
                          self.rest_id, upstream_tx)
-            if upstream_delta is None or not(upstream_delta):
+
+            if upstream_delta is None or upstream_tx.req_inflight():
                 logging.warning('OutputHandler._output() %s '
                                 'BUG empty upstream_delta %s',
                                 self.rest_id, upstream_delta)
@@ -417,13 +415,14 @@ class OutputHandler:
             return
 
         orig_headers : str
-        if self.cursor.tx.body:
-            if isinstance(self.cursor.tx.body, MessageBuilderSpec):
-                builder = MessageBuilder(self.cursor.tx.body.json,
-                                         blobs={})  # blobs not needed here
+        body = self.cursor.tx.body
+        if body:
+            if isinstance(body, MessageBuilderSpec):
+                # blobs not needed here
+                builder = MessageBuilder(body.json, blobs={})
                 orig_headers = builder.build_headers_for_notification().decode(
                     'utf-8')
-            elif isinstance(self.cursor.tx.body, Blob):
+            elif isinstance(body, Blob):
                 h = read_headers(self.cursor.tx.body)
                 orig_headers = h if h is not None else ''
             else:

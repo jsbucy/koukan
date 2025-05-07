@@ -37,6 +37,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             blobs = [InlineBlob(b'hello, world!', last=True,
                                 rest_id='blob_rest_id')]
         )
+        tx.body.check_ids()
 
         def exp(tx, delta):
             self.assertTrue(isinstance(delta.body, Blob))

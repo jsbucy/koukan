@@ -603,6 +603,14 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('list-ness mismatch')
                 return None  # invalid
+            if f == 'body' and old_v is not None and new_v is not None:
+                body_delta = old_v.delta(new_v)
+                if body_delta is None:
+                    return None
+                if body_delta:
+                    setattr(out, f, new_v)
+                continue
+
             if not isinstance(old_v, list):
                 # use the old value, assume the new one is the same
                 # TODO could verify that old_v == new_v
@@ -649,6 +657,15 @@ class TransactionMetadata:
                return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
+                continue
+
+            # emit body in the delta if it changed
+            if f == 'body' and old_v is not None and new_v is not None:
+                body_delta = old_v.delta(new_v)
+                if body_delta is None:
+                    return None
+                if body_delta:
+                    setattr(out, f, new_v)
                 continue
 
             # XXX TxField.is_list?

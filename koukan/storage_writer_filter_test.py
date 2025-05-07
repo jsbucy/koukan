@@ -331,7 +331,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'reuse')
         tx2 = TransactionMetadata(
                 host = 'outbound-gw',
-                body = BlobUri('inline', tx_body=True))
+                body = BlobSpec(reuse_uri=BlobUri('inline', tx_body=True)))
         # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
 

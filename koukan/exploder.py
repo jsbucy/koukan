@@ -211,11 +211,8 @@ class Exploder(SyncFilter):
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
         elif body.finalized():
-            # OutputHandler currently only sends finalized body so we
-            # always take this branch today.
-            # Moreover, Storage currently does not allow reusing
-            # !finalized blob so even if OH streamed the body out, we
-            # would buffer here it until finalized.
+            # Storage currently does not allow reusing !finalized blob
+            # so we must buffer here it until finalized.
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
