@@ -96,7 +96,15 @@ class MessageBuilderFilterTest(unittest.TestCase):
         tx_delta = TransactionMetadata()
         # MessageBuilder currently raises ValueError() if date is
         # missing unix_secs
-        tx.body = MessageBuilderSpec({ 'headers': [['date', {}]] })
+        tx.body = MessageBuilderSpec(
+            {'headers': [['date', {}]],
+             "text_body": [{
+                 "content_type": "text/html",
+                 "content": {"create_id": "blob_rest_id"}
+             }]},
+            # non-finalized blob to tickle early-reject path
+            blobs=[InlineBlob(b'hello, ', last=False,
+                              rest_id='blob_rest_id')])
         tx.body.check_ids()
         def exp(tx, delta):
             self.fail()
