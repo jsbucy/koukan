@@ -71,10 +71,13 @@ class MessageBuilderFilter(SyncFilter):
             # catch these errors
             logging.exception('unexpected exception in MessageBuilder')
             err = TransactionMetadata()
-            msg = ('unexpected exception in MessageBuilder, '
-                   'likely invalid message_builder json')
-            tx.fill_inflight_responses(Response(450, msg), err)
-            err.data_response = Response(550, msg)
+            tx.fill_inflight_responses(
+                Response(250, 'ok (MessageBuilderFilter no-op, '
+                         'DATA will fail)'),
+                err)
+            err.data_response = Response(
+                550, 'unexpected exception in MessageBuilder, '
+                'likely invalid message_builder json')
             tx.merge_from(err)
             return err
 

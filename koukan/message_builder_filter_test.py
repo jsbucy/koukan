@@ -111,8 +111,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
         upstream.add_expectation(exp)
 
         upstream_delta = message_builder.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 450)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [450])
+        self.assertEqual(upstream_delta.mail_response.code, 250)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [250])
         self.assertEqual(upstream_delta.data_response.code, 550)
 
 
