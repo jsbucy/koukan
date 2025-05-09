@@ -70,14 +70,15 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual(tx.body.pread(0), b'hello, world!')
 
             upstream_delta = TransactionMetadata(
-                mail_response = Response(),
-                rcpt_response = [Response(234)],
-                data_response = Response(256))
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp)
 
         tx_cursor = self.storage.load_one()
+        assert tx_cursor.in_attempt
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(tx_cursor, endpoint,
@@ -87,6 +88,9 @@ class OutputHandlerTest(unittest.TestCase):
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
+        self.assertEqual(201, reader.tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in reader.tx.rcpt_response])
+        self.assertEqual(203, reader.tx.data_response.code)
 
     # multiple roundtrips ~smtp
     def test_handle_multi(self):

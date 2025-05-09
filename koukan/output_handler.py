@@ -32,6 +32,8 @@ class OutputHandler:
     notification_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
     retry_params : dict
+    prev_tx : TransactionMetadata
+    tx : TransactionMetadata
 
     def __init__(self,
                  cursor : TransactionCursor,
@@ -49,6 +51,8 @@ class OutputHandler:
         self.notification_factory = notification_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
+        self.prev_tx = TransactionMetadata()
+        self.tx = TransactionMetadata()
 
     def _wait_downstream(self, delta : TransactionMetadata,
                          ok_rcpt : bool
@@ -68,7 +72,7 @@ class OutputHandler:
             timeout = self.data_timeout
             msg = 'body'
 
-        if not self.cursor.wait(self.env_timeout):
+        if not self.cursor.wait(timeout):
             logging.debug(
                 'OutputHandler._output() %s timeout %s=%d',
                 self.rest_id, msg, timeout)
@@ -80,26 +84,28 @@ class OutputHandler:
 
     def _output(self) -> Optional[Response]:
         ok_rcpt = False
-        rcpt0_resp = None
         # full vector after last upstream update
         last_tx = None
         upstream_tx = None
 
-        # TODO this control flow no longer makes sense to me, I would expect
-        # final_resp: tx cannot make forward progress, mail failed,
-        # rcpts done and all failed, etc
-        # while not tx.final_resp():
-        #   # 1st req or possible for write_envelope() to return new
-        #   # downstream reqs?
+        # TODO clean up control flow
+        # while True:
+        #   # first call or small chance write_envelope will return new reqs
         #   if not cursor.tx.req_inflight():
         #     prev = cursor.tx.copy()
         #     wait_downstream()
-        #   delta = prev.delta(cursor.tx)
+        #     delta = prev.delta(cursor.tx)
+        #     precondition check: e.g. delta.body after all rcpts failed
+        #       delta = cancel -> upstream
+        #       return precondition error downstream
+
         #   upstream_delta = output_chain.on_update(tx, delta)
-        #   rcpt/data precondition check -> set data response
-        #   if tx.req_inflight():
-        #     # bug
+        #   done = mail_resp.err or data_response or req_inflight()  # bug
+        #   if done:
+        #     final attempt reason/notification logic
         #   write_envelope(upstream_delta)
+        #   if done:
+        #     break
 
         while True:
             logging.debug('OutputHandler._output() %s db tx %s input done %s',
@@ -107,15 +113,6 @@ class OutputHandler:
 
             cursor_tx = self.cursor.tx.copy()
             # NOTE: possible to read finalized body but input_done == False
-
-
-            if cursor_tx.body is not None:
-                body : Union[Blob, MessageBuilderSpec]
-                b = cursor_tx.body
-                if isinstance(b, Union[Blob, MessageBuilderSpec]):
-                    body = b
-                else:
-                    raise ValueError()
             if last_tx is None:
                 last_tx = cursor_tx.copy()
                 upstream_tx = cursor_tx.copy()
@@ -148,7 +145,7 @@ class OutputHandler:
                 # all recipients so far have failed and we aren't
                 # waiting for any more (have_body) -> we're done
                 if len(self.cursor.tx.rcpt_to) == 1:
-                    return rcpt0_resp
+                    return self.cursor.tx.rcpt_response[0]
                 else:
                     # placeholder response, this is only used for
                     # notification logic for
@@ -205,15 +202,13 @@ class OutputHandler:
             if (upstream_delta.mail_response is not None and
                 upstream_delta.mail_response.err()):
                 return upstream_delta.mail_response
-            if rcpt0_resp is None and upstream_delta.rcpt_response:
-                rcpt0_resp = upstream_delta.rcpt_response[0]
             if not ok_rcpt and any(
                     [r.ok() for r in upstream_delta.rcpt_response]):
                 ok_rcpt = True
             if upstream_delta.data_response is not None:
                 return upstream_delta.data_response
 
-    def handle(self):
+    def handle_old(self):
         logging.info('OutputHandler.handle() %s', self.rest_id)
 
         try:
@@ -276,6 +271,7 @@ class OutputHandler:
                         final_attempt_reason=final_attempt_reason,
                         next_attempt_time=next_attempt_time,
                         finalize_attempt=True,
+                        # True clears no_final_notification
                         notification_done=notification_done)
                     break
                 except VersionConflictException:
@@ -304,13 +300,15 @@ class OutputHandler:
         elif resp.perm():
             final_attempt_reason = 'upstream response permfail'
         elif (not self.cursor.input_done) and (self.cursor.tx.retry is None):
-            # if we early-returned due to upstream fastfail before
+            # if we early-returned due to upstream temp err before
             # receiving all of the body, don't set
             # final_attempt_reason if retries are enabled so it is
             # recoverable at such time as we get the rest of the
             # body/input_done
             final_attempt_reason = 'downstream timeout'
         else:
+            # assert len(self.cursor.tx.rcpt_to) == 1
+            # assert self.cursor.tx.body.finalized()
             final_attempt_reason, next_attempt_time = (
                 self._next_attempt_time(time.time()))
 
@@ -322,6 +320,108 @@ class OutputHandler:
 
         return final_attempt_reason, next_attempt_time
 
+    # -> delta, kwargs for write_envelope()
+    def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
+        logging.debug('_handle_once %s', self.cursor.tx)
+        upstream_delta = None
+        # XXX cursor.no_final_notification: tx.notification was None when
+        # final_attempt_reason was written iow notifications were enabled after
+        # the tx already failed (Exploder)
+
+        # very first call or
+        # we may have picked this up from the previous write_envelope()
+        if not self.tx.req_inflight() and not self.tx.cancelled:
+            if not self.cursor.wait():
+                upstream_delta = TransactionMetadata()
+                self.tx.fill_inflight_responses(
+                    Response(450, 'upstream timeout (OutputHandler)'),
+                    upstream_delta)
+            self.tx = self.cursor.load()
+        delta = self.prev_tx.delta(self.tx)
+        # precondition check: body after all rcpts failed
+
+        if upstream_delta is None:  # else upstream timeout (above)
+            upstream_delta = self.endpoint.on_update(self.tx, delta)
+            self.prev_tx = self.tx.copy()
+            # postcondition check: !req_inflight()
+
+
+        done = False
+        final_attempt_reason = None
+        if self.tx.cancelled:
+            done = True
+            final_attempt_reason = 'cancelled'
+        final_response = None
+        if not done and (self.tx.mail_response is not None) and self.tx.mail_response.err():
+            done = True
+            final_response = self.tx.mail_response
+        # for interactive smtp/downstream exploder, final rcpt error will be
+        # followed by cancellation (or possibly timeout if the gateway crashed)
+        if not done and self.tx.data_response is not None:
+            done = True
+            final_response = self.tx.data_response
+        done = done or self.tx.req_inflight()  # bug
+        if not done:
+            return upstream_delta, {}
+
+        kwargs = {}
+
+        if final_response is not None and (
+                final_response.ok() or final_response.perm()):
+            final_attempt_reason = 'upstream response'
+        if final_attempt_reason is None:
+            final_attempt_reason, kwargs['next_attempt_time'] = (
+                self._next_attempt_time(time.time()))
+        kwargs['final_attempt_reason'] = final_attempt_reason
+
+        if self.tx.notification is not None:
+            self._maybe_send_notification(final_attempt_reason)
+            kwargs['notification_done'] = True
+        kwargs['finalize_attempt'] = True
+
+        return upstream_delta, kwargs
+
+
+    def handle(self):
+        done = False
+        while not done:
+            try:
+                # pre-load results as a last resort against bugs:
+                # _handle_once() could be terminated by an uncaught
+                # exception. We don't know whether this is
+                # due to something in the tx deterministically tickling a
+                # bug in the code or due to a bug handling a transient
+                # failure (e.g. the executor overflow thing w/exploder
+                # which we handled in 2eb7a4f0 but there are undoubtedly
+                # others) that would succeed if you retry. To try to split
+                # the difference on this, preload next_attempt_time with
+                # 1h so that transient errors will eventually get retried
+                # but we won't crashloop excessively on a bad tx.
+                delta = TransactionMetadata()
+                env_kwargs = {
+                    'finalize_attempt': True,
+                    'next_attempt_time': time.time() + self.retry_params.get(
+                        'bug_retry', 3600) }
+                self.tx = self.cursor.tx.copy()
+                delta, env_kwargs = self._handle_once()
+                done = env_kwargs.get('finalize_attempt', False)
+            except Exception as e:
+                logging.exception('uncaught exception in OutputHandler')
+            finally:
+                err_resp = Response(
+                    450, 'internal error: OutputHandler failed to populate '
+                    'response')
+                self.tx.fill_inflight_responses(err_resp, delta)
+                for i in range(0,5):
+                    try:
+                        self.cursor.write_envelope(delta, **env_kwargs)
+                        break
+                    except VersionConflictException:
+                        logging.debug('VersionConflictException')
+                        if i == 4:
+                            raise
+                        backoff(i)
+                        self.cursor.load()
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
