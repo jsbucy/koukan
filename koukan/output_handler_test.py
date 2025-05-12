@@ -40,8 +40,8 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertEqual(tx_cursor.rest_id, rest_id)
         handler = OutputHandler(tx_cursor, endpoint,
-                                downstream_env_timeout=1,
-                                downstream_data_timeout=1)
+                                downstream_env_timeout=3,
+                                downstream_data_timeout=3)
         handler.handle()
 
     # oneshot ~rest
@@ -293,6 +293,7 @@ class OutputHandlerTest(unittest.TestCase):
             tx_cursor.wait(0.3)
             tx_cursor.load()
         time.sleep(1) # more xxx
+        self.assertEqual([402, 403], [r.code for r in tx_cursor.tx.rcpt_response])
 
         # no additional expectation on endpoint, should not send blob
         # upstream since all rcpts failed
@@ -310,7 +311,8 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='rest_blob_id'))
         d = b'hello, world!'
-        blob_writer.append_data(0, d, len(d))
+        logging.debug('finalize body')
+        blob_writer.append_data(0, d, last=True)
 
         fut.result(timeout=5)
 
@@ -319,7 +321,8 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx_cursor.tx.rcpt_response],
                          [402, 403])
-        self.assertIsNone(tx_cursor.tx.data_response)
+        self.assertEqual(450, tx_cursor.tx.data_response.code)
+        self.assertIn('precondition', tx_cursor.tx.data_response.message)
 
 
     # incomplete transactions i.e. downstream timeout shouldn't be retried
@@ -557,7 +560,9 @@ class OutputHandlerTest(unittest.TestCase):
         reader.load(rest_id='rest_tx_id')
 
 
-    # 2: handle w/o notification that permfails, recover, handle -> dsn
+    # 2: handle w/o notification that permfails,
+    # enable notifications after handler done,
+    # recover, handle -> dsn
     def test_notification_post_facto(self):
         tx = TransactionMetadata(
             host='outbound',
@@ -634,7 +639,7 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_data_timeout=1)
 
         handler.handle()
-
+        self.assertFalse(notification_endpoint.update_expectation)
 
 
 if __name__ == '__main__':

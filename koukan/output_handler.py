@@ -320,38 +320,58 @@ class OutputHandler:
 
         return final_attempt_reason, next_attempt_time
 
+    # one iteration of output
+    # - wait for new downstream if necessary
+    # - emit to output chain
+    # - completion/next attempt/notification logic
     # -> delta, kwargs for write_envelope()
     def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
         upstream_delta = None
-        # XXX cursor.no_final_notification: tx.notification was None when
+        # cursor.no_final_notification: tx.notification was None when
         # final_attempt_reason was written iow notifications were enabled after
         # the tx already failed (Exploder)
 
-        # very first call or
-        # we may have picked this up from the previous write_envelope()
-        if not self.tx.req_inflight() and not self.tx.cancelled:
-            if not self.cursor.wait(5):  # xxx
-                upstream_delta = TransactionMetadata()
-                self.tx.fill_inflight_responses(
-                    Response(450, 'upstream timeout (OutputHandler)'),
-                    upstream_delta)
-            self.tx = self.cursor.load().copy()
+        # very first call or there's a small chance
+        # we may have picked up new downstream from the previous
+        # write_envelope()
+        downstream_timeout = False
+        logging.debug(self.tx)
+        if (not self.cursor.no_final_notification and
+            not self.cursor.input_done and
+            not self.prev_tx.delta(self.tx) and  # no new downstream
+            not self.tx.cancelled):
+            if not self.cursor.wait(self.env_timeout):  # xxx
+                logging.debug('downstream timeout')
+                downstream_timeout = True
+            else:
+                self.tx = self.cursor.load().copy()
         logging.debug('_handle_once %s', self.tx)
         delta = self.prev_tx.delta(self.tx)
-        # precondition check: body after all rcpts failed
-
-        if upstream_delta is None:  # else upstream timeout (above)
+        if (self.tx.body is not None and
+            len(self.tx.rcpt_response) == len(self.tx.rcpt_to) and
+            not any([r.ok() for r in self.tx.rcpt_response])):
+            upstream_delta = TransactionMetadata(
+                data_response=Response(450, 'precondition failed: '
+                                       'no valid rcpt (OutputHandler)'))
+        elif self.tx.req_inflight() or self.tx.cancelled:
             upstream_delta = self.endpoint.on_update(self.tx, delta)
             logging.debug(self.cursor.tx)
             self.prev_tx = self.tx.copy()
-            # postcondition check: !req_inflight()
-
+            # postcondition check: !req_inflight() in handle() finally:
+        else:
+            upstream_delta = TransactionMetadata()
 
         done = False
         final_attempt_reason = None
+        if self.cursor.no_final_notification:
+            done = True
         if self.tx.cancelled:
             done = True
             final_attempt_reason = 'cancelled'
+        if not done and downstream_timeout:
+            done = True
+            final_attempt_reason = 'downstream timeout'
+
         final_response = None
         if not done and (self.tx.mail_response is not None) and self.tx.mail_response.err():
             done = True
@@ -367,10 +387,10 @@ class OutputHandler:
 
         kwargs = {}
 
-        if final_response is not None and (
+        if final_attempt_reason is None and final_response is not None and (
                 final_response.ok() or final_response.perm()):
             final_attempt_reason = 'upstream response'
-        if final_attempt_reason is None:
+        if final_attempt_reason is None and not self.cursor.no_final_notification:
             final_attempt_reason, kwargs['next_attempt_time'] = (
                 self._next_attempt_time(time.time()))
         kwargs['final_attempt_reason'] = final_attempt_reason
