@@ -345,6 +345,13 @@ class OutputHandler:
                 downstream_timeout = True
             else:
                 self.tx = self.cursor.load().copy()
+        # drop some fields from the tx that's going upstream
+        # OH consumes these fields but they should not propagate to the
+        # output chain/upstream rest/gateway etc
+        for field in ['notification', 'retry', 'final_attempt_reason']:
+            if getattr(self.tx, field) is not None:
+                delattr(self.tx, field)
+
         logging.debug('_handle_once %s', self.tx)
         delta = self.prev_tx.delta(self.tx)
         if (self.tx.body is not None and
@@ -353,6 +360,7 @@ class OutputHandler:
             upstream_delta = TransactionMetadata(
                 data_response=Response(450, 'precondition failed: '
                                        'no valid rcpt (OutputHandler)'))
+            self.tx.merge_from(upstream_delta)
         elif self.tx.req_inflight() or self.tx.cancelled:
             upstream_delta = self.endpoint.on_update(self.tx, delta)
             logging.debug(self.cursor.tx)
@@ -398,7 +406,7 @@ class OutputHandler:
                 self._next_attempt_time(time.time()))
         kwargs['final_attempt_reason'] = final_attempt_reason
 
-        if self.tx.notification is not None:
+        if self.cursor.tx.notification is not None:
             self._maybe_send_notification(final_attempt_reason)
             kwargs['notification_done'] = True
         kwargs['finalize_attempt'] = True
