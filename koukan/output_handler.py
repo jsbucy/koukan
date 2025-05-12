@@ -389,7 +389,10 @@ class OutputHandler:
 
         if final_attempt_reason is None and final_response is not None and (
                 final_response.ok() or final_response.perm()):
-            final_attempt_reason = 'upstream response'
+            if final_response.ok():
+                final_attempt_reason = 'upstream response success'
+            elif final_response.perm():
+                final_attempt_reason = 'upstream response permfail'
         if final_attempt_reason is None and not self.cursor.no_final_notification:
             final_attempt_reason, kwargs['next_attempt_time'] = (
                 self._next_attempt_time(time.time()))
