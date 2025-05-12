@@ -621,8 +621,9 @@ class TransactionMetadata:
                 continue
             offset = getattr(delta, field.list_offset(), 0)
             if offset != len(old_v):
-                logging.debug('list offset mismatch %s old %d new %s',
-                              f, len(old_v), offset)
+                logging.debug(
+                    'list offset mismatch %s old len %d new offset %s',
+                    f, len(old_v), offset)
                 return None
             l = []
             l.extend(old_v)

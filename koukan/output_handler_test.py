@@ -194,25 +194,28 @@ class OutputHandlerTest(unittest.TestCase):
             else:
                 self.fail('failed to read ' + rcpt[i] + ' response')
 
-
-        # write & patch blob
-        tx_cursor.write_envelope(
-            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
-        blob_writer = tx_cursor.get_blob_for_append(
-            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
-        blob_writer.append_data(0, body, len(body))
-
         def exp_body(tx, tx_delta):
             logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
+            if not tx.body.finalized():
+                return TransactionMetadata()
             self.assertEqual(tx_delta.body.pread(0), body)
             upstream_delta = TransactionMetadata(
                 data_response = Response(204))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_body)
+        endpoint.add_expectation(exp_body)
+
+        # write blob
+        tx_cursor.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
+        blob_writer = tx_cursor.get_blob_for_append(
+            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
+        blob_writer.append_data(0, body, last=True)
+
 
         # read data resp
         for j in range(0,5):

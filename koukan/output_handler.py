@@ -322,7 +322,6 @@ class OutputHandler:
 
     # -> delta, kwargs for write_envelope()
     def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
-        logging.debug('_handle_once %s', self.cursor.tx)
         upstream_delta = None
         # XXX cursor.no_final_notification: tx.notification was None when
         # final_attempt_reason was written iow notifications were enabled after
@@ -331,17 +330,19 @@ class OutputHandler:
         # very first call or
         # we may have picked this up from the previous write_envelope()
         if not self.tx.req_inflight() and not self.tx.cancelled:
-            if not self.cursor.wait():
+            if not self.cursor.wait(5):  # xxx
                 upstream_delta = TransactionMetadata()
                 self.tx.fill_inflight_responses(
                     Response(450, 'upstream timeout (OutputHandler)'),
                     upstream_delta)
-            self.tx = self.cursor.load()
+            self.tx = self.cursor.load().copy()
+        logging.debug('_handle_once %s', self.tx)
         delta = self.prev_tx.delta(self.tx)
         # precondition check: body after all rcpts failed
 
         if upstream_delta is None:  # else upstream timeout (above)
             upstream_delta = self.endpoint.on_update(self.tx, delta)
+            logging.debug(self.cursor.tx)
             self.prev_tx = self.tx.copy()
             # postcondition check: !req_inflight()
 
@@ -404,16 +405,17 @@ class OutputHandler:
                         'bug_retry', 3600) }
                 self.tx = self.cursor.tx.copy()
                 delta, env_kwargs = self._handle_once()
-                done = env_kwargs.get('finalize_attempt', False)
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
+                done = env_kwargs.get('finalize_attempt', False)
                 err_resp = Response(
                     450, 'internal error: OutputHandler failed to populate '
                     'response')
                 self.tx.fill_inflight_responses(err_resp, delta)
                 for i in range(0,5):
                     try:
+                        logging.debug(self.cursor.tx)
                         self.cursor.write_envelope(delta, **env_kwargs)
                         break
                     except VersionConflictException:
@@ -422,6 +424,7 @@ class OutputHandler:
                             raise
                         backoff(i)
                         self.cursor.load()
+        logging.debug('done')
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
