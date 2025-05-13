@@ -140,11 +140,19 @@ class Exploder(SyncFilter):
         return lhs
 
     def on_update(self,
-                  tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
+                  downstream_tx : TransactionMetadata,
+                  downstream_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        tx_orig = tx.copy()
-        tx_delta = tx_delta.copy()
+        tx_orig = downstream_tx.copy()
+        tx = downstream_tx.copy()
+        tx_delta = downstream_delta.copy()
+
+        # OutputHandler may send but Storage currently does not accept
+        # reusing !finalized blob so we must buffer incomplete body here.
+        if tx.body is not None and not tx.body.finalized():
+            tx_orig.body = tx.body = tx_delta.body = None
+            if not tx_delta:
+                return TransactionMetadata()
 
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(
@@ -192,7 +200,9 @@ class Exploder(SyncFilter):
                 tx.data_response = rcpt.tx.data_response
 
         if (body is None) or (tx.data_response is not None):
-            return tx_orig.delta(tx)
+            upstream_delta = tx_orig.delta(tx)
+            downstream_tx.merge_from(upstream_delta)
+            return upstream_delta
 
         # If all rcpts with rcpt_response.ok() have the same
         # data_response.major_code(), return that.  The most likely
@@ -210,9 +220,7 @@ class Exploder(SyncFilter):
             tx.data_response = Response(
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
-        elif body.finalized():
-            # Storage currently does not allow reusing !finalized blob
-            # so we must buffer here it until finalized.
+        else:
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
@@ -225,4 +233,6 @@ class Exploder(SyncFilter):
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
 
-        return tx_orig.delta(tx)
+        upstream_delta = tx_orig.delta(tx)
+        downstream_tx.merge_from(upstream_delta)
+        return upstream_delta
