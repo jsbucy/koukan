@@ -1224,9 +1224,6 @@ class RestEndpointTest(unittest.TestCase):
 
         tx = TransactionMetadata(cancelled = True)
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
-        self.assertTrue(upstream_delta.cancelled)
-        upstream_delta = rest_endpoint.on_update(tx, TransactionMetadata())
-        self.assertFalse(upstream_delta.cancelled)
 
 
 if __name__ == '__main__':

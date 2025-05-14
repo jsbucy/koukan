@@ -249,7 +249,10 @@ class RouterServiceTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_cancel(tx, tx_delta):
-            return TransactionMetadata()
+            upstream_delta = TransactionMetadata()
+            tx.fill_inflight_responses(Response(450), upstream_delta)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
 
         for i in range(0,10):
             logging.info('RouterServiceTest.setUp probe %d', i)
@@ -343,6 +346,7 @@ class RouterServiceTest(unittest.TestCase):
             self.assertTrue(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
         upstream_endpoint.add_expectation(exp)
         upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
@@ -656,12 +660,15 @@ class RouterServiceTest(unittest.TestCase):
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_body(tx, tx_delta):
+            if tx.body is None or not tx.body.finalized():
+                return TransactionMetadata()
             self.assertEqual(tx.body.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         upstream_endpoint.add_expectation(exp_env)
+        upstream_endpoint.add_expectation(exp_body)
         upstream_endpoint.add_expectation(exp_body)
         self.add_endpoint(upstream_endpoint)
 

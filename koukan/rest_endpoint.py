@@ -215,7 +215,7 @@ class RestEndpoint(SyncFilter):
     def _cancel(self):
         logging.debug('RestEndpoint._cancel %s ', self.transaction_url)
         if not self.transaction_url:
-            return TransactionMetadata(cancelled=True)
+            return
         try:
             rest_resp = self.client.post(self.transaction_url + '/cancel')
         except RequestError as e:
@@ -223,7 +223,7 @@ class RestEndpoint(SyncFilter):
         else:
             logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
                           rest_resp)
-        return TransactionMetadata(cancelled=True)
+        return
 
     def on_update(self,
                   tx : TransactionMetadata,
@@ -231,7 +231,12 @@ class RestEndpoint(SyncFilter):
                   timeout : Optional[float] = None
                   ) -> Optional[TransactionMetadata]:
         if tx_delta.cancelled:
-            return self._cancel()
+            self._cancel()
+            upstream_delta = TransactionMetadata()
+            tx.fill_inflight_responses(
+                Response(450, 'cancelled'), upstream_delta)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
         elif tx.cancelled:
             return TransactionMetadata()
 

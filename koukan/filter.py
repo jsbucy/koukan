@@ -405,29 +405,12 @@ class TransactionMetadata:
 
     def __repr__(self):
         out = ''
-        out += 'version=%s ' % self.version
-        out += 'mail_from=%s mail_response=%s ' % (
-            self.mail_from, self.mail_response)
-        out += 'rcpt_to=%s rcpt_response=%s ' % (
-            self.rcpt_to, self.rcpt_response)
-        out += 'body=%s ' % (self.body)
-        out += 'data_response=%s ' % self.data_response
-        if self.rest_endpoint:
-            out += 'rest_endpoint=%s ' % self.rest_endpoint
-        if self.upstream_http_host:
-            out += 'upstream_http_host=%s ' % self.upstream_http_host
-        if self.remote_host:
-            out += 'remote_host=%s ' % self.remote_host
-        if self.cancelled is not None:
-            out += 'cancelled=%s ' % self.cancelled
-        if self.options is not None:
-            out += 'options=%s ' % self.options
-        if self.resolution:
-            out += 'resolution=%s ' % self.resolution
-        if self.notification is not None:
-            out += 'notification=%s ' % self.notification
-        if self.retry is not None:
-            out += 'retry=%s ' % self.retry
+        for name,field in tx_json_fields.items():
+            if hasattr(self, name):
+                v = getattr(self, name)
+                if (field.is_list and v == []) or v is None:
+                    continue
+                out += '%s: %s\n' % (name, v)
         return out
 
     def empty(self, which_js : WhichJson):
@@ -537,11 +520,15 @@ class TransactionMetadata:
                                 dest : Optional['TransactionMetadata'] = None):
         if dest is None:
             dest = self
-        if self.mail_from and not self.mail_response:
+        if (self.cancelled or self.mail_from) and not self.mail_response:
             dest.mail_response = resp
         dest.rcpt_response.extend(
             [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
-        if self._body_last() and self.data_response is None:
+        if self.data_response is None and (self.body is not None) and (
+                self.cancelled or
+                not any([r.ok() for r in self.rcpt_response])):
+            dest.data_response = resp
+        elif self._body_last() and self.data_response is None:
             dest.data_response = resp
 
     def _field_to_json(self, name : str, field : TxField,

@@ -54,23 +54,35 @@ class OutputHandler:
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
 
+    def _fixup_downstream_tx(self) -> TransactionMetadata:
+        t = self.cursor.tx
+        assert t is not None
+        self.tx = t.copy()
+        # drop some fields from the tx that's going upstream
+        # OH consumes these fields but they should not propagate to the
+        # output chain/upstream rest/gateway etc
+        for field in ['notification', 'retry', 'final_attempt_reason']:
+            if getattr(self.tx, field) is not None:
+                delattr(self.tx, field)
+        delta = self.prev_tx.delta(self.tx)
+        assert delta is not None
+        logging.debug(str(delta) if delta else '(empty delta)')
+        return delta
+
     # one iteration of output
-    # - wait for new downstream if necessary
-    # - emit to output chain
+    # - wait for delta from downstream if necessary
+    # - emit delta to output chain
     # - completion/next attempt/notification logic
     # -> delta, kwargs for write_envelope()
     def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
-        # cursor.no_final_notification: tx.notification was None when
-        # final_attempt_reason was written iow notifications were enabled after
-        # the tx already failed (Exploder)
-
+        assert not self.cursor.no_final_notification
         # very first call or there's a small chance
         # we may have picked up new downstream from the previous
         # write_envelope()
         downstream_timeout = False
-        if (not self.cursor.no_final_notification and
-            not self.cursor.input_done and
-            not self.prev_tx.delta(self.tx) and  # no new downstream
+        delta = self._fixup_downstream_tx()
+        if (not self.cursor.input_done and
+            delta.empty(WhichJson.ALL) and  # no new downstream
             not self.tx.cancelled):
             # TODO until we get chunked uploads merged in aiosmtpd,
             # probably want gateway/SmtpHandler to keepalive/ping
@@ -82,57 +94,39 @@ class OutputHandler:
             else:
                 tx = self.cursor.load()
                 assert tx is not None
-                self.tx = tx.copy()
-        # drop some fields from the tx that's going upstream
-        # OH consumes these fields but they should not propagate to the
-        # output chain/upstream rest/gateway etc
-        for field in ['notification', 'retry', 'final_attempt_reason']:
-            if getattr(self.tx, field) is not None:
-                delattr(self.tx, field)
+                delta = self._fixup_downstream_tx()
 
-        logging.debug('_handle_once %s', self.tx)
-        delta = self.prev_tx.delta(self.tx)
-        if (self.tx.body is not None and
-            len(self.tx.rcpt_response) == len(self.tx.rcpt_to) and
-            not any([r.ok() for r in self.tx.rcpt_response])):
-            upstream_delta = TransactionMetadata(
-                data_response=Response(450, 'precondition failed: '
-                                       'no valid rcpt (OutputHandler)'))
-            self.tx.merge_from(upstream_delta)
-        elif self.tx.req_inflight() or self.tx.cancelled:
+        logging.debug('_handle_once %s %s', self.rest_id, self.tx)
+
+        if not delta.empty(WhichJson.ALL) or self.tx.cancelled:
             upstream_delta = self.endpoint.on_update(self.tx, delta)
             assert upstream_delta is not None
 
-            # similarly to above, if rest output to router
-            # (short-circuit: submission -> egress), these fields will clash
-            for field in ['final_attempt_reason', 'attempt_count']:
-                for t in [self.tx, upstream_delta]:
-                    if getattr(t, field) is not None:
-                        delattr(t, field)
+            # note: Exploder does not propagate any fields other than
+            # rcpt_response, data_response from upstream so it is no longer
+            # necessary to clear e.g. attempt_count here.
 
-            self.prev_tx = self.tx.copy()
             # postcondition check: !req_inflight() in handle() finally:
         else:
             upstream_delta = TransactionMetadata()
 
+        self.prev_tx = self.tx.copy()
+
         done = False
         final_attempt_reason = None
-        if self.cursor.no_final_notification:
-            done = True
+        final_response = None
         if self.tx.cancelled:
             done = True
-            final_attempt_reason = 'cancelled'
-        if not done and downstream_timeout:
+        elif downstream_timeout:
             done = True
             final_attempt_reason = 'downstream timeout'
-
-        final_response = None
-        if not done and (self.tx.mail_response is not None) and self.tx.mail_response.err():
+        elif (self.tx.mail_response is not None) and (
+                self.tx.mail_response.err()):
             done = True
             final_response = self.tx.mail_response
         # for interactive smtp/downstream exploder, final rcpt error will be
         # followed by cancellation (or possibly timeout if the gateway crashed)
-        if not done and self.tx.data_response is not None:
+        elif self.tx.data_response is not None:
             done = True
             final_response = self.tx.data_response
         done = done or self.tx.req_inflight()  # bug
@@ -147,7 +141,7 @@ class OutputHandler:
                 final_attempt_reason = 'upstream response success'
             elif final_response.perm():
                 final_attempt_reason = 'upstream response permfail'
-        if final_attempt_reason is None and not self.cursor.no_final_notification:
+        if final_attempt_reason is None:
             final_attempt_reason, kwargs['next_attempt_time'] = (
                 self._next_attempt_time(time.time()))
         kwargs['final_attempt_reason'] = final_attempt_reason
@@ -181,8 +175,23 @@ class OutputHandler:
                     'finalize_attempt': True,
                     'next_attempt_time': time.time() + self.retry_params.get(
                         'bug_retry', 3600) }
-                self.tx = self.cursor.tx.copy()
-                delta, env_kwargs = self._handle_once()
+                if self.cursor.no_final_notification:
+                    if not self.cursor.tx.notification:
+                        logging.error(
+                            'invalid tx state: no_final_notification without '
+                            'notification')
+                        raise ValueError()
+                    # tx.notification was None when
+                    # final_attempt_reason was written iow
+                    # notifications were enabled after the tx already
+                    # failed (Exploder)
+                    self._maybe_send_notification(
+                        self.cursor.final_attempt_reason)
+                    env_kwargs = {'finalize_attempt': True,
+                                  'notification_done': True}
+                else:
+                    self.tx = self.cursor.tx.copy()
+                    delta, env_kwargs = self._handle_once()
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
@@ -247,13 +256,12 @@ class OutputHandler:
         # for rcpt errors, don't enable it until after sending the
         # data, etc.
 
-        # This does expose one shortcoming that appending body/blob
-        # data will probably not fail even if the upstream transaction
+        # This does expose one shortcoming that an http request to
+        # append body/blob data will probably not fail even if the
+        # upstream transaction
         # has permfailed since:
         # - Exploder doesn't check for upstream errors after it it has
         # decided to store&forward
-        # - OutputHandler buffers the entire body before sending it
-        # upstream
         # - downstream StorageWriterFilter/RestHandler stack doesn't
         # have the logic to fail the PUT in that case
         # RestHandler should probably always fail body/blob PUT after

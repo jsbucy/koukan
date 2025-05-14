@@ -221,6 +221,7 @@ class TransactionCursor:
                           ) -> bool:  # blobs done
         blob_specs : List[BlobSpec]
         body = tx.body
+        # xxx precondition check, when does this need to be finalized?
         if isinstance(body, BlobSpec):
             blob_specs = [body]
         elif isinstance(body, MessageBuilderSpec):
@@ -312,10 +313,12 @@ class TransactionCursor:
                 self.final_attempt_reason != 'oneshot'):
             return
 
-        assert (self.final_attempt_reason == 'oneshot' or
-                self.final_attempt_reason is None or
-                final_attempt_reason is None)
-
+        if (self.final_attempt_reason is not None and
+            self.final_attempt_reason != 'oneshot' and
+            final_attempt_reason is not None):
+            logging.error('%s %s', self.final_attempt_reason,
+                          final_attempt_reason)
+            raise ValueError()
         assert self.tx is not None
 
         if (tx_delta.empty(WhichJson.DB) and
