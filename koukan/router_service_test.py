@@ -370,6 +370,7 @@ class RouterServiceTest(unittest.TestCase):
                 'data_response': {'code': 203, 'message': 'ok'},
                 'final_attempt_reason': 'upstream response success'}:
                 break
+            logging.debug(tx_json)
         else:
             logging.debug(self.service.storage.debug_dump())
             self.fail('didn\'t get expected transaction %s' % tx_json)

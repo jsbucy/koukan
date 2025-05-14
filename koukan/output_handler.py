@@ -76,9 +76,8 @@ class OutputHandler:
     # -> delta, kwargs for write_envelope()
     def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
         assert not self.cursor.no_final_notification
-        # very first call or there's a small chance
-        # we may have picked up new downstream from the previous
-        # write_envelope()
+        # very first call or there's a small chance we the previous
+        # write_envelope() may have picked up a delta from downstream
         downstream_timeout = False
         delta = self._fixup_downstream_tx()
         if (not self.cursor.input_done and
@@ -113,9 +112,15 @@ class OutputHandler:
         self.prev_tx = self.tx.copy()
 
         done = False
+        # for oneshot tx (i.e. exploder downstream or rest without
+        # retries enabled), start_attempt() preloads
+        # final_attempt_reason with oneshot
         final_attempt_reason = None
+        assert final_attempt_reason in [None, 'oneshot', 'downstream cancelled']
         final_response = None
-        if self.tx.cancelled:
+        if self.tx.req_inflight():
+            done = True  # output postcondition failure
+        elif self.tx.cancelled:
             done = True
         elif downstream_timeout:
             done = True
@@ -123,24 +128,38 @@ class OutputHandler:
         elif (self.tx.mail_response is not None) and (
                 self.tx.mail_response.err()):
             done = True
-            final_response = self.tx.mail_response
-        # for interactive smtp/downstream exploder, final rcpt error will be
-        # followed by cancellation (or possibly timeout if the gateway crashed)
+            if self.tx.mail_response.perm():
+                final_attempt_reason = 'upstream mail_response permfail'
+        # for interactive smtp/downstream exploder w/multiple rcpt and
+        # all failed:
+        # 1: non-pipelined client smtp will rset/quit and router will get
+        # cancellation
+        # 2: router may see a downstream timeout if gw crashes in the
+        # middle of this
+        # 3: client may pipeline data with rcpts, then some invocation of
+        # fill_inflight_responses should populate data_response with
+        # ~failed precondition
+        elif (not any([r.ok() for r in self.tx.rcpt_response]) and
+              self.tx.body is not None):
+            done = True
+            if len(self.tx.rcpt_to) == 1 and self.tx.rcpt_response[0].perm():
+                final_attempt_reason = 'upstream rcpt_response permfail'
+            else:
+                # single rcpt (above) could also be exploder but
+                # multi-rcpt is always exploder/ephemeral/no-retry
+                final_attempt_reason = 'exploder/oneshot all rcpts failed'
         elif self.tx.data_response is not None:
             done = True
-            final_response = self.tx.data_response
-        done = done or self.tx.req_inflight()  # bug
+            if self.tx.data_response.ok():
+                final_attempt_reason = 'upstream response success'
+            elif self.tx.data_response.perm():
+                final_attempt_reason = 'upstream response permfail'
+
         if not done:
             return upstream_delta, {}
 
-        kwargs = {}
+        kwargs = {'finalize_attempt': True}
 
-        if final_attempt_reason is None and final_response is not None and (
-                final_response.ok() or final_response.perm()):
-            if final_response.ok():
-                final_attempt_reason = 'upstream response success'
-            elif final_response.perm():
-                final_attempt_reason = 'upstream response permfail'
         if final_attempt_reason is None:
             final_attempt_reason, kwargs['next_attempt_time'] = (
                 self._next_attempt_time(time.time()))
@@ -149,7 +168,6 @@ class OutputHandler:
         if self.cursor.tx.notification is not None:
             self._maybe_send_notification(final_attempt_reason)
             kwargs['notification_done'] = True
-        kwargs['finalize_attempt'] = True
 
         return upstream_delta, kwargs
 

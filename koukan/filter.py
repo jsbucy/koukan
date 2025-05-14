@@ -513,21 +513,21 @@ class TransactionMetadata:
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs
-    # TODO possibly this should populate the first of mail/rcpt/data
-    # and either leave the rest unset or set them to "failed
-    # precondition/bad sequence of commands"
     def fill_inflight_responses(self, resp : Response,
                                 dest : Optional['TransactionMetadata'] = None):
         if dest is None:
             dest = self
-        if (self.cancelled or self.mail_from) and not self.mail_response:
+        if self.mail_from and not self.mail_response:
             dest.mail_response = resp
+        err = resp
+        if self.mail_response is not None and self.mail_response.err():
+            err = Response(503, '5.5.1 failed precondition: MAIL')
         dest.rcpt_response.extend(
-            [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
+            [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
         if self.data_response is None and (self.body is not None) and (
-                self.cancelled or
                 not any([r.ok() for r in self.rcpt_response])):
-            dest.data_response = resp
+            err = Response(503, '5.5.1 failed precondition: all rcpts failed')
+            dest.data_response = err
         elif self._body_last() and self.data_response is None:
             dest.data_response = resp
 

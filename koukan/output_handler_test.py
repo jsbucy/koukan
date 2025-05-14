@@ -313,12 +313,12 @@ class OutputHandlerTest(unittest.TestCase):
         fut.result(timeout=5)
 
         tx_cursor.load()
-        self.assertIsNone(tx_cursor.final_attempt_reason)
+        self.assertIn('oneshot', tx_cursor.final_attempt_reason)
         self.assertEqual(tx_cursor.tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx_cursor.tx.rcpt_response],
                          [402, 403])
-        self.assertEqual(450, tx_cursor.tx.data_response.code)
-        self.assertIn('cancelled', tx_cursor.tx.data_response.message)
+        self.assertEqual(503, tx_cursor.tx.data_response.code)
+        self.assertIn('precondition', tx_cursor.tx.data_response.message)
 
 
     # incomplete transactions i.e. downstream timeout shouldn't be retried
