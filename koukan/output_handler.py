@@ -194,15 +194,15 @@ class OutputHandler:
                     'next_attempt_time': time.time() + self.retry_params.get(
                         'bug_retry', 3600) }
                 if self.cursor.no_final_notification:
+                    # tx.notification was None when
+                    # final_attempt_reason was written iow
+                    # notifications were enabled after the tx already
+                    # failed (Exploder)
                     if not self.cursor.tx.notification:
                         logging.error(
                             'invalid tx state: no_final_notification without '
                             'notification')
                         raise ValueError()
-                    # tx.notification was None when
-                    # final_attempt_reason was written iow
-                    # notifications were enabled after the tx already
-                    # failed (Exploder)
                     self._maybe_send_notification(
                         self.cursor.final_attempt_reason)
                     env_kwargs = {'finalize_attempt': True,
@@ -228,7 +228,7 @@ class OutputHandler:
                             raise
                         backoff(i)
                         self.cursor.load()
-        logging.debug('done')
+        logging.debug('done %s', self.rest_id)
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:

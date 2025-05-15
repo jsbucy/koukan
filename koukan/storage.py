@@ -189,8 +189,8 @@ class TransactionCursor:
             blob_id, blob_rest_id, length, content_length, last_update = row
             ids.add(blob_rest_id)
 
-            if content_length is None or length != content_length:  # !done
-                raise ValueError()
+            if content_length is None or length != content_length:
+                raise ValueError()  # not finalized
             blob_cursor = BlobCursor(self.parent)
             blob_cursor.init(self.rest_id, blob_id, blob_rest_id,
                              content_length, last_update, length)
@@ -221,7 +221,6 @@ class TransactionCursor:
                           ) -> bool:  # blobs done
         blob_specs : List[BlobSpec]
         body = tx.body
-        # xxx precondition check, when does this need to be finalized?
         if isinstance(body, BlobSpec):
             blob_specs = [body]
         elif isinstance(body, MessageBuilderSpec):
@@ -247,16 +246,18 @@ class TransactionCursor:
 
             if blob_spec.reuse_uri:
                 reuse_uris.append(body_blob_uri(blob_spec.reuse_uri))
-            elif blob_spec.create_id or blob_spec.create_tx_body or isinstance(blob_spec.blob, Blob):
+            elif (blob_spec.create_id or blob_spec.create_tx_body or
+                  isinstance(blob_spec.blob, Blob)):
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob_spec.blob:
                     blob_cursor.append_blob(blob_spec.blob)
                 if not blob_spec.create_id and not blob_spec.create_tx_body:
                     create_id = str(i)
-                blob_rest_id = TX_BODY if blob_spec.create_tx_body else blob_spec.create_id
+                blob_rest_id = (TX_BODY if blob_spec.create_tx_body
+                                else blob_spec.create_id)
                 blob_cursor.blob_uri = BlobUri(
-                    self.rest_id, tx_body = (blob_rest_id==TX_BODY),
+                    self.rest_id, tx_body = (blob_rest_id == TX_BODY),
                     blob = blob_rest_id)
                 blob_cursor.update_tx = self.rest_id
                 blob_cursor.db_tx = None  # ugh

@@ -233,8 +233,12 @@ class RestEndpoint(SyncFilter):
         if tx_delta.cancelled:
             self._cancel()
             upstream_delta = TransactionMetadata()
+            # TODO I'm not sure whether it's possible to get new
+            # requests in delta along with cancellation. This response
+            # should never get as far as smtp since cancel only occurs
+            # after the smtp transaction aborted due to rset/quit/timeout.
             tx.fill_inflight_responses(
-                Response(450, 'cancelled'), upstream_delta)
+                Response(550, 'cancelled'), upstream_delta)
             tx.merge_from(upstream_delta)
             return upstream_delta
         elif tx.cancelled:
