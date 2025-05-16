@@ -41,6 +41,10 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         self.retry_params = retry_params if retry_params else {}
         self.timeout_resp = TransactionMetadata()
 
+    def incremental(self):
+        # only RestEndpoint calls this for http req validation
+        raise NotImplementedError()
+
     def get_blob_writer(
             self,
             create : bool,

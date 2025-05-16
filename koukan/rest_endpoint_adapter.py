@@ -119,6 +119,9 @@ class SyncFilterAdapter(AsyncFilter):
         self.tx.rest_id = rest_id
         self.id_version = IdVersion(db_id=1, rest_id='1', version=1)
 
+    def incremental(self):
+        return True
+
     def idle(self, now : float, ttl : float, done_ttl : float):
         with self.mu:
             t = done_ttl if self.done else ttl
@@ -435,7 +438,15 @@ class RestHandler(Handler):
         if self.async_filter is None:
             return self.response(
                 request, code=500, msg='internal error creating transaction')
-        tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
+        tx = TransactionMetadata.from_json(
+            req_json, WhichJson.REST_CREATE)
+        if not self.async_filter.incremental():
+            if tx.mail_from is None or len(tx.rcpt_to) != 1:
+                return self.response(
+                    request, code=400, msg='transaction creation to '
+                    'non-incremental endpoint must contain mail_from and '
+                    'exactly 1 rcpt_to')
+
         if tx is None:
             return self.response(request, code=400, msg='invalid tx json')
         tx.host = self.http_host
@@ -544,18 +555,11 @@ class RestHandler(Handler):
             return err
         return self._get_tx_resp(request, tx)
 
-    def patch_tx(self, request : HttpRequest,
-                 req_json : dict,
-                 message_builder : bool = False
-                 ) -> HttpResponse:
+    def patch_tx(self, request : HttpRequest, req_json : dict) -> HttpResponse:
         logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
-        if message_builder:
-            downstream_delta = TransactionMetadata()
-            downstream_delta.message_builder = req_json
-        else:
-            downstream_delta = TransactionMetadata.from_json(
-                req_json, WhichJson.REST_UPDATE)
+        downstream_delta = TransactionMetadata.from_json(
+            req_json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
             return self.response(request, code=400, msg='invalid request')
         body = downstream_delta.body
@@ -571,6 +575,10 @@ class RestHandler(Handler):
                 request,
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
+        if not self.async_filter.incremental():
+            return self.response(
+                request, code=400,
+                msg='endpoint does not accept incremental updates')
 
         if tx.merge_from(downstream_delta) is None:
             return self.response(

@@ -760,6 +760,12 @@ class SyncFilter(ABC):
 
 # interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
+    # returns whether this endpoint supports building up the
+    # transaction incrementally a la smtp
+    @abstractmethod
+    def incremental(self) -> bool:
+        pass
+
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,

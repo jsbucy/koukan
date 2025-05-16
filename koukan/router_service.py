@@ -235,7 +235,9 @@ class Service:
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=True)
+            create_leased=True,
+            http_host = http_host,
+            endpoint_yaml = self.get_endpoint_yaml)
         fut = self.output_executor.submit(
             lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
             0)
@@ -244,10 +246,17 @@ class Service:
             return None
         return writer, endpoint_yaml
 
+    def get_endpoint_yaml(self, endpoint : str) -> Optional[dict]:
+        try:
+            return next(e for e in self.root_yaml['endpoint'] if e['name'] == endpoint)
+        except StopIteration:
+            return None
+
     def get_storage_writer(self, rest_id : str) -> StorageWriterFilter:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            endpoint_yaml = self.get_endpoint_yaml)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
                        endpoint : SyncFilter,

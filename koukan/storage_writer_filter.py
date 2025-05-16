@@ -32,20 +32,29 @@ class StorageWriterFilter(AsyncFilter):
     # leased cursor for cutthrough
     upstream_cursor : Optional[TransactionCursor] = None
     create_err : bool = False
-
     mu : Lock
     cv : Condition
+    http_host : Optional[str] = None
+    endpoint_yaml : Optional[Callable[str, dict]] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
-                 create_leased : bool = False):
+                 create_leased : bool = False,
+                 http_host : Optional[str] = None,
+                 endpoint_yaml : Optional[Callable[str, dict]] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
         self.create_leased = create_leased
         self.mu = Lock()
         self.cv = Condition(self.mu)
+        self.http_host = http_host
+        self.endpoint_yaml = endpoint_yaml
+
+    def incremental(self):
+        yaml = self.endpoint_yaml(self.http_host)
+        return yaml['chain'][-1]['filter'] == 'exploder'
 
     # AsyncFilter
     def wait(self, version, timeout) -> bool:
@@ -96,7 +105,11 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-        self.tx_cursor.load()
+        tx = self.tx_cursor.load()
+        if tx is None:  # 404 e.g. after GC
+            return
+        if self.http_host is None:
+            self.http_host = tx.host
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:

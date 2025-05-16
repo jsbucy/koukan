@@ -61,19 +61,6 @@ def create_app(handler_factory : HandlerFactory):
 
         return await handler.put_blob_async(request, tx_body=True)
 
-    # TODO disallow this for rest submission? require to be specified
-    # in the initial post?  however rest receiving may not because
-    # it's coming from interactive smtp
-    @app.post('/transactions/{tx_rest_id}/message_builder')
-    async def set_message_builder(tx_rest_id : str,
-                                  request : FastApiRequest) -> FastApiResponse:
-        req_json = await request.json()
-        logging.debug('rest_service.set_message_builder %s', request)
-        handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.handle_async(
-            request, lambda: handler.patch_tx(request, req_json=req_json,
-                                              message_builder=True))
-
     @app.post('/transactions/{tx_rest_id}/cancel')
     async def cancel_tx(tx_rest_id : str, request : FastApiRequest
                         ) -> FastApiResponse:

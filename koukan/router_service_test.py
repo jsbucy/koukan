@@ -245,7 +245,8 @@ class RouterServiceTest(unittest.TestCase):
         # probe for startup
         def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
-                mail_response = Response(299, 'probe mail ok'))
+                mail_response = Response(201, 'probe mail ok'),
+                rcpt_response = [Response(202)])
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         def exp_cancel(tx, tx_delta):
@@ -267,7 +268,8 @@ class RouterServiceTest(unittest.TestCase):
                 static_http_host='submission',
                 timeout_start=1, timeout_data=1)
             tx = TransactionMetadata(
-                mail_from = Mailbox('probe-from%d' % i))
+                mail_from = Mailbox('probe-from%d' % i),
+                rcpt_to = [Mailbox('probe-to%d' % i)])
             rest_endpoint.on_update(tx, tx.copy(), 5)
             delta = TransactionMetadata(cancelled=True)
             tx.merge_from(delta)
@@ -1157,18 +1159,12 @@ class RouterServiceTest(unittest.TestCase):
 
         # start a tx on self.service
         rest_endpoint = RestEndpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url, static_http_host='smtp-msa',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(mail_from=Mailbox('alice@example.com'))
 
-        def exp_mail(tx, tx_delta):
-            time.sleep(1)
-            upstream_delta=TransactionMetadata(mail_response=Response(201))
-            self.assertTrue(tx.merge_from(upstream_delta))
-            return upstream_delta
         upstream_endpoint = FakeSyncFilter()
-        upstream_endpoint.add_expectation(exp_mail)
         self.add_endpoint(upstream_endpoint)
 
         upstream_delta = rest_endpoint.on_update(tx, tx.copy(), timeout=1)
@@ -1191,7 +1187,9 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_rcpt(tx, tx_delta):
             time.sleep(1)
-            upstream_delta=TransactionMetadata(rcpt_response=[Response(202)])
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
             self.assertTrue(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream_endpoint.add_expectation(exp_rcpt)
