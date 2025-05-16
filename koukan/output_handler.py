@@ -142,8 +142,9 @@ class OutputHandler:
         elif (not any([r.ok() for r in self.tx.rcpt_response]) and
               self.tx.body is not None):
             done = True
-            if len(self.tx.rcpt_to) == 1 and self.tx.rcpt_response[0].perm():
-                final_attempt_reason = 'upstream rcpt_response permfail'
+            if len(self.tx.rcpt_to) == 1:
+                if self.tx.rcpt_response[0].perm():
+                    final_attempt_reason = 'upstream rcpt_response permfail'
             else:
                 # single rcpt (above) could also be exploder but
                 # multi-rcpt is always exploder/ephemeral/no-retry
