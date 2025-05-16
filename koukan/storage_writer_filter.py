@@ -211,8 +211,9 @@ class StorageWriterFilter(AsyncFilter):
             assert tx_body
             for i in range(0,5):
                 try:
-                    # xxx this is not idempotent, if this
-                    # retries, will create multiple blobs
+                    body = self.tx_cursor.tx.body
+                    if isinstance(body, WritableBlob):
+                        return body
                     self.tx_cursor.write_envelope(
                         TransactionMetadata(body=BlobSpec(create_tx_body=True)))
                     break

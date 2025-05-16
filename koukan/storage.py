@@ -785,9 +785,9 @@ class BlobCursor(Blob, WritableBlob):
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None
                     ) -> Tuple[bool, int, Optional[int]]:
-        logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
+        logging.info('BlobWriter.append_data %d %s %d length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.rest_id(), self.length, len(d),
+                     self.id, self.rest_id(), offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:
@@ -797,7 +797,8 @@ class BlobCursor(Blob, WritableBlob):
             content_length >= (offset + len(d)))
 
         tx_version = None
-        with nullcontext(self.db_tx) if self.db_tx is not None else self.parent.begin_transaction() as db_tx:
+        with (nullcontext(self.db_tx) if self.db_tx is not None
+              else self.parent.begin_transaction() as db_tx):
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
                 self.parent.blob_table.c.length).where(
@@ -829,6 +830,9 @@ class BlobCursor(Blob, WritableBlob):
 
             res = db_tx.execute(upd)
             row = res.fetchone()
+            # we should have early-returned after the select if the offset
+            # didn't match, etc.
+            assert row is not None
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
 

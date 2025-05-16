@@ -28,13 +28,6 @@ class Handler(ABC):
         pass
 
     @abstractmethod
-    async def create_body_async(
-            self, request : HttpRequest,
-            req_upload : Optional[str] = None
-    ) -> HttpResponse:
-        pass
-
-    @abstractmethod
     async def put_blob_async(
             self, request : HttpRequest,
             blob_rest_id : Optional[str] = None,

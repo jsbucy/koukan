@@ -130,7 +130,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertEqual(450, upstream_tx.mail_response.code)
         self.assertIn('unexpected exception', upstream_tx.mail_response.message)
 
-class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
+class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=5)
 
@@ -138,7 +138,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         return [(k.encode('ascii'), v.encode('ascii')) for k,v in d]
 
     async def test_create_tx(self):
-        endpoint = MockAsyncFilter()
+        endpoint = MockAsyncFilter(incremental=True)
         tx = TransactionMetadata()
 
         def exp(tx, tx_delta):
@@ -345,9 +345,9 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
                  'headers': self._headers([
                      ('content-length', str(len(body)))])}
         req = FastApiRequest(scope, input)
-        resp = await handler.create_body_async(req)
+        resp = await handler.put_blob_async(req, tx_body=True)
         logging.debug('test_create_tx create blob resp %s', resp.body)
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(endpoint.body.d, body)
         self.assertEqual(endpoint.body.content_length(), len(body))
 
@@ -406,42 +406,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r1.length, r2.length)
 
     async def test_blob_chunking(self):
-        endpoint = MockAsyncFilter()
-
-        # content-range header is not accepted in non-chunked blob post
-        handler = RestHandler(
-            async_filter=endpoint,
-            http_host='msa',
-            rest_id_factory = lambda: 'blob-rest-id',
-            tx_rest_id='tx_rest_id',
-            executor=self.executor)
-
-        scope = {'type': 'http',
-                 'headers': self._headers([
-                     ('content-range', str(ContentRange('bytes', 0,10,10)))])}
-        req = FastApiRequest(scope)
-
-        resp = await handler.create_body_async(req)
-        self.assertEqual(resp.status_code, 400)
-
-        # POST ...blob...?upload=chunked may eventually take
-        # json metadata as the entity but for now that's unimplemented
-        handler = RestHandler(
-            async_filter=endpoint,
-            http_host='msa',
-            rest_id_factory = lambda: 'blob-rest-id',
-            tx_rest_id='tx_rest_id',
-            executor=self.executor)
-        scope = {'type': 'http',
-                 'headers': [(b'content-length', b'23')]}
-        async def input():
-            return {'type': 'http.request',
-                    'body': 'unimplemented params',
-                    'more_body': False}
-        req = FastApiRequest(scope, input)
-        resp = await handler.create_body_async(req, req_upload='chunked')
-        self.assertEqual(resp.status_code, 400)
-
+        endpoint = MockAsyncFilter(incremental=True)
 
         endpoint.body = InlineBlob(b'')
         handler = RestHandler(
@@ -453,12 +418,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-
-        resp = await handler.create_body_async(req, req_upload='chunked')
-        logging.debug(resp.body)
-        self.assertEqual(resp.status_code, 201)
-        self.assertNotIn('content-range', resp.headers)
-
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
@@ -514,7 +473,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
     # transfer-encoding: chunked
     # i.e. no content-length header
     async def test_chunked_blob(self):
-        endpoint = MockAsyncFilter()
+        endpoint = MockAsyncFilter(incremental=True)
 
         endpoint.body = InlineBlob(b'')
         handler = RestHandler(
@@ -525,10 +484,6 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-
-        resp = await handler.create_body_async(req, req_upload='chunked')
-        self.assertEqual(resp.status_code, 201)
-        self.assertNotIn('content-range', resp.headers)
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
@@ -557,7 +512,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         req = FastApiRequest(scope, input)
         resp = await handler.put_blob_async(req, 'blob-rest-id')
         self.assertEqual(resp.status_code, 200)
-        self.assertNotIn('content-range', resp.headers)
+        #self.assertNotIn('content-range', resp.headers)
 
         self.assertEqual(b+b2, endpoint.body.d)
 
@@ -566,7 +521,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
             self,
             session_uri : Optional[str], service_uri : Optional[str],
             rest_lro : bool):
-        endpoint = MockAsyncFilter()
+        endpoint = MockAsyncFilter(incremental=True)
 
         handler = RestHandler(
             async_filter=endpoint,
@@ -609,7 +564,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
 
     async def _test_get_redirect(self, session_uri : Optional[str] = None
                                  ) -> FastApiResponse:
-        endpoint = MockAsyncFilter()
+        endpoint = MockAsyncFilter(incremental=True)
 
         handler = RestHandler(
             async_filter=endpoint,
@@ -642,7 +597,7 @@ class RestHandlerAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resp.headers['location'].startswith('http://1.router'))
 
     async def test_ping_session(self):
-        endpoint = MockAsyncFilter()
+        endpoint = MockAsyncFilter(incremental=True)
 
         mu = Lock()
         cv = Condition(mu)

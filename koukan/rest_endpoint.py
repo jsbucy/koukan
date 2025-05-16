@@ -479,7 +479,7 @@ class RestEndpoint(SyncFilter):
         assert blob.finalized()
         assert not(body and blob_rest_id)
         assert body or blob_rest_id
-        method, exp_code = ('PUT', 200) if blob_rest_id else ('POST', 201)
+        method, exp_code = ('PUT', 200)
         if blob_rest_id is not None:
             self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
         elif body:
@@ -495,6 +495,7 @@ class RestEndpoint(SyncFilter):
                       content = BlobReader(blob))
         rest_resp = None
         try:
+            # xxx always PUT now
             rest_resp = self.client.send(req)
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
@@ -544,6 +545,10 @@ class RestEndpoint(SyncFilter):
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
         headers = {}
+        if offset > 0 or not last:
+            headers['content-range'] = ContentRange(
+                'bytes', offset, offset + len(d),
+                offset + len(d) if last else None).to_header()
         if self.http_host:
             headers['host'] = self.http_host
         try:
@@ -552,55 +557,25 @@ class RestEndpoint(SyncFilter):
                     endpoint = self.transaction_url + '/blob/' + blob_rest_id
                 elif not non_body_blob:
                     self.blob_path = self.transaction_path + '/body'
-                    self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
+                    self.blob_url, self.blob_path = (
+                        self._maybe_qualify_url(self.blob_path))
                     endpoint = self.blob_url
                 else:
                     endpoint = self.transaction_url + '/blob'
 
-                entity = d
-                if not last:
-                    endpoint += '?upload=chunked'
-                    entity = None
-
-                logging.info('RestEndpoint._put_blob_chunk POST %s', endpoint)
-                if non_body_blob:
-                    method, exp_code = (self.client.put, 200)
-                else:
-                    method, exp_code = (self.client.post, 201)
-                rest_resp = method(
-                    urljoin(self.base_url, endpoint), headers=headers,
-                    content=entity, timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob_chunk POST %s %s %s',
-                             endpoint, rest_resp, rest_resp.headers)
-                if rest_resp.status_code != exp_code:
-                    return None, None
-                if blob_rest_id is None and non_body_blob:
-                    self.blob_path = rest_resp.headers.get('location', None)
-                    if not self.blob_path:
-                        return None, None
-                    self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
-                if not last:  # i.e. chunked upload
-                    return Response(), 0
-            else:
-                range = ContentRange('bytes', offset, offset + len(d),
-                                     offset + len(d) if last else None)
-                logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
-                             self.blob_url, range)
-                headers['content-range'] = range.to_header()
-                logging.info('RestEndpoint._put_blob_chunk PUT %s',
-                             self.blob_url)
-                rest_resp = self.client.put(
-                    self.blob_url, headers=headers, content=d,
-                    timeout=self.timeout_data)
-                logging.info('RestEndpoint._put_blob_chunk PUT %s %s %s',
-                             self.blob_url, rest_resp, rest_resp.headers)
-                if rest_resp.status_code not in [200, 416]:
-                    return Response(
-                        450, 'RestEndpoint._put_blob_chunk PUT err'), None
+            logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
+                         self.blob_url, headers)
+            rest_resp = self.client.put(
+                self.blob_url, headers=headers, content=d,
+                timeout=self.timeout_data)
+            logging.info('RestEndpoint._put_blob_chunk PUT %s %s %s',
+                         self.blob_url, rest_resp, rest_resp.headers)
+            if rest_resp.status_code not in [200, 416]:
+                return Response(
+                    450, 'RestEndpoint._put_blob_chunk PUT err'), None
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_chunk RequestError %s', e)
             return None, None
-        logging.info('RestEndpoint._put_blob_chunk %s', rest_resp)
 
         # Most(all?) errors on blob put here means temp
         # transaction final status

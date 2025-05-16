@@ -12,6 +12,9 @@ from urllib.parse import urljoin
 from datetime import timedelta
 import copy
 
+from werkzeug.datastructures import ContentRange
+import werkzeug.http
+
 from koukan.rest_schema import BlobUri, parse_blob_uri
 import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
@@ -421,9 +424,9 @@ class RouterServiceTest(unittest.TestCase):
         tx_url = rest_endpoint._maybe_qualify_url(post_resp.headers['location'])[0]
         logging.debug(tx_url)
 
-        post_body_resp = rest_endpoint.client.post(
+        post_body_resp = rest_endpoint.client.put(
             tx_url + '/body', data=body)
-        self.assertEqual(201, post_body_resp.status_code)
+        self.assertEqual(200, post_body_resp.status_code)
 
         # GET without if-none-match does a point read
         logging.debug('get tx')
@@ -501,6 +504,84 @@ class RouterServiceTest(unittest.TestCase):
         })
 
 
+    def test_rest_body_http_retry(self):
+        logging.debug('RouterServiceTest.test_rest_body_chunked')
+        rest_endpoint = RestEndpoint(
+            static_base_url=self.router_url, static_http_host='submission',
+            timeout_start=5, timeout_data=5)
+        body = b'hello, world!'
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'),
+            rcpt_to=[Mailbox('bob@example.com')])
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+        rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+
+        def exp(tx, tx_delta):
+            upstream_delta=TransactionMetadata(
+                data_response=Response(203))
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp)
+
+
+        body = 200000 * b'hello, '
+        def data():
+            yield body
+            raise EOFError()  # simulate request timeout
+
+        try:
+            resp = rest_endpoint.client.put(
+                rest_endpoint._maybe_qualify_url(
+                    rest_endpoint.transaction_path + '/body')[0],
+                content = data())
+        except:
+            pass
+
+        # xxx some race
+        time.sleep(1)
+
+        logging.debug('retry')
+
+        body += b'world!'
+        resp = rest_endpoint.client.put(
+            rest_endpoint._maybe_qualify_url(
+                rest_endpoint.transaction_path + '/body')[0],
+            content = body)
+        logging.debug(resp)
+        logging.debug(resp.headers)
+        self.assertEqual(416, resp.status_code)
+
+        # xxx some race
+        time.sleep(1)
+
+        range = werkzeug.http.parse_content_range_header(
+            resp.headers.get('content-range'))
+        range.start = range.stop
+        range.stop = len(body)
+        range.length = len(body)
+        resp = rest_endpoint.client.put(
+            rest_endpoint._maybe_qualify_url(
+                rest_endpoint.transaction_path + '/body')[0],
+            headers={'content-range': range.to_header()},
+            content = body[range.start:])
+        logging.debug(resp)
+        logging.debug(resp.headers)
+        self.assertEqual(200, resp.status_code)
+
+        # xxx get tx
+
     def test_rest_body_chunked(self):
         logging.debug('RouterServiceTest.test_rest_body_chunked')
         rest_endpoint = RestEndpoint(
@@ -536,7 +617,7 @@ class RouterServiceTest(unittest.TestCase):
             yield b'hello, '
             yield b'world!'
 
-        resp = rest_endpoint.client.post(
+        resp = rest_endpoint.client.put(
             rest_endpoint._maybe_qualify_url(
                 rest_endpoint.transaction_path + '/body')[0],
             content = data())
@@ -588,17 +669,17 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [402])
 
-        def exp_cancel(tx, tx_delta):
-            self.assertTrue(tx.cancelled)
-            return TransactionMetadata()
-        upstream_endpoint.add_expectation(exp_cancel)
+        def exp_body(tx, tx_delta):
+            self.assertIsNotNone(tx.body)
+            upstream_delta = TransactionMetadata()
+            tx.fill_inflight_responses(Response(550), upstream_delta)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+
+        upstream_endpoint.add_expectation(exp_body)
 
         body_url = rest_endpoint._maybe_qualify_url(
             rest_endpoint.transaction_path + '/body')[0]
-        logging.debug(body_url)
-        resp = rest_endpoint.client.post(body_url + '?upload=chunked')
-        logging.debug(resp.headers)
-        self.assertEqual(201, resp.status_code)
 
         data = b'hello, world!\r\n'  # 15B
         chunk1 = 7
@@ -608,6 +689,7 @@ class RouterServiceTest(unittest.TestCase):
             headers={'content-range': 'bytes 0-%d/%d' % (chunk1-1, len(data))},
             content = data[0:chunk1])
         logging.debug('%d %s', resp.status_code, resp.content)
+        self.assertEqual(200, resp.status_code)
 
         time.sleep(1)
 
@@ -617,7 +699,8 @@ class RouterServiceTest(unittest.TestCase):
                 chunk1, len(data) - 1, len(data))},
             content = data[chunk1:])
         logging.debug('%d %s', resp.status_code, resp.content)
-        #logging.debug(self.service.storage.debug_dump())
+        logging.debug(self.service.storage.debug_dump())
+        self.assertEqual(200, resp.status_code)
 
 
         def exp_body(tx, tx_delta):

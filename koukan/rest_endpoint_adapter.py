@@ -624,66 +624,11 @@ class RestHandler(Handler):
         assert(range.stop - range.start == content_length)
         return None, range
 
-    def _create_body(self, request : HttpRequest,
-                     req_upload : Optional[str] = None) -> HttpResponse:
-        logging.debug('RestHandler._create_body %s %s blob %s tx %s',
-                      request, request.headers, self._blob_rest_id,
-                      self._tx_rest_id)
-
-        if req_upload is not None and req_upload != 'chunked':
-            return self.response(request, code=400, msg='bad param: upload=')
-        chunked = req_upload is not None and req_upload == 'chunked'
-        if not chunked and 'content-range' in request.headers:
-            return self.response(
-                request, code=400,
-                msg='content-range only with chunked uploads')
-        if chunked and int(request.headers.get('content-length', '0')) > 0:
-            return self.response(
-                request, code=400, msg='unimplemented metadata upload')
-
-        logging.debug('RestHandler._create_blob before create')
-
-        if (blob := self.async_filter.get_blob_writer(
-                create=True, tx_body=True)) is None:
-            return self.response(
-                request, code=500, msg='internal error creating blob')
-        self.blob = blob
-        if not chunked:
-            range_err, range = self._get_range(request)
-            if range_err:
-                return range_err
-            self.range = range
-
-        blob_uri = make_blob_uri(self._tx_rest_id, tx_body=True)
-        return self.response(request, code=201,
-                             headers=[('location', blob_uri)])
-
-    async def create_body_async(
-            self, request : FastApiRequest, req_upload : Optional[str] = None
-            ) -> FastApiResponse:
-        logging.debug('RestHandler.create_blob_async')
-        cfut = self.executor.submit(
-            partial(self._create_body, request, req_upload=req_upload), 0)
-        if cfut is None:
-            return self.response(request, code=500, msg='failed to schedule')
-        fut = asyncio.wrap_future(cfut)
-        await fut
-        resp = fut.result()
-        if resp is None or resp.status_code != 201:
-           return fut.result()
-        if req_upload is None:
-            resp = await self._put_blob_async(request)
-            if resp is not None and resp.status_code != 200:
-                return resp
-
-        blob_uri = make_blob_uri(self._tx_rest_id, tx_body=True)
-        return self.response(request, code=201,
-                             headers=[('location', blob_uri)])
-
     # populate self.blob or return http err
     def _get_blob_writer(self, request : HttpRequest,
                          blob_rest_id : Optional[str] = None,
-                         tx_body : bool = False) -> Optional[HttpResponse]:
+                         tx_body : bool = False
+                         ) -> Optional[HttpResponse]:
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -692,9 +637,13 @@ class RestHandler(Handler):
         if range_err:
             return range_err
         self.range = range
+        create = tx_body
+        create = create and (range is None or range.start == 0)
 
+        # this just returns the blob writer now if it already exists,
+        # append will fail precondition/offset check downstream -> 416
         blob = self.async_filter.get_blob_writer(
-            create = False, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
+            create = create, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
         if blob is None:
             return self.response(request, code=404, msg='unknown blob')
@@ -783,10 +732,9 @@ class RestHandler(Handler):
             self._blob_rest_id, appended, result_len, content_length)
 
         headers = []
-        if self.range is not None:
-            headers.append(
-                ('content-range',
-                 ContentRange('bytes', 0, result_len, content_length)))
+        headers.append(
+            ('content-range',
+             ContentRange('bytes', 0, result_len, content_length)))
 
         if not appended:
             return self.response(

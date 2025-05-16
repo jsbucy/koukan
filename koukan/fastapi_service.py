@@ -39,19 +39,6 @@ def create_app(handler_factory : HandlerFactory):
         handler = handler_factory.get_tx(tx_rest_id)
         return await handler.get_tx_async(request)
 
-    # ?upload=chunked
-    # then body is json metadata (unimplemented)
-    # else body stream
-    @app.post('/transactions/{tx_rest_id}/body')
-    async def create_tx_body(tx_rest_id : str,
-                             request : FastApiRequest,
-                             upload : Union[str, None] = None
-                             ) -> FastApiResponse:
-        logging.debug('fastapi_service.create_tx_body %s', request)
-        chunked = (upload == "chunked")
-        handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.create_body_async(request, req_upload=upload)
-
     # body stream
     @app.put('/transactions/{tx_rest_id}/body')
     async def put_tx_body(tx_rest_id : str,

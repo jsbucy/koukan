@@ -173,10 +173,10 @@ class Sender:
         if self.body_filename is not None and self.body_path is None:
             with open(self.body_filename, 'rb') as body_file:
                 body_path = tx_path + '/body'
-                resp = self.session.post(
+                resp = self.session.put(
                     urljoin(self.base_url, body_path),
                     data=body_file)
-                logging.debug('POST %s %s %s', body_path, resp, resp.text)
+                logging.debug('PUT %s %s %s', body_path, resp, resp.text)
                 if resp.status_code == 201:
                     self.body_path = body_path
         elif (self.message_builder is not None and
