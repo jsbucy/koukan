@@ -479,7 +479,6 @@ class RestEndpoint(SyncFilter):
         assert blob.finalized()
         assert not(body and blob_rest_id)
         assert body or blob_rest_id
-        method, exp_code = ('PUT', 200)
         if blob_rest_id is not None:
             self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
         elif body:
@@ -491,15 +490,13 @@ class RestEndpoint(SyncFilter):
         if self.http_host:
             headers['host'] = self.http_host
 
-        req = Request(method, self.blob_url, headers=headers,
-                      content = BlobReader(blob))
         rest_resp = None
         try:
-            # xxx always PUT now
-            rest_resp = self.client.send(req)
+            rest_resp = self.client.put(
+                self.blob_url, headers=headers, content = BlobReader(blob))
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
-        if rest_resp is None or rest_resp.status_code != exp_code:
+        if rest_resp is None or rest_resp.status_code != 200:
             logging.debug(rest_resp)
             return Response(450, 'RestEndpoint blob upload error')
         logging.info('RestEndpoint._put_blob_single %s', rest_resp)
