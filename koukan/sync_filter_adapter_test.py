@@ -1,6 +1,5 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-# this file is being forked into sync_filter_adapter and rest_handler
 from typing import List, Optional, Tuple
 import unittest
 import logging
