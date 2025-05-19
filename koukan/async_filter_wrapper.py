@@ -90,9 +90,17 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         assert upstream_delta is not None
         return upstream_tx, upstream_delta
 
-    def update(self, tx : TransactionMetadata,
-               tx_delta : TransactionMetadata
+    def update(self, downstream_tx : TransactionMetadata,
+               downstream_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        tx = downstream_tx.copy()
+        tx_delta = downstream_delta.copy()
+        # OutputHandler may send but Storage currently does not accept
+        # reusing !finalized blob so we must buffer incomplete body here.
+        if tx.body is not None and not tx.body.finalized():
+            tx.body = tx_delta.body = None
+            if not tx_delta:
+                return TransactionMetadata()
         tx_orig = tx.copy()
         upstream_tx, upstream_delta = self._update(tx, tx_delta)
         self.tx = upstream_tx.copy()
@@ -100,7 +108,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         logging.debug(upstream_tx)
         del tx_orig.version
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert tx.merge_from(upstream_delta) is not None
+        assert downstream_tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:

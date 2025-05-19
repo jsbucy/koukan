@@ -23,8 +23,7 @@ class Handler(ABC):
 
     @abstractmethod
     def patch_tx(self, request : HttpRequest,
-                 req_json : dict,
-                 message_builder : bool = False) -> HttpResponse:
+                 req_json : dict) -> HttpResponse:
         pass
 
     @abstractmethod

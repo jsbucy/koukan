@@ -35,14 +35,14 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
     http_host : Optional[str] = None
-    endpoint_yaml : Optional[Callable[str, dict]] = None
+    endpoint_yaml : Optional[Callable[[str], dict]] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
                  http_host : Optional[str] = None,
-                 endpoint_yaml : Optional[Callable[str, dict]] = None):
+                 endpoint_yaml : Optional[Callable[[str], dict]] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -91,8 +91,7 @@ class StorageWriterFilter(AsyncFilter):
         self._load()
         return self.tx_cursor.version
 
-    def _create(self, tx : TransactionMetadata,
-                blobs : Optional[List[BlobSpec]] = None):
+    def _create(self, tx : TransactionMetadata):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()

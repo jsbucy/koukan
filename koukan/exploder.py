@@ -149,6 +149,7 @@ class Exploder(SyncFilter):
 
         # OutputHandler may send but Storage currently does not accept
         # reusing !finalized blob so we must buffer incomplete body here.
+        # TODO redundant with AsyncFilterWrapper, drop?
         if tx.body is not None and not tx.body.finalized():
             tx_orig.body = tx.body = tx_delta.body = None
             if not tx_delta:

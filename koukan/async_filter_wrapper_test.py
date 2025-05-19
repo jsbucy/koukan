@@ -192,45 +192,6 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         tx = wrapper.get()
         logging.debug(tx)
 
-    def test_early_data_err(self):
-        async_filter = MockAsyncFilter()
-        wrapper = AsyncFilterWrapper(async_filter, 1, store_and_forward=True)
-
-        def exp_update(tx, tx_delta):
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(),
-                rcpt_response=[Response()],
-                data_response=Response(450),
-                version=1)
-
-            assert tx.merge_from(upstream_delta) is not None
-            return upstream_delta
-        async_filter.expect_update(exp_update)
-
-        b = b'hello, world!'
-        tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body=InlineBlob(b[0:7], len(b)))
-
-        upstream_delta = wrapper.update(tx, tx.copy())
-        self.assertEqual(1, tx.version)
-
-        def exp_data_last(tx, tx_delta):
-            logging.debug(tx)
-            self.assertTrue(tx.body.finalized())
-            return TransactionMetadata()
-        async_filter.expect_update(exp_data_last)
-
-        def exp_retry(tx, tx_delta):
-            self.assertIsNotNone(tx.retry)
-            return TransactionMetadata()
-        async_filter.expect_update(exp_retry)
-
-        tx.body = InlineBlob(b, len(b))
-        upstream_delta = wrapper.update(
-            tx, TransactionMetadata(body=tx.body))
-
     def test_sync_smoke(self):
         async_filter = MockAsyncFilter()
 

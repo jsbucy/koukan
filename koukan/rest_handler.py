@@ -48,7 +48,7 @@ from koukan.executor import Executor
 
 from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
 from koukan.version_cache import IdVersion
-from koukan.storage_schema import VersionConflictException
+from koukan.storage_schema import BlobSpec, VersionConflictException
 
 
 # runs SyncFilter on Executor with AsyncFilter interface for
@@ -440,15 +440,17 @@ class RestHandler(Handler):
                 request, code=500, msg='internal error creating transaction')
         tx = TransactionMetadata.from_json(
             req_json, WhichJson.REST_CREATE)
+        if tx is None:
+            return self.response(request, code=400, msg='invalid tx json')
+
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
                 return self.response(
                     request, code=400, msg='transaction creation to '
                     'non-incremental endpoint must contain mail_from and '
                     'exactly 1 rcpt_to')
-
-        if tx is None:
-            return self.response(request, code=400, msg='invalid tx json')
+            if tx.body is None:
+                tx.body = BlobSpec(create_tx_body=True)
         tx.host = self.http_host
         body = tx.body
 
