@@ -14,18 +14,18 @@ import koukan.fastapi_service as fastapi_service
 import koukan.hypercorn_main as hypercorn_main
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.rest_endpoint_adapter import (
+from koukan.rest_handler import (
     EndpointFactory,
     RestHandlerFactory )
 from koukan.output_handler import OutputHandler
-from koukan.response import Response
 from koukan.executor import Executor
 from koukan.filter_chain_factory import FilterChainFactory
 from koukan.filter_chain_wiring import FilterChainWiring
-from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
-
+from koukan.filter import (
+    AsyncFilter,
+    SyncFilter,
+    TransactionMetadata )
 from koukan.storage_writer_filter import StorageWriterFilter
-from koukan.storage_schema import VersionConflictException
 from koukan.deadline import Deadline
 
 class StorageWriterFactory(EndpointFactory):
