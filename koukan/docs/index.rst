@@ -8,10 +8,10 @@ Koukan documentation
 
 Overview
 
-Email is ubiquitous but also difficult to get right. Within any
-computing facility, there is a collection of often highly
-miscellaneous things that send email. 
-
+Koukan is an email<->application gateway. Koukan provides a rich
+http/json rest api for new-build applications to send and receive
+email which includes rfc822/MIME handling, DKIM signing, etc. Koukan acts as
+a SMTP MTA/MSA for existing applications.
 
 
 Installation
@@ -28,12 +28,14 @@ only text, we can send a message with a single POST:
 
 POST /transactions
 Content-type: application/json
-{"mail_from": "alice",
- "rcpt_to": "bob",
+{"mail_from": {"m": "alice@example.com"},
+ "rcpt_to": {"m": "bob@example.com"},
  "body": {"message_builder: {
      "headers": [["subject", "hello"]],
      "text_body": [{
-       "content_type": "text/plain", "content": {"inline": "hello, world!"}}]
+       "content_type": "text/plain", "content": {"inline": "hello, world!"}}],
+ "retry": {},
+ "notification": null
 }}}
 
 201 created
@@ -41,9 +43,16 @@ Location: /transactions/xyz
 Content-type: application/json
 {"mail_from": {}, "rcpt_to": {}, "body": {}}
 
+"retry": {} means "use system-configured default retry parameters"
+(null means "do not retry") TODO: {} should be the default if not
+specified?
+"notification": null means "do not send a bounce message" and again {}
+means "use system default notification parameters" e.g. only send a
+DSN on perm fail.
+
 RestMTP transactions are write-once; the {} is a placeholder
 indicating the field is populated. RestMTP transactions are
-long-running operations that track the status of the message
+long-running operations (lro) that track the status of the message
 delivery. With a request-timeout header, Koukan will do a hanging GET:
 
 GET /transactions/xyz
@@ -53,17 +62,28 @@ request-timeout: 10
 200 ok
 Content-type: application/json
 {"mail_from": {}, "rcpt_to": {}, "body": {},
- "mail_response": 250, "rcpt_response": 250, "data_response": 250
+ "mail_response": {"code": 250 },
+ "rcpt_response": {"code": 250 },
+ "data_response": {"code": 250 },
+ "attempt_count": 1,
+ "final_attempt_reason": "upstream response success"
 }
 
+Response fields are per the most recent attempt.
+
+final_attempt_reason is a human-readable string that if non-null
+indicates that Koukan is done with this transaction. Completed
+transactions are garbage-collected after a configured interval
+(e.g. 1h) from the time they were completed.
+
 If you need to send a large or binary attachment, that is done by
-specifying an id within the message_builder and then PUTting the blob
+specifying an id within the message_builder spec and then PUTting the blob
 to that id:
 
 POST /transactions
 Content-type: application/json
-{"mail_from": "alice",
- "rcpt_to": "bob",
+{"mail_from": {"m": "alice@example.com"},
+ "rcpt_to": {"m": "bob@example.com"},
  "body": {"message_builder: {
      "headers": [["subject", "hello"]],
      "text_body": [{
@@ -83,12 +103,14 @@ A transaction can reuse an attachment from a previous transaction:
 
 POST /transactions
 Content-type: application/json
-{"mail_from": "alice",
- "rcpt_to": "bob",
+{"mail_from": {"m": "alice@example.com"},
+ "rcpt_to": {"m": "bob@example.com"},
  "body": {"message_builder: {
      "headers": [["subject", "hello"]],
      "text_body": [{
-       "content_type": "text/plain", "content": {"reuse_uri": "/transactions/xyz/blob/my_body"}}]
+       "content_type": "text/plain",
+       "content": { "reuse_uri": "/transactions/xyz/blob/my_body"}
+     }]
 }}}
 
 
@@ -98,8 +120,8 @@ to send. Simply POST that to /transactions/xyz/body. Similarly, you
 can reuse an rfc822 body from a previous transaction:
 POST /transactions
 Content-type: application/json
-{"mail_from": "alice",
- "rcpt_to": "bob",
+{"mail_from": {"m": "alice@example.com"},
+ "rcpt_to": {"m": "bob@example.com"},
  "body": {"reuse_uri": "/transactions/xyz/body"}
 }
 
@@ -117,7 +139,7 @@ POST /transactions
 create a new transaction and return the path in location:
 GET /transactions/<tx id>
 
-POST /transactions/<tx id>/body
+PUT /transactions/<tx id>/body
 upload the rfc822 message
 
 additionally, if you enable receive parsing:
