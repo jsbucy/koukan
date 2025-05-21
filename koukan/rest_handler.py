@@ -763,7 +763,7 @@ class RestHandler(Handler):
         assert tx.cancelled
         self.async_filter.update(tx, delta)
         # TODO this should probably return the tx?
-        return self.response(request)
+        return self.response()
 
 
 class EndpointFactory(ABC):
