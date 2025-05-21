@@ -394,7 +394,7 @@ class TransactionCursor:
                 no_final_notification = not bool(tx_to_db.notification),
                 final_attempt_reason = final_attempt_reason)
         elif notification_done:
-            assert tx_to_db.notification
+            assert tx_to_db.notification is not None
             upd = upd.values(no_final_notification = False)
 
         if finalize_attempt:
