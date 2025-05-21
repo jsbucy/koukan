@@ -89,8 +89,7 @@ class Recipient:
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:
-            del ti.version
-            del ti.body
+            ti.version = ti.body = None
         assert orig.delta(tt) is not None  # check buggy filter
         self.tx = t
 

@@ -110,9 +110,9 @@ class RestEndpoint(SyncFilter):
         return urljoin(self.base_url, url), url
 
     def _create(self,
-               resolution : Resolution,
-               tx : TransactionMetadata,
-               deadline : Deadline) -> Optional[HttpResponse]:
+                resolution : Resolution,
+                tx : TransactionMetadata,
+                deadline : Deadline) -> Optional[HttpResponse]:
         logging.debug('RestEndpoint._create %s %s', resolution, tx)
 
         hosts = resolution.hosts if resolution is not None else [None]
@@ -464,8 +464,8 @@ class RestEndpoint(SyncFilter):
         tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'), errs)
         assert tx.merge_from(errs) is not None
-        del upstream_tx.remote_host
-        del tx_out.remote_host
+        for t in [upstream_tx, tx_out]:
+            t.remote_host = None
         upstream_delta = upstream_tx.delta(tx_out, WhichJson.REST_READ)
         assert upstream_delta is not None
         assert upstream_delta.merge_from(errs) is not None

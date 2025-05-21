@@ -802,10 +802,10 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug(tx_json)
         self.assertEqual(
             {'mail_from': {},
-             'mail_response': {'code': 201, 'message': 'ok'},
              'rcpt_to': [{}],
-             'rcpt_response': [{'code': 202, 'message': 'ok'}],
              'body': {},
+             'mail_response': {'code': 201, 'message': 'ok'},
+             'rcpt_response': [{'code': 202, 'message': 'ok'}],
              'data_response': {'code': 203, 'message': 'ok'},
              'attempt_count': 1,
              'final_attempt_reason': 'upstream response success'},

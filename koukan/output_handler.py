@@ -61,9 +61,8 @@ class OutputHandler:
         # drop some fields from the tx that's going upstream
         # OH consumes these fields but they should not propagate to the
         # output chain/upstream rest/gateway etc
-        for field in ['notification', 'retry', 'final_attempt_reason']:
-            if getattr(self.tx, field) is not None:
-                delattr(self.tx, field)
+        for field in ['final_attempt_reason', 'notification', 'retry']:
+            setattr(self.tx, field, None)
         delta = self.prev_tx.delta(self.tx)
         assert delta is not None
         logging.debug(str(delta) if delta else '(empty delta)')
@@ -100,6 +99,10 @@ class OutputHandler:
         if not delta.empty(WhichJson.ALL) or self.tx.cancelled:
             upstream_delta = self.endpoint.on_update(self.tx, delta)
             assert upstream_delta is not None
+            # router output to an endpoint that retries/notifies is
+            # probably a misconfiguration
+            assert self.tx.notification is None
+            assert self.tx.retry is None
 
             # note: Exploder does not propagate any fields other than
             # rcpt_response, data_response from upstream so it is no longer
@@ -166,6 +169,11 @@ class OutputHandler:
                 self._next_attempt_time(time.time()))
         kwargs['final_attempt_reason'] = final_attempt_reason
 
+        # Note: notifications are currently hard-coded to only be sent
+        # on final perm failure. The notification params dict only
+        # specifies the endpoint to send it to. To implement "queue
+        # warning" messages, success dsn, etc, this invocation needs to
+        # move before the 'if not done' early return (above).
         if self.cursor.tx.notification is not None:
             self._maybe_send_notification(final_attempt_reason)
             kwargs['notification_done'] = True
@@ -209,7 +217,6 @@ class OutputHandler:
                     env_kwargs = {'finalize_attempt': True,
                                   'notification_done': True}
                 else:
-                    self.tx = self.cursor.tx.copy()
                     delta, env_kwargs = self._handle_once()
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')

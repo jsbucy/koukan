@@ -106,7 +106,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         self.tx = upstream_tx.copy()
         self._update_responses(upstream_tx)
         logging.debug(upstream_tx)
-        del tx_orig.version
+        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         assert downstream_tx.merge_from(upstream_delta) is not None
         return upstream_delta
@@ -216,7 +216,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
-        del tx_orig.version
+        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
