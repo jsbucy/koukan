@@ -347,7 +347,7 @@ class RestHandler(Handler):
     def blob_rest_id(self):
         return self._blob_rest_id
 
-    def response(self, req : HttpRequest,
+    def response(self,
                  code : int = 200,
                  msg : Optional[str] = None,
                  resp_json : Optional[dict] = None,
@@ -387,7 +387,7 @@ class RestHandler(Handler):
         if self.executor.submit(
                 partial(self._ping_tx, session_uri,
                         self._tx_rest_id)) is None:
-            return self.response(request, code=500, msg='schedule ping tx')
+            return self.response(code=500, msg='schedule ping tx')
         return None
 
     async def handle_async(self, request : FastApiRequest, fn
@@ -399,11 +399,11 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
         cfut = self.executor.submit(fn, 0)
         if cfut is None:
-            return self.response(request, code=500, msg='failed to schedule')
+            return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         if not await asyncio.wait_for(fut, deadline.deadline_left()):
             cfut.cancel()
-            return self.response(request, code=500, msg='timeout')
+            return self.response(code=500, msg='timeout')
         resp = fut.result()
         logging.debug('RestHandler.handle_async resp %s', resp)
         return resp
@@ -418,11 +418,19 @@ class RestHandler(Handler):
             timeout = min(int(timeout_header), MAX_TIMEOUT)
         except ValueError:
             return None, self.response(
-                req, 400, msg='invalid request-timeout header')
+                code=400, msg='invalid request-timeout header')
         return timeout, None
 
     def _etag(self, version : int) -> str:
         return '%d' % version
+
+    def _validate_incremental_tx(self, tx : TransactionMetadata
+                                 ) -> Optional[HttpResponse]:
+        if tx.retry is not None or tx.notification is not None:
+            return self.response(
+                code=400, msg='incremental endpoint does not '
+                'accept retry/notification')
+        return None
 
     def create_tx(self, request : HttpRequest, req_json : dict
                   ) -> Optional[HttpResponse]:
@@ -437,26 +445,29 @@ class RestHandler(Handler):
 
         if self.async_filter is None:
             return self.response(
-                request, code=500, msg='internal error creating transaction')
+                code=500, msg='internal error creating transaction')
         tx = TransactionMetadata.from_json(
             req_json, WhichJson.REST_CREATE)
         if tx is None:
-            return self.response(request, code=400, msg='invalid tx json')
+            return self.response(code=400, msg='invalid tx json')
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
                 return self.response(
-                    request, code=400, msg='transaction creation to '
+                    code=400, msg='transaction creation to '
                     'non-incremental endpoint must contain mail_from and '
                     'exactly 1 rcpt_to')
             if tx.body is None:
                 tx.body = BlobSpec(create_tx_body=True)
+        elif err := self._validate_incremental_tx(tx):
+            return err
+
         tx.host = self.http_host
         body = tx.body
 
         upstream = self.async_filter.update(tx, tx.copy())
         if upstream is None or tx.rest_id is None:
-            return self.response(request, code=400, msg='bad request')
+            return self.response(code=400, msg='bad request')
         assert upstream.version is not None
         self._tx_rest_id = tx.rest_id
 
@@ -470,7 +481,7 @@ class RestHandler(Handler):
         else:
             tx_uri = tx_path
         resp = self.response(
-            request, code=201,
+            code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', tx_uri)],
             etag=self._etag(upstream.version))
@@ -487,7 +498,6 @@ class RestHandler(Handler):
     def _get_tx_resp(self, request, tx):
         tx_out = tx.copy()
         return self.response(
-            request,
             etag=self._etag(tx.version) if tx else None,
             resp_json=tx_out.to_json(WhichJson.REST_READ))
 
@@ -504,7 +514,7 @@ class RestHandler(Handler):
         cfut = self.executor.submit(lambda: self._get_tx())
         if cfut is None:
             return self.response(
-                request, code=500, msg='get tx async schedule read'), None
+                code=500, msg='get tx async schedule read'), None
         afut = asyncio.wrap_future(cfut)
         try:
             # wait ~forever here, this is a point read
@@ -513,18 +523,17 @@ class RestHandler(Handler):
         except TimeoutError:
             # unexpected
             return self.response(
-                request, code=500, msg='get tx async read'), None
+                code=500, msg='get tx async read'), None
         if not afut.done():
-            return self.response(request, code=500,
+            return self.response(code=500,
                                  msg='get tx async read fut done'), None
         if afut.result() is None:
-            return self.response(request, code=404, msg='unknown tx'), None
+            return self.response(code=404, msg='unknown tx'), None
         return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
         if self.async_filter is None:
-            return self.response(
-                request, code=404, msg='transaction not found')
+            return self.response(code=404, msg='transaction not found')
 
         timeout, err = self._get_timeout(request)
         if err is not None:
@@ -541,7 +550,7 @@ class RestHandler(Handler):
         elif (timeout is not None and etag is not None and
               tx.session_uri is not None):
             return self.response(
-                request, code=307, headers=[
+                code=307, headers=[
                     ('location', urljoin(tx.session_uri,
                                          make_tx_uri(self._tx_rest_id)))])
 
@@ -550,7 +559,7 @@ class RestHandler(Handler):
         wait_result = await self.async_filter.wait_async(
             tx.version, deadline.deadline_left())
         if not wait_result:
-            return self.response(request, code=304, msg='unchanged',
+            return self.response(code=304, msg='unchanged',
                                  headers=[('etag', self._etag(tx.version))])
         err, tx = await self._get_tx_async(request)
         if err is not None:
@@ -563,43 +572,41 @@ class RestHandler(Handler):
         downstream_delta = TransactionMetadata.from_json(
             req_json, WhichJson.REST_UPDATE)
         if downstream_delta is None:
-            return self.response(request, code=400, msg='invalid request')
+            return self.response(code=400, msg='invalid request')
         body = downstream_delta.body
         req_etag = request.headers.get('if-match', None)
         if req_etag is None:
-            return self.response(
-                request, code=400, msg='etags required for update')
+            return self.response(code=400, msg='etags required for update')
         req_etag = req_etag.strip('"')
 
         tx = self.async_filter.get()
         if tx is None:
             return self.response(
-                request,
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
         if not self.async_filter.incremental():
             return self.response(
-                request, code=400,
+                code=400,
                 msg='endpoint does not accept incremental updates')
+        elif err := self._validate_incremental_tx(tx):
+            return err
 
         if tx.merge_from(downstream_delta) is None:
             return self.response(
-                request, code=400,
-                msg='RestHandler.patch_tx merge failed')
+                code=400, msg='RestHandler.patch_tx merge failed')
 
         # TODO should these 412s set the etag?
         if req_etag != self._etag(tx.version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
                           req_etag, self._etag(tx.version))
-            return self.response(request, code=412, msg='update conflict')
+            return self.response(code=412, msg='update conflict')
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
         except VersionConflictException:
-            return self.response(request, code=412, msg='update conflict')
+            return self.response(code=412, msg='update conflict')
         if upstream_delta is None:
             return self.response(
-                request, code=400,
-                msg='RestHandler.patch_tx bad request')
+                code=400, msg='RestHandler.patch_tx bad request')
 
         if (err := self._maybe_schedule_ping(
                 request, tx.session_uri, self._tx_rest_id)):
@@ -607,7 +614,7 @@ class RestHandler(Handler):
 
         tx.body = body
         return self.response(
-            request, etag=self._etag(upstream_delta.version),
+            etag=self._etag(upstream_delta.version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 
@@ -621,7 +628,7 @@ class RestHandler(Handler):
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
         if not range or range.units != 'bytes':
-            return self.response(request, 400, 'bad range'), None
+            return self.response(400, 'bad range'), None
         # no idea if underlying stack enforces this
         assert(range.stop - range.start == content_length)
         return None, range
@@ -648,7 +655,7 @@ class RestHandler(Handler):
             create = create, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
         if blob is None:
-            return self.response(request, code=404, msg='unknown blob')
+            return self.response(code=404, msg='unknown blob')
 
         self.blob = blob
 
@@ -661,7 +668,7 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
         if cfut is None:
-            return self.response(request, code=500, msg='failed to schedule')
+            return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         if fut.result() is not None:
@@ -706,7 +713,7 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             lambda: self._put_blob_chunk(request, b, last), 0)
         if cfut is None:
-            return self.response(request, code=500, msg='failed to schedule')
+            return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         return fut.result()
@@ -740,14 +747,11 @@ class RestHandler(Handler):
 
         if not appended:
             return self.response(
-                request,
-                code = 416,
-                msg = 'invalid range',
-                headers=headers)
+                code = 416, msg = 'invalid range', headers=headers)
 
         self.bytes_read += len(b)
 
-        return self.response(request, resp_json={}, headers=headers)
+        return self.response(resp_json={}, headers=headers)
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
