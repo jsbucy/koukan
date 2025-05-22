@@ -23,7 +23,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     filter : AsyncFilter
     timeout : float  # used for SyncFilter.on_update()
     store_and_forward : bool
-    default_notification : Optional[dict] = None
     do_store_and_forward : bool = False
     retry_params : Optional[dict] = None
     tx : TransactionMetadata  # most recent upstream
@@ -32,12 +31,10 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     def __init__(self, filter : AsyncFilter,
                  timeout : float,
                  store_and_forward : bool = False,
-                 default_notification : Optional[dict] = None,
                  retry_params : Optional[dict] = None):
         self.filter = filter
         self.timeout = timeout
         self.store_and_forward = store_and_forward
-        self.default_notification = default_notification
         self.retry_params = retry_params if retry_params else {}
         self.timeout_resp = TransactionMetadata()
 
@@ -200,9 +197,9 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         if (data_last and self.do_store_and_forward
             and tx.retry is None):
             retry_delta = TransactionMetadata(
-                retry = self.retry_params,
+                retry = {},
                 # this will blackhole if unset!
-                notification=self.default_notification)
+                notification={})
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 

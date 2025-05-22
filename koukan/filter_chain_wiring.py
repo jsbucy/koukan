@@ -68,18 +68,13 @@ class FilterChainWiring:
                           rcpt_timeout : float,
                           data_timeout : float,
                           store_and_forward : bool,
-                          notification : Optional[dict],
-                          retry : Optional[dict],
                           block_upstream : bool):
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
             http_host, block_upstream)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
-            upstream,
-            rcpt_timeout,
-            store_and_forward=store_and_forward,
-            default_notification=notification, retry_params=retry)
+            upstream, rcpt_timeout, store_and_forward=store_and_forward)
 
     def exploder(self, yaml, next):
         assert next is None
@@ -99,11 +94,9 @@ class FilterChainWiring:
         return Exploder(
             yaml['output_chain'],
             partial(self.exploder_upstream, yaml['output_chain'],
-                    rcpt_timeout, data_timeout, msa, notification,
-                    retry={}, block_upstream=True),
+                    rcpt_timeout, data_timeout, msa, block_upstream=True),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
-            data_timeout=yaml.get('data_timeout', data_timeout),
-            default_notification=notification)
+            data_timeout=yaml.get('data_timeout', data_timeout))
 
     def add_route(self, yaml, next):
         if yaml.get('store_and_forward', None):
@@ -111,8 +104,6 @@ class FilterChainWiring:
                 yaml['output_chain'],
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors
                 store_and_forward=True,
-                notification=yaml.get('notification', None),
-                retry=yaml.get('retry_params', None),
                 block_upstream=False)
         else:
             output = self.filter_chain_factory.build_filter_chain(

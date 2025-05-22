@@ -164,8 +164,7 @@ class ExploderTest(unittest.TestCase):
         notify = {} if store_and_forward else None
         return AsyncFilterWrapper(self.upstream_endpoints.pop(0),
                                   timeout=5,
-                                  store_and_forward=store_and_forward,
-                                  default_notification=notify)
+                                  store_and_forward=store_and_forward)
 
     # xxx all tests validate response message
 
@@ -173,8 +172,7 @@ class ExploderTest(unittest.TestCase):
         logging.debug('_test_one()', stack_info=True)
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
 
         output_threads = []
         for r in test.rcpt:
@@ -520,8 +518,7 @@ class ExploderTest(unittest.TestCase):
     def test_upstream_busy(self):
         exploder = Exploder('output-chain',
                             lambda: None,
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
         upstream_delta = exploder.on_update(tx, tx.copy())
@@ -533,8 +530,7 @@ class ExploderTest(unittest.TestCase):
         upstream = MockAsyncFilter()
         exploder = Exploder('output-chain',
                             lambda: upstream,
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
 
         def exp_update(tx, delta):
             self.assertFalse(tx.body.finalized())

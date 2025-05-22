@@ -375,7 +375,7 @@ class TransactionCursor:
             res = db_tx.execute(upd_att)
             assert rowcount(res) == 1
 
-        upd = upd.values(notification = bool(tx_to_db.notification))
+        upd = upd.values(notification = tx_to_db.notification is not None)
 
         # TODO possibly assert here, the first case is
         # downstream/Exploder, #2/3 are upstream/OutputHandler

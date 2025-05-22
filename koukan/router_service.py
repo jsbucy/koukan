@@ -290,7 +290,8 @@ class Service:
             notification_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
-            retry_params = output_yaml.get('retry_params', {}))
+            retry_params = output_yaml.get('retry_params', {}),
+            notification_params = output_yaml.get('notification', {}))
         try:
             handler.handle()
         except Exception as e:

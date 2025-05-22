@@ -34,6 +34,7 @@ class OutputHandler:
     retry_params : dict
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
+    notification : dict
 
     def __init__(self,
                  cursor : TransactionCursor,
@@ -42,7 +43,8 @@ class OutputHandler:
                  downstream_data_timeout=None,
                  notification_factory = default_notification_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 retry_params : dict = {}):
+                 retry_params : dict = {},
+                 notification_params : dict = {}):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
@@ -53,6 +55,7 @@ class OutputHandler:
         self.retry_params = retry_params
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
+        self.notification = notification_params
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         t = self.cursor.tx
@@ -207,7 +210,7 @@ class OutputHandler:
                     # final_attempt_reason was written iow
                     # notifications were enabled after the tx already
                     # failed (Exploder)
-                    if not self.cursor.tx.notification:
+                    if self.cursor.tx.notification is None:
                         logging.error(
                             'invalid tx state: no_final_notification without '
                             'notification')
@@ -240,16 +243,14 @@ class OutputHandler:
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
-        if self.cursor.tx.retry is None:
-            # leave the existing value for final_attempt_reason
-            final_attempt_reason = None
-            next_attempt_time = None
-            return final_attempt_reason, next_attempt_time
+        # leave the existing value for final_attempt_reason
+        if self.retry_params is None:
+            return None, None
+        if (self.retry_params.get('mode', None) == 'per_request' and
+            self.cursor.tx.retry is None):
+            return None, None
 
-        max_attempts = self.cursor.tx.retry.get('max_attempts', None)
-        # TODO separate function to merge tx.retry, self.retry_params, defaults
-        if max_attempts is None:
-            max_attempts = self.retry_params.get('max_attempts', 30)
+        max_attempts = self.retry_params.get('max_attempts', 30)
         if max_attempts is not None and (
                 self.cursor.attempt_id >= max_attempts):
             return 'retry policy max attempts', None
@@ -263,14 +264,18 @@ class OutputHandler:
         # TODO jitter?
         logging.debug('OutputHandler._next_attempt_time %s %d %d',
                       self.rest_id, int(dt), next)
-        deadline = self.cursor.tx.retry.get('deadline', None)
-        if deadline is None:
-            deadline = self.retry_params.get('deadline', 86400)
+        deadline = self.retry_params.get('deadline', 86400)
         if deadline is not None and ((next - self.cursor.creation) > deadline):
             return 'retry policy deadline', None
         return None, next
 
     def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
+        if self.notification is None:
+            return
+        if (self.notification.get('mode', None) == 'per_request' and
+            self.cursor.tx.notification is None):
+            return
+
         resp : Optional[Response] = None
         tx = self.cursor.tx
         # Note: this is not contingent on self.cursor.input_done. Thus
@@ -317,7 +322,7 @@ class OutputHandler:
 
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s last %s notify %s tx %s', self.rest_id, last_attempt,
-                      self.cursor.tx.notification, self.cursor.tx)
+                      self.notification, self.cursor.tx)
 
         if resp.ok():
             return
@@ -356,15 +361,14 @@ class OutputHandler:
                            now=int(time.time()),
                            response=resp)
 
-        # TODO link these transactions somehow
+        # TODO link these transactions in storage somehow
         # self.cursor.id should end up in this tx and this tx id
         # should get written back to self.cursor
-        notify_json = self.cursor.tx.notification
         # The endpoint used for notifications should go out directly,
         # *not* via the exploder which has the potential to enable
         # bounces on this bounce, etc.
         notification_tx = TransactionMetadata(
-            host=notify_json['host'],
+            host=self.notification['host'],
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],

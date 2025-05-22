@@ -101,7 +101,6 @@ class Exploder(SyncFilter):
     # TODO these timeouts move to AsyncFilterWrapper
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
-    default_notification : Optional[dict] = None
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -112,14 +111,12 @@ class Exploder(SyncFilter):
                  output_chain : str,
                  upstream_factory : FilterFactory,
                  rcpt_timeout : Optional[float] = None,
-                 data_timeout : Optional[float] = None,
-                 default_notification : Optional[dict] = None):
+                 data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
         self.output_chain = output_chain
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
-        self.default_notification = default_notification
 
     @staticmethod
     def reduce_data_response(
@@ -218,7 +215,7 @@ class Exploder(SyncFilter):
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
-                notification=self.default_notification)
+                notification={})
             for rcpt in self.recipients:
                 if (rcpt.tx.rcpt_response[0].ok() and
                     (not rcpt.tx.data_response.ok()) and

@@ -632,7 +632,8 @@ class OutputHandlerTest(unittest.TestCase):
             notification_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            notification_params={'host': 'notify-out'})
 
         logging.debug('handle() for notification')
         handler.handle()

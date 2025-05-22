@@ -62,22 +62,12 @@ root_yaml_template = {
             'output_handler': {
                 'downstream_env_timeout': 10,
                 'downstream_data_timeout': 10,
-                'retry_params': {
-                    'max_attempts': 3,
-                    'min_attempt_time': 1,
-                    'max_attempt_time': 1,
-                    'backoff_factor': 0,
-                    'deadline': 300,
-                }
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'submission',
                        'msa': True,
                        'rcpt_timeout': 10,
-                       'data_timeout': 10,
-                       'default_notification': {
-                           'host': 'submission'
-                       }}]
+                       'data_timeout': 10}]
         },
         {
             'name': 'submission',
@@ -86,18 +76,23 @@ root_yaml_template = {
                 'downstream_env_timeout': 10,
                 'downstream_data_timeout': 10,
                 'retry_params': {
+                    'mode': 'per_request',
                     'max_attempts': 3,
                     'min_attempt_time': 1,
                     'max_attempt_time': 1,
                     'backoff_factor': 0,
                     'deadline': 300,
                     'bug_retry': 1,
+                },
+                'notification': {
+                    'mode': 'per_request',
+                    'host': 'submission'
                 }
             },
             'chain': [
                 {'filter': 'message_builder'},
                 {'filter': 'sync'}
-            ]
+            ],
         },
         {
             'name': 'smtp-in',
@@ -110,17 +105,21 @@ root_yaml_template = {
                        'output_chain': 'inbound-gw',
                        'msa': False,
                        'rcpt_timeout': 10,
-                       'data_timeout': 10,
-                       'default_notification': {
-                           'host': 'inbound-gw'
-                       }}]
+                       'data_timeout': 10 }]
         },
         {
             'name': 'inbound-gw',
             'msa': True,
             'output_handler': {
                 'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1
+                'downstream_data_timeout': 1,
+                'retry_params': {
+                    'mode': 'per_request'
+                },
+                'notification': {
+                    'mode': 'per_request',
+                    'host': 'inbound-gw'
+                }
             },
             'chain': [
                 {'filter': 'router',
@@ -134,7 +133,7 @@ root_yaml_template = {
                 {'filter': 'router',
                  'policy': { 'name': 'address_list' }},
                 {'filter': 'message_parser'},
-                {'filter': 'sync'} ]
+                {'filter': 'sync'} ],
         },
         {
             'name': 'submission-sync-sor',
@@ -331,7 +330,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -365,8 +363,6 @@ class RouterServiceTest(unittest.TestCase):
             if 'attempt_count' in tx_json:
                 del tx_json['attempt_count']
             if tx_json == {
-                #'attempt_count': 1,
-                #'retry': {},
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {},
@@ -399,7 +395,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
             #inline_body=body)
@@ -464,7 +459,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1061,6 +1055,7 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
         dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
+
         # no_final_notification(bob2) + dsn output
         self._dequeue(2)
 
@@ -1071,7 +1066,6 @@ class RouterServiceTest(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail('didn\'t get dsn')
-
 
     # message builder is a rest submission feature; first-class rest
     # never uses the exploder
