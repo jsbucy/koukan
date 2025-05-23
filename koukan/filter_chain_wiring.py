@@ -94,12 +94,17 @@ class FilterChainWiring:
         return Exploder(
             yaml['output_chain'],
             partial(self.exploder_upstream, yaml['output_chain'],
-                    rcpt_timeout, data_timeout, msa, block_upstream=True),
+                    rcpt_timeout, data_timeout, store_and_forward=msa,
+                    block_upstream=True),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
     def add_route(self, yaml, next):
         if yaml.get('store_and_forward', None):
+            # output_chain should be similar to exploder upstream with
+            # per_request retry/notify mode
+            # alternatively, this could not set store_and_forward
+            # and control retry/notify on the upstream
             add_route = self.exploder_upstream(
                 yaml['output_chain'],
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors

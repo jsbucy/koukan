@@ -95,7 +95,23 @@ class StorageWriterFilter(AsyncFilter):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
-        self.tx_cursor.create(rest_id, tx, create_leased=self.create_leased)
+        storage_tx = tx.copy()
+        for i in range(0,1):
+            if self.endpoint_yaml is None:
+                break
+            if (endpoint_yaml := self.endpoint_yaml(self.http_host)) is None:
+                break
+            if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
+                break
+            # xxx output_handler_yaml_schema.py ?
+            notify_yaml = output_yaml.get('notification', None)
+            if notify_yaml is not None and notify_yaml.get('mode', '') != 'per_request':
+                storage_tx.notify = {}
+            retry_yaml = output_yaml.get('retry_params', None)
+            if retry_yaml is not None and retry_yaml.get('mode', '') != 'per_request':
+                storage_tx.retry = {}
+        self.tx_cursor.create(rest_id, storage_tx,
+                              create_leased=self.create_leased)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()

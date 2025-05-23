@@ -48,6 +48,7 @@ endpoint:
   msa: true
   output_handler:
     retry_params:
+      mode: per_request
       max_attempts: 3
       min_attempt_time: 2
       max_attempt_time: 5
@@ -119,6 +120,7 @@ endpoint:
   msa: false
   output_handler:
     retry_params:
+      mode: per_request
       max_attempts: 3
       min_attempt_time: 2
       max_attempt_time: 5

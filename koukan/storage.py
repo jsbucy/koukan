@@ -385,8 +385,8 @@ class TransactionCursor:
         # enables notifications/retries at the end. If the upstream tx
         # had already finished by this point, we need to clear the
         # oneshot final_attempt_reason.
-        if ((tx_to_db.retry is not None or tx_to_db.notification is not None
-             ) and self.final_attempt_reason == 'oneshot'):
+        if ((tx_to_db.retry is not None or tx_to_db.notification is not None)
+             and self.final_attempt_reason == 'oneshot'):
             self.final_attempt_reason = None
             upd = upd.values(final_attempt_reason = None)
         elif final_attempt_reason:

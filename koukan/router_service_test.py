@@ -64,13 +64,13 @@ root_yaml_template = {
                 'downstream_data_timeout': 10,
             },
             'chain': [{'filter': 'exploder',
-                       'output_chain': 'submission',
+                       'output_chain': 'msa-upstream',
                        'msa': True,
                        'rcpt_timeout': 10,
                        'data_timeout': 10}]
         },
         {
-            'name': 'submission',
+            'name': 'msa-upstream',
             'msa': True,
             'output_handler': {
                 'downstream_env_timeout': 10,
@@ -87,6 +87,29 @@ root_yaml_template = {
                 'notification': {
                     'mode': 'per_request',
                     'host': 'submission'
+                }
+            },
+            'chain': [
+                {'filter': 'message_builder'},
+                {'filter': 'sync'}
+            ],
+        },
+        {
+            'name': 'submission',
+            'msa': True,
+            'output_handler': {
+                'downstream_env_timeout': 10,
+                'downstream_data_timeout': 10,
+                'retry_params': {
+                    'max_attempts': 3,
+                    'min_attempt_time': 1,
+                    'max_attempt_time': 1,
+                    'backoff_factor': 0,
+                    'deadline': 300,
+                    'bug_retry': 1,
+                },
+                'notification': {
+                    'host': 'msa-upstream'
                 }
             },
             'chain': [
@@ -157,6 +180,14 @@ root_yaml_template = {
         },
         {
             'name': 'sor',
+            'output_handler': {
+                'retry_params': {
+                    'mode': 'per_request',
+                },
+                'notification': {
+                    'mode': 'per_request',
+                }
+            },
             'chain': [
                 {'filter': 'sync'}
             ]
@@ -366,6 +397,7 @@ class RouterServiceTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {},
+                'retry': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
@@ -491,6 +523,7 @@ class RouterServiceTest(unittest.TestCase):
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {},
+            'retry': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
@@ -628,6 +661,7 @@ class RouterServiceTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {},
+                'retry': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
@@ -645,7 +679,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
 
@@ -709,9 +742,9 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp_body)
         self.add_endpoint(upstream_endpoint)
 
+        logging.debug(self.service.storage.debug_dump())
         self._dequeue()
 
-        logging.debug(self.service.storage.debug_dump())
         tx_json = rest_endpoint.get_json()
         tx = TransactionMetadata.from_json(tx_json, WhichJson.REST_READ)
         self.assertEqual(2, tx.attempt_count)
@@ -798,6 +831,7 @@ class RouterServiceTest(unittest.TestCase):
             {'mail_from': {},
              'rcpt_to': [{}],
              'body': {},
+             'retry': {},
              'mail_response': {'code': 201, 'message': 'ok'},
              'rcpt_response': [{'code': 202, 'message': 'ok'}],
              'data_response': {'code': 203, 'message': 'ok'},
@@ -1192,7 +1226,6 @@ class RouterServiceTest(unittest.TestCase):
         with open('testdata/multipart.msg', 'rb') as f:
             body = f.read()
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1305,7 +1338,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1349,7 +1381,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            #retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1393,7 +1424,6 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata(
-            retry={},
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))

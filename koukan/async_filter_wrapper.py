@@ -24,18 +24,15 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     timeout : float  # used for SyncFilter.on_update()
     store_and_forward : bool
     do_store_and_forward : bool = False
-    retry_params : Optional[dict] = None
     tx : TransactionMetadata  # most recent upstream
     timeout_resp : TransactionMetadata  # store&forward responses
 
     def __init__(self, filter : AsyncFilter,
                  timeout : float,
-                 store_and_forward : bool = False,
-                 retry_params : Optional[dict] = None):
+                 store_and_forward : bool = False):
         self.filter = filter
         self.timeout = timeout
         self.store_and_forward = store_and_forward
-        self.retry_params = retry_params if retry_params else {}
         self.timeout_resp = TransactionMetadata()
 
     def incremental(self):

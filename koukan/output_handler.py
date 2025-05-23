@@ -361,12 +361,15 @@ class OutputHandler:
                            now=int(time.time()),
                            response=resp)
 
-        # TODO link these transactions in storage somehow
+        # TODO link these transactions in storage somehow:
         # self.cursor.id should end up in this tx and this tx id
-        # should get written back to self.cursor
+        # should get written back to self.cursor.
         # The endpoint used for notifications should go out directly,
         # *not* via the exploder which has the potential to enable
         # bounces on this bounce, etc.
+        # This tx explicitly toggles retry so endpoint should be
+        # ~exploder upstream with per_request retry.  cf
+        # FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
             host=self.notification['host'],
             mail_from=Mailbox(''),
