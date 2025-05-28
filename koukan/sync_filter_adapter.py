@@ -440,6 +440,8 @@ class RestHandler(Handler):
                 request, code=500, msg='internal error creating transaction')
         tx = TransactionMetadata.from_json(
             req_json, WhichJson.REST_CREATE)
+        if tx is None:
+            return self.response(request, code=400, msg='invalid tx json')
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
                 return self.response(
@@ -447,8 +449,6 @@ class RestHandler(Handler):
                     'non-incremental endpoint must contain mail_from and '
                     'exactly 1 rcpt_to')
 
-        if tx is None:
-            return self.response(request, code=400, msg='invalid tx json')
         tx.host = self.http_host
         body = tx.body
 
