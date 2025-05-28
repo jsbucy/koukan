@@ -177,13 +177,13 @@ class OutputHandler:
         # specifies the endpoint to send it to. To implement "queue
         # warning" messages, success dsn, etc, this invocation needs to
         # move before the 'if not done' early return (above).
-        if self.cursor.tx.notification is not None:
-            # self.tx via _fixup_downstream_tx() drops notification so
-            # use cursor tx, but merge upstream responses
-            tx = self.cursor.tx.copy()
-            assert tx.merge_from(upstream_delta) is not None
-            self._maybe_send_notification(final_attempt_reason, tx)
-            kwargs['notification_done'] = True
+
+        # self.tx via _fixup_downstream_tx() drops notification so
+        # use cursor tx, but merge upstream responses
+        tx = self.cursor.tx.copy()
+        assert tx.merge_from(upstream_delta) is not None
+        self._maybe_send_notification(final_attempt_reason, tx)
+        kwargs['notification_done'] = True
 
         return upstream_delta, kwargs
 
@@ -276,10 +276,11 @@ class OutputHandler:
 
     def _maybe_send_notification(self, final_attempt_reason : Optional[str],
                                  tx : TransactionMetadata):
+        logging.debug('%s %s', self.notification_params, tx.notification)
         if self.notification_params is None:
             return
         if (self.notification_params.get('mode', None) == 'per_request' and
-            self.cursor.tx.notification is None):
+            tx.notification is None):
             return
         resp : Optional[Response] = None
         # Note: this is not contingent on self.cursor.input_done. Thus

@@ -398,6 +398,7 @@ class RouterServiceTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'body': {},
                 'retry': {},
+                'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
@@ -524,6 +525,7 @@ class RouterServiceTest(unittest.TestCase):
             'rcpt_to': [{}],
             'body': {},
             'retry': {},
+            'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
@@ -532,7 +534,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_rest_body_http_retry(self):
-        logging.debug('RouterServiceTest.test_rest_body_chunked')
+        logging.debug('RouterServiceTest.test_rest_body_http_retry')
         rest_endpoint = RestEndpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
@@ -662,11 +664,13 @@ class RouterServiceTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'body': {},
                 'retry': {},
+                'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
                 'final_attempt_reason': 'upstream response success' }:
                 break
+            logging.debug(tx_json)
             time.sleep(1)
         else:
             self.fail('expected tx')
@@ -832,6 +836,7 @@ class RouterServiceTest(unittest.TestCase):
              'rcpt_to': [{}],
              'body': {},
              'retry': {},
+             'notification': {},
              'mail_response': {'code': 201, 'message': 'ok'},
              'rcpt_response': [{'code': 202, 'message': 'ok'}],
              'data_response': {'code': 203, 'message': 'ok'},

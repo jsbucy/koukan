@@ -40,8 +40,6 @@ endpoint:
     msa: true
     rcpt_timeout: 4
     data_timeout: 4
-    default_notification:
-      host: msa-output
 
 - name: msa-output
   rest_lro: true
@@ -112,8 +110,6 @@ endpoint:
     output_chain: mx-out
     rcpt_timeout: 4
     data_timeout: 4
-    default_notification:
-      host: msa-output
 
 - name: mx-out
   rest_lro: true

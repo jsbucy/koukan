@@ -106,7 +106,7 @@ class StorageWriterFilter(AsyncFilter):
             # xxx output_handler_yaml_schema.py ?
             notify_yaml = output_yaml.get('notification', None)
             if notify_yaml is not None and notify_yaml.get('mode', '') != 'per_request':
-                storage_tx.notify = {}
+                storage_tx.notification = {}
             retry_yaml = output_yaml.get('retry_params', None)
             if retry_yaml is not None and retry_yaml.get('mode', '') != 'per_request':
                 storage_tx.retry = {}

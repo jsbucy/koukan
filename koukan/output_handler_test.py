@@ -414,8 +414,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -465,7 +463,9 @@ class OutputHandlerTest(unittest.TestCase):
             notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params = {'host': 'smtp-out'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -479,8 +479,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
@@ -549,7 +547,9 @@ class OutputHandlerTest(unittest.TestCase):
             notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params={'host': 'smtp-out'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -566,7 +566,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -597,7 +596,11 @@ class OutputHandlerTest(unittest.TestCase):
             tx_cursor, endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1,
+                          'mode': 'per_request'},
+            notification_params={'host': 'notify-out',
+                                 'mode': 'per_request'})
         handler.handle()
 
         # tx should not be loadable
@@ -607,8 +610,8 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.load(db_id=tx_id)
         tx_cursor.write_envelope(TransactionMetadata(
-            notification={'host': 'smtp-out'}))
-
+            retry={},
+            notification={}))
 
         notification_endpoint = MockAsyncFilter()
 
@@ -635,6 +638,7 @@ class OutputHandlerTest(unittest.TestCase):
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
             downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
             notification_params={'host': 'notify-out'})
 
         logging.debug('handle() for notification')
