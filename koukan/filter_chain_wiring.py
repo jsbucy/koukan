@@ -84,7 +84,6 @@ class FilterChainWiring:
         if msa:
             rcpt_timeout = 5
             data_timeout = 30
-        notification = yaml.get('default_notification', None)
         # if one wanted to store&forward on executor overflow
         # (i.e. pass block_upstream=False below),
         # exploder_output_factory probably needs to return an extra

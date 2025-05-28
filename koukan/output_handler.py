@@ -22,26 +22,26 @@ from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
-def default_notification_factory():
+def default_notification_endpoint_factory():
     raise NotImplementedError()
 
 class OutputHandler:
     cursor : TransactionCursor
     endpoint : SyncFilter
     rest_id : str
-    notification_factory : Callable[[], AsyncFilter]
+    notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
     retry_params : dict
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
-    notification : dict
+    notification_params : dict
 
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
-                 notification_factory = default_notification_factory,
+                 notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
                  retry_params : dict = {},
                  notification_params : dict = {}):
@@ -50,12 +50,12 @@ class OutputHandler:
         self.rest_id = self.cursor.rest_id
         self.env_timeout = downstream_env_timeout
         self.data_timeout = downstream_data_timeout
-        self.notification_factory = notification_factory
+        self.notification_endpoint_factory = notification_endpoint_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
-        self.notification = notification_params
+        self.notification_params = notification_params
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         t = self.cursor.tx
@@ -270,9 +270,9 @@ class OutputHandler:
         return None, next
 
     def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
-        if self.notification is None:
+        if self.notification_params is None:
             return
-        if (self.notification.get('mode', None) == 'per_request' and
+        if (self.notification_params.get('mode', None) == 'per_request' and
             self.cursor.tx.notification is None):
             return
 
@@ -322,7 +322,7 @@ class OutputHandler:
 
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s last %s notify %s tx %s', self.rest_id, last_attempt,
-                      self.notification, self.cursor.tx)
+                      self.notification_params, self.cursor.tx)
 
         if resp.ok():
             return
@@ -371,13 +371,13 @@ class OutputHandler:
         # ~exploder upstream with per_request retry.  cf
         # FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
-            host=self.notification['host'],
+            host=self.notification_params['host'],
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
             body = InlineBlob(dsn, last=True),
             retry={})
-        notification_endpoint = self.notification_factory()
+        notification_endpoint = self.notification_endpoint_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)
         # should result in the parent retrying even if it was

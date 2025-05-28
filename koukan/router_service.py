@@ -287,7 +287,7 @@ class Service:
             output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
             output_yaml.get('downstream_data_timeout', 60),
-            notification_factory=self._notification_endpoint,
+            notification_endpoint_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', {}),

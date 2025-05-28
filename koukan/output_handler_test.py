@@ -367,7 +367,7 @@ class OutputHandlerTest(unittest.TestCase):
         retry_params = {}
         handler = OutputHandler(
             tx_cursor, endpoint=None,
-            notification_factory=None,
+            notification_endpoint_factory=None,
             retry_params=retry_params)
 
         retry_params['min_attempt_time'] = 0
@@ -462,7 +462,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
             downstream_data_timeout=1)
@@ -545,7 +545,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
             downstream_data_timeout=1)
@@ -589,7 +589,7 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp)
 
-        # no notification_factory since not requested
+        # no notification_endpoint_factory since not requested
         tx_cursor = self.storage.load_one()
         handler = OutputHandler(
             tx_cursor, endpoint,
@@ -629,7 +629,7 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
             downstream_data_timeout=1,
