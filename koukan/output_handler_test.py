@@ -468,6 +468,7 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_data_timeout=1)
 
         handler.handle()
+        self.assertFalse(notification_endpoint.update_expectation)
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
@@ -551,6 +552,7 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_data_timeout=1)
 
         handler.handle()
+        self.assertFalse(notification_endpoint.update_expectation)
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')

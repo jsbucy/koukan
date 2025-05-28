@@ -178,7 +178,11 @@ class OutputHandler:
         # warning" messages, success dsn, etc, this invocation needs to
         # move before the 'if not done' early return (above).
         if self.cursor.tx.notification is not None:
-            self._maybe_send_notification(final_attempt_reason)
+            # self.tx via _fixup_downstream_tx() drops notification so
+            # use cursor tx, but merge upstream responses
+            tx = self.cursor.tx.copy()
+            assert tx.merge_from(upstream_delta) is not None
+            self._maybe_send_notification(final_attempt_reason, tx)
             kwargs['notification_done'] = True
 
         return upstream_delta, kwargs
@@ -216,7 +220,8 @@ class OutputHandler:
                             'notification')
                         raise ValueError()
                     self._maybe_send_notification(
-                        self.cursor.final_attempt_reason)
+                        self.cursor.final_attempt_reason,
+                        self.cursor.tx)
                     env_kwargs = {'finalize_attempt': True,
                                   'notification_done': True}
                 else:
@@ -269,15 +274,14 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
-    def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
+    def _maybe_send_notification(self, final_attempt_reason : Optional[str],
+                                 tx : TransactionMetadata):
         if self.notification_params is None:
             return
         if (self.notification_params.get('mode', None) == 'per_request' and
             self.cursor.tx.notification is None):
             return
-
         resp : Optional[Response] = None
-        tx = self.cursor.tx
         # Note: this is not contingent on self.cursor.input_done. Thus
         # if the rest client enables notifications in the initial
         # POST, we will send a bounce if it permfailed at
