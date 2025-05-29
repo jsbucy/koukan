@@ -268,7 +268,7 @@ if __name__ == '__main__':
     parser.add_argument('--rfc822_filename')
     parser.add_argument('--message_builder_filename')
     parser.add_argument('--base_url', default='http://localhost:8000')
-    parser.add_argument('--host', default='msa-output')
+    parser.add_argument('--host', default='submission')
     parser.add_argument('--iters', default='1')
     parser.add_argument('--threads', default='1')
     parser.add_argument('rcpt_to', nargs='*')

@@ -52,6 +52,10 @@ endpoint:
       max_attempt_time: 5
       backoff_factor: 1.5
       deadline: 30
+    notification:
+      mode: per_request
+      host: msa-output
+
   chain:
   - filter: remote_host
   # message_builder must be chained before anything that wants to
@@ -98,6 +102,64 @@ endpoint:
     rcpt_timeout: 5
     data_timeout: 5
 
+- name: submission
+  rest_lro: true
+  msa: true
+  output_handler:
+    retry_params:
+      max_attempts: 3
+      min_attempt_time: 2
+      max_attempt_time: 5
+      backoff_factor: 1.5
+      deadline: 30
+
+  chain:
+  - filter: remote_host
+  # message_builder must be chained before anything that wants to
+  # access/modify the message: received_header, dkim
+  - filter: message_builder
+  - filter: received_header
+    received_hostname: gargantua1    
+  - filter: router
+    policy:
+      name: hello
+  # send my own domains directly to my ingress
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      - rest-application.example.com
+      destination:
+        endpoint: http://localhost:8000
+        http_host: mx-out
+  # send everything else to the rhs of the addr via the smtp gw
+  - filter: router
+    policy:
+      name: dest_domain
+      destination:
+        endpoint: http://localhost:8001
+        http_host: outbound
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest -> reject all
+  #- filter: dkim
+  #  key: config/local-test/dkim.key
+  #  domain: example.com
+  #  selector: sel
+  - filter: hello
+  - filter: dns_resolution
+    suffix: ''  # match everything
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
+  - filter: rest_output
+    verify: localhost.crt
+    rcpt_timeout: 5
+    data_timeout: 5
+
+
 - name: inbound-gw
   rest_lro: false
   msa: false
@@ -122,6 +184,9 @@ endpoint:
       max_attempt_time: 5
       backoff_factor: 1.5
       deadline: 30
+    notification:
+      mode: per_request
+      host: msa-output
   chain:
   - filter: remote_host
   - filter: received_header
