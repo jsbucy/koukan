@@ -223,18 +223,10 @@ class OutputHandler:
                             'invalid tx state: no_final_notification without '
                             'notification')
                         raise ValueError()
-<<<<<<< HEAD
-                    self._maybe_send_notification(
-                        self.cursor.final_attempt_reason,
-                        self.cursor.tx)
-                    env_kwargs = {'finalize_attempt': True,
-                                  'notification_done': True}
-=======
                     env_kwargs = {'finalize_attempt': True}
                     if self._maybe_send_notification(
                         self.cursor.final_attempt_reason, self.cursor.tx):
                         env_kwargs['notification_done'] = True
->>>>>>> rest_validation
                 else:
                     delta, env_kwargs = self._handle_once()
 
