@@ -26,14 +26,20 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     do_store_and_forward : bool = False
     tx : TransactionMetadata  # most recent upstream
     timeout_resp : TransactionMetadata  # store&forward responses
+    retry : bool
+    notify : bool
 
     def __init__(self, filter : AsyncFilter,
                  timeout : float,
-                 store_and_forward : bool = False):
+                 store_and_forward : bool = False,
+                 retry : bool = False,
+                 notify : bool = False):
         self.filter = filter
         self.timeout = timeout
         self.store_and_forward = store_and_forward
         self.timeout_resp = TransactionMetadata()
+        self.retry = retry
+        self.notify = notify
 
     def incremental(self):
         # only RestEndpoint calls this for http req validation
@@ -192,11 +198,12 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     250, 'DATA ok (AsyncFilterWrapper store&forward)')
 
         if (data_last and self.do_store_and_forward
-            and tx.retry is None):
-            retry_delta = TransactionMetadata(
-                retry = {},
-                # this will blackhole if unset!
-                notification={})
+            and tx.retry is None and (self.retry or self.notify)):
+            retry_delta = TransactionMetadata()
+            if self.retry:
+                retry_delta.retry = {}
+            if self.notify:
+                retry_delta.notification = {}
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 

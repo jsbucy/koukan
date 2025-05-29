@@ -86,7 +86,7 @@ root_yaml_template = {
                 },
                 'notification': {
                     'mode': 'per_request',
-                    'host': 'msa-upstream'
+                    'host': 'submission'
                 }
             },
             'chain': [
@@ -109,7 +109,7 @@ root_yaml_template = {
                     'bug_retry': 1,
                 },
                 'notification': {
-                    'host': 'msa-upstream'
+                    'host': 'submission'
                 }
             },
             'chain': [
@@ -141,7 +141,7 @@ root_yaml_template = {
                 },
                 'notification': {
                     'mode': 'per_request',
-                    'host': 'inbound-gw'
+                    'host': 'submission'
                 }
             },
             'chain': [
@@ -182,11 +182,7 @@ root_yaml_template = {
             'name': 'sor',
             'output_handler': {
                 'retry_params': {
-                    'mode': 'per_request',
                 },
-                'notification': {
-                    'mode': 'per_request',
-                }
             },
             'chain': [
                 {'filter': 'sync'}
@@ -1083,14 +1079,13 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(250),
                 rcpt_response=[Response(250)])
-            tx.merge_from(upstream_delta)
 
             if tx.body and tx.body.finalized():
                 dsn = tx.body.pread(0)
                 logging.debug('test_notification %s', dsn)
                 self.assertIn(b'subject: Delivery Status Notification', dsn)
                 upstream_delta.data_response=Response(250)
-            tx.merge_from(upstream_delta)
+            assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)

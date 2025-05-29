@@ -378,16 +378,15 @@ class OutputHandler:
         # The endpoint used for notifications should go out directly,
         # *not* via the exploder which has the potential to enable
         # bounces on this bounce, etc.
-        # This tx explicitly toggles retry so endpoint should be
-        # ~exploder upstream with per_request retry.  cf
-        # FilterChainWiring.add_route()
+        # This expects to get retry params from the output chain
+        # similar to rest submission: retries enabled, notifications disabled
+        # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
             host=self.notification_params['host'],
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
-            body = InlineBlob(dsn, last=True),
-            retry={})
+            body = InlineBlob(dsn, last=True))
         notification_endpoint = self.notification_endpoint_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)

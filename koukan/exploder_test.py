@@ -164,7 +164,8 @@ class ExploderTest(unittest.TestCase):
         notify = {} if store_and_forward else None
         return AsyncFilterWrapper(self.upstream_endpoints.pop(0),
                                   timeout=5,
-                                  store_and_forward=store_and_forward)
+                                  store_and_forward=store_and_forward,
+                                  retry=True, notify=True)
 
     # xxx all tests validate response message
 

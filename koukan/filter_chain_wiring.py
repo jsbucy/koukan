@@ -68,13 +68,16 @@ class FilterChainWiring:
                           rcpt_timeout : float,
                           data_timeout : float,
                           store_and_forward : bool,
-                          block_upstream : bool):
+                          block_upstream : bool,
+                          notify : bool,
+                          retry : bool):
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
             http_host, block_upstream)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
-            upstream, rcpt_timeout, store_and_forward=store_and_forward)
+            upstream, rcpt_timeout, store_and_forward=store_and_forward,
+            notify=notify, retry=retry)
 
     def exploder(self, yaml, next):
         assert next is None
@@ -94,21 +97,20 @@ class FilterChainWiring:
             yaml['output_chain'],
             partial(self.exploder_upstream, yaml['output_chain'],
                     rcpt_timeout, data_timeout, store_and_forward=msa,
-                    block_upstream=True),
+                    block_upstream=True, notify=True, retry=True),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
     def add_route(self, yaml, next):
         if yaml.get('store_and_forward', None):
-            # output_chain should be similar to exploder upstream with
-            # per_request retry/notify mode
-            # alternatively, this could not set store_and_forward
-            # and control retry/notify on the upstream
+            # we configure AsyncFilterWrapper *not* to toggle
+            # retry/notify upstream; it gets that from the upstream
+            # chain
             add_route = self.exploder_upstream(
                 yaml['output_chain'],
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors
                 store_and_forward=True,
-                block_upstream=False)
+                block_upstream=False, notify=False, retry=False)
         else:
             output = self.filter_chain_factory.build_filter_chain(
                 yaml['output_chain'])

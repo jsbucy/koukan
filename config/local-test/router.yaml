@@ -54,7 +54,7 @@ endpoint:
       deadline: 30
     notification:
       mode: per_request
-      host: msa-output
+      host: submission
 
   chain:
   - filter: remote_host
@@ -186,7 +186,7 @@ endpoint:
       deadline: 30
     notification:
       mode: per_request
-      host: msa-output
+      host: submission
   chain:
   - filter: remote_host
   - filter: received_header
