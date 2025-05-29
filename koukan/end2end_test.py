@@ -151,7 +151,7 @@ class End2EndTest(unittest.TestCase):
             del endpoint['verify']
 
         for endpoint in router_yaml['endpoint']:
-            if endpoint['name'] == 'msa-output':
+            if endpoint['name'] in ['msa-output', 'submission']:
                 self._update_dkim(endpoint['chain'])
             for filter in endpoint['chain']:
                 self._update_router(filter)
@@ -320,7 +320,7 @@ class End2EndTest(unittest.TestCase):
         self._configure_and_run()
 
         sender = Sender(self.router_base_url,
-                        'msa-output',
+                        'submission',
                         'alice@example.com',
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
@@ -369,7 +369,7 @@ class End2EndTest(unittest.TestCase):
         }
 
         sender = Sender(self.router_base_url,
-                        'msa-output',
+                        'submission',
                         'alice@example.com',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')

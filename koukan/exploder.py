@@ -89,8 +89,7 @@ class Recipient:
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:
-            del ti.version
-            del ti.body
+            ti.version = ti.body = None
         assert orig.delta(tt) is not None  # check buggy filter
         self.tx = t
 
@@ -102,7 +101,6 @@ class Exploder(SyncFilter):
     # TODO these timeouts move to AsyncFilterWrapper
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
-    default_notification : Optional[dict] = None
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -113,14 +111,12 @@ class Exploder(SyncFilter):
                  output_chain : str,
                  upstream_factory : FilterFactory,
                  rcpt_timeout : Optional[float] = None,
-                 data_timeout : Optional[float] = None,
-                 default_notification : Optional[dict] = None):
+                 data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
         self.output_chain = output_chain
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
-        self.default_notification = default_notification
 
     @staticmethod
     def reduce_data_response(
@@ -140,19 +136,14 @@ class Exploder(SyncFilter):
         return lhs
 
     def on_update(self,
-                  downstream_tx : TransactionMetadata,
-                  downstream_delta : TransactionMetadata
+                  tx : TransactionMetadata,
+                  tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
-        tx_orig = downstream_tx.copy()
-        tx = downstream_tx.copy()
-        tx_delta = downstream_delta.copy()
+        tx_orig = tx.copy()
 
-        # OutputHandler may send but Storage currently does not accept
-        # reusing !finalized blob so we must buffer incomplete body here.
-        if tx.body is not None and not tx.body.finalized():
-            tx_orig.body = tx.body = tx_delta.body = None
-            if not tx_delta:
-                return TransactionMetadata()
+        # NOTE: OutputHandler may send but Storage currently does not
+        # accept reusing !finalized blob. Exploder passes it through
+        # but AsyncFilterWrapper buffers.
 
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(
@@ -201,7 +192,7 @@ class Exploder(SyncFilter):
 
         if (body is None) or (tx.data_response is not None):
             upstream_delta = tx_orig.delta(tx)
-            downstream_tx.merge_from(upstream_delta)
+            tx.merge_from(upstream_delta)
             return upstream_delta
 
         # If all rcpts with rcpt_response.ok() have the same
@@ -220,11 +211,11 @@ class Exploder(SyncFilter):
             tx.data_response = Response(
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
-        else:
+        elif body.finalized():
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
-                notification=self.default_notification)
+                notification={})
             for rcpt in self.recipients:
                 if (rcpt.tx.rcpt_response[0].ok() and
                     (not rcpt.tx.data_response.ok()) and
@@ -233,6 +224,4 @@ class Exploder(SyncFilter):
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
 
-        upstream_delta = tx_orig.delta(tx)
-        downstream_tx.merge_from(upstream_delta)
-        return upstream_delta
+        return tx_orig.delta(tx)

@@ -23,15 +23,7 @@ class Handler(ABC):
 
     @abstractmethod
     def patch_tx(self, request : HttpRequest,
-                 req_json : dict,
-                 message_builder : bool = False) -> HttpResponse:
-        pass
-
-    @abstractmethod
-    async def create_body_async(
-            self, request : HttpRequest,
-            req_upload : Optional[str] = None
-    ) -> HttpResponse:
+                 req_json : dict) -> HttpResponse:
         pass
 
     @abstractmethod

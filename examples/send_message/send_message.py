@@ -36,7 +36,6 @@ from contextlib import nullcontext
 class Sender:
     base_url : str
     host : str
-    notification_host : Optional[str]
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
@@ -47,15 +46,10 @@ class Sender:
 
     def __init__(self,
                  base_url : str,
-                 # in the default configs, this is a post-exploder
-                 # chain that doesn't have default_notification...
                  host : str,
                  mail_from : str,
                  message_builder : Optional[dict] = None,
-                 body_filename : Optional[str] = None,
-                 # ... so if you want notifications, you need to
-                 # enable it explicitly
-                 notification_host : Optional[str] = None):
+                 body_filename : Optional[str] = None):
         self.session = requests.Session()
         self.session.verify = 'localhost.crt'
         self.mail_from = mail_from
@@ -65,7 +59,6 @@ class Sender:
             self.fixup_headers()
         self.base_url = base_url
         self.host = host
-        self.notification_host = notification_host
 
     # -> url path (for reuse)
     def send_part(self,
@@ -117,17 +110,13 @@ class Sender:
 
         return True
 
-    def send(self, rcpt_to : str, retry : Dict[str, Any]={}, max_wait=30):
+    def send(self, rcpt_to : str, max_wait=30):
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json={
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
         }
-        if retry is not None:
-            tx_json['retry'] = retry
-        if self.notification_host:
-            tx_json['notification'] = {'host': self.notification_host }
         if self.body_path is not None:
             tx_json['body'] = {'reuse_uri': self.body_path}
         elif self.body_filename is not None:
@@ -173,10 +162,10 @@ class Sender:
         if self.body_filename is not None and self.body_path is None:
             with open(self.body_filename, 'rb') as body_file:
                 body_path = tx_path + '/body'
-                resp = self.session.post(
+                resp = self.session.put(
                     urljoin(self.base_url, body_path),
                     data=body_file)
-                logging.debug('POST %s %s %s', body_path, resp, resp.text)
+                logging.debug('PUT %s %s %s', body_path, resp, resp.text)
                 if resp.status_code == 201:
                     self.body_path = body_path
         elif (self.message_builder is not None and
@@ -279,10 +268,7 @@ if __name__ == '__main__':
     parser.add_argument('--rfc822_filename')
     parser.add_argument('--message_builder_filename')
     parser.add_argument('--base_url', default='http://localhost:8000')
-    parser.add_argument('--host', default='msa-output')
-    parser.add_argument('--notification_host', default='msa-output')
-    # {}: use system defaults for retries
-    parser.add_argument('--retry', default='{}')
+    parser.add_argument('--host', default='submission')
     parser.add_argument('--iters', default='1')
     parser.add_argument('--threads', default='1')
     parser.add_argument('rcpt_to', nargs='*')
@@ -305,18 +291,16 @@ if __name__ == '__main__':
                         args.host,
                         args.mail_from,
                         message_builder=message_builder,
-                        body_filename=args.rfc822_filename,
-                        notification_host=args.notification_host)
+                        body_filename=args.rfc822_filename)
 
         for i in range(0, int(args.iters)):
             for rcpt in args.rcpt_to:
-                result = sender.send(rcpt, retry)
+                result = sender.send(rcpt)
                 with mu:
                     if result not in results:
                         results[result] = 0
                     results[result] += 1
 
-    retry = json.loads(args.retry) if args.retry else None
     threads = []
     start = time.monotonic()
     for t in range(0, int(args.threads)):

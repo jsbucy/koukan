@@ -23,23 +23,27 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
     filter : AsyncFilter
     timeout : float  # used for SyncFilter.on_update()
     store_and_forward : bool
-    default_notification : Optional[dict] = None
     do_store_and_forward : bool = False
-    retry_params : Optional[dict] = None
     tx : TransactionMetadata  # most recent upstream
     timeout_resp : TransactionMetadata  # store&forward responses
+    retry : bool
+    notify : bool
 
     def __init__(self, filter : AsyncFilter,
                  timeout : float,
                  store_and_forward : bool = False,
-                 default_notification : Optional[dict] = None,
-                 retry_params : Optional[dict] = None):
+                 retry : bool = False,
+                 notify : bool = False):
         self.filter = filter
         self.timeout = timeout
         self.store_and_forward = store_and_forward
-        self.default_notification = default_notification
-        self.retry_params = retry_params if retry_params else {}
         self.timeout_resp = TransactionMetadata()
+        self.retry = retry
+        self.notify = notify
+
+    def incremental(self):
+        # only RestEndpoint calls this for http req validation
+        raise NotImplementedError()
 
     def get_blob_writer(
             self,
@@ -86,17 +90,25 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         assert upstream_delta is not None
         return upstream_tx, upstream_delta
 
-    def update(self, tx : TransactionMetadata,
-               tx_delta : TransactionMetadata
+    def update(self, downstream_tx : TransactionMetadata,
+               downstream_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        tx = downstream_tx.copy()
+        tx_delta = downstream_delta.copy()
+        # OutputHandler may send but Storage currently does not accept
+        # reusing !finalized blob so we must buffer incomplete body here.
+        if tx.body is not None and not tx.body.finalized():
+            tx.body = tx_delta.body = None
+            if not tx_delta:
+                return TransactionMetadata()
         tx_orig = tx.copy()
         upstream_tx, upstream_delta = self._update(tx, tx_delta)
         self.tx = upstream_tx.copy()
         self._update_responses(upstream_tx)
         logging.debug(upstream_tx)
-        del tx_orig.version
+        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert tx.merge_from(upstream_delta) is not None
+        assert downstream_tx.merge_from(upstream_delta) is not None
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:
@@ -186,11 +198,12 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                     250, 'DATA ok (AsyncFilterWrapper store&forward)')
 
         if (data_last and self.do_store_and_forward
-            and tx.retry is None):
-            retry_delta = TransactionMetadata(
-                retry = self.retry_params,
-                # this will blackhole if unset!
-                notification=self.default_notification)
+            and tx.retry is None and (self.retry or self.notify)):
+            retry_delta = TransactionMetadata()
+            if self.retry:
+                retry_delta.retry = {}
+            if self.notify:
+                retry_delta.notification = {}
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 
@@ -204,7 +217,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
-        del tx_orig.version
+        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta

@@ -24,11 +24,13 @@ class MockAsyncFilter(AsyncFilter):
     body : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
     _version : Optional[int] = None
+    _incremental : Optional[bool] = None
 
-    def __init__(self):
+    def __init__(self, incremental=None):
         self.update_expectation = []
         self.get_expectation = []
         self.blob = {}
+        self._incremental = incremental
 
     def expect_update(self, exp : UpdateExpectation):
         self.update_expectation.append(exp)
@@ -77,6 +79,10 @@ class MockAsyncFilter(AsyncFilter):
     async def wait_async(self, version, timeout) -> bool:
         return bool(self.get_expectation)
 
+    def incremental(self):
+        if self._incremental is None:
+            raise NotImplementedError()
+        return self._incremental
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],
                        Optional[TransactionMetadata]]

@@ -367,7 +367,7 @@ class OutputHandlerTest(unittest.TestCase):
         retry_params = {}
         handler = OutputHandler(
             tx_cursor, endpoint=None,
-            notification_factory=None,
+            notification_endpoint_factory=None,
             retry_params=retry_params)
 
         retry_params['min_attempt_time'] = 0
@@ -414,8 +414,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -462,10 +460,12 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params = {'host': 'smtp-out'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -479,8 +479,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
@@ -546,10 +544,12 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params={'host': 'smtp-out'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -566,7 +566,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -591,13 +590,17 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp)
 
-        # no notification_factory since not requested
+        # no notification_endpoint_factory since not requested
         tx_cursor = self.storage.load_one()
         handler = OutputHandler(
             tx_cursor, endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1,
+                          'mode': 'per_request'},
+            notification_params={'host': 'notify-out',
+                                 'mode': 'per_request'})
         handler.handle()
 
         # tx should not be loadable
@@ -607,8 +610,8 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.load(db_id=tx_id)
         tx_cursor.write_envelope(TransactionMetadata(
-            notification={'host': 'smtp-out'}))
-
+            retry={},
+            notification={}))
 
         notification_endpoint = MockAsyncFilter()
 
@@ -631,10 +634,12 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params={'host': 'notify-out'})
 
         logging.debug('handle() for notification')
         handler.handle()

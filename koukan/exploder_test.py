@@ -165,7 +165,7 @@ class ExploderTest(unittest.TestCase):
         return AsyncFilterWrapper(self.upstream_endpoints.pop(0),
                                   timeout=5,
                                   store_and_forward=store_and_forward,
-                                  default_notification=notify)
+                                  retry=True, notify=True)
 
     # xxx all tests validate response message
 
@@ -173,8 +173,7 @@ class ExploderTest(unittest.TestCase):
         logging.debug('_test_one()', stack_info=True)
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
 
         output_threads = []
         for r in test.rcpt:
@@ -520,8 +519,7 @@ class ExploderTest(unittest.TestCase):
     def test_upstream_busy(self):
         exploder = Exploder('output-chain',
                             lambda: None,
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
         upstream_delta = exploder.on_update(tx, tx.copy())
@@ -533,11 +531,10 @@ class ExploderTest(unittest.TestCase):
         upstream = MockAsyncFilter()
         exploder = Exploder('output-chain',
                             lambda: upstream,
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
 
         def exp_update(tx, delta):
-            self.assertIsNone(tx.body)
+            self.assertFalse(tx.body.finalized())
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)])
@@ -546,7 +543,7 @@ class ExploderTest(unittest.TestCase):
 
         upstream.expect_update(exp_update)
 
-        body = b'hello'
+        body = b'hello, world'
 
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -557,14 +554,6 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
 
-        # empty delta after we drop non-finalized body -> early
-        # return, no upstream update
-        tx_delta = TransactionMetadata()
-        body += b', world'
-        tx.body = tx_delta.body = InlineBlob(body)
-        upstream_delta = exploder.on_update(tx, tx_delta)
-        self.assertFalse(upstream_delta)
-
         def exp_body(tx, delta):
             self.assertTrue(tx.body.finalized())
             upstream_delta = TransactionMetadata(
@@ -574,6 +563,7 @@ class ExploderTest(unittest.TestCase):
         upstream.expect_update(exp_body)
 
         body += b'!'
+        tx_delta = tx.copy()
         tx.body = tx_delta.body = InlineBlob(body, last=True)
         upstream_delta = exploder.on_update(tx, tx_delta)
         self.assertEqual(250, tx.mail_response.code)

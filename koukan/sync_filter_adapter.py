@@ -1,0 +1,290 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union )
+
+from abc import ABC, abstractmethod
+import logging
+import time
+from threading import Condition, Lock
+import json
+import asyncio
+from functools import partial
+
+from urllib.parse import urljoin
+
+from werkzeug.datastructures import ContentRange
+import werkzeug.http
+
+from fastapi import (
+    Request as FastApiRequest,
+    Response as FastApiResponse )
+from fastapi.responses import (
+    JSONResponse as FastApiJsonResponse,
+    PlainTextResponse )
+
+HttpRequest = FastApiRequest
+HttpResponse = FastApiResponse
+
+from httpx import Client, Response as HttpxResponse
+
+from koukan.deadline import Deadline
+from koukan.response import Response as MailResponse
+from koukan.blob import Blob, InlineBlob, WritableBlob
+
+from koukan.rest_service_handler import Handler, HandlerFactory
+from koukan.filter import (
+    AsyncFilter,
+    SyncFilter,
+    TransactionMetadata,
+    WhichJson )
+from koukan.executor import Executor
+
+from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
+from koukan.version_cache import IdVersion
+from koukan.storage_schema import VersionConflictException
+
+
+# runs SyncFilter on Executor with AsyncFilter interface for
+# RestHandler -> SyncFilterAdapter -> SmtpEndpoint
+
+# TODO I'm unhappy with how complicated this has become. I have
+# considered writing a memory-backed TransactionCursor and running
+# SmtpEndpoint on OutputHandler instead. In the past I didn't think
+# that would actually be simpler than this but now I'm not so sure...
+class SyncFilterAdapter(AsyncFilter):
+    class BlobWriter(WritableBlob):
+        # all accessed with parent.mu
+        parent : "SyncFilterAdapter"
+        offset : int = 0
+        # queue of staged appends, these are propagated to
+        # parent.body in _update_once()
+        q : List[bytes]
+        content_length : Optional[int] = None
+        def __init__(self, parent):
+            self.parent = parent
+            self.q = []
+
+        def len(self):
+            return self.offset
+
+        def append_data(self, offset : int, d : bytes,
+                        content_length : Optional[int] = None
+                        ) -> Tuple[bool, int, Optional[int]]:
+            with self.parent.mu:
+                assert self.content_length is None or (
+                    content_length == self.content_length)
+                if self.content_length is not None and (
+                        self.offset + len(d) > self.content_length):
+                    return False, self.offset, self.content_length
+                if offset != self.offset:
+                    return False, self.offset, None
+                self.q.append(d)
+                self.offset += len(d)
+                self.content_length = content_length
+            self.parent._blob_wakeup()
+            return True, self.offset, content_length
+
+    executor : Executor
+    filter : SyncFilter
+    prev_tx : TransactionMetadata
+    tx : TransactionMetadata
+    mu : Lock
+    cv : Condition
+    inflight : bool = False
+    rest_id : str
+    _last_update : float
+    blob_writer : Optional[BlobWriter] = None
+    body : Optional[InlineBlob] = None
+    # transaction has reached a final status: data response or cancelled
+    # (used for gc)
+    done : bool = False
+    id_version : IdVersion
+
+    def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
+        self.executor = executor
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+        self.filter = filter
+        self.rest_id = rest_id
+        self._last_update = time.monotonic()
+        self.prev_tx = TransactionMetadata()
+        self.tx = TransactionMetadata()
+        self.tx.rest_id = rest_id
+        self.id_version = IdVersion(db_id=1, rest_id='1', version=1)
+
+    def incremental(self):
+        return True
+
+    def idle(self, now : float, ttl : float, done_ttl : float):
+        with self.mu:
+            t = done_ttl if self.done else ttl
+            idle = now - self._last_update
+            timedout = idle > t
+            if self.inflight:
+                if timedout:
+                    logging.warning('maybe stuck %s idle %d',
+                                    self.rest_id, idle)
+                return False
+            return timedout
+
+    def version(self):
+        return self.id_version.get()
+
+    def wait(self, version, timeout) -> bool:
+        return self.id_version.wait(
+            version=version, timeout=timeout)
+
+    async def wait_async(self, version, timeout) -> bool:
+        return await self.id_version.wait_async(
+            version=version, timeout=timeout)
+
+    def _update(self):
+        try:
+            while self._update_once():
+                pass
+        except Exception:
+            logging.exception('SyncFilterAdapter._update_once() %s',
+                              self.rest_id)
+            with self.mu:
+                # The upstream SyncFilter is supposed to return tx
+                # error responses and not throw
+                # exceptions. i.e. SmtpEndpoint is supposed to convert
+                # all smtplib/socket exceptions to error responses but there
+                # may be bugs.
+                self.tx.fill_inflight_responses(MailResponse(
+                    450, 'internal error: unexpected exception in '
+                    'SyncFilterAdapter'))
+                self.cv.notify_all()
+            raise
+        finally:
+            with self.mu:
+                self.inflight = False
+                self.cv.notify_all()
+
+    def _update_once(self):
+        with self.mu:
+            assert self.inflight
+            delta = self.prev_tx.delta(self.tx)  # new reqs
+            assert delta is not None
+            logging.debug('SyncFilterAdapter._update_once() '
+                          'downstream_delta %s staged %s', delta,
+                          len(self.blob_writer.q) if self.blob_writer else None)
+            self.prev_tx = self.tx.copy()
+
+            # propagate staged appends from blob_writer to body
+            if self.blob_writer is not None and self.blob_writer.q:
+                # this may be moot because we early-return
+                # if the blob isn't finalized anyway but: we haven't
+                # really spelled out whether body is only in the
+                # delta the first time or every time that it grows?
+                delta.body = self.body
+                for b in self.blob_writer.q:
+                    self.body.append_data(
+                        self.body.len(), b,
+                        self.blob_writer.content_length)
+                    logging.debug('append %d %s', self.body.len(),
+                                  self.body.content_length())
+                self.blob_writer.q = []
+
+            if not self.tx.req_inflight() and not delta.cancelled:
+                return False
+            tx = self.tx.copy()
+        upstream_delta = self.filter.on_update(tx, delta)
+
+        logging.debug('SyncFilterAdapter._update_once() '
+                      'tx after upstream %s', tx)
+        with self.mu:
+            assert self.tx.merge_from(upstream_delta) is not None
+            # TODO closer to req_inflight() logic i.e. tx has reached
+            # a final state due to an error
+            self.done = self.tx.cancelled or self.tx.data_response is not None
+            version = self.id_version.get()
+            version += 1
+            self.cv.notify_all()
+            self.id_version.update(version=version)
+            self._last_update = time.monotonic()
+        return True
+
+    def update(self,
+               tx : TransactionMetadata,
+               tx_delta : TransactionMetadata
+               ) -> Optional[TransactionMetadata]:
+        if tx.retry is not None or tx.notification is not None:
+            err = TransactionMetadata()
+            tx.fill_inflight_responses(
+                MailResponse(500, 'internal err/invalid transaction fields'),
+                err)
+            tx.merge_from(err)
+            return err
+
+        with self.mu:
+            version = self.id_version.get()
+            # xxx bootstrap
+            if version > 1 and tx.version != version:
+                raise VersionConflictException
+
+            # try this non-destructively to see if the delta is valid...
+            if self.tx.merge(tx_delta) is None:
+                # bad delta, xxx this should throw an exception distinct
+                # from VersionConflictException, cannot make forward progress
+                return None
+            # ... before committing to self.tx
+            self.tx.merge_from(tx_delta)
+            logging.debug('SyncFilterAdapter.updated merged %s', self.tx)
+
+            version = self.id_version.get()
+            version += 1
+            self.id_version.update(version)
+
+            if not self.inflight:
+                fut = self.executor.submit(lambda: self._update(), 0)
+                # TODO we need a better way to report this error but
+                # throwing here will -> http 500
+                assert fut is not None
+                self.inflight = True
+            # no longer waits for inflight
+            delta = TransactionMetadata(rest_id=self.rest_id)
+            delta.version = version
+            tx.merge_from(delta)
+            assert delta.version is not None
+            return delta
+
+    def get(self) -> Optional[TransactionMetadata]:
+        with self.mu:
+            tx = self.tx.copy()
+            tx.version = self.id_version.get()
+            return tx
+
+    def get_blob_writer(self,
+                        create : bool,
+                        blob_rest_id : Optional[str] = None,
+                        tx_body : Optional[bool] = None,
+                        ) -> Optional[WritableBlob]:
+        if not tx_body:
+            raise NotImplementedError()
+        if create and self.blob_writer is None:
+            with self.mu:
+                assert self.body is None
+                assert self.blob_writer is None
+                self.body = InlineBlob(b'')
+                self.tx.body = self.body
+                self.blob_writer = SyncFilterAdapter.BlobWriter(self)
+        return self.blob_writer
+
+
+    def _blob_wakeup(self):
+        logging.debug('SyncFilterAdapter.blob_wakeup %s',
+                      [len(b) for b in self.blob_writer.q])
+        tx = self.get()
+        assert tx is not None
+        # shenanigans: empty update, _update_once() will dequeue from
+        # BlobWriter.q to self.body
+        tx_delta = TransactionMetadata()
+        self.update(tx, tx_delta)

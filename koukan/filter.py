@@ -291,14 +291,12 @@ _tx_fields = [
             to_json=body_to_json,
             from_json=body_from_json),
     TxField('notification',
-            validity=set([WhichJson.REST_CREATE,
-                          WhichJson.REST_READ,
+            validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.EXPLODER_UPDATE])),
     TxField('retry',
-            validity=set([WhichJson.REST_CREATE,
-                          WhichJson.REST_READ,
+            validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.EXPLODER_UPDATE])),
@@ -579,6 +577,8 @@ class TransactionMetadata:
         for f,field in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(delta, f, None)
+            if old_v is None and new_v is None:
+                continue
             if old_v is None and new_v is not None:
                 setattr(out, f, new_v)
                 continue
@@ -632,6 +632,8 @@ class TransactionMetadata:
         for (f,json_field) in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(successor, f, None)
+            if old_v is None and new_v is None:
+                continue
             # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
@@ -760,6 +762,12 @@ class SyncFilter(ABC):
 
 # interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
+    # returns whether this endpoint supports building up the
+    # transaction incrementally a la smtp
+    @abstractmethod
+    def incremental(self) -> bool:
+        pass
+
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,
