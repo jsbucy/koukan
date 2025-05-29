@@ -86,7 +86,7 @@ root_yaml_template = {
                 },
                 'notification': {
                     'mode': 'per_request',
-                    'host': 'submission'
+                    'host': 'msa-upstream'
                 }
             },
             'chain': [

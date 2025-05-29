@@ -182,8 +182,8 @@ class OutputHandler:
         # use cursor tx, but merge upstream responses
         tx = self.cursor.tx.copy()
         assert tx.merge_from(upstream_delta) is not None
-        self._maybe_send_notification(final_attempt_reason, tx)
-        kwargs['notification_done'] = True
+        if self._maybe_send_notification(final_attempt_reason, tx):
+            kwargs['notification_done'] = True
 
         return upstream_delta, kwargs
 
@@ -219,13 +219,13 @@ class OutputHandler:
                             'invalid tx state: no_final_notification without '
                             'notification')
                         raise ValueError()
-                    self._maybe_send_notification(
-                        self.cursor.final_attempt_reason,
-                        self.cursor.tx)
-                    env_kwargs = {'finalize_attempt': True,
-                                  'notification_done': True}
+                    env_kwargs = {'finalize_attempt': True}
+                    if self._maybe_send_notification(
+                        self.cursor.final_attempt_reason, self.cursor.tx):
+                        env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs = self._handle_once()
+
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
@@ -274,14 +274,16 @@ class OutputHandler:
             return 'retry policy deadline', None
         return None, next
 
+    # returns False if this early-returned because notifications were
+    # not enabled for this tx, True otherwise
     def _maybe_send_notification(self, final_attempt_reason : Optional[str],
-                                 tx : TransactionMetadata):
-        logging.debug('%s %s', self.notification_params, tx.notification)
+                                 tx : TransactionMetadata) -> bool:
+        logging.debug('%s %s', self.notification_params, tx)
         if self.notification_params is None:
-            return
+            return False
         if (self.notification_params.get('mode', None) == 'per_request' and
             tx.notification is None):
-            return
+            return False
         resp : Optional[Response] = None
         # Note: this is not contingent on self.cursor.input_done. Thus
         # if the rest client enables notifications in the initial
@@ -314,14 +316,14 @@ class OutputHandler:
         elif len(tx.rcpt_response) > 1:
             logging.warning('OutputHandler._maybe_send_notification %s '
                             'unexpected multi-rcpt', self.rest_id)
-            return
+            return True
         else:
             resp = tx.data_response
 
         if resp is None:
             logging.info('OutputHandler._maybe_send_notification %s '
                          'response is None, upstream timeout?', self.rest_id)
-            return
+            return True
 
         last_attempt = final_attempt_reason is not None
 
@@ -330,13 +332,13 @@ class OutputHandler:
                       self.notification_params, self.cursor.tx)
 
         if resp.ok():
-            return
+            return True
         if resp.temp() and not last_attempt:
-            return
+            return True
 
         mail_from = self.cursor.tx.mail_from
         if mail_from.mailbox == '':
-            return
+            return True
 
         orig_headers : str
         body = self.cursor.tx.body
@@ -390,3 +392,4 @@ class OutputHandler:
 
         notification_endpoint.update(notification_tx, notification_tx.copy())
         # no wait -> fire&forget
+        return True
