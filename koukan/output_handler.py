@@ -31,10 +31,13 @@ class OutputHandler:
     rest_id : str
     notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
-    retry_params : dict
+
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
-    notification_params : dict
+
+    retry_params : Optional[dict] = None
+    notification_params : Optional[dict] = None
+    _bug_retry : int = 3600
 
     def __init__(self,
                  cursor : TransactionCursor,
@@ -43,8 +46,8 @@ class OutputHandler:
                  downstream_data_timeout=None,
                  notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 retry_params : dict = {},
-                 notification_params : dict = {}):
+                 retry_params : Optional[dict] = None,
+                 notification_params : Optional[dict] = None):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
@@ -53,6 +56,8 @@ class OutputHandler:
         self.notification_endpoint_factory = notification_endpoint_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
+        if self.retry_params and 'bug_retry' in self.retry_params:
+            self._bug_retry = self.retry_params['bug_retry']
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.notification_params = notification_params
@@ -207,8 +212,7 @@ class OutputHandler:
                 delta = TransactionMetadata()
                 env_kwargs = {
                     'finalize_attempt': True,
-                    'next_attempt_time': time.time() + self.retry_params.get(
-                        'bug_retry', 3600) }
+                    'next_attempt_time': time.time() + self._bug_retry }
                 if self.cursor.no_final_notification:
                     # tx.notification was None when
                     # final_attempt_reason was written iow
