@@ -16,6 +16,55 @@ a SMTP MTA/MSA for existing applications.
 
 Installation
 
+Configuration
+
+Endpoints/Output Chains
+you will typically have 1 endpoint for each smtp vip + port e.g. mx and msa
+any endpoint that terminates smtp will end with the exploder
+there will be an accompanying "exploder upstream" endpoint/chain
+with "per_request" retry/notify settings
+there will also be an endpoint for direct rest clients
+so a simple config might consist of
+endpoint:
+- name: smtp-mx
+  chain:
+  # ...
+  - filter: exploder
+    msa: false
+    output-chain: smtp-mx-upstream
+- name: smtp-mx-upstream
+  output_handler:
+    notification:
+      host: submission
+    retry_params:
+  chain:
+  # ...
+  - filter: rest_output
+
+msa is similar to mx but enables store&forward on the exploder in more
+cases with msa: true
+
+rest clients that take full advantage of RestMTP LROs don't need notifications:
+
+- name: submission
+  output_handler:
+    retry_params:
+  chain:
+  # ...
+  - filter: rest_output
+
+Note that the output chain is linear. Koukan routes on recipient by
+setting fields in the transaction to influence the next hop that
+rest_output sends to and if that is the smtp gateway, what destination
+the gateway sends to after that. A typical ingress config would route
+known domains and reject everything else. Whereas an egress config
+might special-case internal domains and then send everything else to
+the RHS of the address.
+
+
+cluster/k8s
+
+
 RestMTP for Applications
 
 Sending
@@ -34,21 +83,12 @@ Content-type: application/json
      "headers": [["subject", "hello"]],
      "text_body": [{
        "content_type": "text/plain", "content": {"inline": "hello, world!"}}],
- "retry": {},
- "notification": null
 }}}
 
 201 created
 Location: /transactions/xyz
 Content-type: application/json
 {"mail_from": {}, "rcpt_to": {}, "body": {}}
-
-"retry": {} means "use system-configured default retry parameters"
-(null means "do not retry") TODO: {} should be the default if not
-specified?
-"notification": null means "do not send a bounce message" and again {}
-means "use system default notification parameters" e.g. only send a
-DSN on perm fail.
 
 RestMTP transactions are write-once; the {} is a placeholder
 indicating the field is populated. RestMTP transactions are
