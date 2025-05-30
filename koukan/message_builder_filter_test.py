@@ -37,6 +37,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             blobs = [InlineBlob(b'hello, world!', last=True,
                                 rest_id='blob_rest_id')]
         )
+        tx.body.check_ids()
 
         def exp(tx, delta):
             self.assertTrue(isinstance(delta.body, Blob))
@@ -83,6 +84,37 @@ class MessageBuilderFilterTest(unittest.TestCase):
         self.assertEqual(upstream_delta.mail_response.code, 201)
         self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
         self.assertEqual(upstream_delta.data_response.code, 203)
+
+    def test_exception(self):
+        upstream = FakeSyncFilter()
+        message_builder = MessageBuilderFilter(upstream)
+
+        tx = TransactionMetadata(
+            remote_host=HostPort('example.com', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob@domain')])
+        tx_delta = TransactionMetadata()
+        # MessageBuilder currently raises ValueError() if date is
+        # missing unix_secs
+        tx.body = MessageBuilderSpec(
+            {'headers': [['date', {}]],
+             "text_body": [{
+                 "content_type": "text/html",
+                 "content": {"create_id": "blob_rest_id"}
+             }]},
+            # non-finalized blob to tickle early-reject path
+            blobs=[InlineBlob(b'hello, ', last=False,
+                              rest_id='blob_rest_id')])
+        tx.body.check_ids()
+        def exp(tx, delta):
+            self.fail()
+        upstream.add_expectation(exp)
+
+        upstream_delta = message_builder.on_update(tx, tx.copy())
+        self.assertEqual(upstream_delta.mail_response.code, 250)
+        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [250])
+        self.assertEqual(upstream_delta.data_response.code, 550)
+
 
 if __name__ == '__main__':
     unittest.main()

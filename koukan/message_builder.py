@@ -57,7 +57,7 @@ class MessageBuilderSpec:
                 self._add_part_blob(part, create_blob_id)
                 create_blob_id += 1
 
-    def _add_part_blob(self, part, create_blob_id):
+    def _add_part_blob(self, part, create_blob_id : int):
         # if not present -> invalid spec
         content = part.get('content')
         if 'reuse_uri' in content:
@@ -68,16 +68,42 @@ class MessageBuilderSpec:
             blob_spec = BlobSpec(create_id=content['create_id'])
         elif 'inline' in content:
             blob_spec = BlobSpec(
-                blob = InlineBlob(content['inline'].encode('utf-8'), last=True))
+                blob = InlineBlob(content['inline'].encode('utf-8'), last=True),
+                create_id='inline%d' % create_blob_id)
         else:
             raise ValueError('bad MessageBuilder entity content')
-        part['content'] = {'create_id': blob_spec.create_id if blob_spec.create_id
-                           else blob_spec.reuse_uri.blob }
+        # cf MessageBuilder._add_part(), reusing 'create_id' for both
+        # create and reuse, maybe should be separate tag '_internal_blob_id'
+        if blob_spec.create_id:
+            blob_id = blob_spec.create_id
+        else:
+            blob_id = blob_spec.reuse_uri.blob
+        part['content'] = {'create_id': blob_id}
         self.blob_specs.append(blob_spec)
 
     def finalized(self):
         return (len(self.ids) == len(self.blobs) and
                 not any([not b.finalized() for b in self.blobs]))
+
+    def delta(self, rhs) -> Optional[bool]:
+        if not isinstance(rhs, MessageBuilderSpec):
+            return None
+        if self.json != rhs.json:
+            return None
+        if len(self.blobs) != len(rhs.blobs):
+            logging.debug('blobs len')
+            return None
+        out = False
+        for i,blob in enumerate(self.blobs):
+            blob_delta = blob.delta(rhs.blobs[i])
+            if blob_delta is None:
+                logging.debug(i)
+                logging.debug(self.blobs)
+                logging.debug(rhs.blobs)
+                return None
+            out |= blob_delta
+        return out
+
 
     def __repr__(self):
         return '%s %s' % (self.json, self.blobs)
@@ -108,14 +134,16 @@ class MessageBuilder:
 
         # TODO use str if maintype == 'text'
         # content : Optional[bytes]
-        content_json = part_json['content']
-        if 'inline' in content_json:
-            content = content_json['inline'].encode('utf-8')
-        elif 'create_id' in content_json:
-            blob = self.blobs[content_json['create_id']]
+        if (content_json := part_json.get('content', None)) is None:
+            raise ValueError('no part content')
+        if inline_content := content_json.get('inline', None):
+            content = inline_content.encode('utf-8')
+        elif create_id := content_json.get('create_id', None):
+            if not (blob := self.blobs.get(create_id, None)):
+                raise ValueError('invalid blob id')
             content = blob.pread(0)
         else:
-            raise ValueError()
+            raise ValueError('invalid part content')
 
         part.set_content(content, maintype=maintype, subtype=subtype)
         if maintype == 'text':
@@ -126,11 +154,11 @@ class MessageBuilder:
 
         if inline:
             part.add_header('content-disposition', 'inline')
-        elif 'filename' in part_json:
+        elif filename := part_json.get('filename', None):
             part.add_header('content-disposition', 'attachment',
-                            filename=part_json['filename'])
-        if 'content_id' in part_json:
-            part.add_header('content-id', part_json['content_id'])
+                            filename=filename)
+        if content_id := part_json.get('content_id', None):
+            part.add_header('content-id', content_id)
 
         if existing_part is None:
             multipart.attach(part)
@@ -158,9 +186,10 @@ class MessageBuilder:
             tz = datetime.timezone(datetime.timedelta(seconds=tz_json))
         else:
             tz = datetime.timezone.utc  # tz=None -> system timezone?
-
-        builder[field] = datetime.datetime.fromtimestamp(
-            field_json['unix_secs'], tz=tz)
+        if date := field_json.get('unix_secs', None):
+            builder[field] = datetime.datetime.fromtimestamp(date, tz=tz)
+        else:
+            raise ValueError('invalid date')
 
     def _add_headers(self, builder):
         for header in self.header_json:

@@ -6,7 +6,7 @@ from koukan.filter import (
     TransactionMetadata )
 from koukan.response import Response
 
-# Filter that fails MAIL in the absence of a positive signal to
+# Filter that fails transaction in the absence of a positive signal to
 # authorize relaying.
 class RelayAuthFilter(SyncFilter):
     upstream : SyncFilter
@@ -25,8 +25,9 @@ class RelayAuthFilter(SyncFilter):
             if (not self.smtp_auth or
                 tx.smtp_meta is None or
                 not tx.smtp_meta.get('auth', False)):
-                upstream_delta = TransactionMetadata(
-                    mail_response = Response(550, '5.7.1 not authorized'))
+                err = Response(550, '5.7.1 not authorized')
+                upstream_delta = TransactionMetadata()
+                tx.fill_inflight_responses(err, upstream_delta)
                 tx.merge_from(upstream_delta)
                 return upstream_delta
         return self.upstream.on_update(tx, tx_delta)

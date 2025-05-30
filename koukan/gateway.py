@@ -13,8 +13,8 @@ from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from koukan.smtp_service import service as smtp_service
 import koukan.fastapi_service as fastapi_service
 from koukan.filter import AsyncFilter
-from koukan.rest_endpoint_adapter import (
-    SyncFilterAdapter,
+from koukan.sync_filter_adapter import SyncFilterAdapter
+from koukan.rest_handler import (
     EndpointFactory,
     RestHandlerFactory )
 import koukan.hypercorn_main as hypercorn_main

@@ -7,6 +7,7 @@ import logging
 import time
 from functools import partial
 from threading import Thread
+import traceback
 
 from koukan.deadline import Deadline
 from koukan.storage import Storage, TransactionCursor
@@ -24,8 +25,8 @@ import koukan.postgres_test_utils as postgres_test_utils
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 
 from koukan.rest_schema import BlobUri
+from koukan.fake_endpoints import MockAsyncFilter
 
-import traceback
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -164,7 +165,7 @@ class ExploderTest(unittest.TestCase):
         return AsyncFilterWrapper(self.upstream_endpoints.pop(0),
                                   timeout=5,
                                   store_and_forward=store_and_forward,
-                                  default_notification=notify)
+                                  retry=True, notify=True)
 
     # xxx all tests validate response message
 
@@ -172,8 +173,7 @@ class ExploderTest(unittest.TestCase):
         logging.debug('_test_one()', stack_info=True)
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
 
         output_threads = []
         for r in test.rcpt:
@@ -519,14 +519,56 @@ class ExploderTest(unittest.TestCase):
     def test_upstream_busy(self):
         exploder = Exploder('output-chain',
                             lambda: None,
-                            rcpt_timeout=5,
-                            default_notification={})
+                            rcpt_timeout=5)
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
         upstream_delta = exploder.on_update(tx, tx.copy())
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(1, len(tx.rcpt_response))
         self.assertEqual(451, tx.rcpt_response[0].code)
+
+    def test_partial_body(self):
+        upstream = MockAsyncFilter()
+        exploder = Exploder('output-chain',
+                            lambda: upstream,
+                            rcpt_timeout=5)
+
+        def exp_update(tx, delta):
+            self.assertFalse(tx.body.finalized())
+            upstream_delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+
+        upstream.expect_update(exp_update)
+
+        body = b'hello, world'
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body=InlineBlob(body))
+        upstream_delta = exploder.on_update(tx, tx.copy())
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertIsNone(tx.data_response)
+
+        def exp_body(tx, delta):
+            self.assertTrue(tx.body.finalized())
+            upstream_delta = TransactionMetadata(
+                data_response=Response(203))
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        upstream.expect_update(exp_body)
+
+        body += b'!'
+        tx_delta = tx.copy()
+        tx.body = tx_delta.body = InlineBlob(body, last=True)
+        upstream_delta = exploder.on_update(tx, tx_delta)
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
 
 
 if __name__ == '__main__':

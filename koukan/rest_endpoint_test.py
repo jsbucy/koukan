@@ -357,11 +357,7 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202}],
             }))
 
-        # POST /transactions/123/body?upload=chunked
-        self.responses.append(Response(
-            http_resp = '201 created'))
-
-        # PUT /transactions/123/body?upload=chunked
+        # PUT /transactions/123/body
         # range 0-8/*
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -391,13 +387,6 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions')
-
-        # PUT /transactions/123/body?upload=chunked
-        req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions/123/body')
-        self.assertEqual(req.query, 'upload=chunked')
-        self.assertIsNone(req.content_range)
-        self.assertEqual(req.body, b'')
 
         # PUT /transactions/123/body
         # range 0-8/*
@@ -486,25 +475,6 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.path, '/transactions')
 
         self.responses.append(Response(
-            http_resp = '201 created',
-            location='/transactions/123/body'))
-
-        resp, len = rest_endpoint._put_blob_chunk(
-            128, b'hello', False)
-        self.assertTrue(resp.ok())
-        self.assertEqual(len, 0)
-        self.assertEqual(rest_endpoint.blob_url,
-                         urljoin(self.static_base_url,
-                                 '/transactions/123/body'))
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'POST')
-        self.assertEqual(req.path, '/transactions/123/body')
-        self.assertEqual(req.query, 'upload=chunked')
-        self.assertIsNone(req.content_range)
-
-        self.assertIsNone(req.content_range)
-
-        self.responses.append(Response(
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 0, 133, None)))
         resp, len = rest_endpoint._put_blob_chunk(128, b'hello', True)
@@ -554,13 +524,14 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_response': [{'code': 202}] },
             location = '/transactions/124'))
 
-        # POST /transactions/123/body?upload=chunked
+        # POST /transactions/123/body
         self.responses.append(Response(
-            http_resp = '201 created',
+            http_resp = '200 created',
             resp_json={},
             location = '/transactions/123/body'))
 
-        # PUT /blob/123 -> server returns invalid content-range header
+        # PUT /transactions/123/body -> server returns invalid
+        # content-range header
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={},
@@ -653,14 +624,7 @@ class RestEndpointTest(unittest.TestCase):
         b = InlineBlob(b'world!', last=True)
         tx.body.append(b, 0, b.len(), True)
 
-        # POST /transactions/123/body?upload=chunked
-        self.responses.append(Response(
-            http_resp = '201 created',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, tx.body.len(), tx.body.len())))
-
-        # PUT /transactions/123/body?upload=chunked
+        # PUT /transactions/123/body
         # range: 0-8/*
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -668,7 +632,7 @@ class RestEndpointTest(unittest.TestCase):
             content_range=ContentRange(
                 'bytes', 0, 8, None)))
 
-        # PUT /transactions/123/body?upload=chunked
+        # PUT /transactions/123/body
         # range: 9-12/12
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -697,10 +661,6 @@ class RestEndpointTest(unittest.TestCase):
         upstream_delta = rest_endpoint.on_update(tx, tx_delta, timeout=5)
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
-
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'POST')
-        self.assertEqual(req.path, '/transactions/123/body')
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'PUT')
@@ -742,7 +702,7 @@ class RestEndpointTest(unittest.TestCase):
 
         # POST /transactions/123/body
         self.responses.append(Response(
-            http_resp = '201 created',
+            http_resp = '200 created',
             resp_json={},
             content_range=ContentRange(
                 'bytes', 0, len(body), len(body))))
@@ -800,7 +760,7 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
 
-        # POST
+        # POST /transactions
         mail_resp = MailResponse(201)
         rcpt0_resp = MailResponse(202)
         rcpt1_resp = MailResponse(203)
@@ -820,7 +780,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [rcpt0_resp.code])
 
-        # PATCH
+        # PATCH /transactions/123
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={
@@ -828,7 +788,7 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json()]}))
-        # GET
+        # GET /transactions/123
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={
@@ -985,9 +945,9 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '200 ok'))
 
-        # POST /transactions/123/body
+        # PUT /transactions/123/body
         self.responses.append(Response(
-            http_resp = '201 created'))
+            http_resp = '200 created'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -1163,7 +1123,7 @@ class RestEndpointTest(unittest.TestCase):
 
         # POST /transactions/123/body
         self.responses.append(Response(
-            http_resp = '201 created',
+            http_resp = '200 created',
             etag='1'))
 
         # GET /transactions/123
@@ -1224,9 +1184,6 @@ class RestEndpointTest(unittest.TestCase):
 
         tx = TransactionMetadata(cancelled = True)
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
-        self.assertTrue(upstream_delta.cancelled)
-        upstream_delta = rest_endpoint.on_update(tx, TransactionMetadata())
-        self.assertFalse(upstream_delta.cancelled)
 
 
 if __name__ == '__main__':

@@ -89,8 +89,7 @@ class Recipient:
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:
-            del ti.version
-            del ti.body
+            ti.version = ti.body = None
         assert orig.delta(tt) is not None  # check buggy filter
         self.tx = t
 
@@ -102,7 +101,6 @@ class Exploder(SyncFilter):
     # TODO these timeouts move to AsyncFilterWrapper
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
-    default_notification : Optional[dict] = None
 
     rcpt_ok = False
     mail_from : Mailbox = None
@@ -113,14 +111,12 @@ class Exploder(SyncFilter):
                  output_chain : str,
                  upstream_factory : FilterFactory,
                  rcpt_timeout : Optional[float] = None,
-                 data_timeout : Optional[float] = None,
-                 default_notification : Optional[dict] = None):
+                 data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
         self.output_chain = output_chain
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
-        self.default_notification = default_notification
 
     @staticmethod
     def reduce_data_response(
@@ -144,7 +140,10 @@ class Exploder(SyncFilter):
                   tx_delta : TransactionMetadata
                   ) -> Optional[TransactionMetadata]:
         tx_orig = tx.copy()
-        tx_delta = tx_delta.copy()
+
+        # NOTE: OutputHandler may send but Storage currently does not
+        # accept reusing !finalized blob. Exploder passes it through
+        # but AsyncFilterWrapper buffers.
 
         if tx_delta.mail_from:
             tx.mail_response = tx_delta.mail_response = Response(
@@ -192,7 +191,9 @@ class Exploder(SyncFilter):
                 tx.data_response = rcpt.tx.data_response
 
         if (body is None) or (tx.data_response is not None):
-            return tx_orig.delta(tx)
+            upstream_delta = tx_orig.delta(tx)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
 
         # If all rcpts with rcpt_response.ok() have the same
         # data_response.major_code(), return that.  The most likely
@@ -211,15 +212,10 @@ class Exploder(SyncFilter):
                 rcpt.tx.data_response.code,
                 rcpt.tx.data_response.message + ' (Exploder same response)')
         elif body.finalized():
-            # OutputHandler currently only sends finalized body so we
-            # always take this branch today.
-            # Moreover, Storage currently does not allow reusing
-            # !finalized blob so even if OH streamed the body out, we
-            # would buffer here it until finalized.
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
-                notification=self.default_notification)
+                notification={})
             for rcpt in self.recipients:
                 if (rcpt.tx.rcpt_response[0].ok() and
                     (not rcpt.tx.data_response.ok()) and

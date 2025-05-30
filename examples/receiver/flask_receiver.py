@@ -49,10 +49,10 @@ def create_app(receiver = None, path = None):
             return FlaskResponse(status=code, response=msg)
         return FlaskResponse()
 
-    @app.route('/transactions/<tx_rest_id>/body', methods=['POST'])
+    @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
     def create_tx_body(tx_rest_id) -> FlaskResponse:
         receiver.create_tx_body(tx_rest_id, request.stream)
-        return FlaskResponse(status=201)
+        return FlaskResponse(status=200)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:

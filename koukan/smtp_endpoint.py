@@ -80,7 +80,7 @@ class SmtpEndpoint(SyncFilter):
             self.smtp._host = tx.remote_host.host
             resp = Response.from_smtp(
                 self.smtp.connect(tx.remote_host.host, tx.remote_host.port))
-        except SMTPException as e:
+        except (SMTPException, ConnectionError) as e:
             logging.info('SmtpEndpoint.connect %s %s', e, tx.remote_host)
             return Response(400, 'SmtpEndpoint: connect error')
 

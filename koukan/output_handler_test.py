@@ -40,12 +40,12 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.load_one()
         self.assertEqual(tx_cursor.rest_id, rest_id)
         handler = OutputHandler(tx_cursor, endpoint,
-                                downstream_env_timeout=1,
-                                downstream_data_timeout=1)
+                                downstream_env_timeout=3,
+                                downstream_data_timeout=3)
         handler.handle()
 
-    # oneshot ~rest
-    def test_handle(self):
+    # ~rest
+    def test_oneshot(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
 
@@ -70,14 +70,15 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual(tx.body.pread(0), b'hello, world!')
 
             upstream_delta = TransactionMetadata(
-                mail_response = Response(),
-                rcpt_response = [Response(234)],
-                data_response = Response(256))
+                mail_response = Response(201),
+                rcpt_response = [Response(202)],
+                data_response = Response(203))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp)
 
         tx_cursor = self.storage.load_one()
+        assert tx_cursor.in_attempt
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(tx_cursor, endpoint,
@@ -87,12 +88,18 @@ class OutputHandlerTest(unittest.TestCase):
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
+        self.assertEqual(201, reader.tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in reader.tx.rcpt_response])
+        self.assertEqual(203, reader.tx.data_response.code)
 
-    # multiple roundtrips ~smtp
-    def test_handle_multi(self):
+    # ~interactive smtp/exploder
+    def test_interactive(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'),
-                         create_leased=True)
+        tx_cursor.create(
+            'rest_tx_id',
+            TransactionMetadata(host='outbound',
+                                mail_from=Mailbox('alice')),
+            create_leased=True)
         tx_id = tx_cursor.id
 
         endpoint = FakeSyncFilter()
@@ -121,10 +128,11 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
             self.assertEqual(tx_delta.rcpt_to[0].mailbox, 'bob2')
+            self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
-            updated_tx = tx.copy()
-            updated_tx.rcpt_response.append(Response(203))
-            upstream_delta = tx.delta(updated_tx)
+            upstream_delta = TransactionMetadata(
+                rcpt_response = [Response(203)])
+            upstream_delta.rcpt_response_list_offset = 1
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
@@ -142,21 +150,10 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.load(db_id=tx_id)
 
-        # write mail
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        #, rcpt_to=[Mailbox('bob')])
-        while True:
-            tx_cursor.load()
-            try:
-                tx_cursor.write_envelope(tx)
-                break
-            except VersionConflictException:
-                pass
-
         # read mail resp
         for i in range(0,5):
-            tx_cursor.load()
-            if tx_cursor.tx.mail_response is not None and tx_cursor.tx.mail_response.code == 201:
+            tx = tx_cursor.load().copy()
+            if tx.mail_response is not None and tx.mail_response.code == 201:
                 break
             time.sleep(1)
         else:
@@ -190,25 +187,28 @@ class OutputHandlerTest(unittest.TestCase):
             else:
                 self.fail('failed to read ' + rcpt[i] + ' response')
 
-
-        # write & patch blob
-        tx_cursor.write_envelope(
-            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
-        blob_writer = tx_cursor.get_blob_for_append(
-            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         body = b'hello, world!'
-        blob_writer.append_data(0, body, len(body))
-
         def exp_body(tx, tx_delta):
             logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
+            if not tx.body.finalized():
+                return TransactionMetadata()
             self.assertEqual(tx_delta.body.pread(0), body)
             upstream_delta = TransactionMetadata(
                 data_response = Response(204))
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
         endpoint.add_expectation(exp_body)
+        endpoint.add_expectation(exp_body)
+
+        # write blob
+        tx_cursor.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
+        blob_writer = tx_cursor.get_blob_for_append(
+            BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
+        blob_writer.append_data(0, body, last=True)
+
 
         # read data resp
         for j in range(0,5):
@@ -270,10 +270,13 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp_rcpt2)
 
-        def exp_cancel(tx, tx_delta):
-            self.assertTrue(tx_delta.cancelled)
-            return TransactionMetadata()
-        endpoint.add_expectation(exp_cancel)
+        def exp_body(tx, tx_delta):
+            self.assertIsNotNone(tx.body)
+            upstream_delta = TransactionMetadata()
+            tx.fill_inflight_responses(Response(450, 'cancelled'), upstream_delta)
+            tx.merge_from(upstream_delta)
+            return upstream_delta
+        endpoint.add_expectation(exp_body)
 
         updated_tx = tx.copy()
         updated_tx.rcpt_to.append(Mailbox('bob2'))
@@ -286,6 +289,7 @@ class OutputHandlerTest(unittest.TestCase):
             tx_cursor.wait(0.3)
             tx_cursor.load()
         time.sleep(1) # more xxx
+        self.assertEqual([402, 403], [r.code for r in tx_cursor.tx.rcpt_response])
 
         # no additional expectation on endpoint, should not send blob
         # upstream since all rcpts failed
@@ -303,16 +307,18 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='rest_blob_id'))
         d = b'hello, world!'
-        blob_writer.append_data(0, d, len(d))
+        logging.debug('finalize body')
+        blob_writer.append_data(0, d, last=True)
 
         fut.result(timeout=5)
 
         tx_cursor.load()
-        self.assertIsNone(tx_cursor.final_attempt_reason)
+        self.assertIn('oneshot', tx_cursor.final_attempt_reason)
         self.assertEqual(tx_cursor.tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx_cursor.tx.rcpt_response],
                          [402, 403])
-        self.assertIsNone(tx_cursor.tx.data_response)
+        self.assertEqual(503, tx_cursor.tx.data_response.code)
+        self.assertIn('precondition', tx_cursor.tx.data_response.message)
 
 
     # incomplete transactions i.e. downstream timeout shouldn't be retried
@@ -361,7 +367,7 @@ class OutputHandlerTest(unittest.TestCase):
         retry_params = {}
         handler = OutputHandler(
             tx_cursor, endpoint=None,
-            notification_factory=None,
+            notification_endpoint_factory=None,
             retry_params=retry_params)
 
         retry_params['min_attempt_time'] = 0
@@ -408,8 +414,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -456,12 +460,15 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params = {'host': 'smtp-out'})
 
         handler.handle()
+        self.assertFalse(notification_endpoint.update_expectation)
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
@@ -472,8 +479,6 @@ class OutputHandlerTest(unittest.TestCase):
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
-            notification = {'host': 'smtp-out'},
             body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
@@ -539,24 +544,28 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params={'host': 'smtp-out'})
 
         handler.handle()
+        self.assertFalse(notification_endpoint.update_expectation)
 
         reader = self.storage.get_transaction_cursor()
         reader.load(rest_id='rest_tx_id')
 
 
-    # 2: handle w/o notification that permfails, recover, handle -> dsn
+    # 2: handle w/o notification that permfails,
+    # enable notifications after handler done,
+    # recover, handle -> dsn
     def test_notification_post_facto(self):
         tx = TransactionMetadata(
             host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            retry={'max_attempts': 1},
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -581,13 +590,17 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         endpoint.add_expectation(exp)
 
-        # no notification_factory since not requested
+        # no notification_endpoint_factory since not requested
         tx_cursor = self.storage.load_one()
         handler = OutputHandler(
             tx_cursor, endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1,
+                          'mode': 'per_request'},
+            notification_params={'host': 'notify-out',
+                                 'mode': 'per_request'})
         handler.handle()
 
         # tx should not be loadable
@@ -597,8 +610,8 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.load(db_id=tx_id)
         tx_cursor.write_envelope(TransactionMetadata(
-            notification={'host': 'smtp-out'}))
-
+            retry={},
+            notification={}))
 
         notification_endpoint = MockAsyncFilter()
 
@@ -621,13 +634,16 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         handler = OutputHandler(
             tx_cursor, endpoint,
-            notification_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=lambda: notification_endpoint,
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_env_timeout=1,
-            downstream_data_timeout=1)
+            downstream_data_timeout=1,
+            retry_params={'max_attempts': 1},
+            notification_params={'host': 'notify-out'})
 
+        logging.debug('handle() for notification')
         handler.handle()
-
+        self.assertFalse(notification_endpoint.update_expectation)
 
 
 if __name__ == '__main__':

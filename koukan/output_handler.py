@@ -22,321 +22,244 @@ from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
-def default_notification_factory():
+def default_notification_endpoint_factory():
     raise NotImplementedError()
 
 class OutputHandler:
     cursor : TransactionCursor
     endpoint : SyncFilter
     rest_id : str
-    notification_factory : Callable[[], AsyncFilter]
+    notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
-    retry_params : dict
+
+    prev_tx : TransactionMetadata
+    tx : TransactionMetadata
+
+    retry_params : Optional[dict] = None
+    notification_params : Optional[dict] = None
+    _bug_retry : int = 3600
 
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
                  downstream_env_timeout=None,
                  downstream_data_timeout=None,
-                 notification_factory = default_notification_factory,
+                 notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
-                 retry_params : dict = {}):
+                 retry_params : Optional[dict] = None,
+                 notification_params : Optional[dict] = None):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
         self.env_timeout = downstream_env_timeout
         self.data_timeout = downstream_data_timeout
-        self.notification_factory = notification_factory
+        self.notification_endpoint_factory = notification_endpoint_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
+        if self.retry_params and 'bug_retry' in self.retry_params:
+            self._bug_retry = self.retry_params['bug_retry']
+        self.prev_tx = TransactionMetadata()
+        self.tx = TransactionMetadata()
+        self.notification_params = notification_params
 
-    def _wait_downstream(self, delta : TransactionMetadata,
-                         ok_rcpt : bool
-                         ) -> Tuple[Optional[bool], Optional[Response]]:
-        # xxx req_inflight()?
-        if ((delta.mail_from is not None) or
-            bool(delta.rcpt_to) or
-            (self.cursor.tx.body and self.cursor.tx.body.finalized())):
-            return False, None
+    def _fixup_downstream_tx(self) -> TransactionMetadata:
+        t = self.cursor.tx
+        assert t is not None
+        self.tx = t.copy()
+        # drop some fields from the tx that's going upstream
+        # OH consumes these fields but they should not propagate to the
+        # output chain/upstream rest/gateway etc
+        for field in ['final_attempt_reason', 'notification', 'retry']:
+            setattr(self.tx, field, None)
+        delta = self.prev_tx.delta(self.tx)
+        assert delta is not None
+        logging.debug(str(delta) if delta else '(empty delta)')
+        return delta
 
-        timeout = self.env_timeout
-        msg = 'envelope'
-        if ok_rcpt:
-            timeout = self.data_timeout
-            msg = 'body'
-
-        if not self.cursor.wait(self.env_timeout):
-            logging.debug(
-                'OutputHandler._output() %s timeout %s=%d',
-                self.rest_id, msg, timeout)
-            return None, Response(
-                400, 'OutputHandler downstream timeout (%s=%d)' % (
-                    msg, timeout))
-        self.cursor.load()
-        return True, None
-
-    def _output(self) -> Optional[Response]:
-        ok_rcpt = False
-        rcpt0_resp = None
-        # full vector after last upstream update
-        last_tx = None
-        upstream_tx = None
-
-        # TODO this control flow no longer makes sense to me, I would expect
-        # final_resp: tx cannot make forward progress, mail failed,
-        # rcpts done and all failed, etc
-        # while not tx.final_resp():
-        #   # 1st req or possible for write_envelope() to return new
-        #   # downstream reqs?
-        #   if not cursor.tx.req_inflight():
-        #     prev = cursor.tx.copy()
-        #     wait_downstream()
-        #   delta = prev.delta(cursor.tx)
-        #   upstream_delta = output_chain.on_update(tx, delta)
-        #   rcpt/data precondition check -> set data response
-        #   if tx.req_inflight():
-        #     # bug
-        #   write_envelope(upstream_delta)
-
-        while True:
-            logging.debug('OutputHandler._output() %s db tx %s input done %s',
-                          self.rest_id, self.cursor.tx, self.cursor.input_done)
-
-            cursor_tx = self.cursor.tx.copy()
-            # NOTE: possible to read finalized body but input_done == False
-
-
-            if cursor_tx.body is not None:
-                body : Union[Blob, MessageBuilderSpec]
-                b = cursor_tx.body
-                if isinstance(b, Union[Blob, MessageBuilderSpec]):
-                    body = b
-                else:
-                    raise ValueError()
-                if not body.finalized():
-                    cursor_tx.body = None
-            if last_tx is None:
-                last_tx = cursor_tx.copy()
-                upstream_tx = cursor_tx.copy()
-                delta = last_tx.copy()
+    # one iteration of output
+    # - wait for delta from downstream if necessary
+    # - emit delta to output chain
+    # - completion/next attempt/notification logic
+    # -> delta, kwargs for write_envelope()
+    def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
+        assert not self.cursor.no_final_notification
+        # very first call or there's a small chance we the previous
+        # write_envelope() may have picked up a delta from downstream
+        downstream_timeout = False
+        delta = self._fixup_downstream_tx()
+        if (not self.cursor.input_done and
+            delta.empty(WhichJson.ALL) and  # no new downstream
+            not self.tx.cancelled):
+            # TODO until we get chunked uploads merged in aiosmtpd,
+            # probably want gateway/SmtpHandler to keepalive/ping
+            # during data upload so this can time out quickly if the
+            # gw crashed
+            if not self.cursor.wait(self.env_timeout):  # xxx
+                logging.debug('downstream timeout')
+                downstream_timeout = True
             else:
-                delta = last_tx.delta(cursor_tx)
-                last_tx = cursor_tx.copy()
-                assert delta is not None
-                assert upstream_tx.merge_from(delta) is not None
+                tx = self.cursor.load()
+                assert tx is not None
+                delta = self._fixup_downstream_tx()
 
-            assert len(last_tx.rcpt_to) >= len(last_tx.rcpt_response)
-            assert len(upstream_tx.rcpt_to) >= len(upstream_tx.rcpt_response)
+        logging.debug('_handle_once %s %s', self.rest_id, self.tx)
 
-            # XXX drop some fields from upstream_tx:
-            # notification, retry
-            # these have REST_CREATE/... validity but we are handling it here
-            for field in ['notification', 'retry', 'final_attempt_reason']:
-                for obj in [last_tx, upstream_tx, delta]:
-                    if getattr(obj, field) is not None:
-                        delattr(obj, field)
+        if not delta.empty(WhichJson.ALL) or self.tx.cancelled:
+            upstream_delta = self.endpoint.on_update(self.tx, delta)
+            assert upstream_delta is not None
+            # router output to an endpoint that retries/notifies is
+            # probably a misconfiguration
+            assert self.tx.notification is None
+            assert self.tx.retry is None
 
-            # have_body here is really a proxy for "envelope done"
-            have_body = self.cursor.tx.body is not None
-            if ((not delta.rcpt_to) and (not ok_rcpt) and have_body) or (
-                    delta.cancelled):
-                delta = TransactionMetadata(cancelled=True)
-                assert upstream_tx.merge_from(delta) is not None
-                self.endpoint.on_update(upstream_tx, delta)
+            # note: Exploder does not propagate any fields other than
+            # rcpt_response, data_response from upstream so it is no longer
+            # necessary to clear e.g. attempt_count here.
 
-                # XXX because of the way we clear non-finalized body
-                # (above), won't get data_response precondition err if
-                # all rcpts failed, need to set here?
+            # postcondition check: !req_inflight() in handle() finally:
+        else:
+            upstream_delta = TransactionMetadata()
 
-                # all recipients so far have failed and we aren't
-                # waiting for any more (have_body) -> we're done
-                if len(self.cursor.tx.rcpt_to) == 1:
-                    return rcpt0_resp
-                else:
-                    # placeholder response, this is only used for
-                    # notification logic for
-                    # post-exploder/single-recipient tx
-                    return Response(400, 'OutputHandler all recipients failed')
+        self.prev_tx = self.tx.copy()
 
-            waited, err = self._wait_downstream(delta, ok_rcpt)
-            if err is not None:
-                return err
-            elif waited:
-                continue
+        done = False
+        # for oneshot tx (i.e. exploder downstream or rest without
+        # retries enabled), start_attempt() preloads
+        # final_attempt_reason with oneshot
+        final_attempt_reason = None
+        assert final_attempt_reason in [None, 'oneshot', 'downstream cancelled']
+        final_response = None
+        if self.tx.req_inflight():
+            done = True  # output postcondition failure
+        elif self.tx.cancelled:
+            done = True
+        elif downstream_timeout:
+            done = True
+            final_attempt_reason = 'downstream timeout'
+        elif (self.tx.mail_response is not None) and (
+                self.tx.mail_response.err()):
+            done = True
+            if self.tx.mail_response.perm():
+                final_attempt_reason = 'upstream mail_response permfail'
+        # for interactive smtp/downstream exploder w/multiple rcpt and
+        # all failed:
+        # 1: non-pipelined client smtp will rset/quit and router will get
+        # cancellation
+        # 2: router may see a downstream timeout if gw crashes in the
+        # middle of this
+        # 3: client may pipeline data with rcpts, then some invocation of
+        # fill_inflight_responses should populate data_response with
+        # ~failed precondition
+        elif (not any([r.ok() for r in self.tx.rcpt_response]) and
+              self.tx.body is not None):
+            done = True
+            if len(self.tx.rcpt_to) == 1:
+                if self.tx.rcpt_response[0].perm():
+                    final_attempt_reason = 'upstream rcpt_response permfail'
+            else:
+                # single rcpt (above) could also be exploder but
+                # multi-rcpt is always exploder/ephemeral/no-retry
+                final_attempt_reason = 'exploder/oneshot all rcpts failed'
+        elif self.tx.data_response is not None:
+            done = True
+            if self.tx.data_response.ok():
+                final_attempt_reason = 'upstream response success'
+            elif self.tx.data_response.perm():
+                final_attempt_reason = 'upstream response permfail'
 
-            logging.info('OutputHandler._output() %s body blob %s',
-                         self.rest_id, upstream_tx.body)
+        if not done:
+            return upstream_delta, {}
 
-            # no new reqs in delta can happen e.g. if blob upload
-            # ping'd last_update
-            if delta.mail_from is None and not delta.rcpt_to and not delta.body:
-                logging.info('OutputHandler._output() %s no reqs', self.rest_id)
-                continue
+        kwargs = {'finalize_attempt': True}
 
-            upstream_delta = self.endpoint.on_update(upstream_tx, delta)
-            logging.info('OutputHandler._output() %s '
-                         'tx after upstream update %s',
-                         self.rest_id, upstream_tx)
-            if upstream_delta is None or not(upstream_delta):
-                logging.warning('OutputHandler._output() %s '
-                                'BUG empty upstream_delta %s',
-                                self.rest_id, upstream_delta)
-                return None  # internal error
-            assert len(upstream_tx.rcpt_response) <= len(upstream_tx.rcpt_to)
+        if final_attempt_reason is None:
+            final_attempt_reason, kwargs['next_attempt_time'] = (
+                self._next_attempt_time(time.time()))
+        kwargs['final_attempt_reason'] = final_attempt_reason
 
-            # if we're short-circuiting to ourselves, these fields will clash
-            for field in ['final_attempt_reason', 'attempt_count']:
-                for t in [upstream_tx, upstream_delta]:
-                    if getattr(t, field) is not None:
-                        delattr(t, field)
+        # Note: notifications are currently hard-coded to only be sent
+        # on final perm failure. The notification params dict only
+        # specifies the endpoint to send it to. To implement "queue
+        # warning" messages, success dsn, etc, this invocation needs to
+        # move before the 'if not done' early return (above).
 
-            for i in range(0,5):
-                try:
-                    self.cursor.write_envelope(upstream_delta)
-                    assert last_tx.merge_from(upstream_delta) is not None
-                    break
-                except VersionConflictException:
-                    logging.info(
-                        'OutputHandler._output() VersionConflictException %s ',
-                        self.rest_id)
-                    if i == 4:
-                        raise
-                    backoff(i)
-                    self.cursor.load()
+        # self.tx via _fixup_downstream_tx() drops notification so
+        # use cursor tx, but merge upstream responses
+        tx = self.cursor.tx.copy()
+        assert tx.merge_from(upstream_delta) is not None
+        if self._maybe_send_notification(final_attempt_reason, tx):
+            kwargs['notification_done'] = True
 
-            if (upstream_delta.mail_response is not None and
-                upstream_delta.mail_response.err()):
-                return upstream_delta.mail_response
-            if rcpt0_resp is None and upstream_delta.rcpt_response:
-                rcpt0_resp = upstream_delta.rcpt_response[0]
-            if not ok_rcpt and any(
-                    [r.ok() for r in upstream_delta.rcpt_response]):
-                ok_rcpt = True
-            if upstream_delta.data_response is not None:
-                return upstream_delta.data_response
+        return upstream_delta, kwargs
+
 
     def handle(self):
-        logging.info('OutputHandler.handle() %s', self.rest_id)
+        done = False
+        logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
+        while not done:
+            try:
+                # pre-load results as a last resort against bugs:
+                # _handle_once() could be terminated by an uncaught
+                # exception. We don't know whether this is
+                # due to something in the tx deterministically tickling a
+                # bug in the code or due to a bug handling a transient
+                # failure (e.g. the executor overflow thing w/exploder
+                # which we handled in 2eb7a4f0 but there are undoubtedly
+                # others) that would succeed if you retry. To try to split
+                # the difference on this, preload next_attempt_time with
+                # 1h so that transient errors will eventually get retried
+                # but we won't crashloop excessively on a bad tx.
+                delta = TransactionMetadata()
+                env_kwargs = {
+                    'finalize_attempt': True,
+                    'next_attempt_time': time.time() + self._bug_retry }
+                if self.cursor.no_final_notification:
+                    # tx.notification was None when
+                    # final_attempt_reason was written iow
+                    # notifications were enabled after the tx already
+                    # failed (Exploder)
+                    if self.cursor.tx.notification is None:
+                        logging.error(
+                            'invalid tx state: no_final_notification without '
+                            'notification')
+                        raise ValueError()
+                    env_kwargs = {'finalize_attempt': True}
+                    if self._maybe_send_notification(
+                        self.cursor.final_attempt_reason, self.cursor.tx):
+                        env_kwargs['notification_done'] = True
+                else:
+                    delta, env_kwargs = self._handle_once()
 
-        try:
-            final_attempt_reason = None
-            # _cursor_to_endpoint() could be terminated by an uncaught
-            # exception due to a bug. We don't know whether this is
-            # due to something in the tx deterministically tickling a
-            # bug in the code or due to a bug handling a transient
-            # failure (e.g. the executor overflow thing w/exploder
-            # which we handled in 2eb7a4f0 but there are undoubtedly
-            # others) that would succeed if you retry. To try to split
-            # the difference on this, preload next_attempt_time with
-            # 1h so that transient errors will eventually get retried
-            # but we won't crashloop excessively on a bad tx. This is
-            # a last resort against bugs.
-            next_attempt_time = time.time() + self.retry_params.get(
-                'bug_retry', 3600)
-            delta = TransactionMetadata()
-            notification_done = False
-
-            if not self.cursor.no_final_notification:
-                final_attempt_reason, next_attempt_time = (
-                    self._cursor_to_endpoint())
-                # xxx why is this here?
-                delta.attempt_count = self.cursor.attempt_id
-            else:
-                # post facto notification
-                # leave the existing value
-                final_attempt_reason = None
-
-            if self.cursor.tx.notification:
-                self._maybe_send_notification(final_attempt_reason)
-                notification_done = True
-        except Exception as e:
-            logging.exception('OutputHandler.handle(): _cursor_to_endpoint()')
-        finally:
-            for i in range(0,5):
-                try:
-                    # TODO it probably wouldn't be hard to merge this
-                    # write with the one at the end of _output()
-
-                    # postcondition of _cursor_to_endpoint() is that all
-                    # reqs have responses. Populate with a temp err here
-                    # in case of a bug, otherwise the downstream will hang
-                    # up to some timeout waiting for a response that will
-                    # never come.
-                    err = TransactionMetadata()
-                    err_resp = Response(
-                        450, 'internal error: OutputHandler failed to populate response')
-                    self.cursor.tx.fill_inflight_responses(err_resp, err)
-
-                    if (self.cursor.tx.body and self.cursor.input_done and
-                        self.cursor.tx.data_response is None):
-                        self.cursor.tx.data_response = err_resp
-                    if err:
-                        logging.warning('missing responses %s', self.cursor.tx)
-                        delta.merge_from(err)
-                    self.cursor.write_envelope(
-                        delta,
-                        final_attempt_reason=final_attempt_reason,
-                        next_attempt_time=next_attempt_time,
-                        finalize_attempt=True,
-                        notification_done=notification_done)
-                    break
-                except VersionConflictException:
-                    if i == 4:
-                        raise
-                    backoff(i)
-                    self.cursor.load()
-
-    def _cursor_to_endpoint(self) -> Tuple[Optional[str], Optional[int]]:
-        logging.debug('OutputHandler._cursor_to_endpoint() %s', self.rest_id)
-
-        resp = self._output()
-        if resp is None:
-            logging.warning('OutputHandler._cursor_to_endpoint() %s abort',
-                            self.rest_id)
-            resp = Response(400, 'output handler abort')
-        logging.info('OutputHandler._cursor_to_endpoint() %s done %s',
-                     self.rest_id, resp)
-
-        next_attempt_time = None
-        final_attempt_reason = None
-        if self.cursor.tx.cancelled:
-            pass  # leave existing value
-        elif resp.ok():
-            final_attempt_reason = 'upstream response success'
-        elif resp.perm():
-            final_attempt_reason = 'upstream response permfail'
-        elif (not self.cursor.input_done) and (self.cursor.tx.retry is None):
-            # if we early-returned due to upstream fastfail before
-            # receiving all of the body, don't set
-            # final_attempt_reason if retries are enabled so it is
-            # recoverable at such time as we get the rest of the
-            # body/input_done
-            final_attempt_reason = 'downstream timeout'
-        else:
-            final_attempt_reason, next_attempt_time = (
-                self._next_attempt_time(time.time()))
-
-        logging.debug(
-            'OutputHandler._cursor_to_endpoint() %s attempt %d retry %s '
-            'final_attempt_reason %s',
-            self.rest_id, self.cursor.attempt_id, self.cursor.tx.retry,
-            final_attempt_reason)
-
-        return final_attempt_reason, next_attempt_time
-
+            except Exception as e:
+                logging.exception('uncaught exception in OutputHandler')
+            finally:
+                done = env_kwargs.get('finalize_attempt', False)
+                err_resp = Response(
+                    450, 'internal error: OutputHandler failed to populate '
+                    'response')
+                self.tx.fill_inflight_responses(err_resp, delta)
+                for i in range(0,5):
+                    try:
+                        self.cursor.write_envelope(delta, **env_kwargs)
+                        break
+                    except VersionConflictException:
+                        logging.debug('VersionConflictException')
+                        if i == 4:
+                            raise
+                        backoff(i)
+                        self.cursor.load()
+        logging.debug('done %s', self.rest_id)
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
-        if self.cursor.tx.retry is None:
-            # leave the existing value for final_attempt_reason
-            final_attempt_reason = None
-            next_attempt_time = None
-            return final_attempt_reason, next_attempt_time
+        # leave the existing value for final_attempt_reason
+        if self.retry_params is None:
+            return None, None
+        if (self.retry_params.get('mode', None) == 'per_request' and
+            self.cursor.tx.retry is None):
+            return None, None
 
-        max_attempts = self.cursor.tx.retry.get('max_attempts', None)
-        # TODO separate function to merge tx.retry, self.retry_params, defaults
-        if max_attempts is None:
-            max_attempts = self.retry_params.get('max_attempts', 30)
+        max_attempts = self.retry_params.get('max_attempts', 30)
         if max_attempts is not None and (
                 self.cursor.attempt_id >= max_attempts):
             return 'retry policy max attempts', None
@@ -350,16 +273,23 @@ class OutputHandler:
         # TODO jitter?
         logging.debug('OutputHandler._next_attempt_time %s %d %d',
                       self.rest_id, int(dt), next)
-        deadline = self.cursor.tx.retry.get('deadline', None)
-        if deadline is None:
-            deadline = self.retry_params.get('deadline', 86400)
+        deadline = self.retry_params.get('deadline', 86400)
         if deadline is not None and ((next - self.cursor.creation) > deadline):
             return 'retry policy deadline', None
         return None, next
 
-    def _maybe_send_notification(self, final_attempt_reason : Optional[str]):
+    # returns False if this early-returned because notifications were
+    # not enabled for this tx, True otherwise
+    def _maybe_send_notification(self, final_attempt_reason : Optional[str],
+                                 tx : TransactionMetadata) -> bool:
+        logging.debug('%s %s', self.notification_params, tx)
+        if self.notification_params is None:
+            return False
+        if (self.notification_params.get('mode', None) == 'per_request' and
+            tx.notification is None):
+            return False
+
         resp : Optional[Response] = None
-        tx = self.cursor.tx
         # Note: this is not contingent on self.cursor.input_done. Thus
         # if the rest client enables notifications in the initial
         # POST, we will send a bounce if it permfailed at
@@ -369,13 +299,12 @@ class OutputHandler:
         # for rcpt errors, don't enable it until after sending the
         # data, etc.
 
-        # This does expose one shortcoming that appending body/blob
-        # data will probably not fail even if the upstream transaction
+        # This does expose one shortcoming that an http request to
+        # append body/blob data will probably not fail even if the
+        # upstream transaction
         # has permfailed since:
         # - Exploder doesn't check for upstream errors after it it has
         # decided to store&forward
-        # - OutputHandler buffers the entire body before sending it
-        # upstream
         # - downstream StorageWriterFilter/RestHandler stack doesn't
         # have the logic to fail the PUT in that case
         # RestHandler should probably always fail body/blob PUT after
@@ -392,38 +321,39 @@ class OutputHandler:
         elif len(tx.rcpt_response) > 1:
             logging.warning('OutputHandler._maybe_send_notification %s '
                             'unexpected multi-rcpt', self.rest_id)
-            return
+            return True
         else:
             resp = tx.data_response
 
         if resp is None:
             logging.info('OutputHandler._maybe_send_notification %s '
                          'response is None, upstream timeout?', self.rest_id)
-            return
+            return True
 
         last_attempt = final_attempt_reason is not None
 
         logging.debug('OutputHandler._maybe_send_notification '
                       '%s last %s notify %s tx %s', self.rest_id, last_attempt,
-                      self.cursor.tx.notification, self.cursor.tx)
+                      self.notification_params, self.cursor.tx)
 
         if resp.ok():
-            return
+            return True
         if resp.temp() and not last_attempt:
-            return
+            return True
 
         mail_from = self.cursor.tx.mail_from
         if mail_from.mailbox == '':
-            return
+            return True
 
         orig_headers : str
-        if self.cursor.tx.body:
-            if isinstance(self.cursor.tx.body, MessageBuilderSpec):
-                builder = MessageBuilder(self.cursor.tx.body.json,
-                                         blobs={})  # blobs not needed here
+        body = self.cursor.tx.body
+        if body:
+            if isinstance(body, MessageBuilderSpec):
+                # blobs not needed here
+                builder = MessageBuilder(body.json, blobs={})
                 orig_headers = builder.build_headers_for_notification().decode(
                     'utf-8')
-            elif isinstance(self.cursor.tx.body, Blob):
+            elif isinstance(body, Blob):
                 h = read_headers(self.cursor.tx.body)
                 orig_headers = h if h is not None else ''
             else:
@@ -443,21 +373,22 @@ class OutputHandler:
                            now=int(time.time()),
                            response=resp)
 
-        # TODO link these transactions somehow
+        # TODO link these transactions in storage somehow:
         # self.cursor.id should end up in this tx and this tx id
-        # should get written back to self.cursor
-        notify_json = self.cursor.tx.notification
+        # should get written back to self.cursor.
         # The endpoint used for notifications should go out directly,
         # *not* via the exploder which has the potential to enable
         # bounces on this bounce, etc.
+        # This expects to get retry params from the output chain
+        # similar to rest submission: retries enabled, notifications disabled
+        # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
-            host=notify_json['host'],
+            host=self.notification_params['host'],
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
-            body = InlineBlob(dsn, last=True),
-            retry={})
-        notification_endpoint = self.notification_factory()
+            body = InlineBlob(dsn, last=True))
+        notification_endpoint = self.notification_endpoint_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)
         # should result in the parent retrying even if it was
@@ -465,3 +396,4 @@ class OutputHandler:
 
         notification_endpoint.update(notification_tx, notification_tx.copy())
         # no wait -> fire&forget
+        return True

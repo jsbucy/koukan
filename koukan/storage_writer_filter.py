@@ -32,20 +32,29 @@ class StorageWriterFilter(AsyncFilter):
     # leased cursor for cutthrough
     upstream_cursor : Optional[TransactionCursor] = None
     create_err : bool = False
-
     mu : Lock
     cv : Condition
+    http_host : Optional[str] = None
+    endpoint_yaml : Optional[Callable[[str], dict]] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
-                 create_leased : bool = False):
+                 create_leased : bool = False,
+                 http_host : Optional[str] = None,
+                 endpoint_yaml : Optional[Callable[[str], dict]] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
         self.create_leased = create_leased
         self.mu = Lock()
         self.cv = Condition(self.mu)
+        self.http_host = http_host
+        self.endpoint_yaml = endpoint_yaml
+
+    def incremental(self):
+        yaml = self.endpoint_yaml(self.http_host)
+        return yaml['chain'][-1]['filter'] == 'exploder'
 
     # AsyncFilter
     def wait(self, version, timeout) -> bool:
@@ -82,12 +91,27 @@ class StorageWriterFilter(AsyncFilter):
         self._load()
         return self.tx_cursor.version
 
-    def _create(self, tx : TransactionMetadata,
-                blobs : Optional[List[BlobSpec]] = None):
+    def _create(self, tx : TransactionMetadata):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         rest_id = self.rest_id_factory()
-        self.tx_cursor.create(rest_id, tx, create_leased=self.create_leased)
+        storage_tx = tx.copy()
+        for i in range(0,1):
+            if self.endpoint_yaml is None:
+                break
+            if (endpoint_yaml := self.endpoint_yaml(self.http_host)) is None:
+                break
+            if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
+                break
+            # xxx output_handler_yaml_schema.py ?
+            notify_yaml = output_yaml.get('notification', None)
+            if notify_yaml is not None and notify_yaml.get('mode', '') != 'per_request':
+                storage_tx.notification = {}
+            retry_yaml = output_yaml.get('retry_params', None)
+            if retry_yaml is not None and retry_yaml.get('mode', '') != 'per_request':
+                storage_tx.retry = {}
+        self.tx_cursor.create(rest_id, storage_tx,
+                              create_leased=self.create_leased)
         with self.mu:
             self.rest_id = rest_id
             self.cv.notify_all()
@@ -96,7 +120,11 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-        self.tx_cursor.load()
+        tx = self.tx_cursor.load()
+        if tx is None:  # 404 e.g. after GC
+            return
+        if self.http_host is None:
+            self.http_host = tx.host
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
@@ -198,8 +226,9 @@ class StorageWriterFilter(AsyncFilter):
             assert tx_body
             for i in range(0,5):
                 try:
-                    # xxx this is not idempotent, if this
-                    # retries, will create multiple blobs
+                    body = self.tx_cursor.tx.body
+                    if isinstance(body, WritableBlob):
+                        return body
                     self.tx_cursor.write_envelope(
                         TransactionMetadata(body=BlobSpec(create_tx_body=True)))
                     break

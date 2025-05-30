@@ -14,18 +14,18 @@ import koukan.fastapi_service as fastapi_service
 import koukan.hypercorn_main as hypercorn_main
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.rest_endpoint_adapter import (
+from koukan.rest_handler import (
     EndpointFactory,
     RestHandlerFactory )
 from koukan.output_handler import OutputHandler
-from koukan.response import Response
 from koukan.executor import Executor
 from koukan.filter_chain_factory import FilterChainFactory
 from koukan.filter_chain_wiring import FilterChainWiring
-from koukan.filter import AsyncFilter, SyncFilter, TransactionMetadata
-
+from koukan.filter import (
+    AsyncFilter,
+    SyncFilter,
+    TransactionMetadata )
 from koukan.storage_writer_filter import StorageWriterFilter
-from koukan.storage_schema import VersionConflictException
 from koukan.deadline import Deadline
 
 class StorageWriterFactory(EndpointFactory):
@@ -235,7 +235,9 @@ class Service:
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=True)
+            create_leased=True,
+            http_host = http_host,
+            endpoint_yaml = self.get_endpoint_yaml)
         fut = self.output_executor.submit(
             lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
             0)
@@ -244,10 +246,17 @@ class Service:
             return None
         return writer, endpoint_yaml
 
+    def get_endpoint_yaml(self, endpoint : str) -> Optional[dict]:
+        try:
+            return next(e for e in self.root_yaml['endpoint'] if e['name'] == endpoint)
+        except StopIteration:
+            return None
+
     def get_storage_writer(self, rest_id : str) -> StorageWriterFilter:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
-            rest_id_factory=self.rest_id_factory)
+            rest_id_factory=self.rest_id_factory,
+            endpoint_yaml = self.get_endpoint_yaml)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
                        endpoint : SyncFilter,
@@ -278,10 +287,11 @@ class Service:
             output_yaml.get('downstream_env_timeout', 30),
             downstream_data_timeout =
             output_yaml.get('downstream_data_timeout', 60),
-            notification_factory=self._notification_endpoint,
+            notification_endpoint_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
-            retry_params = output_yaml.get('retry_params', {}))
+            retry_params = output_yaml.get('retry_params', None),
+            notification_params = output_yaml.get('notification', None))
         try:
             handler.handle()
         except Exception as e:

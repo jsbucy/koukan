@@ -71,6 +71,7 @@ class AddRouteFilterTest(unittest.TestCase):
                                  rcpt_to=[Mailbox('bob')],
                                  body=InlineBlob(b, len(b)))
         filter.on_update(tx, tx.copy())
+        logging.debug(tx)
         self.assertEqual(401, tx.mail_response.code)
         self.assertEqual([403], [r.code for r in tx.rcpt_response])
         self.assertEqual(405, tx.data_response.code)

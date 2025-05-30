@@ -291,14 +291,12 @@ _tx_fields = [
             to_json=body_to_json,
             from_json=body_from_json),
     TxField('notification',
-            validity=set([WhichJson.REST_CREATE,
-                          WhichJson.REST_READ,
+            validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.EXPLODER_UPDATE])),
     TxField('retry',
-            validity=set([WhichJson.REST_CREATE,
-                          WhichJson.REST_READ,
+            validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.EXPLODER_UPDATE])),
@@ -405,29 +403,12 @@ class TransactionMetadata:
 
     def __repr__(self):
         out = ''
-        out += 'version=%s ' % self.version
-        out += 'mail_from=%s mail_response=%s ' % (
-            self.mail_from, self.mail_response)
-        out += 'rcpt_to=%s rcpt_response=%s ' % (
-            self.rcpt_to, self.rcpt_response)
-        out += 'body=%s ' % (self.body)
-        out += 'data_response=%s ' % self.data_response
-        if self.rest_endpoint:
-            out += 'rest_endpoint=%s ' % self.rest_endpoint
-        if self.upstream_http_host:
-            out += 'upstream_http_host=%s ' % self.upstream_http_host
-        if self.remote_host:
-            out += 'remote_host=%s ' % self.remote_host
-        if self.cancelled is not None:
-            out += 'cancelled=%s ' % self.cancelled
-        if self.options is not None:
-            out += 'options=%s ' % self.options
-        if self.resolution:
-            out += 'resolution=%s ' % self.resolution
-        if self.notification is not None:
-            out += 'notification=%s ' % self.notification
-        if self.retry is not None:
-            out += 'retry=%s ' % self.retry
+        for name,field in tx_json_fields.items():
+            if hasattr(self, name):
+                v = getattr(self, name)
+                if (field.is_list and v == []) or v is None:
+                    continue
+                out += '%s: %s\n' % (name, v)
         return out
 
     def empty(self, which_js : WhichJson):
@@ -489,6 +470,14 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
+    def _body_last(self):
+        if isinstance(self.body, BlobSpec):
+            return True
+        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+            return self.body.finalized()
+        elif self.body is not None:
+            raise ValueError()
+
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
     # xxx cancelled?
@@ -506,35 +495,38 @@ class TransactionMetadata:
             # XXX rcpt_response should never be None now?
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
-        body_last = self.body is not None and (
-            isinstance(self.body, Blob) and self.body.finalized())
-        # xxx used to have message_builder here?
-        if self.body or body_last:
-            # if we have the body, then we aren't getting any more
-            # rcpts. If they all failed, then we can't make forward
-            # progress.
-            if not any([r.ok() for r in tx.rcpt_response]):
-                return False
-            if tx.data_response is None:
-                return True
-        return False
+
+        # at least router_service_test uses RestEndpoint to submit
+        # with BlobSpec for payload reuse
+        if not self._body_last():
+            return False
+
+        # if we have the body, then we aren't getting any more
+        # rcpts. If they all failed, then we can't make forward
+        # progress.
+        if not any([r.ok() for r in tx.rcpt_response]):
+            return False
+        if tx.data_response is None:
+            return True
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs
-    # TODO possibly this should populate the first of mail/rcpt/data
-    # and either leave the rest unset or set them to "failed
-    # precondition/bad sequence of commands"
     def fill_inflight_responses(self, resp : Response,
                                 dest : Optional['TransactionMetadata'] = None):
         if dest is None:
             dest = self
         if self.mail_from and not self.mail_response:
             dest.mail_response = resp
+        err = resp
+        if self.mail_response is not None and self.mail_response.err():
+            err = Response(503, '5.5.1 failed precondition: MAIL')
         dest.rcpt_response.extend(
-            [resp] * (len(self.rcpt_to) - len(self.rcpt_response)))
-        body_last = self.body is not None and (
-            isinstance(self.body, Blob) and self.body.finalized())
-        if body_last and self.data_response is None:
+            [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
+        if self.data_response is None and (self.body is not None) and (
+                not any([r.ok() for r in self.rcpt_response])):
+            err = Response(503, '5.5.1 failed precondition: all rcpts failed')
+            dest.data_response = err
+        elif self._body_last() and self.data_response is None:
             dest.data_response = resp
 
     def _field_to_json(self, name : str, field : TxField,
@@ -585,6 +577,8 @@ class TransactionMetadata:
         for f,field in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(delta, f, None)
+            if old_v is None and new_v is None:
+                continue
             if old_v is None and new_v is not None:
                 setattr(out, f, new_v)
                 continue
@@ -596,6 +590,14 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('list-ness mismatch')
                 return None  # invalid
+            if f == 'body' and old_v is not None and new_v is not None:
+                body_delta = old_v.delta(new_v)
+                if body_delta is None:
+                    return None
+                if body_delta:
+                    setattr(out, f, new_v)
+                continue
+
             if not isinstance(old_v, list):
                 # use the old value, assume the new one is the same
                 # TODO could verify that old_v == new_v
@@ -606,8 +608,9 @@ class TransactionMetadata:
                 continue
             offset = getattr(delta, field.list_offset(), 0)
             if offset != len(old_v):
-                logging.debug('list offset mismatch %s old %d new %s',
-                              f, len(old_v), offset)
+                logging.debug(
+                    'list offset mismatch %s old len %d new offset %s',
+                    f, len(old_v), offset)
                 return None
             l = []
             l.extend(old_v)
@@ -629,6 +632,8 @@ class TransactionMetadata:
         for (f,json_field) in tx_json_fields.items():
             old_v = getattr(self, f, None)
             new_v = getattr(successor, f, None)
+            if old_v is None and new_v is None:
+                continue
             # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
@@ -642,6 +647,15 @@ class TransactionMetadata:
                return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
+                continue
+
+            # emit body in the delta if it changed
+            if f == 'body' and old_v is not None and new_v is not None:
+                body_delta = old_v.delta(new_v)
+                if body_delta is None:
+                    return None
+                if body_delta:
+                    setattr(out, f, new_v)
                 continue
 
             # XXX TxField.is_list?
@@ -748,6 +762,12 @@ class SyncFilter(ABC):
 
 # interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
+    # returns whether this endpoint supports building up the
+    # transaction incrementally a la smtp
+    @abstractmethod
+    def incremental(self) -> bool:
+        pass
+
     @abstractmethod
     def update(self,
                tx : TransactionMetadata,

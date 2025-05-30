@@ -189,8 +189,8 @@ class TransactionCursor:
             blob_id, blob_rest_id, length, content_length, last_update = row
             ids.add(blob_rest_id)
 
-            if content_length is None or length != content_length:  # !done
-                raise ValueError()
+            if content_length is None or length != content_length:
+                raise ValueError()  # not finalized
             blob_cursor = BlobCursor(self.parent)
             blob_cursor.init(self.rest_id, blob_id, blob_rest_id,
                              content_length, last_update, length)
@@ -231,7 +231,7 @@ class TransactionCursor:
                 blob_spec.create_tx_body = True
             blob_specs = [blob_spec]
         else:
-            return True
+            raise ValueError()
 
         blobs : List[BlobCursor] = []
 
@@ -246,16 +246,18 @@ class TransactionCursor:
 
             if blob_spec.reuse_uri:
                 reuse_uris.append(body_blob_uri(blob_spec.reuse_uri))
-            elif blob_spec.create_id or blob_spec.create_tx_body or isinstance(blob_spec.blob, Blob):
+            elif (blob_spec.create_id or blob_spec.create_tx_body or
+                  isinstance(blob_spec.blob, Blob)):
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob_spec.blob:
                     blob_cursor.append_blob(blob_spec.blob)
                 if not blob_spec.create_id and not blob_spec.create_tx_body:
                     create_id = str(i)
-                blob_rest_id = TX_BODY if blob_spec.create_tx_body else blob_spec.create_id
+                blob_rest_id = (TX_BODY if blob_spec.create_tx_body
+                                else blob_spec.create_id)
                 blob_cursor.blob_uri = BlobUri(
-                    self.rest_id, tx_body = (blob_rest_id==TX_BODY),
+                    self.rest_id, tx_body = (blob_rest_id == TX_BODY),
                     blob = blob_rest_id)
                 blob_cursor.update_tx = self.rest_id
                 blob_cursor.db_tx = None  # ugh
@@ -275,7 +277,8 @@ class TransactionCursor:
                               "blob_id": blob_cursor.id,
                               "rest_id": blob_cursor.rest_id() })
 
-        logging.debug('TransactionCursor._write_blob %d %s', self.id, blobrefs)
+        logging.debug('TransactionCursor._write_blob %d %s all done %s',
+                      self.id, blobrefs, blobs_done)
 
         if blobrefs:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
@@ -311,10 +314,12 @@ class TransactionCursor:
                 self.final_attempt_reason != 'oneshot'):
             return
 
-        assert (self.final_attempt_reason == 'oneshot' or
-                self.final_attempt_reason is None or
-                final_attempt_reason is None)
-
+        if (self.final_attempt_reason is not None and
+            self.final_attempt_reason != 'oneshot' and
+            final_attempt_reason is not None):
+            logging.error('%s %s', self.final_attempt_reason,
+                          final_attempt_reason)
+            raise ValueError()
         assert self.tx is not None
 
         if (tx_delta.empty(WhichJson.DB) and
@@ -370,7 +375,7 @@ class TransactionCursor:
             res = db_tx.execute(upd_att)
             assert rowcount(res) == 1
 
-        upd = upd.values(notification = bool(tx_to_db.notification))
+        upd = upd.values(notification = tx_to_db.notification is not None)
 
         # TODO possibly assert here, the first case is
         # downstream/Exploder, #2/3 are upstream/OutputHandler
@@ -380,8 +385,8 @@ class TransactionCursor:
         # enables notifications/retries at the end. If the upstream tx
         # had already finished by this point, we need to clear the
         # oneshot final_attempt_reason.
-        if ((tx_to_db.retry is not None or tx_to_db.notification is not None
-             ) and self.final_attempt_reason == 'oneshot'):
+        if ((tx_to_db.retry is not None or tx_to_db.notification is not None)
+             and self.final_attempt_reason == 'oneshot'):
             self.final_attempt_reason = None
             upd = upd.values(final_attempt_reason = None)
         elif final_attempt_reason:
@@ -389,7 +394,7 @@ class TransactionCursor:
                 no_final_notification = not bool(tx_to_db.notification),
                 final_attempt_reason = final_attempt_reason)
         elif notification_done:
-            assert tx_to_db.notification
+            assert tx_to_db.notification is not None
             upd = upd.values(no_final_notification = False)
 
         if finalize_attempt:
@@ -397,11 +402,12 @@ class TransactionCursor:
                              inflight_session_live = None,
                              next_attempt_time = next_attempt_time)
 
-        input_done |= self._maybe_write_blob(db_tx, tx_delta)
+        if tx_delta.body is not None:
+            input_done |= self._maybe_write_blob(db_tx, tx_delta)
 
-        message_builder = tx_delta.body if isinstance(tx_delta.body, MessageBuilderSpec) else None
-        if message_builder:
-            upd = upd.values(message_builder = message_builder)
+        body = tx_delta.body
+        if isinstance(body, MessageBuilderSpec):
+            upd = upd.values(message_builder = body.json)
 
         if input_done:
             upd = upd.values(input_done = True)
@@ -587,7 +593,8 @@ class TransactionCursor:
             self.parent.blob_table.c.id,
             self.parent.blob_table.c.length,
             self.parent.blob_table.c.last_update,
-            func.length(self.parent.blob_table.c.content)).select_from(j)
+            func.length(self.parent.blob_table.c.content)
+        ).order_by(self.parent.blob_table.c.id).select_from(j)
 
         res = db_tx.execute(sel_blob)
         blobs = []
@@ -721,6 +728,17 @@ class BlobCursor(Blob, WritableBlob):
         self.update_tx = update_tx
         self.db_tx = db_tx
 
+    def delta(self, rhs):
+        if not isinstance(rhs, BlobCursor):
+            return None
+        if self.id != rhs.id:
+            return None
+        if self.length > rhs.length:
+            return None
+        if self._content_length is not None and self._content_length != rhs._content_length:
+            return None
+        return self.length < rhs.length
+
     def init(self, tx_rest_id : str, blob_id : int, blob_rest_id : str,
              content_length : Optional[int], last_update : int, length : int):
         self.id = blob_id
@@ -767,9 +785,9 @@ class BlobCursor(Blob, WritableBlob):
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None
                     ) -> Tuple[bool, int, Optional[int]]:
-        logging.info('BlobWriter.append_data %d %s length=%d d.len=%d '
+        logging.info('BlobWriter.append_data %d %s %d length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.rest_id(), self.length, len(d),
+                     self.id, self.rest_id(), offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:
@@ -779,7 +797,8 @@ class BlobCursor(Blob, WritableBlob):
             content_length >= (offset + len(d)))
 
         tx_version = None
-        with nullcontext(self.db_tx) if self.db_tx is not None else self.parent.begin_transaction() as db_tx:
+        with (nullcontext(self.db_tx) if self.db_tx is not None
+              else self.parent.begin_transaction() as db_tx):
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
                 self.parent.blob_table.c.length).where(
@@ -811,6 +830,9 @@ class BlobCursor(Blob, WritableBlob):
 
             res = db_tx.execute(upd)
             row = res.fetchone()
+            # we should have early-returned after the select if the offset
+            # didn't match, etc.
+            assert row is not None
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
 

@@ -28,8 +28,10 @@ class RemoteHostFilter(SyncFilter):
         if self.delta is None and tx_delta.mail_from is not None:
             err, self.delta = self._resolve(tx)
             if err is not None:
-                tx.merge_from(err)
-                return err
+                upstream_delta = TransactionMetadata()
+                tx.fill_inflight_responses(err, upstream_delta)
+                tx.merge_from(upstream_delta)
+                return upstream_delta
             done = True
 
         upstream_tx = tx.copy()
@@ -47,7 +49,7 @@ class RemoteHostFilter(SyncFilter):
         return upstream_delta
 
     def _resolve(self, tx : TransactionMetadata
-                 ) -> Tuple[Optional[TransactionMetadata],  # err
+                 ) -> Tuple[Optional[Response],  # err
                             # added fields to send upstream
                             Optional[TransactionMetadata]]:
         if (tx.remote_host is None or
@@ -57,8 +59,7 @@ class RemoteHostFilter(SyncFilter):
         try:
             ans = self.resolver.resolve_address(tx.remote_host.host)
         except ServFailExceptions:
-            return TransactionMetadata(
-                mail_response = Response(450, 'RemoteHostFilter ptr err')), None
+            return Response(450, 'RemoteHostFilter ptr err'), None
         except NotFoundExceptions:
             pass
 
@@ -95,8 +96,7 @@ class RemoteHostFilter(SyncFilter):
             res.fcrdns = False
 
         if all_failed:
-            return TransactionMetadata(
-                mail_response = Response(450, 'RemoteHostFilter fwd err')), None
+            return Response(450, 'RemoteHostFilter fwd err'), None
 
         logging.debug('RemoteHostFilter._resolve() '
                       'remote_hostname=%s fcrdns=%s',

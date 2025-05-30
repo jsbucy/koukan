@@ -47,13 +47,13 @@ def create_app(receiver = None, path = None):
             return FastApiResponse(status_code=code, content=msg)
         return FastApiResponse()
 
-    @app.post('/transactions/{tx_rest_id}/body')
+    @app.put('/transactions/{tx_rest_id}/body')
     async def create_tx_body(tx_rest_id : str,
                              request : FastApiRequest,
                              upload : Union[str, None] = None
                              ) -> FastApiResponse:
         await receiver.create_tx_body_async(tx_rest_id, request.stream())
-        return FastApiResponse(status_code=201)
+        return FastApiResponse(status_code=200)
 
     @app.put('/transactions/{tx_rest_id}/blob/{blob_id}')
     async def put_blob(tx_rest_id : str, blob_id : str,
