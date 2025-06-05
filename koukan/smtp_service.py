@@ -270,6 +270,39 @@ class SmtpHandler:
         self.tx = None
         return data_resp
 
+    async def handle_DATA_CHUNK(self, server : SMTP,
+                                session : Session,
+                                envelope : Envelope,
+                                data : bytes,
+                                decoded_data : Optional[str],
+                                last : bool):
+        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes',
+                     self.cx_id, len(data))
+
+        if self.tx.body is None:
+            self.tx.body = InlineBlob(envelope.content, last=last)
+        else:
+            body = self.tx.body
+            assert isinstance(body, InlineBlob)
+            assert body.content_length is None
+            body.append(data, last)
+
+        tx_delta = TransactionMetadata(body = self.tx.body)
+        fut = self.executor.submit(
+            lambda: self._update_tx(
+                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
+        if fut is None:
+            return '450 server busy'
+        await asyncio.wait([asyncio.wrap_future(fut)],
+                           timeout=self.timeout_data)
+        logging.info('SmtpHandler.handle_DATA %s resp %s',
+                     self.cx_id, self.tx.data_response)
+
+        data_resp = self.tx.data_response.to_smtp_resp()
+        self.tx = None
+        return data_resp
+
+
 class ControllerTls(Controller):
     def __init__(self, host, port, ssl_context, auth,
                  endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,

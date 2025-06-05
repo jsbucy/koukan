@@ -116,9 +116,13 @@ class InlineBlob(Blob, WritableBlob):
     def content_length(self):
         return self._content_length
 
-    def append(self, dd : bytes):
+    def append(self, dd : bytes, last : bool = False):
+        # if not last:
+        #     assert self._content_length is None
         self.d += dd
         assert self.len() <= self.content_length()
+        if last:
+            self._content_length = len(self.d)
 
     def __repr__(self):
         return 'length=%d content_length=%s' % (
