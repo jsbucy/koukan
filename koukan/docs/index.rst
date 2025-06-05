@@ -156,7 +156,7 @@ Content-type: application/json
 
 
 Finally, suppose you already have a serialized rfc822 payload you want
-to send. Simply POST that to /transactions/xyz/body. Similarly, you
+to send. Simply PUT that to /transactions/xyz/body. Similarly, you
 can reuse an rfc822 body from a previous transaction:
 POST /transactions
 Content-type: application/json
@@ -183,7 +183,7 @@ PUT /transactions/<tx id>/body
 upload the rfc822 message
 
 additionally, if you enable receive parsing:
-POST /transactions/<tx id>/message_builder
+PUT /transactions/<tx id>/message_builder
 PUT /transactions<tx id>/blob/<blob id>
 for each blob in the message builder spec json
 
