@@ -65,17 +65,17 @@ routes all addresses to `fake_smtpd` via gateway
 ## Send some messages
 
 - mx receive  
-`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1025 --ehlo=localhost --mail_from=alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 
 - mx receive to rest receiver
-`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@rest-application.example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1025 --ehlo=localhost --mail_from=alice@example.com bob@rest-application.example.com <<< 'hello, world!'`
 
 should print out on the `examples/receiver` console
 
 - smtp submission  
-`python koukan/ssmtp.py localhost 1587 localhost alice@example.com bob@example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1587 --ehlo=localhost --mail_from=alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 
