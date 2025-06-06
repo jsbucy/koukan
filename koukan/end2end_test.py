@@ -95,7 +95,8 @@ class End2EndTest(unittest.TestCase):
                                 'key': None})
             dkim = last
         filter_yaml = chain[last]
-        self.dkim_tempdir = tempfile.TemporaryDirectory()
+        if not self.dkim_tempdir:
+            self.dkim_tempdir = tempfile.TemporaryDirectory()
         dir = self.dkim_tempdir.name
         self.dkim_privkey = dir + '/privkey'
         self.dkim_pubkey = dir + '/pubkey'

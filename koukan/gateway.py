@@ -7,10 +7,14 @@ import time
 import secrets
 from threading import Condition, Lock, Thread
 import asyncio
+from functools import partial
 
 from koukan.rest_endpoint import RestEndpoint
 from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
-from koukan.smtp_service import service as smtp_service
+from koukan.smtp_service import (
+    ControllerTls,
+    SmtpHandler,
+    service as smtp_service )
 import koukan.fastapi_service as fastapi_service
 from koukan.filter import AsyncFilter
 from koukan.sync_filter_adapter import SyncFilterAdapter
@@ -31,7 +35,7 @@ class SmtpGateway(EndpointFactory):
     cv: Condition
     rest_id_factory : Optional[Callable[[], str]]
     hypercorn_shutdown : Optional[asyncio.Event] = None
-    smtp_services : List[object]
+    smtp_services : List[ControllerTls]
 
     def __init__(self, config_yaml : Optional[dict] = None):
         self.config_yaml = config_yaml
@@ -76,6 +80,7 @@ class SmtpGateway(EndpointFactory):
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
             verify=yaml.get('verify', True))
+            #chunk_size=yaml.get('chunk_size', 2**16))
 
     def rest_endpoint_yaml(self, name):
         for endpoint_yaml in self.config_yaml['rest_output']:
@@ -179,7 +184,6 @@ class SmtpGateway(EndpointFactory):
             factory = None
             msa = False
             endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
-            factory = lambda y=endpoint_yaml: self.rest_factory(y)
 
             # cf router config.Config.exploder()
             rcpt_timeout=40
@@ -189,15 +193,22 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=40
 
             addr = service_yaml['addr']
+            handler_factory = lambda: SmtpHandler(
+                endpoint_factory=partial(self.rest_factory, endpoint_yaml),
+                executor=Executor(inflight_limit=100, watchdog_timeout=3600),
+                timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
+                timeout_data=service_yaml.get('data_timeout', data_timeout),
+                chunk_size=service_yaml.get('chunk_size', 2**16))
+
             self.smtp_services.append(smtp_service(
-                factory, hostname=addr[0], port=addr[1],
+                hostname=addr[0], port=addr[1],
                 cert=service_yaml.get('cert', None),
                 key=service_yaml.get('key', None),
                 auth_secrets_path=service_yaml.get('auth_secrets', None),
-                rcpt_timeout=service_yaml.get('rcpt_timeout', rcpt_timeout),
-                data_timeout=service_yaml.get('data_timeout', data_timeout),
                 proxy_protocol_timeout=
-                  service_yaml.get('proxy_protocol_timeout', None)))
+                  service_yaml.get('proxy_protocol_timeout', None),
+                smtp_handler_factory=handler_factory,
+                enable_bdat=service_yaml.get('enable_bdat', False)))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,

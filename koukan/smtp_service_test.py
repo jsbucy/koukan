@@ -16,6 +16,8 @@ from koukan.filter import TransactionMetadata
 from koukan.smtp_service import SmtpHandler, service
 from koukan.response import Response
 from koukan.fake_endpoints import FakeSyncFilter
+from koukan.blob import InlineBlob
+from koukan.executor import Executor
 
 def find_unused_port() -> int:
     with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -26,8 +28,14 @@ class SmtpServiceTest(unittest.TestCase):
         self.endpoint = FakeSyncFilter()
 
         logging.basicConfig(level=logging.DEBUG)
-        endpoint_factory = lambda: self.endpoint
-        self.controller = service(endpoint_factory, port=find_unused_port())
+        handler_factory = lambda: SmtpHandler(
+            endpoint_factory = lambda: self.endpoint,
+            executor = Executor(inflight_limit=100, watchdog_timeout=3600),
+            chunk_size = 16
+        )
+        self.controller = service(
+            port=find_unused_port(),
+            smtp_handler_factory = handler_factory)
 
         logging.debug('controller port %d', self.controller.port)
 
@@ -76,16 +84,26 @@ class SmtpServiceTest(unittest.TestCase):
         if exp_data_resp is None:
             return
 
-        def exp(tx, tx_delta):
+        b = b''
+        for i in range(0,10):
+            b += b'hello, world! %d\r\n' % i
+        logging.debug(b)
+
+        body = InlineBlob(b'')
+        def exp_body(tx, tx_delta):
             upstream_delta=TransactionMetadata()
-            updated_tx = tx.copy()
-            if tx_data_resp:
-                updated_tx.data_response = tx_data_resp
-            upstream_delta = tx.delta(updated_tx)
+            logging.debug(tx.body)
+            if tx.body:
+                body.append(tx.body.pread(body.len()))
+                logging.debug(body.pread(0))
+            if tx.body.finalized() and tx_data_resp:
+                self.assertEqual(b, body.pread(0))
+                upstream_delta.data_response = tx_data_resp
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
-        self.endpoint.add_expectation(exp)
-        resp = self.smtp_client.data(b'hello')
+        for i in range(0,11):
+            self.endpoint.add_expectation(exp_body)
+        resp = self.smtp_client.data(b)
         self.assertEqual(resp[0], exp_data_resp.code)
 
     def test_mail_fail(self):
@@ -110,6 +128,7 @@ class SmtpServiceTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
     unittest.main()

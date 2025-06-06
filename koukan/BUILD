@@ -485,6 +485,7 @@ pytype_library(name='smtp_service',
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
         deps=[':smtp_service',
+              ':executor',
               ':filter',
               ':response',
               ':fake_endpoints'])

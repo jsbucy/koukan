@@ -517,9 +517,9 @@ class RestEndpoint(SyncFilter):
         if blob not in self.blob_readers:
             self.blob_readers[blob] = BlobReader(blob)
         blob_reader = self.blob_readers[blob]
-        # if self.chunk_size is None and blob.finalized():
-        #     return self._put_blob_single(
-        #         blob, not non_body_blob, blob.rest_id())
+        if blob_reader is None and self.chunk_size is None and blob.finalized():
+            return self._put_blob_single(
+                blob, not non_body_blob, blob.rest_id())
 
         offset = blob_reader.tell()
         chunk = None
