@@ -336,6 +336,7 @@ class SmtpHandler:
 SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
     smtp_handler_factory : SmtpHandlerFactory
+    enable_bdat = False
 
     def __init__(self, host, port, ssl_context, auth,
                  smtp_handler_factory : SmtpHandlerFactory,
@@ -345,6 +346,7 @@ class ControllerTls(Controller):
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
         self.smtp_handler_factory = smtp_handler_factory
+        self.enable_bdat = enable_bdat
 
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
@@ -356,6 +358,10 @@ class ControllerTls(Controller):
         handler = self.smtp_handler_factory()
         handler.loop = self.loop
 
+        kwargs = {}
+        if self.enable_bdat:
+            kwargs['enable_BDAT'] = True
+
         # TODO aiosmtpd supports LMTP so we could add that though it
         # is not completely trivial due to LMTP's per-recipient data
         # responses https://github.com/jsbucy/koukan/issues/2
@@ -364,7 +370,8 @@ class ControllerTls(Controller):
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth,
-                    proxy_protocol_timeout=self.proxy_protocol_timeout)
+                    proxy_protocol_timeout=self.proxy_protocol_timeout,
+                    **kwargs)
         handler.set_smtp(smtp)
         return smtp
 
