@@ -155,6 +155,9 @@ class SmtpGateway(EndpointFactory):
             self._gc_inflight(now, rest_yaml.get('gc_tx_ttl', 600),
                               rest_yaml.get('gc_done_ttl', 10))
 
+    def smtp_handler_factory(self, **kwargs):
+        return SmtpHandler(**kwargs)
+
     def main(self, alive=None):
         if self.config_yaml is None:
             with open(sys.argv[1], 'r') as yaml_file:
@@ -167,12 +170,12 @@ class SmtpGateway(EndpointFactory):
             executor_yaml.get('max_inflight', 10),
             executor_yaml.get('watchdog_timeout', 3600))
 
-        self.gc_thread = Thread(target = lambda: self.gc_inflight(),
+        self.gc_thread = Thread(target = partial(self.gc_inflight),
                                 daemon=True)
         self.gc_thread.start()
 
         rest_listener_yaml = self.config_yaml['rest_listener']
-        self.rest_id_factory = lambda: secrets.token_urlsafe(
+        self.rest_id_factory = partial(secrets.token_urlsafe,
             rest_listener_yaml.get('rest_id_entropy', 16))
 
         root_yaml = self.config_yaml
@@ -193,7 +196,8 @@ class SmtpGateway(EndpointFactory):
                 data_timeout=40
 
             addr = service_yaml['addr']
-            handler_factory = lambda: SmtpHandler(
+            handler_factory = partial(
+                self.smtp_handler_factory,
                 endpoint_factory=partial(self.rest_factory, endpoint_yaml),
                 executor=Executor(inflight_limit=100, watchdog_timeout=3600),
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
