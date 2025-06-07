@@ -283,14 +283,16 @@ class SmtpHandler:
                                 data : bytes,
                                 decoded_data : Optional[str],
                                 last : bool):
-        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
-                     self.cx_id, len(data), last)
-
         if ((len(self.prev_chunk) + len(data)) < self.chunk_size) or last:
             self.prev_chunk += data
             if not last:
                 return None
             data = b''
+
+        # TODO move this back once we fix aiosmtpd to buffer instead
+        # of calling per line
+        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
+                     self.cx_id, len(self.prev_chunk), last)
 
         # In the current aiosmtpd dotstuff implementation, the
         # last==True chunk will always be empty but (at least the way
