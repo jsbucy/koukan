@@ -328,6 +328,9 @@ class RestHandler(Handler):
         return self._get_tx_resp(request, tx)
 
     def patch_tx(self, request : HttpRequest, req_json : dict) -> HttpResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
         downstream_delta = TransactionMetadata.from_json(
@@ -426,6 +429,9 @@ class RestHandler(Handler):
             self, request : FastApiRequest,
             tx_body : bool = False,
             blob_rest_id : Optional[str] = None) -> FastApiResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         cfut = self.executor.submit(
             lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
         if cfut is None:
@@ -515,6 +521,9 @@ class RestHandler(Handler):
         return self.response(resp_json={}, headers=headers)
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get()
         if tx is None:
