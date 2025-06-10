@@ -78,6 +78,9 @@ class SyncFilterAdapter(AsyncFilter):
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:
             with self.parent.mu:
+                # flow control: don't buffer multiple chunks from downstream
+                # TODO this can probably be further simplified
+                self.parent.cv.wait_for(lambda: not(self.q))
                 assert self.content_length is None or (
                     content_length == self.content_length)
                 if self.content_length is not None and (
@@ -180,10 +183,7 @@ class SyncFilterAdapter(AsyncFilter):
 
             # propagate staged appends from blob_writer to body
             if self.blob_writer is not None and self.blob_writer.q:
-                # this may be moot because we early-return
-                # if the blob isn't finalized anyway but: we haven't
-                # really spelled out whether body is only in the
-                # delta the first time or every time that it grows?
+                # body goes in delta if it changed
                 delta.body = self.body
                 for b in self.blob_writer.q:
                     self.body.append_data(
@@ -197,6 +197,8 @@ class SyncFilterAdapter(AsyncFilter):
                 return False
             tx = self.tx.copy()
         upstream_delta = self.filter.on_update(tx, delta)
+        if self.body is not None:
+            self.body.trim_front(self.body.len())
 
         logging.debug('SyncFilterAdapter._update_once() '
                       'tx after upstream %s', tx)

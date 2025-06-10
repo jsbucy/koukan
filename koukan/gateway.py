@@ -1,6 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Callable, Dict, List, Optional, Tuple
+from types import ModuleType
 import sys
 import logging
 import time
@@ -8,6 +9,7 @@ import secrets
 from threading import Condition, Lock, Thread
 import asyncio
 from functools import partial
+import importlib
 
 from koukan.rest_endpoint import RestEndpoint
 from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
@@ -26,6 +28,7 @@ import yaml
 from koukan.executor import Executor
 
 
+
 class SmtpGateway(EndpointFactory):
     inflight : Dict[str, SyncFilterAdapter]
     config_yaml : Optional[dict] = None
@@ -36,11 +39,14 @@ class SmtpGateway(EndpointFactory):
     rest_id_factory : Optional[Callable[[], str]]
     hypercorn_shutdown : Optional[asyncio.Event] = None
     smtp_services : List[ControllerTls]
+    smtp_factory : Dict[str, SmtpFactory]
+
+    smtplib : Optional[ModuleType] = None
 
     def __init__(self, config_yaml : Optional[dict] = None):
         self.config_yaml = config_yaml
 
-        self.smtp_factory = SmtpFactory()
+        self.smtp_factory = {}
 
         self.inflight = {}
 
@@ -92,19 +98,14 @@ class SmtpGateway(EndpointFactory):
     def create(self, host) -> Optional[Tuple[AsyncFilter, dict]]:
         rest_yaml = self.config_yaml['rest_listener']
 
-        smtp_yaml = self.config_yaml['smtp_output']
-        if not(host_yaml := smtp_yaml.get(host, None)):
+        if (factory := self.smtp_factory.get(host, None)) is None:
             return None
 
         # The ehlo_host comes from the yaml and not the request
         # because it typically needs to align to the source IP
         # rdns. This stanza could select among multiple IPs in the
         # future, etc.
-        endpoint = self.smtp_factory.new(
-            ehlo_hostname=host_yaml['ehlo_host'],
-            # 1h (default watchdog timeout) - 5min
-            timeout=smtp_yaml.get('timeout', 55*60),
-            protocol = host_yaml.get('protocol', 'smtp'))
+        endpoint = factory.new()
 
         with self.lock:
             rest_id = self.rest_id_factory()
@@ -182,6 +183,20 @@ class SmtpGateway(EndpointFactory):
         logging_yaml = root_yaml.get('logging', None)
         if logging_yaml:
             logging.config.dictConfig(logging_yaml)
+
+        smtp_yaml = self.config_yaml['smtp_output']
+        smtplib_module = 'koukan_cpython_smtplib.smtplib'
+        if smtp_yaml.get('use_system_smtplib', False):
+            smtplib_module = 'smtplib'
+        self.smtplib = importlib.import_module(smtplib_module)
+
+        for host,smtp_host_yaml in smtp_yaml.items():
+            self.smtp_factory[host] = SmtpFactory(
+                self.smtplib,
+                ehlo_hostname = smtp_host_yaml['ehlo_host'],
+                # 1h (default watchdog timeout) - 5min
+                timeout = smtp_host_yaml.get('timeout', 55*60),
+                protocol = smtp_host_yaml.get('protocol', 'smtp'))
 
         for service_yaml in root_yaml['smtp_listener']['services']:
             factory = None

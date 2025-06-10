@@ -544,7 +544,7 @@ py_test(name='sync_filter_adapter_test',
 
 pytype_library(name='smtp_endpoint',
                srcs=['smtp_endpoint.py'],
-               deps=[])
+               deps=['//koukan_cpython_smtplib:smtplib'])
 
 pytype_library(name='gateway_lib',
                srcs=['gateway.py'],
