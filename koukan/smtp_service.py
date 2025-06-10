@@ -4,7 +4,6 @@ from typing import Callable, List, Optional, Tuple
 import asyncio
 import time
 import logging
-# from io import BytesIO
 
 from functools import partial
 import ssl
@@ -56,8 +55,6 @@ class SmtpHandler:
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
-    prev_chunk : list[bytes]  # TODO BytesIO?
-    prev_chunk_len = 0
     chunk_size : int
 
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
@@ -257,80 +254,29 @@ class SmtpHandler:
     async def handle_DATA(self, server : SMTP,
                           session : Session,
                           envelope : Envelope) -> str:
-        logging.info('SmtpHandler.handle_DATA %s %d bytes',
-                     self.cx_id, len(envelope.content))
-
-        blob = InlineBlob(envelope.content, last=True)
-
-        updated_tx = self.tx.copy()
-        updated_tx.body = blob
-        tx_delta = self.tx.delta(updated_tx)
-        self.tx = updated_tx
-        fut = self.executor.submit(
-            lambda: self._update_tx(
-                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
-        if fut is None:
-            return '450 server busy'
-        await asyncio.wait([asyncio.wrap_future(fut)],
-                           timeout=self.timeout_data)
-        logging.info('SmtpHandler.handle_DATA %s resp %s',
-                     self.cx_id, self.tx.data_response)
-
-        data_resp = self.tx.data_response.to_smtp_resp()
-        self.tx = None
-        return data_resp
+        resp = await self.handle_DATA_CHUNK(
+            server, session, envelope,
+            envelope.content, decoded_data=None, last=True)
+        assert resp is not None
+        return resp
 
     async def handle_DATA_CHUNK(self, server : SMTP,
                                 session : Session,
                                 envelope : Envelope,
                                 data : bytes,
                                 decoded_data : Optional[str],
-                                last : bool):
-        # in particular if data > self.chunk_size, don't churn through
-        # buffer, send directly (below)
-        if ((self.prev_chunk_len + len(data)) < self.chunk_size) or last:
-            self.prev_chunk.append(data)
-            self.prev_chunk_len += len(data)
-            if not last:
-                return None
-            data = b''
-
-        # TODO move this back once we fix aiosmtpd to buffer instead
-        # of calling per line
+                                last : bool) -> Optional[str]:
         logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
-                     self.cx_id, self.prev_chunk_len, last)
+                     self.cx_id, len(data), last)
 
-        # In the current aiosmtpd dotstuff implementation, the
-        # last==True chunk will always be empty but (at least the way
-        # our chunked PUTs work) we can't do a 0 length PUT to set the
-        # content-range overall length. So hold back the most recent
-        # chunk so there's something to send if the last chunk is
-        # empty
-        emit = bool(self.prev_chunk) or bool(data)
-        if emit:
-            if self.prev_chunk:
-                prev_chunk = b''.join(self.prev_chunk)
-                self.prev_chunk = []
-                self.prev_chunk_len = 0
-            else:
-                prev_chunk = data
-                data = None
+        if self.tx.body is None:
+            self.tx.body = InlineBlob(data, last=last)
+        else:
+            body = self.tx.body
+            assert isinstance(body, InlineBlob)
+            assert body.content_length() is None
+            body.append(data, last)
 
-            if self.tx.body is None:
-                self.tx.body = InlineBlob(prev_chunk, last=last)
-            else:
-                body = self.tx.body
-                assert isinstance(body, InlineBlob)
-                assert body.content_length() is None
-                body.append(prev_chunk, last)
-
-        if data:
-            self.prev_chunk = [data]
-            self.prev_chunk_len = len(data)
-        if not emit:
-            return None
-
-        logging.debug(self.tx.body)
         tx_delta = TransactionMetadata(body = self.tx.body)
         fut = self.executor.submit(
             lambda: self._update_tx(
