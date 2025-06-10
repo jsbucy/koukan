@@ -4,6 +4,7 @@ from typing import Callable, List, Optional, Tuple
 import asyncio
 import time
 import logging
+# from io import BytesIO
 
 from functools import partial
 import ssl
@@ -55,7 +56,8 @@ class SmtpHandler:
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
-    prev_chunk : bytes
+    prev_chunk : list[bytes]  # TODO BytesIO?
+    prev_chunk_len = 0
     chunk_size : int
 
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
@@ -72,7 +74,7 @@ class SmtpHandler:
         self.timeout_data = timeout_data
 
         self.cx_id = 'cx%d' % next_cx()
-        self.prev_chunk = b''
+        self.prev_chunk = []
         self.chunk_size = chunk_size
 
     def set_smtp(self, smtp):
@@ -131,7 +133,8 @@ class SmtpHandler:
         return '250 {}'.format(server.hostname)
 
     def _cancel(self):
-        self.prev_chunk = b''
+        self.prev_chunk = []
+        self.prev_chunk_len = 0
         if self.endpoint is None and self.tx is None:
             return
         if self.tx is not None:
@@ -283,8 +286,11 @@ class SmtpHandler:
                                 data : bytes,
                                 decoded_data : Optional[str],
                                 last : bool):
-        if ((len(self.prev_chunk) + len(data)) < self.chunk_size) or last:
-            self.prev_chunk += data
+        # in particular if data > self.chunk_size, don't churn through
+        # buffer, send directly (below)
+        if ((self.prev_chunk_len + len(data)) < self.chunk_size) or last:
+            self.prev_chunk.append(data)
+            self.prev_chunk_len += len(data)
             if not last:
                 return None
             data = b''
@@ -292,7 +298,7 @@ class SmtpHandler:
         # TODO move this back once we fix aiosmtpd to buffer instead
         # of calling per line
         logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
-                     self.cx_id, len(self.prev_chunk), last)
+                     self.cx_id, self.prev_chunk_len, last)
 
         # In the current aiosmtpd dotstuff implementation, the
         # last==True chunk will always be empty but (at least the way
@@ -300,17 +306,27 @@ class SmtpHandler:
         # content-range overall length. So hold back the most recent
         # chunk so there's something to send if the last chunk is
         # empty
-        emit = bool(self.prev_chunk)
-        if self.prev_chunk:
+        emit = bool(self.prev_chunk) or bool(data)
+        if emit:
+            if self.prev_chunk:
+                prev_chunk = b''.join(self.prev_chunk)
+                self.prev_chunk = []
+                self.prev_chunk_len = 0
+            else:
+                prev_chunk = data
+                data = None
+
             if self.tx.body is None:
-                self.tx.body = InlineBlob(self.prev_chunk, last=last)
+                self.tx.body = InlineBlob(prev_chunk, last=last)
             else:
                 body = self.tx.body
                 assert isinstance(body, InlineBlob)
                 assert body.content_length() is None
-                body.append(self.prev_chunk, last)
+                body.append(prev_chunk, last)
 
-        self.prev_chunk = data
+        if data:
+            self.prev_chunk = [data]
+            self.prev_chunk_len = len(data)
         if not emit:
             return None
 
