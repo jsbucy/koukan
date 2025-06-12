@@ -99,8 +99,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         # reusing !finalized blob so we must buffer incomplete body here.
         if tx.body is not None and not tx.body.finalized():
             tx.body = tx_delta.body = None
-            if not tx_delta:
-                return TransactionMetadata()
         tx_orig = tx.copy()
         upstream_tx, upstream_delta = self._update(tx, tx_delta)
         self.tx = upstream_tx.copy()
