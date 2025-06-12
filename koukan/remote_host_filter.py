@@ -40,7 +40,7 @@ class RemoteHostFilter(SyncFilter):
             assert upstream_tx.merge_from(self.delta)
             if done:
                 assert upstream_delta.merge_from(self.delta)
-        if bool(upstream_delta) and self.upstream is not None:
+        if self.upstream is not None:
             upstream_delta = self.upstream.on_update(
                 upstream_tx, upstream_delta)
         else:
