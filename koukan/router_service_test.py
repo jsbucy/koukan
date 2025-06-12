@@ -60,8 +60,8 @@ root_yaml_template = {
             'name': 'smtp-msa',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 10,
-                'downstream_data_timeout': 10,
+                'downstream_timeout': 10,
+                'upstream_refresh': 10,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'msa-upstream',
@@ -73,8 +73,8 @@ root_yaml_template = {
             'name': 'msa-upstream',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 10,
-                'downstream_data_timeout': 10,
+                'downstream_timeout': 10,
+                'upstream_refresh': 10,
                 'retry_params': {
                     'mode': 'per_request',
                     'max_attempts': 3,
@@ -98,8 +98,8 @@ root_yaml_template = {
             'name': 'submission',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 10,
-                'downstream_data_timeout': 10,
+                'downstream_timeout': 10,
+                'upstream_refresh': 10,
                 'retry_params': {
                     'max_attempts': 3,
                     'min_attempt_time': 1,
@@ -121,8 +121,8 @@ root_yaml_template = {
             'name': 'smtp-in',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1,
+                'downstream_timeout': 1,
+                'upstream_refresh': 1,
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
@@ -134,8 +134,8 @@ root_yaml_template = {
             'name': 'inbound-gw',
             'msa': True,
             'output_handler': {
-                'downstream_env_timeout': 1,
-                'downstream_data_timeout': 1,
+                'downstream_timeout': 1,
+                'upstream_refresh': 1,
                 'retry_params': {
                     'mode': 'per_request'
                 },
@@ -916,16 +916,16 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body(i, tx, tx_delta):
             logging.debug('%d %s', i, tx)
-            self.assertEqual(tx.body.pread(0),
-                             b'Hello, World!')
-            updated_tx = tx.copy()
-            # repro temp err here
-            updated_tx.data_response = Response(205 + i, 'upstream data %d' % i)
-            upstream_delta = tx.delta(updated_tx)
+            upstream_delta = TransactionMetadata()
+            if tx.body and tx.body.finalized():
+                self.assertEqual(tx.body.pread(0), b'Hello, World!')
+                upstream_delta.data_response = Response(
+                    205 + i, 'upstream data %d' % i)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
 
         for i,upstream in enumerate([upstream_endpoint, upstream_endpoint2]):
+            upstream.add_expectation(partial(exp_body, i))
             upstream.add_expectation(partial(exp_body, i))
 
         logging.info('testExploderMultiRcpt patch body')

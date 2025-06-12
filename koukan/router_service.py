@@ -283,10 +283,8 @@ class Service:
 
         handler = OutputHandler(
             storage_tx, endpoint,
-            downstream_env_timeout =
-            output_yaml.get('downstream_env_timeout', 30),
-            downstream_data_timeout =
-            output_yaml.get('downstream_data_timeout', 60),
+            downstream_timeout = output_yaml.get('downstream_timeout', 60),
+            upstream_refresh = output_yaml.get('upstream_refresh', 30),
             notification_endpoint_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),

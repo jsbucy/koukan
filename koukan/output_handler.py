@@ -38,12 +38,17 @@ class OutputHandler:
     retry_params : Optional[dict] = None
     notification_params : Optional[dict] = None
     _bug_retry : int = 3600
+    downstream_timeout : int
+    upstream_refresh : int
+    _last_downstream_update : int
+    _last_upstream_refresh : int
+    _last_downstream_version : int = 0
 
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
-                 downstream_env_timeout=None,
-                 downstream_data_timeout=None,
+                 downstream_timeout : int = 60,
+                 upstream_refresh : int = 30,
                  notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
                  retry_params : Optional[dict] = None,
@@ -51,8 +56,8 @@ class OutputHandler:
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
-        self.env_timeout = downstream_env_timeout
-        self.data_timeout = downstream_data_timeout
+        self.downstream_timeout = downstream_timeout
+        self.upstream_refresh = upstream_refresh
         self.notification_endpoint_factory = notification_endpoint_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
@@ -61,6 +66,9 @@ class OutputHandler:
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.notification_params = notification_params
+        now = time.monotonic()
+        self._last_downstream_update = now
+        self._last_upstream_refresh = now
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         t = self.cursor.tx
@@ -90,35 +98,35 @@ class OutputHandler:
         if (not self.cursor.input_done and
             delta.empty(WhichJson.ALL) and  # no new downstream
             not self.tx.cancelled):
-            # TODO until we get chunked uploads merged in aiosmtpd,
-            # probably want gateway/SmtpHandler to keepalive/ping
-            # during data upload so this can time out quickly if the
-            # gw crashed
-            if not self.cursor.wait(self.env_timeout):  # xxx
-                logging.debug('downstream timeout')
+            now = time.monotonic()
+            self.cursor.wait(
+                self.upstream_refresh - (now - self._last_upstream_refresh))
+            now = time.monotonic()
+            self._last_upstream_refresh = now
+            tx = self.cursor.load()
+            assert tx is not None
+            if self.cursor.version != self._last_downstream_version:
+                self._last_downstream_version = tx.version
+                self._last_downstream_update = now
+            delta = self._fixup_downstream_tx()
+            if (now - self._last_downstream_update) > self.downstream_timeout:
+                logging.debug('%s downstream timeout', self.rest_id)
                 downstream_timeout = True
-            else:
-                tx = self.cursor.load()
-                assert tx is not None
-                delta = self._fixup_downstream_tx()
 
         logging.debug('_handle_once %s %s', self.rest_id, self.tx)
 
-        if not delta.empty(WhichJson.ALL) or self.tx.cancelled:
-            upstream_delta = self.endpoint.on_update(self.tx, delta)
-            assert upstream_delta is not None
-            # router output to an endpoint that retries/notifies is
-            # probably a misconfiguration
-            assert self.tx.notification is None
-            assert self.tx.retry is None
+        upstream_delta = self.endpoint.on_update(self.tx, delta)
+        assert upstream_delta is not None
+        # router output to an endpoint that retries/notifies is
+        # probably a misconfiguration
+        assert self.tx.notification is None
+        assert self.tx.retry is None
 
-            # note: Exploder does not propagate any fields other than
-            # rcpt_response, data_response from upstream so it is no longer
-            # necessary to clear e.g. attempt_count here.
+        # note: Exploder does not propagate any fields other than
+        # rcpt_response, data_response from upstream so it is no longer
+        # necessary to clear e.g. attempt_count here.
 
-            # postcondition check: !req_inflight() in handle() finally:
-        else:
-            upstream_delta = TransactionMetadata()
+        # postcondition check: !req_inflight() in handle() finally:
 
         self.prev_tx = self.tx.copy()
 
