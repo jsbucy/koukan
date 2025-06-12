@@ -196,7 +196,8 @@ class SmtpGateway(EndpointFactory):
                 ehlo_hostname = smtp_host_yaml['ehlo_host'],
                 # 1h (default watchdog timeout) - 5min
                 timeout = smtp_host_yaml.get('timeout', 55*60),
-                protocol = smtp_host_yaml.get('protocol', 'smtp'))
+                protocol = smtp_host_yaml.get('protocol', 'smtp'),
+                enable_bdat = smtp_host_yaml.get('enable_bdat', False))
 
         for service_yaml in root_yaml['smtp_listener']['services']:
             factory = None
