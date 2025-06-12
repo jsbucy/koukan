@@ -635,7 +635,6 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.content_range.stop, 7)
         self.assertEqual(req.content_range.length, None)
 
-
         logging.debug('testFilterApi last append')
 
         b = InlineBlob(b'world!', last=True)
@@ -648,11 +647,6 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={},
             content_range=ContentRange(
                 'bytes', 0, tx.body.len(), tx.body.len())))
-
-        # GET
-        # self.responses.append(Response(
-        #     http_resp = '304 not modified',
-        #     etag = '2'))
 
         # GET
         self.responses.append(Response(
@@ -671,12 +665,6 @@ class RestEndpointTest(unittest.TestCase):
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
 
-
-        # req = self.requests.pop(0)
-        # self.assertEqual(req.method, 'GET')
-        # self.assertEqual(req.path, '/transactions/123')
-        # self.assertEqual(req.etag, '1')
-
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'PUT')
         self.assertEqual(req.path, '/transactions/123/body')
@@ -687,11 +675,6 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.method, 'GET')
         self.assertEqual(req.path, '/transactions/123')
         self.assertEqual(req.etag, '1')
-
-        # req = self.requests.pop(0)
-        # self.assertEqual(req.method, 'GET')
-        # self.assertEqual(req.path, '/transactions/123')
-        # self.assertEqual(req.etag, '3')
 
     def testFilterApiOneshot(self):
         rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,

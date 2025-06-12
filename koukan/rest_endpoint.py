@@ -134,7 +134,7 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint._create remote_host %s %s %s',
                           self.base_url, remote_host, json)
 
-            req_headers = {}
+            req_headers = {'content-type': 'application/json'}
             if self.http_host:
                 req_headers['host'] = self.http_host
             deadline_left = deadline.deadline_left()
@@ -161,8 +161,6 @@ class RestEndpoint(SyncFilter):
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
         body_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
-        # verify the not tx.empty() condition in the caller
-        assert body_json
 
         rest_resp = self._post_tx(
             self.transaction_url, body_json, self.client.patch, deadline)
@@ -186,9 +184,15 @@ class RestEndpoint(SyncFilter):
         if self.etag:
             req_headers['if-match'] = self.etag
         try:
+            kwargs = {}
+            if body_json:
+                req_headers['content-type'] = 'application/json'
+                kwargs['json'] = body_json
+            else:
+                kwargs['data'] = b''
             rest_resp = http_method(
                 uri,
-                json=body_json,
+                **kwargs,
                 headers=req_headers,
                 timeout=deadline_left)
         except RequestError:
@@ -310,23 +314,24 @@ class RestEndpoint(SyncFilter):
                 return err
             tx_update = True
             created = True
-        # the precondition is that the delta isn't empty but it might
-        # only contain internal fields
-        elif not downstream_delta.empty(WhichJson.REST_UPDATE):
-            rest_resp = self._update(downstream_delta, deadline)
-            # TODO handle 412 failed precondition
-            if rest_resp is None or rest_resp.status_code != 200:
-                err_delta = TransactionMetadata()
-                tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream http err'),
-                    err_delta)
-                tx.merge_from(err_delta)
-                return err_delta
+        else:
+            # as long as the delta isn't just the body, send a patch even
+            # if it's empty as a heartbeat
+            delta_no_body = tx_delta.copy()
+            delta_no_body.body = None
+            if (tx_delta.empty(WhichJson.REST_UPDATE) or
+                not delta_no_body.empty(WhichJson.REST_UPDATE)):
+               rest_resp = self._update(downstream_delta, deadline)
+               # TODO handle 412 failed precondition
+               if rest_resp is None or rest_resp.status_code != 200:
+                   err_delta = TransactionMetadata()
+                   tx.fill_inflight_responses(
+                       Response(450, 'RestEndpoint upstream http err'),
+                       err_delta)
+                   tx.merge_from(err_delta)
+                   return err_delta
 
-            tx_update = True
-        elif tx_delta.body is None:
-              # not tx_delta.body.finalized()):
-            return TransactionMetadata()
+               tx_update = True
 
         upstream_delta = None
         if tx_update:
