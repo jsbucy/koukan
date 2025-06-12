@@ -207,14 +207,16 @@ class TransactionCursor:
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
-                       notification_done : Optional[bool] = None):
+                       notification_done : Optional[bool] = None,
+                       ping_tx : bool = False):
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
                         final_attempt_reason=final_attempt_reason,
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
-                        notification_done=notification_done)
+                        notification_done=notification_done,
+                        ping_tx=ping_tx)
         self._update_version_cache()
 
     def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata

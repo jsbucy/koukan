@@ -327,14 +327,18 @@ class RestHandler(Handler):
             return err
         return self._get_tx_resp(request, tx)
 
-    def patch_tx(self, request : HttpRequest, req_json : dict) -> HttpResponse:
+    def patch_tx(self, request : HttpRequest, req_json : Optional[dict]
+                 ) -> HttpResponse:
         if self.async_filter is None:
             return self.response(code=404, msg='transaction not found')
 
         logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
-        downstream_delta = TransactionMetadata.from_json(
-            req_json, WhichJson.REST_UPDATE)
+        if req_json is not None:
+            downstream_delta = TransactionMetadata.from_json(
+                req_json, WhichJson.REST_UPDATE)
+        else:
+             downstream_delta = TransactionMetadata()
         if downstream_delta is None:
             return self.response(code=400, msg='invalid request')
         body = downstream_delta.body
@@ -348,7 +352,9 @@ class RestHandler(Handler):
             return self.response(
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
-        if not self.async_filter.incremental():
+        if req_json is None:  # heartbeat/ping
+            pass
+        elif not self.async_filter.incremental():
             return self.response(
                 code=400,
                 msg='endpoint does not accept incremental updates')
