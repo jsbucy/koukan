@@ -78,7 +78,8 @@ class Service:
             executor.ping_watchdog()
             with self.lock:
                 self.cv.wait_for(lambda: self._shutdown,
-                                 min(deadline.deadline_left(), 30))
+                                 # xxx align to watchdog timeout
+                                 min(deadline.deadline_left(), 5))
                 if self._shutdown:
                     return True
         return False
@@ -148,7 +149,9 @@ class Service:
 
         if self.storage is None:
             self.storage=Storage.connect(
-                storage_yaml['url'], listener_yaml['session_uri'])
+                storage_yaml['url'], listener_yaml['session_uri'],
+                blob_tx_refresh_interval=
+                  storage_yaml.get('blob_tx_refresh_interval', 10))
 
         session_refresh_interval = storage_yaml.get(
             'session_refresh_interval', 30)
