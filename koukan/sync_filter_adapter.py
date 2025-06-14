@@ -149,69 +149,72 @@ class SyncFilterAdapter(AsyncFilter):
             version=version, timeout=timeout)
 
     def _update(self):
-        try:
-            while self._update_once():
-                pass
-        except Exception:
-            logging.exception('SyncFilterAdapter._update_once() %s',
-                              self.rest_id)
-            with self.mu:
+        with self.mu:
+            try:
+                while self._update_once():
+                    pass
+            except Exception:
+                logging.exception('SyncFilterAdapter._update_once() %s',
+                                  self.rest_id)
                 # The upstream SyncFilter is supposed to return tx
                 # error responses and not throw
                 # exceptions. i.e. SmtpEndpoint is supposed to convert
                 # all smtplib/socket exceptions to error responses but there
                 # may be bugs.
+                # TODO this should probably self.filter = None
+                # and downstream fastfail
                 self.tx.fill_inflight_responses(MailResponse(
                     450, 'internal error: unexpected exception in '
                     'SyncFilterAdapter'))
-                self.cv.notify_all()
-            raise
-        finally:
-            with self.mu:
+                raise
+            finally:
                 self.inflight = False
                 self.cv.notify_all()
 
     def _update_once(self):
-        with self.mu:
-            assert self.inflight
-            delta = self.prev_tx.delta(self.tx)  # new reqs
-            assert delta is not None
-            logging.debug('SyncFilterAdapter._update_once() '
-                          'downstream_delta %s staged %s', delta,
-                          len(self.blob_writer.q) if self.blob_writer else None)
-            self.prev_tx = self.tx.copy()
+        assert self.inflight
+        delta = self.prev_tx.delta(self.tx)  # new reqs
+        assert delta is not None
+        logging.debug('SyncFilterAdapter._update_once() '
+                      'downstream_delta %s staged %s', delta,
+                      len(self.blob_writer.q) if self.blob_writer else None)
+        self.prev_tx = self.tx.copy()
 
-            # propagate staged appends from blob_writer to body
-            if self.blob_writer is not None and self.blob_writer.q:
-                # body goes in delta if it changed
-                delta.body = self.body
-                for b in self.blob_writer.q:
-                    self.body.append_data(
-                        self.body.len(), b,
-                        self.blob_writer.content_length)
-                    logging.debug('append %d %s', self.body.len(),
-                                  self.body.content_length())
-                self.blob_writer.q = []
+        # propagate staged appends from blob_writer to body
+        if self.blob_writer is not None and self.blob_writer.q:
+            # body goes in delta if it changed
+            delta.body = self.body
+            for b in self.blob_writer.q:
+                self.body.append_data(
+                    self.body.len(), b,
+                    self.blob_writer.content_length)
+                logging.debug('append %d %s', self.body.len(),
+                              self.body.content_length())
+            self.blob_writer.q = []
 
-            if not self.tx.req_inflight() and not delta.cancelled:
-                return False
-            tx = self.tx.copy()
-        upstream_delta = self.filter.on_update(tx, delta)
+        # XXX heartbeat/keepalive don't early return here
+        if not self.tx.req_inflight() and not delta.cancelled:
+            return False
+        tx = self.tx.copy()
+        self.mu.release()
+        try:
+            upstream_delta = self.filter.on_update(tx, delta)
+        finally:
+            self.mu.acquire()
         if self.body is not None:
             self.body.trim_front(self.body.len())
 
         logging.debug('SyncFilterAdapter._update_once() '
                       'tx after upstream %s', tx)
-        with self.mu:
-            assert self.tx.merge_from(upstream_delta) is not None
-            # TODO closer to req_inflight() logic i.e. tx has reached
-            # a final state due to an error
-            self.done = self.tx.cancelled or self.tx.data_response is not None
-            version = self.id_version.get()
-            version += 1
-            self.cv.notify_all()
-            self.id_version.update(version=version)
-            self._last_update = time.monotonic()
+        assert self.tx.merge_from(upstream_delta) is not None
+        # TODO closer to req_inflight() logic i.e. tx has reached
+        # a final state due to an error
+        self.done = self.tx.cancelled or self.tx.data_response is not None
+        version = self.id_version.get()
+        version += 1
+        self.cv.notify_all()
+        self.id_version.update(version=version)
+        self._last_update = time.monotonic()
         return True
 
     def update(self,
