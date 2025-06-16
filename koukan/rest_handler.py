@@ -81,7 +81,7 @@ class RestHandler(Handler):
                  blob_rest_id : Optional[str] = None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None,
-                 chunk_size : int = 1048576,
+                 chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
                  session_uri : Optional[str] = None,
                  service_uri : Optional[str] = None,
@@ -470,6 +470,8 @@ class RestHandler(Handler):
                 b = bytes()
                 chunk = chunk[count:]
         # send any leftover
+        # xxx b may be empty, may tickle bugs in sync filter adapter,
+        # just set last in loop if content-length/range (but not cte: chunked)
         resp = await self._put_blob_chunk_async(request, b, last=True)
         if resp.status_code != 200:
             return resp
@@ -558,20 +560,26 @@ class RestHandlerFactory(HandlerFactory):
     session_uri : Optional[str] = None
     service_uri : Optional[str] = None
     rest_id_factory : Callable[[], str]
+    chunk_size : Optional[int] = None
 
     def __init__(self, executor,
                  endpoint_factory,
                  rest_id_factory : Callable[[], str],
                  session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None):
+                 service_uri : Optional[str] = None,
+                 chunk_size : Optional[int] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
         self.session_uri = session_uri
         self.service_uri = service_uri
+        self.chunk_size = chunk_size
 
     def create_tx(self, http_host) -> RestHandler:
         endpoint, yaml = self.endpoint_factory.create(http_host)
+        kwargs = {}
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
         return RestHandler(
             executor=self.executor,
             async_filter=endpoint,
@@ -579,14 +587,19 @@ class RestHandlerFactory(HandlerFactory):
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
             session_uri = self.session_uri,
-            service_uri = self.service_uri)
+            service_uri = self.service_uri,
+            **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
         filter = self.endpoint_factory.get(tx_rest_id)
+        kwargs = {}
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
         return RestHandler(
             executor=self.executor,
             async_filter=filter,
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory,
             session_uri = self.session_uri,
-            service_uri = self.service_uri)
+            service_uri = self.service_uri,
+            **kwargs)

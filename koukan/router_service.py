@@ -181,7 +181,8 @@ class Service:
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
-            service_uri=listener_yaml.get('service_uri', None))
+            service_uri=listener_yaml.get('service_uri', None),
+            chunk_size=listener_yaml.get('chunk_size', None))
 
         with self.lock:
             self.started = True

@@ -234,7 +234,8 @@ class SmtpGateway(EndpointFactory):
             self.executor, endpoint_factory=self,
             rest_id_factory=self.rest_id_factory,
             session_uri=rest_listener_yaml.get('session_uri', None),
-            service_uri=rest_listener_yaml.get('service_uri', None))
+            service_uri=rest_listener_yaml.get('service_uri', None),
+            chunk_size=rest_listener_yaml.get('chunk_size', None))
 
         rest_listener_yaml = root_yaml['rest_listener']
         app = fastapi_service.create_app(self.adapter_factory)
