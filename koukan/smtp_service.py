@@ -55,14 +55,11 @@ class SmtpHandler:
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
-    chunk_size : int
-
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
                  timeout_rcpt=60,
-                 timeout_data=330,
-                 chunk_size = 2**16):
+                 timeout_data=330):
         self.endpoint_factory = endpoint_factory
         self.executor = executor
 
@@ -72,7 +69,6 @@ class SmtpHandler:
 
         self.cx_id = 'cx%d' % next_cx()
         self.prev_chunk = []
-        self.chunk_size = chunk_size
 
     def set_smtp(self, smtp):
         self.smtp = smtp
@@ -296,6 +292,13 @@ class SmtpHandler:
         self.tx = None
         return data_resp
 
+    # TODO send heartbeat update
+    # async def handle_NOOP(server : SMTP,
+    #                       session : Session,
+    #                       envelope : Envelope,
+    #                       arg: Any):
+    #     pass
+
 
 SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
@@ -305,12 +308,14 @@ class ControllerTls(Controller):
     def __init__(self, host, port, ssl_context, auth,
                  smtp_handler_factory : SmtpHandlerFactory,
                  proxy_protocol_timeout : Optional[int] = None,
-                 enable_bdat=False):
+                 enable_bdat=False,
+                 chunk_size : Optional[int] = None):
         self.tls_controller_context = ssl_context
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
         self.smtp_handler_factory = smtp_handler_factory
         self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
 
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
@@ -325,6 +330,8 @@ class ControllerTls(Controller):
         kwargs = {}
         if self.enable_bdat:
             kwargs['enable_BDAT'] = True
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
 
         # TODO aiosmtpd supports LMTP so we could add that though it
         # is not completely trivial due to LMTP's per-recipient data
@@ -344,7 +351,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
             cert=None, key=None,
             auth_secrets_path=None,
             proxy_protocol_timeout : Optional[int] = None,
-            enable_bdat = False
+            enable_bdat = False,
+            chunk_size : Optional[int] = None
             ) -> ControllerTls:
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -357,7 +365,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
         auth,
         proxy_protocol_timeout = proxy_protocol_timeout,
         smtp_handler_factory = smtp_handler_factory,
-        enable_bdat = enable_bdat)
+        enable_bdat = enable_bdat,
+        chunk_size = chunk_size)
 
     controller.start()
     return controller

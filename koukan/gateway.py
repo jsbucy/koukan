@@ -85,8 +85,8 @@ class SmtpGateway(EndpointFactory):
             static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
-            verify=yaml.get('verify', True))
-            #chunk_size=yaml.get('chunk_size', 2**16))
+            verify=yaml.get('verify', True),
+            chunk_size=yaml.get('chunk_size', 2**16))
 
     def rest_endpoint_yaml(self, name):
         for endpoint_yaml in self.config_yaml['rest_output']:
@@ -217,8 +217,7 @@ class SmtpGateway(EndpointFactory):
                 endpoint_factory=partial(self.rest_factory, endpoint_yaml),
                 executor=Executor(inflight_limit=100, watchdog_timeout=3600),
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
-                timeout_data=service_yaml.get('data_timeout', data_timeout),
-                chunk_size=service_yaml.get('chunk_size', 2**16))
+                timeout_data=service_yaml.get('data_timeout', data_timeout))
 
             self.smtp_services.append(smtp_service(
                 hostname=addr[0], port=addr[1],
@@ -228,7 +227,8 @@ class SmtpGateway(EndpointFactory):
                 proxy_protocol_timeout=
                   service_yaml.get('proxy_protocol_timeout', None),
                 smtp_handler_factory=handler_factory,
-                enable_bdat=service_yaml.get('enable_bdat', False)))
+                enable_bdat=service_yaml.get('enable_bdat', False),
+                chunk_size=service_yaml.get('chunk_size', 2**16)))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,
