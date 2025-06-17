@@ -242,23 +242,25 @@ class SmtpEndpoint(SyncFilter):
             data_resp = None
             while not chunk_last and (data_resp is None or data_resp.ok()):
                 chunk = self.body_reader.read(2**16)  # XXX config
+                logging.debug(len(chunk))
                 if tx.body.content_length() is not None:
                     chunk_last = (self.body_reader.tell() ==
                                   tx.body.content_length())
+                if not chunk_last and not chunk:
+                    break
                 resp = self.smtp.data_chunk(chunk, chunk_last)
                 if resp is not None:
-                    data_response = Response.from_smtp(resp)
+                    data_resp = Response.from_smtp(resp)
             # BDAT will return a 250 for every chunk but our stack
-            # generally assumes data_response != None means it's done;
+            # generally assumes data_resp != None means it's done;
             # returning a !last 250 here will probably trigger an
             # early-return elsewhere.
-            if chunk_last or data_response.err():
-                upstream_delta.data_response = data_response
+            if chunk_last or (data_resp is not None and data_resp.err()):
+                upstream_delta.data_response = data_resp
+                self._shutdown()
 
-            logging.info('SmtpEndpoint %s data_response %s',
+            logging.info('SmtpEndpoint %s data_resp %s',
                          tx.rest_id, upstream_delta.data_response)
-
-            self._shutdown()
 
         return upstream_delta
 

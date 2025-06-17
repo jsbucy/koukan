@@ -181,19 +181,19 @@ class SyncFilterAdapter(AsyncFilter):
         self.prev_tx = self.tx.copy()
 
         # propagate staged appends from blob_writer to body
+        dequeued = 0
         if self.blob_writer is not None and self.blob_writer.q:
             # body goes in delta if it changed
             delta.body = self.body
             for b in self.blob_writer.q:
-                self.body.append_data(
-                    self.body.len(), b,
-                    self.blob_writer.content_length)
-                logging.debug('append %d %s', self.body.len(),
-                              self.body.content_length())
+                logging.debug(self.body)
+                last = self.blob_writer.content_length is not None and self.body.len() + len(b) == self.blob_writer.content_length
+                self.body.append(b, last)
+                dequeued += len(b)
+                logging.debug('append %d %s', len(b), self.body)
             self.blob_writer.q = []
 
-        # XXX heartbeat/keepalive don't early return here
-        if not self.tx.req_inflight() and not delta.cancelled:
+        if not delta and not dequeued:
             return False
         tx = self.tx.copy()
         self.mu.release()

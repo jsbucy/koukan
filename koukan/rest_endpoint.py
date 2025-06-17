@@ -529,7 +529,15 @@ class RestEndpoint(SyncFilter):
         offset = blob_reader.tell()
         chunk = None
         while offset < blob.len():
-            # chunk = blob.pread(offset, self.chunk_size)
+            chunk_size = self.chunk_size if self.chunk_size else blob.len()
+            # the content-range chunked upload protocol can't
+            # represent a 0 length append to finalize the length so don't
+            # consume all the data from the blob if we might be in that case
+            if not blob.finalized() and (offset + chunk_size >= blob.len()):
+                if blob.len() - offset <= self.min_last_chunk:
+                    return Response()
+                chunk_size = blob.len() - offset - self.min_last_chunk
+
             if chunk is None:
                 chunk = blob_reader.read(self.chunk_size)
             chunk_last = False
