@@ -16,6 +16,7 @@ import werkzeug.http
 
 from koukan.deadline import Deadline
 from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_schema import FINALIZE_BLOB_HEADER
 from koukan.filter import (
     HostPort,
     Mailbox,
@@ -35,6 +36,8 @@ class Request:
     request_timeout : Optional[int] = None
     body = None
     etag = None
+    finalize_length = None
+
     def __init__(self,
                  method = None,
                  path = None,
@@ -118,7 +121,7 @@ class RestEndpointTest(unittest.TestCase):
             self.fail()
 
     def wsgi_app(self, environ, start_response):
-        #logging.debug(environ)
+        # logging.debug(environ)
         req = Request()
         req.method = environ['REQUEST_METHOD']
         req.path = environ['PATH_INFO']
@@ -130,6 +133,11 @@ class RestEndpointTest(unittest.TestCase):
                 werkzeug.http.parse_content_range_header(range_header))
         if timeout_header := environ.get('HTTP_REQUEST_TIMEOUT', None):
             req.request_timeout = int(timeout_header)
+
+        header = 'HTTP_' + FINALIZE_BLOB_HEADER.upper().replace('-', '_')
+        if finalize_length := environ.get(header, None):
+            finalize_length.strip()
+            req.finalize_length = int(finalize_length)
 
         if ((wsgi_input := environ.get('wsgi.input', None)) and
             (length := environ.get('CONTENT_LENGTH', None))):
@@ -358,7 +366,7 @@ class RestEndpointTest(unittest.TestCase):
             }))
 
         # PUT /transactions/123/body
-        # range 0-8/*
+        # range 0-7/*
         self.responses.append(Response(
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 0, 8, None)))
@@ -618,7 +626,7 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '200 ok',
             resp_json={},
             content_range=ContentRange(
-                'bytes', 0, 8, None)))
+                'bytes', 0, 7, None)))
 
         tx_delta = TransactionMetadata()
         tx.body = tx_delta.body = CompositeBlob()
@@ -803,7 +811,82 @@ class RestEndpointTest(unittest.TestCase):
 
         self.assertEqual([r.code for r in tx.rcpt_response], [202, 203])
 
+    def testFilterApiEmptyLastChunk(self):
+        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+                                     min_poll=0.1)
 
+        body = b'hello, world!'
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
+            location = '/transactions/123'))
+
+        # PUT /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={},
+            content_range=ContentRange(
+                'bytes', 0, len(body))))
+
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body=InlineBlob(body))
+        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        logging.debug('tx after update %s', tx)
+        logging.debug('upstream_delta %s', upstream_delta)
+        for t in [tx, upstream_delta]:
+            self.assertEqual(t.mail_response.code, 201)
+            self.assertEqual([r.code for r in t.rcpt_response], [202])
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'POST')
+        self.assertEqual(req.path, '/transactions')
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertEqual(req.content_range.start, 0)
+        self.assertEqual(req.content_range.stop, 13)
+        self.assertEqual(req.content_range.length, None)
+
+
+        # PUT /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={},
+            content_range=ContentRange(
+                'bytes', 0, len(body), len(body))))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'} }))
+
+        tx.body.append(b'', last=True)
+        upstream_delta = rest_endpoint.on_update(
+            tx, TransactionMetadata(body=tx.body), 5)
+        logging.debug('tx after update %s', tx)
+        logging.debug('upstream_delta %s', upstream_delta)
+        for t in [tx, upstream_delta]:
+            self.assertEqual(203, t.data_response.code)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertIsNone(req.content_range)
+        self.assertEqual(13, req.finalize_length)
 
     def test_discovery(self):
         resolution = Resolution([

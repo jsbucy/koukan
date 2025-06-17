@@ -46,7 +46,12 @@ from koukan.filter import (
     WhichJson )
 from koukan.executor import Executor
 
-from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
+from koukan.rest_schema import (
+    FINALIZE_BLOB_HEADER,
+    BlobUri,
+    make_blob_uri,
+    make_tx_uri,
+    parse_blob_uri )
 from koukan.version_cache import IdVersion
 from koukan.storage_schema import BlobSpec, VersionConflictException
 
@@ -68,6 +73,8 @@ class RestHandler(Handler):
     range : Optional[ContentRange] = None
     blob : Optional[WritableBlob] = None
     bytes_read : Optional[int] = None
+    final_blob_length : Optional[int] = None
+
     endpoint_yaml : Optional[dict] = None
     session_uri : Optional[str] = None
     service_uri : Optional[str] = None
@@ -453,6 +460,15 @@ class RestHandler(Handler):
         logging.debug('RestHandler._put_blob_async')
         b = bytes()
         self.bytes_read = 0
+        finalize_blob_header = request.headers.get(FINALIZE_BLOB_HEADER, None)
+        if finalize_blob_header:
+            finalize_blob_header.strip()
+            try:
+                final_blob_length = int(finalize_blob_header)
+            except:
+                return self.response(code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
+            self.final_blob_length = final_blob_length
+
         async for chunk in request.stream():
             # copy from chunk to b until it contains chunk_size, then
             # send upstream
@@ -469,9 +485,8 @@ class RestHandler(Handler):
                     return resp
                 b = bytes()
                 chunk = chunk[count:]
+
         # send any leftover
-        # xxx b may be empty, may tickle bugs in sync filter adapter,
-        # just set last in loop if content-length/range (but not cte: chunked)
         resp = await self._put_blob_chunk_async(request, b, last=True)
         if resp.status_code != 200:
             return resp
@@ -501,7 +516,14 @@ class RestHandler(Handler):
         content_length = result_len = None
 
         start = 0
-        if self.range is not None:
+        if self.final_blob_length is not None:
+            start = self.final_blob_length
+            length = self.final_blob_length
+            if len(b):
+                return self.response(
+                    code=400,
+                    msg=FINALIZE_BLOB_HEADER + ' with non-empty PUT',)
+        elif self.range is not None:
             start = self.range.start
             length = self.range.length
         elif last:
