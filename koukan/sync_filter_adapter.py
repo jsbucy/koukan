@@ -178,7 +178,6 @@ class SyncFilterAdapter(AsyncFilter):
         logging.debug('SyncFilterAdapter._update_once() '
                       'downstream_delta %s staged %s', delta,
                       len(self.blob_writer.q) if self.blob_writer else None)
-        self.prev_tx = self.tx.copy()
 
         # propagate staged appends from blob_writer to body
         dequeued = 0
@@ -186,8 +185,9 @@ class SyncFilterAdapter(AsyncFilter):
             # body goes in delta if it changed
             delta.body = self.body
             for b in self.blob_writer.q:
-                logging.debug(self.body)
-                last = self.blob_writer.content_length is not None and self.body.len() + len(b) == self.blob_writer.content_length
+                last = (self.blob_writer.content_length is not None and
+                        (self.body.len() + len(b) ==
+                         self.blob_writer.content_length))
                 self.body.append(b, last)
                 dequeued += len(b)
                 logging.debug('append %d %s', len(b), self.body)
@@ -207,6 +207,8 @@ class SyncFilterAdapter(AsyncFilter):
         logging.debug('SyncFilterAdapter._update_once() '
                       'tx after upstream %s', tx)
         assert self.tx.merge_from(upstream_delta) is not None
+        self.prev_tx = tx.copy()
+
         # TODO closer to req_inflight() logic i.e. tx has reached
         # a final state due to an error
         self.done = self.tx.cancelled or self.tx.data_response is not None

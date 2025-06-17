@@ -17,7 +17,7 @@ from fastapi import (
 
 from httpx import Response as HttpxResponse
 
-from koukan.blob import InlineBlob
+from koukan.blob import BlobReader, InlineBlob
 from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
 from koukan.executor import Executor
@@ -39,6 +39,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             self.executor, upstream, 'rest_id')
 
         def exp_mail(tx, tx_delta):
+            logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             upstream_delta=TransactionMetadata(
                 mail_response = Response(201))
@@ -53,6 +54,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertEqual(upstream_tx.mail_response.code, 201)
 
         def exp_rcpt(tx, tx_delta):
+            logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([r.mailbox for r in tx.rcpt_to], ['bob'])
             upstream_delta=TransactionMetadata(
@@ -74,27 +76,36 @@ class SyncFilterAdapterTest(unittest.TestCase):
         else:
             self.fail('expected rcpt_response')
 
+
         body = b'hello, world!'
+        blob_reader = None
+        read_body = b''
 
         def exp_body(tx, tx_delta):
-            logging.debug(tx.body)
+            nonlocal blob_reader, read_body
+            logging.debug(tx)
+            if tx.body is None:
+                return TransactionMetadata()
+            if blob_reader is None:
+                blob_reader = BlobReader(tx.body)
+            read_body += blob_reader.read()
             if not tx.body.finalized():
-                return
-            self.assertEqual(body, tx.body.pread(0))
+                return TransactionMetadata()
+            self.assertEqual(body, read_body)
             upstream_delta=TransactionMetadata(
                 data_response = Response(203))
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
         upstream.add_expectation(exp_body)
+        upstream.add_expectation(exp_body)
 
         blob_writer = sync_filter_adapter.get_blob_writer(
             create=True, blob_rest_id=None, tx_body=True)
-        b=b'hello, '
-        b2=b'world!'
-        blob_writer.append_data(0, b, None)
+        b=b'hello, world!'
+        blob_writer.append_data(0, b[0:7], None)
         blob_writer = sync_filter_adapter.get_blob_writer(
             create=False, blob_rest_id=None, tx_body=True)
-        blob_writer.append_data(len(b), b2, len(b) + len(b2))
+        blob_writer.append_data(7, b[7:], len(b))
 
         for i in range(0,3):
             tx = sync_filter_adapter.get()

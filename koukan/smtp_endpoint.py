@@ -242,7 +242,6 @@ class SmtpEndpoint(SyncFilter):
             data_resp = None
             while not chunk_last and (data_resp is None or data_resp.ok()):
                 chunk = self.body_reader.read(2**16)  # XXX config
-                logging.debug(len(chunk))
                 if tx.body.content_length() is not None:
                     chunk_last = (self.body_reader.tell() ==
                                   tx.body.content_length())
