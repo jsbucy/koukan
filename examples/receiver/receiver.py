@@ -1,12 +1,13 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
 import logging
 import json
 from io import IOBase, TextIOBase
 import os
 import time
+from contextlib import nullcontext
 
 import secrets
 import copy
@@ -20,8 +21,10 @@ class Transaction:
     message_json : Optional[dict] = None
     message_json_path : Optional[str] = None
 
-    blobs : Dict[str, IOBase]
-    blob_paths = Dict[str, str]
+    # create_id (or auto-generated for inline) -> fs path
+    # lifecycle: update_message_builder() inserts placeholder None
+    # put_blob() writes and replaces with actual filename
+    blob_paths = Dict[str, Optional[str]]
     cancelled = False
     dir : str
 
@@ -29,7 +32,6 @@ class Transaction:
 
     def __init__(self, tx_id : str, tx_json,
                  dir : str):
-        self.blobs = {}
         self.blob_paths = {}
         self.tx_id = tx_id
         logging.debug('Tx.init %s', tx_json)
@@ -60,46 +62,60 @@ class Transaction:
         path = self.dir + '/' + self.tx_id + '.' + suffix
         return open(path, mode='x' + content)
 
+    # walks mime part tree
+    # creates/writes files for inline
+    # inserts placeholder values for create_id in blob_paths
     def _check_blobs(self, part_json) -> bool:
         logging.debug('check_blobs %s', part_json)
-        if 'parts' not in part_json:
-            content = part_json['content']
-            if 'inline' in content:
-                blob_id = 'inline%d' % self.next_inline
-                self.next_inline += 1
-            elif 'create_id' in content:
-                blob_id = content['create_id']
-            else:
-                return False  # this doesn't support reuse
+        if 'parts' in part_json:
+            for part_i in part_json['parts']:
+                if not self._check_blobs(part_i):
+                    return False
+            return True
 
-            logging.debug('check_blobs %s', blob_id)
-            created = False
-            if (file := self.blobs.get(blob_id, None)) is None:
-                file = self._create_file(blob_id)
-                created = True
-            content['filename'] = file.name
-            if 'create_id' in content:
-                del content['create_id']
-            if not created:
+        content = part_json['content']
+        if inline := content.get('inline', None):
+            blob_id = 'inline%d' % self.next_inline
+            self.next_inline += 1
+            with self._create_file(blob_id) as file:
+                file.write(inline.encode('utf-8'))
+                self.blob_paths[blob_id] = file.name
+                del content['inline']
+                content['filename'] = file.name
+
+        elif blob_id := content.get('create_id', None):
+            if blob_id in self.blob_paths:
                 # this is now expected as the same id will usually
                 # appear in both the original mime tree and the
                 # simplified "text_body" fields
                 return True
+            self.blob_paths[blob_id] = None
+        else:
+            return False  # this doesn't support reuse
 
-            # a la send_message.py
-            self.blobs[blob_id] = file
-            if inline := content.get('inline', None):
-                file.write(inline.encode('utf-8'))
-                del content['inline']
-                self.blob_paths[blob_id] = file.name
-                file.close()
-            return True
+        logging.debug('check_blobs %s', blob_id)
 
-        for part_i in part_json['parts']:
-            if not self._check_blobs(part_i):
-                return False
         return True
 
+    # walks mime part tree
+    # removes create_id and replaces with filename from blob_paths
+    def _finalize_blobrefs(self, part_json, blob_id, filename):
+        logging.debug(blob_id)
+        logging.debug(json.dumps(part_json, indent=2))
+        if 'parts' in part_json:
+            for part_i in part_json['parts']:
+                if not self._finalize_blobrefs(part_i, blob_id, filename):
+                    return False
+            return True
+
+        content = part_json['content']
+        if (bid := content.get('create_id', None)) is None or (bid != blob_id):
+            logging.debug('%s %s', bid, blob_id)
+            return True
+        del content['create_id']
+        content['filename'] = filename
+        logging.debug(content)
+        return True
 
     def update_message_builder(self, message_json) -> Optional[Tuple[int, str]]:
         assert not self.cancelled
@@ -118,60 +134,69 @@ class Transaction:
             json.dump(message_json, f)
             self.message_json_path = f.name
 
-    # wsgi/flask-only
-    def create_tx_body(self, stream : IOBase):
-        assert not self.cancelled
-        assert self.body_path is None
+    def _validate_put_req(self, req_headers,
+                          tx_body : Optional[bool] = None,
+                          blob_id : Optional[str] = None,
+                          ) -> Optional[Tuple[int, str]]:
+        if self.cancelled:
+            return 400, 'transaction cancelled'
+        if tx_body and self.body_path is not None:
+            return 400, 'body already exists'
+        if blob_id is not None:
+            if blob_id not in self.blob_paths:
+                return 404, 'blob not found'
+            elif self.blob_paths[blob_id] is not None:
+                return 400, 'blob already exists'
+        if 'content-range' in req_headers:
+            return 400, 'receiver does not accept chunked PUT'
+        return None
 
-        with self._create_file('msg') as file:
-            assert isinstance(file, IOBase)
+    def _finalize_blob(self, filename,
+                       tx_body : Optional[bool] = None,
+                       blob_id : Optional[str] = None):
+        logging.debug('%s %s %s', filename, tx_body, blob_id)
+        if blob_id:
+            self.blob_paths[blob_id] = filename
+            self._finalize_blobrefs(self.message_json['parts'], blob_id, filename)
+            for p in ["text_body", "related_attachments", "file_attachments"]:
+                if parts := self.message_json.get(p, None):
+                    for part in parts:
+                        self._finalize_blobrefs(part, blob_id, filename)
+
+            logging.debug(self.message_json)
+        if tx_body:
+            self.body_path = filename
+            self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+
+    # wsgi/flask-only
+    def put_blob(self, req_headers, stream : IOBase,
+                 tx_body : Optional[bool] = None,
+                 blob_id : Optional[str] = None,
+                 ) -> Tuple[int, str]:
+        if err := self._validate_put_req(req_headers, tx_body, blob_id):
+            return err
+        logging.debug('put_blob %s', blob_id)
+        with self._create_file('msg' if tx_body else blob_id) as file:
             while b := stream.read(self.CHUNK_SIZE):
                 file.write(b)
-            self.body_path = file.name
-
-        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-        self.log()
-
-    # asgi/fastapi-only
-    async def create_tx_body_async(self, stream : AsyncGenerator[bytes, None]):
-        assert not self.cancelled
-        assert self.body_path is None
-
-        with self._create_file('msg') as file:
-            assert isinstance(file, IOBase)
-            async for b in stream:
-                file.write(b)
-            self.body_path = file.name
-
-        self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
-        self.log()
-
-    # wsgi/flask-only
-    def put_blob(self, blob_id : str, stream : IOBase) -> int:
-        assert not self.cancelled
-        assert blob_id in self.blobs
-        logging.debug('put_blob %s', blob_id)
-        blob_file = self.blobs[blob_id]
-        while b := stream.read(self.CHUNK_SIZE):
-            blob_file.write(b)
-        self.blob_paths[blob_id] = blob_file.name
-        del self.blobs[blob_id]
-        blob_file.close()
-        return 200
+            self.finalize_blob(file.name, tx_body, blob_id)
+        return 200, 'ok'
 
     # asgi/fastapi-only
     async def put_blob_async(
-            self, blob_id : str, stream : AsyncGenerator[bytes, None]) -> int:
-        assert not self.cancelled
-        assert blob_id in self.blobs
+            self, req_headers,
+            stream : AsyncGenerator[bytes, None],
+            tx_body : Optional[bool] = None,
+            blob_id : Optional[str] = None
+    ) -> Tuple[int, str]:
+        if err := self._validate_put_req(req_headers, tx_body, blob_id):
+            return err
         logging.debug('put_blob %s', blob_id)
-        blob_file = self.blobs[blob_id]
-        async for b in stream:
-            blob_file.write(b)
-        self.blob_paths[blob_id] = blob_file.name
-        del self.blobs[blob_id]
-        blob_file.close()
-        return 200
+        with self._create_file('msg' if tx_body else blob_id) as file:
+            async for b in stream:
+                file.write(b)
+            self._finalize_blob(file.name, tx_body, blob_id)
+        return 200, 'ok'
 
     def _file_size(self, path):
         with open(path, 'rb') as file:
@@ -184,7 +209,7 @@ class Transaction:
                       self.message_json if self.message_json else None)
         logging.debug('received body %d bytes', self._file_size(self.body_path))
 
-        logging.debug('received blobs %s', self.blobs.keys())
+        logging.debug('received blobs %s', self.declared_blob_ids.keys())
         for blob_id, blob_path in self.blob_paths.items():
             logging.debug('received blob %s %d bytes',
                           blob_id, self._file_size(blob_path))
@@ -205,12 +230,7 @@ class Transaction:
     def cancel(self):
         if self.cancelled:
             return
-        for blob_id,blob_file in self.blobs.items():
-            blob_file.close()
-        self.blobs = {}
-
         self.cancelled = True
-
 
 class Receiver:
     transactions : dict[str, Transaction]
@@ -265,31 +285,26 @@ class Receiver:
         tx = self._get_tx(tx_rest_id)
         return tx.update_message_builder(message_json)
 
-    # wsgi/flask-only
-    def create_tx_body(self,
-                       tx_rest_id : str,
-                       stream : IOBase):
+    # asgi/fastapi-only
+    def put_blob(self, tx_rest_id: str, req_headers,
+                 stream : IOBase,
+                 tx_body : Optional[bool] = None,
+                 blob_id : Optional[str] = None
+                 ) -> Tuple[int, str]:
         tx = self._get_tx(tx_rest_id)
-        return tx.create_tx_body(stream)
+        return tx.put_blob(
+            req_headers, stream, tx_body=tx_body, blob_id=blob_id)
 
     # asgi/fastapi-only
-    def put_blob(self, tx_rest_id: str, blob_id : str, stream : IOBase) -> int:
+    async def put_blob_async(self, tx_rest_id: str,
+                             req_headers,
+                             stream : AsyncGenerator[bytes, None],
+                             tx_body : Optional[bool] = None,
+                             blob_id : Optional[str] = None
+                             ) -> Tuple[int, str]:
         tx = self._get_tx(tx_rest_id)
-        return tx.put_blob(blob_id, stream)
-
-    # wsgi/flask-only
-    async def create_tx_body_async(self,
-                       tx_rest_id : str,
-                       stream : AsyncGenerator[bytes, None]):
-        tx = self._get_tx(tx_rest_id)
-        return await tx.create_tx_body_async(stream)
-
-    # asgi/fastapi-only
-    async def put_blob_async(self, tx_rest_id: str, blob_id : str,
-                             stream : AsyncGenerator[bytes, None]
-                             ) -> int:
-        tx = self._get_tx(tx_rest_id)
-        return await tx.put_blob_async(blob_id, stream)
+        return await tx.put_blob_async(
+            req_headers, stream, tx_body=tx_body, blob_id=blob_id)
 
     def cancel_tx(self, tx_rest_id : str):
         tx = self._get_tx(tx_rest_id)
