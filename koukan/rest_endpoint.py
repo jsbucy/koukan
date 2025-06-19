@@ -438,7 +438,8 @@ class RestEndpoint(SyncFilter):
         if not blobs:
             return upstream_delta
 
-        # XXX assumes that message_builder includes all blobs on the first call
+        # NOTE this assumes that message_builder includes all blobs on
+        # the first call
         finalized = True
         for blob,non_body_blob in blobs:
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
