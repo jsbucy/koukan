@@ -145,9 +145,12 @@ class InlineBlob(Blob, WritableBlob):
         return 'length=%d content_length=%s offset=%d' % (
             self.len(), self.content_length(), self._offset)
 
+    # WritableBlob
+    # precondition: offset == blob.len()
     def append_data(self, offset : int, d : bytes,
                     content_length : Optional[int] = None
                     ) -> Tuple[bool, int, Optional[int]]:
+        offset -= self._offset
         req = content_length is not None
         upstream = self._content_length is not None
         if (offset != len(self.d) or
