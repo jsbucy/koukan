@@ -24,8 +24,10 @@ root_yaml = {
         'gc_blob_ttl': 1,
     },
     'smtp_output': {
-        'outbound': {
-            'ehlo_host': 'gateway_test',
+        'hosts': {
+            'outbound': {
+                'ehlo_host': 'gateway_test',
+            }
         }
     },
     'smtp_listener': {
@@ -33,14 +35,16 @@ root_yaml = {
     }
 }
 
-@parameterized_class(('protocol',), [('smtp',), ('lmtp',)])
+@parameterized_class(('protocol','use_system_smtplib'), [
+    ('smtp', False), ('smtp', True), ('lmtp', False)])
 class GatewayTest(unittest.TestCase):
     def setUp(self):
         logging.info('GatewayTest.setUp protocol=%s', self.protocol)
 
         rest_port = self.find_unused_port()
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
-        root_yaml['smtp_output']['outbound']['protocol'] = self.protocol
+        root_yaml['smtp_output']['use_system_smtplib'] = self.use_system_smtplib
+        root_yaml['smtp_output']['hosts']['outbound']['protocol'] = self.protocol
 
         self.gw = SmtpGateway(root_yaml)
 

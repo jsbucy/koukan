@@ -40,6 +40,7 @@ class SmtpEndpoint(SyncFilter):
     smtplib : ModuleType
     enable_bdat : bool
     chunk_size : int
+    body : Optional[bytes] = None
 
     def __init__(self,
                  smtplib : ModuleType,
@@ -230,17 +231,25 @@ class SmtpEndpoint(SyncFilter):
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
                 return upstream_delta
 
+            if self.body_reader is None:
+                self.body_reader = BlobReader(tx.body)
+
             if not hasattr(self.smtp, 'data_chunk'):
+                # low-performance/backward-compatibility path:
+                # SyncFilterAdapter assumes that each on_update() call
+                # consumes all the data from the blob and calls
+                # blob.trim_front() after
+                if self.body is None:
+                    self.body = b''
+                self.body += self.body_reader.read()
                 if not tx.body.finalized():
                     return upstream_delta
                 upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(body.pread(0)))
+                    self.smtp.data(self.body))
+                self.body = None
                 logging.info('SmtpEndpoint %s data_response %s',
                              tx.rest_id, upstream_delta.data_response)
                 return upstream_delta
-
-            if self.body_reader is None:
-                self.body_reader = BlobReader(tx.body)
 
             chunk_last = False
             data_resp = None

@@ -190,7 +190,7 @@ class SmtpGateway(EndpointFactory):
             smtplib_module = 'smtplib'
         self.smtplib = importlib.import_module(smtplib_module)
 
-        for host,smtp_host_yaml in smtp_yaml.items():
+        for host,smtp_host_yaml in smtp_yaml['hosts'].items():
             self.smtp_factory[host] = SmtpFactory(
                 self.smtplib,
                 ehlo_hostname = smtp_host_yaml['ehlo_host'],
