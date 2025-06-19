@@ -16,17 +16,18 @@ from koukan.filter import (
 
 class Factory:
     def __init__(self, smtplib : ModuleType, ehlo_hostname, timeout, protocol,
-                 enable_bdat):
+                 enable_bdat, chunk_size):
         self.ehlo = ehlo_hostname
         self.timeout = timeout
         self.protocol = protocol
         self.smtplib = smtplib
         self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
 
     def new(self):
         return SmtpEndpoint(
             self.smtplib, self.ehlo, self.timeout, self.protocol,
-            self.enable_bdat)
+            self.enable_bdat, self.chunk_size)
 
 class SmtpEndpoint(SyncFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
@@ -38,12 +39,14 @@ class SmtpEndpoint(SyncFilter):
     body_reader : Optional[BlobReader] = None
     smtplib : ModuleType
     enable_bdat : bool
+    chunk_size : int
 
     def __init__(self,
                  smtplib : ModuleType,
                  ehlo_hostname, timeout : Optional[int] = None,
                  protocol : str = 'smtp',
-                 enable_bdat = False):
+                 enable_bdat = False,
+                 chunk_size = 2**16):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
@@ -53,6 +56,7 @@ class SmtpEndpoint(SyncFilter):
         self.protocol = protocol
         self.smtplib = smtplib
         self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -241,7 +245,7 @@ class SmtpEndpoint(SyncFilter):
             chunk_last = False
             data_resp = None
             while not chunk_last and (data_resp is None or data_resp.ok()):
-                chunk = self.body_reader.read(2**16)  # XXX config
+                chunk = self.body_reader.read(self.chunk_size)
                 if tx.body.content_length() is not None:
                     chunk_last = (self.body_reader.tell() ==
                                   tx.body.content_length())
