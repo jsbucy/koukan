@@ -293,7 +293,8 @@ class Service:
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', None),
-            notification_params = output_yaml.get('notification', None))
+            notification_params = output_yaml.get('notification', None),
+            heartbeat=self.output_executor.ping_watchdog)
         try:
             handler.handle()
         except Exception as e:

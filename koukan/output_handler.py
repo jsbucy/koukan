@@ -43,7 +43,7 @@ class OutputHandler:
     _last_downstream_update : float
     _last_upstream_refresh : float
     _last_downstream_version : int = 0
-
+    heartbeat : Optional[Callable[[], None]] = None
     def __init__(self,
                  cursor : TransactionCursor,
                  endpoint : SyncFilter,
@@ -52,7 +52,8 @@ class OutputHandler:
                  notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
                  retry_params : Optional[dict] = None,
-                 notification_params : Optional[dict] = None):
+                 notification_params : Optional[dict] = None,
+                 heartbeat : Optional[Callable[[], None]] = None):
         self.cursor = cursor
         self.endpoint = endpoint
         self.rest_id = self.cursor.rest_id
@@ -69,6 +70,7 @@ class OutputHandler:
         now = time.monotonic()
         self._last_downstream_update = now
         self._last_upstream_refresh = 0
+        self.heartbeat = heartbeat
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         t = self.cursor.tx
@@ -213,6 +215,8 @@ class OutputHandler:
         done = False
         logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
         while not done:
+            if self.heartbeat is not None:
+                self.heartbeat()
             try:
                 # pre-load results as a last resort against bugs:
                 # _handle_once() could be terminated by an uncaught
