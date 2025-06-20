@@ -113,10 +113,13 @@ class InlineBlob(Blob, WritableBlob):
     def delta(self, rhs) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):
             return None
-        # XXX fix before merge
-        # if not rhs.d.startswith(self.d):
-        #     return None
-        return rhs.d != self.d
+        # leading edge of self may have moved forward
+        if rhs._offset > self._offset:
+            return None
+        off = self._offset - rhs._offset
+        if not rhs.d[off:].startswith(self.d):
+            return None
+        return rhs.len() > self.len()
 
     def len(self):
         return self._offset + len(self.d)
@@ -137,8 +140,8 @@ class InlineBlob(Blob, WritableBlob):
         return self._content_length
 
     def append(self, dd : bytes, last : bool = False):
-        # if not last:
-        #     assert self._content_length is None
+        if not last:
+            assert self._content_length is None
         self.d += dd
         assert self.content_length() is None or (self.len() <= self.content_length())
         if last:

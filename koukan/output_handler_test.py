@@ -234,7 +234,6 @@ class OutputHandlerTest(unittest.TestCase):
         else:
             self.fail('couldn\'t write envelope')
 
-    # XXX broken/update expectations
     def test_no_valid_rcpt(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))

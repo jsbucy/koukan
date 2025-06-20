@@ -1254,8 +1254,8 @@ class RouterServiceTest(unittest.TestCase):
             logging.debug(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeSyncFilter()
-        upstream_endpoint.add_expectation(exp)
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0, 3):
+            upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(tx, tx.copy())

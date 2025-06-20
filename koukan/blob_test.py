@@ -33,6 +33,18 @@ class BlobTest(unittest.TestCase):
         b.trim_front(3)
         self.assertEqual(3, b.len())
 
+    def test_inline_fifo_delta(self):
+        b1 = InlineBlob(b'uv')
+        self.assertFalse(b1.delta(b1))
+        b1.trim_front(1)
+        b2 = InlineBlob(b'uvw')
+        self.assertTrue(b1.delta(b2))
+        self.assertIsNone(b2.delta(b1))
+
+        b3 = InlineBlob(b'uxw')
+        self.assertIsNone(b1.delta(b3))
+
+
     def test_composite(self):
         b = CompositeBlob()
         self.assertEqual(b.content_length(), None)
