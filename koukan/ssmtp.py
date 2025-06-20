@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional
-import smtplib
+from typing import Optional, Tuple
+import koukan_cpython_smtplib.smtplib as smtplib
 import sys
 import secrets
 import logging
@@ -14,6 +14,10 @@ import email.message
 import email.utils
 from email import policy
 from email.headerregistry import Address
+
+def _resp_err(resp : Tuple[int, bytes]):
+    code, msg = resp
+    return int(code / 100) > 2
 
 def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
          raw : Optional[bytes] = None):
@@ -34,8 +38,16 @@ def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
         assert raw
         logging.info('sending smtp')
         try:
-            resp = s.sendmail(mail_from, rcpt_to, raw)
-            logging.info('done %s', resp)
+            resp = s.mail(mail_from, ['size=%d' % len(raw)])
+            logging.info('mail resp %s', resp)
+            if _resp_err(resp):
+                return resp
+            resp = s.rcpt(rcpt_to)
+            logging.info('rcpt resp %s', resp)
+            if _resp_err(resp):
+                return resp
+            resp = s.data(raw)
+            logging.info('data resp %s', resp)
             return resp
         except:
             logging.exception('sendmail exception')
