@@ -204,6 +204,7 @@ class SmtpGateway(EndpointFactory):
             factory = None
             msa = False
             endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
+            assert endpoint_yaml is not None
 
             # cf router config.Config.exploder()
             rcpt_timeout=40
@@ -231,7 +232,7 @@ class SmtpGateway(EndpointFactory):
                   service_yaml.get('proxy_protocol_timeout', None),
                 smtp_handler_factory=handler_factory,
                 enable_bdat=service_yaml.get('enable_bdat', False),
-                chunk_size=service_yaml.get('chunk_size', 2**16)))
+                chunk_size=service_yaml.get('chunk_size', None)))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,
