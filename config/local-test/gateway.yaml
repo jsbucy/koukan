@@ -11,13 +11,16 @@ rest_listener:
   #key: localhost.key
 
   gc_interval: 5
-  gc_tx_ttl: 5
+  gc_tx_ttl: 300
   session_uri: http://localhost:8001
 
 smtp_output:
-  outbound:
-    # protocol: lmtp
-    ehlo_host: localhost
+  # use_system_smtplib: false
+  hosts:
+    outbound:
+      # protocol: lmtp
+      ehlo_host: localhost
+      enable_bdat: true
 
 
 # smtp -> rest
@@ -25,20 +28,33 @@ smtp_listener:
   services:
     - addr: [localhost, 1025]
       endpoint: mx
+      # these depend on our patches to aiosmtpd
+      #chunk_size: 16384
+      # enable_bdat: true
     - addr: [localhost, 1587]
       endpoint: msa
+      #chunk_size: 16384
       # auth_secrets: secrets.json
+      # enable_bdat: true
 
 rest_output:
   - name: mx
     host: inbound-gw
     endpoint: http://localhost:8000/
     verify: localhost.crt
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
+    refresh_interval: 5
+
   - name: msa
     host: outbound-gw
     endpoint: http://localhost:8000/
     verify: localhost.crt
-
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
+    refresh_interval: 5
 
 logging:
   version: 1

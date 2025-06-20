@@ -30,21 +30,24 @@ endpoint:
   rest_lro: false
   msa: true
   output_handler:
-    downstream_env_timeout: 5
-    downstream_data_timeout: 5
+    downstream_timeout: 5
+    upstream_refresh: 1
   chain:
   #- filter: relay_auth
   #  smtp_auth: true
   - filter: exploder
     output_chain: msa-output
     msa: true
-    rcpt_timeout: 4
-    data_timeout: 4
+    rcpt_timeout: 300
+    data_timeout: 300
 
 - name: msa-output
   rest_lro: true
   msa: true
   output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+
     retry_params:
       mode: per_request
       max_attempts: 3
@@ -99,13 +102,17 @@ endpoint:
         port: 3025
   - filter: rest_output
     verify: localhost.crt
-    rcpt_timeout: 5
-    data_timeout: 5
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
 
 - name: submission
   rest_lro: true
   msa: true
   output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+
     retry_params:
       max_attempts: 3
       min_attempt_time: 2
@@ -156,27 +163,31 @@ endpoint:
         port: 3025
   - filter: rest_output
     verify: localhost.crt
-    rcpt_timeout: 5
-    data_timeout: 5
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
 
 
 - name: inbound-gw
   rest_lro: false
   msa: false
   output_handler:
-    downstream_env_timeout: 5
-    downstream_data_timeout: 5
+    downstream_timeout: 5
+    upstream_refresh: 1
   chain:
   - filter: exploder
     msa: false
     output_chain: mx-out
-    rcpt_timeout: 4
-    data_timeout: 4
+    rcpt_timeout: 300
+    data_timeout: 300
 
 - name: mx-out
   rest_lro: true
   msa: false
   output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+
     retry_params:
       mode: per_request
       max_attempts: 3
@@ -233,16 +244,17 @@ endpoint:
     overwrite: true
   - filter: rest_output
     verify: localhost.crt
-    rcpt_timeout: 5
-    data_timeout: 5
-
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
 
 - name: sink
   chain:
   - filter: rest_output
-    rcpt_timeout: 30
-    data_timeout: 60
+    rcpt_timeout: 300
+    data_timeout: 300
     static_endpoint: http://localhost:8002
+    chunk_size: 1048576
 
 
 modules:
