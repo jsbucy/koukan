@@ -54,12 +54,17 @@ class SmtpHandler:
     proxy_protocol = False
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
+    refresh_interval : int
+    last_refresh : float = 0
+    chunk_size : int
 
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
                  timeout_rcpt=60,
-                 timeout_data=330):
+                 timeout_data=330,
+                 refresh_interval=30,
+                 chunk_size=2**20):
         self.endpoint_factory = endpoint_factory
         self.executor = executor
 
@@ -69,6 +74,8 @@ class SmtpHandler:
 
         self.cx_id = 'cx%d' % next_cx()
         self.prev_chunk = []
+        self.refresh_interval = refresh_interval
+        self.chunk_size = chunk_size
 
     def set_smtp(self, smtp):
         self.smtp = smtp
@@ -262,16 +269,24 @@ class SmtpHandler:
                                 data : bytes,
                                 decoded_data : Optional[str],
                                 last : bool) -> Optional[str]:
-        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
-                     self.cx_id, len(data), last)
-
+        now = time.monotonic()
         if self.tx.body is None:
-            self.tx.body = InlineBlob(data, last=last)
-        else:
-            body = self.tx.body
-            assert isinstance(body, InlineBlob)
-            assert body.content_length() is None
+            self.tx.body = InlineBlob(b'')
+            self.last_refresh = now
+        body = self.tx.body
+        assert isinstance(body, InlineBlob)
+        assert body.content_length() is None
+
+        if last or (self.tx.body.available() + len(data) <= self.chunk_size):
             body.append(data, last)
+            data = b''
+        stale = now - self.last_refresh > self.refresh_interval
+        if not last and not stale and not data:
+            return None
+        self.last_refresh = now
+
+        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
+                     self.cx_id, body.available(), last)
 
         tx_delta = TransactionMetadata(body = self.tx.body)
         fut = self.executor.submit(
@@ -284,6 +299,9 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
                      self.cx_id, self.tx.data_response)
         self.tx.body.trim_front(self.tx.body.len())
+
+        if data:
+            body.append(data, last)
 
         if self.tx.data_response is None:
             assert not last

@@ -488,7 +488,8 @@ py_test(name='smtp_service_test',
               ':executor',
               ':filter',
               ':response',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              '//koukan_cpython_smtplib:smtplib'])
 
 pytype_library(name='rest_handler',
                srcs=['rest_handler.py'],
@@ -569,7 +570,8 @@ pytype_library(name='fake_smtpd',
                srcs=['fake_smtpd.py'])
 
 pytype_library(name='ssmtp',
-               srcs=['ssmtp.py'])
+               srcs=['ssmtp.py'],
+               deps=['//koukan_cpython_smtplib:smtplib'])
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],

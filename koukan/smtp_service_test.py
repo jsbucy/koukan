@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import List, Optional, Tuple
 
-import smtplib
+from koukan_cpython_smtplib.smtplib import SMTP as SmtpClient
 
 import logging
 import unittest
@@ -31,15 +31,17 @@ class SmtpServiceTest(unittest.TestCase):
         handler_factory = lambda: SmtpHandler(
             endpoint_factory = lambda: self.endpoint,
             executor = Executor(inflight_limit=100, watchdog_timeout=3600),
-            chunk_size = 16
+            chunk_size = 64
         )
         self.controller = service(
             port=find_unused_port(),
             smtp_handler_factory = handler_factory)
+        # TODO setting chunk_size depends on our patches to aiosmtpd
+        # and there isn't an easy way to detect that
 
         logging.debug('controller port %d', self.controller.port)
 
-        self.smtp_client = smtplib.SMTP(
+        self.smtp_client = SmtpClient(
             self.controller.hostname, self.controller.port)
 
     def tearDown(self):

@@ -121,6 +121,9 @@ class InlineBlob(Blob, WritableBlob):
     def len(self):
         return self._offset + len(self.d)
 
+    def available(self):
+        return len(self.d)
+
     def rest_id(self):
         return self._rest_id
 

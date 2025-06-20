@@ -218,7 +218,9 @@ class SmtpGateway(EndpointFactory):
                 endpoint_factory=partial(self.rest_factory, endpoint_yaml),
                 executor=Executor(inflight_limit=100, watchdog_timeout=3600),
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
-                timeout_data=service_yaml.get('data_timeout', data_timeout))
+                timeout_data=service_yaml.get('data_timeout', data_timeout),
+                chunk_size=endpoint_yaml.get('chunk_size', 2**20),
+                refresh_interval=endpoint_yaml.get('refresh_interval', 30))
 
             self.smtp_services.append(smtp_service(
                 hostname=addr[0], port=addr[1],
