@@ -49,18 +49,17 @@ def create_app(receiver = None, path = None):
 
     @app.put('/transactions/{tx_rest_id}/body')
     async def create_tx_body(tx_rest_id : str,
-                             request : FastApiRequest,
-                             upload : Union[str, None] = None
-                             ) -> FastApiResponse:
-        await receiver.create_tx_body_async(tx_rest_id, request.stream())
+                             request : FastApiRequest) -> FastApiResponse:
+        await receiver.put_blob_async(
+            tx_rest_id, request.headers, request.stream(), tx_body=True)
         return FastApiResponse(status_code=200)
 
     @app.put('/transactions/{tx_rest_id}/blob/{blob_id}')
     async def put_blob(tx_rest_id : str, blob_id : str,
                        request : FastApiRequest) -> FastApiResponse:
-        code = await receiver.put_blob_async(
-            tx_rest_id, blob_id, request.stream())
-        return FastApiResponse(status_code=code)
+        code, msg = await receiver.put_blob_async(
+            tx_rest_id, request.headers, request.stream(), blob_id=blob_id)
+        return FastApiResponse(status_code=code, content=msg)
 
     @app.post('/transactions/{tx_rest_id}/cancel')
     async def cancel_tx(tx_rest_id) -> FastApiResponse:

@@ -71,14 +71,14 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx.body = InlineBlob(body[0:30], len(body))
         tx_delta = TransactionMetadata(body = tx.body)
 
-        def exp_none(tx, tx_delta):
+        def exp_empty(tx, tx_delta):
             logging.debug(tx)
             logging.debug(tx_delta)
-            self.fail()
-        upstream.add_expectation(exp_none)
+            self.assertFalse(tx_delta)
+            return TransactionMetadata()
+        upstream.add_expectation(exp_empty)
         filter.on_update(tx, tx_delta)
-        self.assertTrue(upstream.expectation)
-        upstream.expectation=[]
+        self.assertFalse(upstream.expectation)
 
         tx.body = tx_delta.body = InlineBlob(body, len(body))
         def exp(tx, tx_delta):

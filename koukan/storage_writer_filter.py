@@ -181,6 +181,12 @@ class StorageWriterFilter(AsyncFilter):
             tx.merge_from(version)
             return version
 
+        if not tx_delta:
+            self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
+            version = TransactionMetadata(version=self.tx_cursor.version)
+            tx.merge_from(version)
+            return version
+
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
         if getattr(downstream_tx, 'rest_id', None) is not None:

@@ -207,14 +207,16 @@ class TransactionCursor:
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
-                       notification_done : Optional[bool] = None):
+                       notification_done : Optional[bool] = None,
+                       ping_tx : bool = False):
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
                         final_attempt_reason=final_attempt_reason,
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
-                        notification_done=notification_done)
+                        notification_done=notification_done,
+                        ping_tx=ping_tx)
         self._update_version_cache()
 
     def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata
@@ -801,11 +803,13 @@ class BlobCursor(Blob, WritableBlob):
               else self.parent.begin_transaction() as db_tx):
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
-                self.parent.blob_table.c.length).where(
+                self.parent.blob_table.c.length,
+                self.parent.blob_table.c.last_update,
+                self.parent._current_timestamp_epoch()).where(
                     self.parent.blob_table.c.id == self.id)
             res = db_tx.execute(stmt)
             row = res.fetchone()
-            db_length, db_content_length = row
+            db_length, db_content_length, last_update, db_now = row
             if offset != db_length:
                 return False, db_length, db_content_length
             if (db_content_length is not None) and (
@@ -835,6 +839,8 @@ class BlobCursor(Blob, WritableBlob):
             assert row is not None
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
+            blob_done = content_length is not None and (
+                row[0] == content_length)
 
             self.length = row[0]
             self._content_length = content_length
@@ -842,8 +848,8 @@ class BlobCursor(Blob, WritableBlob):
             logging.debug('append_data %d %s last=%s',
                           self.length, self._content_length, self.last)
 
-
-        if self.update_tx is not None:
+        stale = (db_now - last_update) > self.parent.blob_tx_refresh_interval
+        if self.update_tx is not None and (stale or blob_done):
             cursor = self.parent.get_transaction_cursor()
             for i in range(0,5):
                 try:
@@ -906,16 +912,19 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
     session_uri : Optional[str] = None
+    blob_tx_refresh_interval : int
 
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
                  engine : Optional[Engine] = None,
-                 session_uri : Optional[str] = None):
+                 session_uri : Optional[str] = None,
+                 blob_tx_refresh_interval : int = 10):
         if version_cache is not None:
             self.tx_versions = version_cache
         else:
             self.tx_versions = IdVersionMap()
         self.engine = engine
         self.session_uri = session_uri
+        self.blob_tx_refresh_interval = blob_tx_refresh_interval
 
     @staticmethod
     def _sqlite_pragma(dbapi_conn, con_record):
@@ -929,12 +938,13 @@ class Storage():
         dbapi_conn.execute("PRAGMA auto_vacuum=2")
 
     @staticmethod
-    def connect(url, session_uri):
+    def connect(url, session_uri, blob_tx_refresh_interval : int = 10):
         engine = create_engine(url)
         if 'sqlite' in url:
             event.listen(engine, 'connect', Storage._sqlite_pragma)
 
-        s = Storage(engine=engine, session_uri=session_uri)
+        s = Storage(engine=engine, session_uri=session_uri,
+                    blob_tx_refresh_interval=blob_tx_refresh_interval)
         s._init_session()
         return s
 

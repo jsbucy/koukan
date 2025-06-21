@@ -145,11 +145,8 @@ class ReceivedHeaderFilter(SyncFilter):
         downstream_delta = tx_delta.copy()
         downstream_tx.body = self.body
         downstream_delta.body = self.body if built else None
-        if bool(downstream_delta):
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
-        else:
-            upstream_delta = TransactionMetadata()
+        upstream_delta = self.upstream.on_update(
+            downstream_tx, downstream_delta)
         if self.data_err:
             assert (upstream_delta is not None and
                     upstream_delta.data_response is None)

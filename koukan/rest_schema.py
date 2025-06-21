@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
 
+FINALIZE_BLOB_HEADER = 'x-finalize-blob-length'
+
 def make_tx_uri(tx):
     return '/transactions/' + tx
 

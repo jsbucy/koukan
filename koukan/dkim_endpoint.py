@@ -52,11 +52,8 @@ class DkimEndpoint(SyncFilter):
         downstream_tx.body = self.body
         downstream_delta.body = self.body if built else None
 
-        if bool(downstream_delta):
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
-        else:
-            upstream_delta = TransactionMetadata()
+        upstream_delta = self.upstream.on_update(
+            downstream_tx, downstream_delta)
         assert tx.merge_from(upstream_delta) is not None
         return upstream_delta
 

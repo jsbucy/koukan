@@ -51,13 +51,15 @@ def create_app(receiver = None, path = None):
 
     @app.route('/transactions/<tx_rest_id>/body', methods=['PUT'])
     def create_tx_body(tx_rest_id) -> FlaskResponse:
-        receiver.create_tx_body(tx_rest_id, request.stream)
+        receiver.put_blob(
+            tx_rest_id, request.headers, request.stream, tx_body=True)
         return FlaskResponse(status=200)
 
     @app.route('/transactions/<tx_rest_id>/blob/<blob_id>', methods=['PUT'])
     def put_blob(tx_rest_id, blob_id) -> FlaskResponse:
-        code = receiver.put_blob(tx_rest_id, blob_id, request.stream)
-        return FlaskResponse(status=code)
+        code, msg = receiver.put_blob(
+            tx_rest_id, request.headers, request.stream, blob_id=blob_id)
+        return FlaskResponse(status=code, response=msg)
 
     @app.route('/transactions/<tx_rest_id>/cancel', methods=['POST'])
     def cancel_tx(tx_rest_id) -> FlaskResponse:

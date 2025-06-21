@@ -102,9 +102,12 @@ class InMemoryHandler:
             elif address.startswith('datatimeout'):
                 await asyncio.sleep(3600)
 
-        for ln in envelope.content.decode('utf8', errors='replace').splitlines():
-            logging.debug(f'> {ln}'.strip())
-        logging.debug('End of message')
+        if len(envelope.content) < 10000:
+            for ln in envelope.content.decode('utf8', errors='replace').splitlines():
+                logging.debug(f'> {ln}'.strip())
+            logging.debug('End of message')
+        else:
+            logging.debug('envelope.content %d bytes' % len(envelope.content))
         return '250 Message accepted for delivery'
 
 class FakeSmtpdController(Controller):

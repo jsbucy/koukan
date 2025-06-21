@@ -54,12 +54,17 @@ class SmtpHandler:
     proxy_protocol = False
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
+    refresh_interval : int
+    last_refresh : float = 0
+    chunk_size : int
 
     def __init__(self, endpoint_factory : Callable[[], SyncFilter],
                  executor : Executor,
                  timeout_mail=10,
                  timeout_rcpt=60,
-                 timeout_data=330):
+                 timeout_data=330,
+                 refresh_interval=30,
+                 chunk_size=2**20):
         self.endpoint_factory = endpoint_factory
         self.executor = executor
 
@@ -68,6 +73,9 @@ class SmtpHandler:
         self.timeout_data = timeout_data
 
         self.cx_id = 'cx%d' % next_cx()
+        self.prev_chunk = []
+        self.refresh_interval = refresh_interval
+        self.chunk_size = chunk_size
 
     def set_smtp(self, smtp):
         self.smtp = smtp
@@ -125,6 +133,8 @@ class SmtpHandler:
         return '250 {}'.format(server.hostname)
 
     def _cancel(self):
+        self.prev_chunk = []
+        self.prev_chunk_len = 0
         if self.endpoint is None and self.tx is None:
             return
         if self.tx is not None:
@@ -247,15 +257,38 @@ class SmtpHandler:
     async def handle_DATA(self, server : SMTP,
                           session : Session,
                           envelope : Envelope) -> str:
-        logging.info('SmtpHandler.handle_DATA %s %d bytes',
-                     self.cx_id, len(envelope.content))
+        resp = await self.handle_DATA_CHUNK(
+            server, session, envelope,
+            envelope.content, decoded_data=None, last=True)
+        assert resp is not None
+        return resp
 
-        blob = InlineBlob(envelope.content, last=True)
+    async def handle_DATA_CHUNK(self, server : SMTP,
+                                session : Session,
+                                envelope : Envelope,
+                                data : bytes,
+                                decoded_data : Optional[str],
+                                last : bool) -> Optional[str]:
+        now = time.monotonic()
+        if self.tx.body is None:
+            self.tx.body = InlineBlob(b'')
+            self.last_refresh = now
+        body = self.tx.body
+        assert isinstance(body, InlineBlob)
+        assert body.content_length() is None
 
-        updated_tx = self.tx.copy()
-        updated_tx.body = blob
-        tx_delta = self.tx.delta(updated_tx)
-        self.tx = updated_tx
+        if last or (self.tx.body.available() + len(data) <= self.chunk_size):
+            body.append(data, last)
+            data = b''
+        stale = now - self.last_refresh > self.refresh_interval
+        if not last and not stale and not data:
+            return None
+        self.last_refresh = now
+
+        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
+                     self.cx_id, body.available(), last)
+
+        tx_delta = TransactionMetadata(body = self.tx.body)
         fut = self.executor.submit(
             lambda: self._update_tx(
                 self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
@@ -263,27 +296,45 @@ class SmtpHandler:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_data)
-        logging.info('SmtpHandler.handle_DATA %s resp %s',
+        logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
                      self.cx_id, self.tx.data_response)
+        self.tx.body.trim_front(self.tx.body.len())
 
+        if data:
+            body.append(data, last)
+
+        if self.tx.data_response is None:
+            assert not last
+            return None
         data_resp = self.tx.data_response.to_smtp_resp()
         self.tx = None
         return data_resp
 
-class ControllerTls(Controller):
-    def __init__(self, host, port, ssl_context, auth,
-                 endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
-                 proxy_protocol_timeout : Optional[int] = None):
-        self.tls_controller_context = ssl_context
-        self.auth = auth
-        self.endpoint_factory = endpoint_factory
-        self.max_rcpt = max_rcpt
-        self.rcpt_timeout = rcpt_timeout
-        self.data_timeout = data_timeout
-        self.proxy_protocol_timeout = proxy_protocol_timeout
+    # TODO send heartbeat update
+    # async def handle_NOOP(server : SMTP,
+    #                       session : Session,
+    #                       envelope : Envelope,
+    #                       arg: Any):
+    #     pass
 
-        # TODO inject this
-        self.executor = Executor(inflight_limit=100, watchdog_timeout=3600)
+
+SmtpHandlerFactory = Callable[[], SmtpHandler]
+class ControllerTls(Controller):
+    smtp_handler_factory : SmtpHandlerFactory
+    enable_bdat = False
+
+    def __init__(self, host, port, ssl_context, auth,
+                 smtp_handler_factory : SmtpHandlerFactory,
+                 proxy_protocol_timeout : Optional[int] = None,
+                 enable_bdat=False,
+                 chunk_size : Optional[int] = None):
+        self.tls_controller_context = ssl_context
+        self.proxy_protocol_timeout = proxy_protocol_timeout
+        self.auth = auth
+        self.smtp_handler_factory = smtp_handler_factory
+        self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
+
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
         # factory() which is moot if you override it like this.
@@ -291,12 +342,14 @@ class ControllerTls(Controller):
             handler=None, hostname=host, port=port)
 
     def factory(self):
-        handler = SmtpHandler(
-            self.endpoint_factory,
-            self.executor,
-            self.max_rcpt, self.rcpt_timeout,
-            self.data_timeout)
+        handler = self.smtp_handler_factory()
         handler.loop = self.loop
+
+        kwargs = {}
+        if self.enable_bdat:
+            kwargs['enable_BDAT'] = True
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
 
         # TODO aiosmtpd supports LMTP so we could add that though it
         # is not completely trivial due to LMTP's per-recipient data
@@ -306,15 +359,19 @@ class ControllerTls(Controller):
                     enable_SMTPUTF8 = True,  # xxx config
                     tls_context=self.tls_controller_context,
                     authenticator=self.auth,
-                    proxy_protocol_timeout=self.proxy_protocol_timeout)
+                    proxy_protocol_timeout=self.proxy_protocol_timeout,
+                    **kwargs)
         handler.set_smtp(smtp)
         return smtp
 
-def service(endpoint_factory,
-            hostname="localhost", port=9025, cert=None, key=None,
-            auth_secrets_path=None, max_rcpt=None,
-            rcpt_timeout=None, data_timeout=None,
-            proxy_protocol_timeout : Optional[int] = None):
+def service(smtp_handler_factory : SmtpHandlerFactory,
+            hostname="localhost", port=9025,
+            cert=None, key=None,
+            auth_secrets_path=None,
+            proxy_protocol_timeout : Optional[int] = None,
+            enable_bdat = False,
+            chunk_size : Optional[int] = None
+            ) -> ControllerTls:
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ssl_context.load_cert_chain(cert, key)
@@ -324,7 +381,10 @@ def service(endpoint_factory,
     controller = ControllerTls(
         hostname, port, ssl_context,
         auth,
-        endpoint_factory, max_rcpt, rcpt_timeout, data_timeout,
-        proxy_protocol_timeout)
+        proxy_protocol_timeout = proxy_protocol_timeout,
+        smtp_handler_factory = smtp_handler_factory,
+        enable_bdat = enable_bdat,
+        chunk_size = chunk_size)
+
     controller.start()
     return controller

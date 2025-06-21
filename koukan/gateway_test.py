@@ -24,8 +24,10 @@ root_yaml = {
         'gc_blob_ttl': 1,
     },
     'smtp_output': {
-        'outbound': {
-            'ehlo_host': 'gateway_test',
+        'hosts': {
+            'outbound': {
+                'ehlo_host': 'gateway_test',
+            }
         }
     },
     'smtp_listener': {
@@ -33,19 +35,16 @@ root_yaml = {
     }
 }
 
-@parameterized_class(('use_fastapi', 'protocol'),
-                     [(True, 'smtp'),
-                      (True, 'lmtp'),
-                      (False, 'smtp')])
+@parameterized_class(('protocol','use_system_smtplib'), [
+    ('smtp', False), ('smtp', True), ('lmtp', False)])
 class GatewayTest(unittest.TestCase):
     def setUp(self):
-        logging.info('GatewayTest.setUp use_fastapi=%s protocol=%s',
-                     self.use_fastapi, self.protocol)
+        logging.info('GatewayTest.setUp protocol=%s', self.protocol)
 
         rest_port = self.find_unused_port()
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
-        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
-        root_yaml['smtp_output']['outbound']['protocol'] = self.protocol
+        root_yaml['smtp_output']['use_system_smtplib'] = self.use_system_smtplib
+        root_yaml['smtp_output']['hosts']['outbound']['protocol'] = self.protocol
 
         self.gw = SmtpGateway(root_yaml)
 
@@ -106,9 +105,14 @@ class GatewayTest(unittest.TestCase):
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
+
         tx_delta = TransactionMetadata(
-            body=InlineBlob(b'hello', last=True))
+            body=InlineBlob(b'hello, '))
         self.assertIsNotNone(tx.merge_from(tx_delta))
+        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        self.assertIsNone(upstream_delta.data_response)
+
+        tx.body.append(b'world!', last=True)
         upstream_delta = rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
         self.assertEqual(tx.data_response.code, 250)

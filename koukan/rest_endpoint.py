@@ -24,6 +24,7 @@ from koukan.blob import Blob, BlobReader
 
 from koukan.message_builder import MessageBuilderSpec
 from koukan.storage_schema import BlobSpec
+from koukan.rest_schema import FINALIZE_BLOB_HEADER
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -64,6 +65,8 @@ class RestEndpoint(SyncFilter):
     static_http_host : Optional[str] = None
     http_host : Optional[str] = None
 
+    blob_readers = Dict[Blob, BlobReader]
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -91,6 +94,7 @@ class RestEndpoint(SyncFilter):
         self.chunk_size = chunk_size
 
         self.client = Client(http2=True, verify=verify, follow_redirects=True)
+        self.blob_readers = {}
 
     def __del__(self):
         if self.client:
@@ -131,7 +135,7 @@ class RestEndpoint(SyncFilter):
             logging.debug('RestEndpoint._create remote_host %s %s %s',
                           self.base_url, remote_host, json)
 
-            req_headers = {}
+            req_headers = {'content-type': 'application/json'}
             if self.http_host:
                 req_headers['host'] = self.http_host
             deadline_left = deadline.deadline_left()
@@ -158,8 +162,6 @@ class RestEndpoint(SyncFilter):
     def _update(self, downstream_delta : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
         body_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
-        # verify the not tx.empty() condition in the caller
-        assert body_json
 
         rest_resp = self._post_tx(
             self.transaction_url, body_json, self.client.patch, deadline)
@@ -183,9 +185,15 @@ class RestEndpoint(SyncFilter):
         if self.etag:
             req_headers['if-match'] = self.etag
         try:
+            kwargs = {}
+            if body_json:
+                req_headers['content-type'] = 'application/json'
+                kwargs['json'] = body_json
+            else:
+                kwargs['data'] = b''
             rest_resp = http_method(
                 uri,
-                json=body_json,
+                **kwargs,
                 headers=req_headers,
                 timeout=deadline_left)
         except RequestError:
@@ -307,25 +315,26 @@ class RestEndpoint(SyncFilter):
                 return err
             tx_update = True
             created = True
-        # the precondition is that the delta isn't empty but it might
-        # only contain internal fields
-        elif not downstream_delta.empty(WhichJson.REST_UPDATE):
-            rest_resp = self._update(downstream_delta, deadline)
-            # TODO handle 412 failed precondition
-            if rest_resp is None or rest_resp.status_code != 200:
-                err_delta = TransactionMetadata()
-                tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream http err'),
-                    err_delta)
-                tx.merge_from(err_delta)
-                return err_delta
+        else:
+            # as long as the delta isn't just the body, send a patch even
+            # if it's empty as a heartbeat
+            delta_no_body = tx_delta.copy()
+            delta_no_body.body = None
+            if (tx_delta.empty(WhichJson.REST_UPDATE) or
+                not delta_no_body.empty(WhichJson.REST_UPDATE)):
+               rest_resp = self._update(downstream_delta, deadline)
+               # TODO handle 412 failed precondition
+               if rest_resp is None or rest_resp.status_code != 200:
+                   err_delta = TransactionMetadata()
+                   tx.fill_inflight_responses(
+                       Response(450, 'RestEndpoint upstream http err'),
+                       err_delta)
+                   tx.merge_from(err_delta)
+                   return err_delta
 
-            tx_update = True
-        elif (tx_delta.body is None or
-              not tx_delta.body.finalized()):
-            return TransactionMetadata()
+               tx_update = True
 
-        upstream_delta = None
+        upstream_delta = TransactionMetadata()
         if tx_update:
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
@@ -429,6 +438,9 @@ class RestEndpoint(SyncFilter):
         if not blobs:
             return upstream_delta
 
+        # NOTE this assumes that message_builder includes all blobs on
+        # the first call
+        finalized = True
         for blob,non_body_blob in blobs:
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
             if not put_blob_resp.ok():
@@ -438,8 +450,13 @@ class RestEndpoint(SyncFilter):
                 return upstream_delta
             if non_body_blob:
                 self.blob_url = None  # xxx wat?
+            if not blob.finalized():
+                finalized = False
+        if finalized:
+            self.sent_data_last = True
+        else:
+            return upstream_delta
 
-        self.sent_data_last = True
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -503,14 +520,23 @@ class RestEndpoint(SyncFilter):
         return Response()
 
     def _put_blob(self, blob : Blob, non_body_blob=False) -> Response:
-        if self.chunk_size is None and blob.finalized():
+        if blob not in self.blob_readers:
+            self.blob_readers[blob] = BlobReader(blob)
+        blob_reader = self.blob_readers[blob]
+        if blob_reader is None and self.chunk_size is None and blob.finalized():
             return self._put_blob_single(
                 blob, not non_body_blob, blob.rest_id())
 
-        offset = 0
-        while offset < blob.len():
-            chunk = blob.pread(offset, self.chunk_size)
-            chunk_last = (offset + len(chunk) >= blob.len())
+        empty_put = (blob.finalized() and
+                     (blob.len() == blob.content_length()) and
+                     (blob_reader.tell() == blob.content_length()))
+
+        offset = blob_reader.tell()
+        while (offset < blob.len()) or empty_put:
+            chunk = blob_reader.read(self.chunk_size)
+            chunk_last = False
+            if blob.content_length() is not None:
+                chunk_last = ((offset + len(chunk)) >= blob.content_length())
             logging.debug('RestEndpoint._put_blob() '
                           'chunk_offset %d chunk len %d '
                           'chunk_last %s',
@@ -526,12 +552,21 @@ class RestEndpoint(SyncFilter):
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
                 return resp
-            # how many bytes from chunk were actually accepted?
+            # XXX does this actually need to handle short writes?
+            # should that just 500?
             chunk_out = result_length - offset
+            if chunk_out > len(chunk):
+                resp = Response(450, 'invalid resp content-range')
+                logging.debug(resp)
+                return resp
+            offset += chunk_out
+            if chunk_out < len(chunk):
+                blob_reader.seek(offset)
             logging.debug('RestEndpoint._put_blob() '
                           'result_length %d chunk_out %d',
                           result_length, chunk_out)
-            offset += chunk_out
+            if empty_put:
+                break
         return Response()
 
     # -> (resp, len)
@@ -542,7 +577,9 @@ class RestEndpoint(SyncFilter):
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
         headers = {}
-        if offset > 0 or not last:
+        if last and len(d) == 0:
+            headers[FINALIZE_BLOB_HEADER] = str(offset)
+        elif offset > 0 or not last:
             headers['content-range'] = ContentRange(
                 'bytes', offset, offset + len(d),
                 offset + len(d) if last else None).to_header()
@@ -551,14 +588,14 @@ class RestEndpoint(SyncFilter):
         try:
             if self.blob_url is None:
                 if blob_rest_id is not None:
-                    endpoint = self.transaction_url + '/blob/' + blob_rest_id
+                    self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
                 elif not non_body_blob:
                     self.blob_path = self.transaction_path + '/body'
-                    self.blob_url, self.blob_path = (
-                        self._maybe_qualify_url(self.blob_path))
-                    endpoint = self.blob_url
                 else:
-                    endpoint = self.transaction_url + '/blob'
+                    raise ValueError()
+
+                self.blob_url, self.blob_path = (
+                    self._maybe_qualify_url(self.blob_path))
 
             logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
                          self.blob_url, headers)

@@ -94,9 +94,9 @@ class StorageTestBase(unittest.TestCase):
         blob_writer.append_data(3, d=b'xyz', content_length=9)
         self.assertFalse(blob_writer.last)
 
-        # blob write should ping tx version
+        # blob write should not ping tx version (blob_tx_refresh_interval)
         downstream.load()
-        self.assertNotEqual(tx_version, downstream.version)
+        self.assertEqual(tx_version, downstream.version)
 
         blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))

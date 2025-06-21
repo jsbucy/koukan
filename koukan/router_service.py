@@ -78,7 +78,8 @@ class Service:
             executor.ping_watchdog()
             with self.lock:
                 self.cv.wait_for(lambda: self._shutdown,
-                                 min(deadline.deadline_left(), 30))
+                                 # xxx align to watchdog timeout
+                                 min(deadline.deadline_left(), 5))
                 if self._shutdown:
                     return True
         return False
@@ -148,7 +149,9 @@ class Service:
 
         if self.storage is None:
             self.storage=Storage.connect(
-                storage_yaml['url'], listener_yaml['session_uri'])
+                storage_yaml['url'], listener_yaml['session_uri'],
+                blob_tx_refresh_interval=
+                  storage_yaml.get('blob_tx_refresh_interval', 10))
 
         session_refresh_interval = storage_yaml.get(
             'session_refresh_interval', 30)
@@ -178,7 +181,8 @@ class Service:
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
-            service_uri=listener_yaml.get('service_uri', None))
+            service_uri=listener_yaml.get('service_uri', None),
+            chunk_size=listener_yaml.get('chunk_size', None))
 
         with self.lock:
             self.started = True
@@ -283,15 +287,14 @@ class Service:
 
         handler = OutputHandler(
             storage_tx, endpoint,
-            downstream_env_timeout =
-            output_yaml.get('downstream_env_timeout', 30),
-            downstream_data_timeout =
-            output_yaml.get('downstream_data_timeout', 60),
+            downstream_timeout = output_yaml.get('downstream_timeout', 60),
+            upstream_refresh = output_yaml.get('upstream_refresh', 30),
             notification_endpoint_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', None),
-            notification_params = output_yaml.get('notification', None))
+            notification_params = output_yaml.get('notification', None),
+            heartbeat=self.output_executor.ping_watchdog)
         try:
             handler.handle()
         except Exception as e:

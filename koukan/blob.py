@@ -83,10 +83,23 @@ class WritableBlob(ABC):
             doff = self.len()
         return (off - start)
 
+# InlineBlob stores exactly one contiguous byte range aligned to the
+# end of a possibly larger address space. It supports appending
+# exactly at the current end and truncating from the beginning. This
+# is used as a trivial FIFO buffer in SmtpHandler -> RestEndpoint for
+# chunked uploads.
+# e.g.
+# b = InlineBlob('hello, ')
+# b.pread(0) -> 'hello, '
+# b.append('world!')
+# b.pread(0) -> 'hello, world!'
+# b.trim_front(7)
+# b.pread(7) -> 'world!'
 class InlineBlob(Blob, WritableBlob):
     d : bytes
     _content_length : Optional[int] = None
     _rest_id : Optional[str] = None
+    _offset : int = 0
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
@@ -100,33 +113,50 @@ class InlineBlob(Blob, WritableBlob):
     def delta(self, rhs) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):
             return None
-        if not rhs.d.startswith(self.d):
+        # leading edge of self may have moved forward
+        if rhs._offset > self._offset:
             return None
-        return rhs.d != self.d
+        off = self._offset - rhs._offset
+        if not rhs.d[off:].startswith(self.d):
+            return None
+        return rhs.len() > self.len()
 
     def len(self):
+        return self._offset + len(self.d)
+
+    def available(self):
         return len(self.d)
 
     def rest_id(self):
         return self._rest_id
 
     def pread(self, offset, len=None):
+        if offset < self._offset:
+            raise ValueError()
+        offset -= self._offset
         return self.d[offset : offset + len if len is not None else None]
 
     def content_length(self):
         return self._content_length
 
-    def append(self, dd : bytes):
+    def append(self, dd : bytes, last : bool = False):
+        if not last:
+            assert self._content_length is None
         self.d += dd
-        assert self.len() <= self.content_length()
+        assert self.content_length() is None or (self.len() <= self.content_length())
+        if last:
+            self._content_length = self._offset + len(self.d)
 
     def __repr__(self):
-        return 'length=%d content_length=%s' % (
-            self.len(), self.content_length())
+        return 'length=%d content_length=%s offset=%d' % (
+            self.len(), self.content_length(), self._offset)
 
+    # WritableBlob
+    # precondition: offset == blob.len()
     def append_data(self, offset : int, d : bytes,
                     content_length : Optional[int] = None
                     ) -> Tuple[bool, int, Optional[int]]:
+        offset -= self._offset
         req = content_length is not None
         upstream = self._content_length is not None
         if (offset != len(self.d) or
@@ -137,6 +167,17 @@ class InlineBlob(Blob, WritableBlob):
         if self._content_length is None:
             self._content_length = content_length
         return True, len(self.d), content_length
+
+    # the semantics here are similar to fallocate(2) with FALLOC_FL_PUNCH_HOLE
+    def trim_front(self, offset : int):
+        if offset < self._offset:
+            raise ValueError()
+        if offset > self._offset + len(self.d):
+            raise ValueError()
+        off = offset - self._offset
+        self.d = self.d[off:]
+        self._offset = offset
+
 
 # already finalized
 class FileLikeBlob(Blob, WritableBlob):
@@ -235,6 +276,7 @@ class CompositeBlob(Blob):
 
     def pread(self, offset, length=None) -> bytes:
         out = bytes()
+        # TODO bisect
         for chunk in self.chunks:
             if offset > (chunk.offset + chunk.length):
                 continue

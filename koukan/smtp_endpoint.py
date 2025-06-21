@@ -1,12 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Dict, List, Optional, Tuple
-from smtplib import LMTP, SMTP, SMTPException
+from typing import Any, Dict, List, Optional, Tuple
+from types import ModuleType
 import logging
 import time
 import ipaddress
 
-from koukan.blob import Blob
+from koukan.blob import Blob, BlobReader
 from koukan.response import Response, Esmtp
 from koukan.filter import (
     EsmtpParam,
@@ -15,21 +15,39 @@ from koukan.filter import (
     TransactionMetadata )
 
 class Factory:
-    def __init__(self):
-        pass
+    def __init__(self, smtplib : ModuleType, ehlo_hostname, timeout, protocol,
+                 enable_bdat, chunk_size):
+        self.ehlo = ehlo_hostname
+        self.timeout = timeout
+        self.protocol = protocol
+        self.smtplib = smtplib
+        self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
 
-    def new(self, ehlo_hostname, timeout, protocol):
-        return SmtpEndpoint(ehlo_hostname, timeout, protocol)
+    def new(self):
+        return SmtpEndpoint(
+            self.smtplib, self.ehlo, self.timeout, self.protocol,
+            self.enable_bdat, self.chunk_size)
 
 class SmtpEndpoint(SyncFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
-    smtp : Optional[SMTP] = None
+    smtp : Optional[Any] = None
     good_rcpt : bool = False
     timeout : int = 30
     protocol : str
     any_rcpt = False
-    def __init__(self, ehlo_hostname, timeout : Optional[int] = None,
-                 protocol : str = 'smtp'):
+    body_reader : Optional[BlobReader] = None
+    smtplib : ModuleType
+    enable_bdat : bool
+    chunk_size : int
+    body : Optional[bytes] = None
+
+    def __init__(self,
+                 smtplib : ModuleType,
+                 ehlo_hostname, timeout : Optional[int] = None,
+                 protocol : str = 'smtp',
+                 enable_bdat = False,
+                 chunk_size = 2**16):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
         self.rcpt_resp = []
@@ -37,6 +55,9 @@ class SmtpEndpoint(SyncFilter):
             self.timeout = timeout
         assert protocol in ['smtp', 'lmtp']
         self.protocol = protocol
+        self.smtplib = smtplib
+        self.enable_bdat = enable_bdat
+        self.chunk_size = chunk_size
 
     def _shutdown(self):
         # SmtpEndpoint is a per-request object but we could return the
@@ -49,7 +70,7 @@ class SmtpEndpoint(SyncFilter):
 
         try:
             self.smtp.quit()
-        except SMTPException as e:
+        except self.smtplib.SMTPException as e:
             logging.info('SmtpEndpoint._shutdown %s', e)
         self.smtp = None
 
@@ -66,9 +87,12 @@ class SmtpEndpoint(SyncFilter):
                 'remote_host.host is not a valid IP address')
 
         if self.protocol == 'smtp':
-            self.smtp = SMTP(timeout=self.timeout)
+            kwargs = {}
+            if self.enable_bdat:
+                kwargs['enable_bdat'] = True
+            self.smtp = self.smtplib.SMTP(timeout=self.timeout, **kwargs)
         elif self.protocol == 'lmtp':
-            self.smtp = LMTP(timeout=self.timeout)
+            self.smtp = self.smtplib.LMTP(timeout=self.timeout)
         else:
             raise ValueError()
 
@@ -80,7 +104,7 @@ class SmtpEndpoint(SyncFilter):
             self.smtp._host = tx.remote_host.host
             resp = Response.from_smtp(
                 self.smtp.connect(tx.remote_host.host, tx.remote_host.port))
-        except (SMTPException, ConnectionError) as e:
+        except (self.smtplib.SMTPException, ConnectionError) as e:
             logging.info('SmtpEndpoint.connect %s %s', e, tx.remote_host)
             return Response(400, 'SmtpEndpoint: connect error')
 
@@ -198,20 +222,57 @@ class SmtpEndpoint(SyncFilter):
         if (tx_delta.body is not None) and not isinstance(tx_delta.body, Blob):
             upstream_delta.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
-        body = tx_delta.maybe_body_blob()
-        if not tx.data_response and (body is not None) and body.finalized():
+        body = tx.maybe_body_blob()
+        if not tx.data_response and (body is not None):
             logging.info('SmtpEndpoint %s append_data len=%d',
                          tx.rest_id, body.len())
             if not self.good_rcpt:
                 upstream_delta.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
-            else:
-                upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(body.pread(0)))
-            logging.info('SmtpEndpoint %s data_response %s',
-                         tx.rest_id, upstream_delta.data_response)
+                return upstream_delta
 
-            self._shutdown()
+            if self.body_reader is None:
+                self.body_reader = BlobReader(tx.body)
+
+            if not hasattr(self.smtp, 'data_chunk'):
+                # low-performance/backward-compatibility path:
+                # SyncFilterAdapter assumes that each on_update() call
+                # consumes all the data from the blob and calls
+                # blob.trim_front() after
+                if self.body is None:
+                    self.body = b''
+                self.body += self.body_reader.read()
+                if not tx.body.finalized():
+                    return upstream_delta
+                upstream_delta.data_response = Response.from_smtp(
+                    self.smtp.data(self.body))
+                self.body = None
+                logging.info('SmtpEndpoint %s data_response %s',
+                             tx.rest_id, upstream_delta.data_response)
+                return upstream_delta
+
+            chunk_last = False
+            data_resp = None
+            while not chunk_last and (data_resp is None or data_resp.ok()):
+                chunk = self.body_reader.read(self.chunk_size)
+                if tx.body.content_length() is not None:
+                    chunk_last = (self.body_reader.tell() ==
+                                  tx.body.content_length())
+                if not chunk_last and not chunk:
+                    break
+                resp = self.smtp.data_chunk(chunk, chunk_last)
+                if resp is not None:
+                    data_resp = Response.from_smtp(resp)
+            # BDAT will return a 250 for every chunk but our stack
+            # generally assumes data_resp != None means it's done;
+            # returning a !last 250 here will probably trigger an
+            # early-return elsewhere.
+            if chunk_last or (data_resp is not None and data_resp.err()):
+                upstream_delta.data_response = data_resp
+                self._shutdown()
+
+            logging.info('SmtpEndpoint %s data_resp %s',
+                         tx.rest_id, upstream_delta.data_response)
 
         return upstream_delta
 
