@@ -103,7 +103,7 @@ class SmtpHandler:
                 (str(proxy_data.src_addr), proxy_data.src_port))
         if proxy_data.dst_addr:
             self.local_host = HostPort.from_seq(
-                (str(proxy_data.dst_addr), proxy_data.src_port))
+                (str(proxy_data.dst_addr), proxy_data.dst_port))
         return True
 
     def _ehlo(self, hostname, esmtp):
