@@ -11,6 +11,7 @@ from functools import partial
 from urllib.parse import urljoin
 from datetime import timedelta
 import copy
+import cProfile
 
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
@@ -18,7 +19,7 @@ import werkzeug.http
 from koukan.rest_schema import BlobUri, parse_blob_uri
 import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.response import Response
 from koukan.blob import Blob, CompositeBlob, InlineBlob
 from koukan.fake_endpoints import FakeSyncFilter
@@ -41,7 +42,6 @@ def setUpModule():
 
 def tearDownModule():
     postgres_test_utils.tearDownModule()
-
 
 root_yaml_template = {
     'global': {
@@ -211,6 +211,7 @@ class RouterServiceTest(unittest.TestCase):
     cv : Condition
     endpoints : List[FakeSyncFilter]
     use_postgres = True
+    client_provider : RestEndpointClientProvider
 
     def __init__(self, *args, **kwargs):
         super(RouterServiceTest, self).__init__(*args, **kwargs)
@@ -271,6 +272,8 @@ class RouterServiceTest(unittest.TestCase):
         # find a free port
         self.router_url, self.service = self._setup_router()
 
+        self.client_provider = RestEndpointClientProvider()
+
         # probe for startup
         def exp(tx, tx_delta):
             upstream_delta = TransactionMetadata(
@@ -292,7 +295,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream.add_expectation(exp_cancel)
             self.add_endpoint(upstream)
 
-            rest_endpoint = RestEndpoint(
+            rest_endpoint = self.create_endpoint(
                 static_base_url=self.router_url,
                 static_http_host='submission',
                 timeout_start=1, timeout_data=1)
@@ -318,9 +321,15 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service._gc(timedelta(seconds=0)))
 
     def tearDown(self):
+        self.client_provider.close()
+        self.client_provider = None
+
         # TODO this should verify that there are no open tx attempts in storage
         # e.g. some exception path failed to tx_cursor.finalize_attempt()
         self.assertTrue(self.service.shutdown())
+
+    def create_endpoint(self, **kwargs):
+        return RestEndpoint(client_provider=self.client_provider, **kwargs)
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:
@@ -352,7 +361,7 @@ class RouterServiceTest(unittest.TestCase):
     # simplest possible case: native rest/inline body -> upstream success
     def test_rest_smoke(self):
         logging.debug('RouterServiceTest.test_rest_smoke')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -419,7 +428,7 @@ class RouterServiceTest(unittest.TestCase):
     # repro/regtest for spurious wakeup bug in VersionCache
     def test_rest_hanging_get(self):
         logging.debug('RouterServiceTest.test_rest_hanging_get')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
@@ -483,7 +492,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -531,7 +540,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_rest_body_http_retry(self):
         logging.debug('RouterServiceTest.test_rest_body_http_retry')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -609,7 +618,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_rest_body_chunked(self):
         logging.debug('RouterServiceTest.test_rest_body_chunked')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -674,7 +683,7 @@ class RouterServiceTest(unittest.TestCase):
     # upstream temp during submission before input done
     # downstream should complete uploading the body -> input_done -> reload
     def test_submission_retry(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -755,7 +764,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_reuse_body(self):
         logging.debug('RouterServiceTest.test_reuse_body')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
@@ -797,7 +806,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_reuse_body create %s',
                       tx_json)
 
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata(
@@ -849,7 +858,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_exploder_multi_rcpt(self):
         logging.info('RouterServiceTest.test_exploder_multi_rcpt')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-msa',
             timeout_start=5, timeout_data=5)
 
@@ -940,9 +949,85 @@ class RouterServiceTest(unittest.TestCase):
                          tx.data_response.message)
 
 
+    def _exploder_micro(self):
+        rest_endpoint = self.create_endpoint(
+            static_base_url=self.router_url, static_http_host='smtp-msa',
+            timeout_start=5, timeout_data=5)
+
+        logging.info('testExploderMultiRcpt start tx')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'),
+            remote_host=HostPort('1.2.3.4', 12345))
+        rest_endpoint.on_update(tx, tx.copy())
+
+        # no rcpt -> buffered
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertIn('exploder noop', tx.mail_response.message)
+
+        # upstream tx #1
+        upstream_endpoint = FakeSyncFilter()
+        self.add_endpoint(upstream_endpoint)
+        def exp_rcpt1(tx, tx_delta):
+            logging.debug(tx)
+            # set upstream responses so output (retry) succeeds
+            # upstream success, retry succeeds, propagates down to rest
+            updated_tx = tx.copy()
+            updated_tx.mail_response = Response(201)
+            updated_tx.rcpt_response.append(Response(202, 'upstream rcpt 1'))
+            upstream_delta = tx.delta(updated_tx)
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+        upstream_endpoint.add_expectation(exp_rcpt1)
+
+        logging.info('testExploderMultiRcpt patch rcpt1')
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob@example.com'))
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
+        rest_endpoint.on_update(tx, tx_delta)
+        self.assertRcptCodesEqual([202], tx.rcpt_response)
+        self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
+
+        def exp_body(tx, tx_delta):
+            logging.debug('%s', tx)
+            upstream_delta = TransactionMetadata()
+            if tx.body and tx.body.finalized():
+                self.assertEqual(tx.body.pread(0), b'Hello, World!')
+                upstream_delta.data_response = Response(
+                    205, 'upstream data')
+            assert tx.merge_from(upstream_delta) is not None
+            return upstream_delta
+
+        upstream_endpoint.add_expectation(exp_body)
+        upstream_endpoint.add_expectation(exp_body)
+
+
+        logging.info('testExploderMultiRcpt patch body')
+
+        tx_delta = TransactionMetadata(
+            body=InlineBlob(b'Hello, World!', last=True))
+        self.assertIsNotNone(tx.merge_from(tx_delta))
+        rest_endpoint.on_update(tx, tx_delta)
+        logging.debug('test_exploder_multi_rcpt %s', tx)
+        self.assertEqual(205, tx.data_response.code)
+        self.assertEqual('upstream data',
+                         tx.data_response.message)
+
+
+    def disabled_test_exploder_micro(self):
+        logging.debug('warmup')
+        self._exploder_micro()
+        logging.debug('real')
+        def micro():
+            for i in range(0,10):
+                self._exploder_micro()
+        cProfile.runctx('fn()', None, {'fn': partial(micro)})
+        logging.debug('done')
+
+
     def test_notification_retry_timeout(self):
         logging.info('RouterServiceTest.test_notification_retry_timeout')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-msa')
 
         def exp(tx, tx_delta):
@@ -1020,7 +1105,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_notification_fast_perm(self):
         logging.info('RouterServiceTest.test_notification_fast_perm')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-msa')
 
         logging.info('test_notification start tx')
@@ -1105,7 +1190,7 @@ class RouterServiceTest(unittest.TestCase):
     # never uses the exploder
     def test_message_builder(self):
         logging.info('RouterServiceTest.test_message_builder')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
@@ -1164,7 +1249,8 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp_body)
         upstream_endpoint.add_expectation(exp_body)
 
-        rest_endpoint.on_update(tx, tx.copy(), 1)
+        logging.debug(tx)
+        rest_endpoint.on_update(tx, tx.copy())
         logging.debug(tx)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
@@ -1187,7 +1273,7 @@ class RouterServiceTest(unittest.TestCase):
             remote_host=HostPort('1.2.3.4', 12345),
             body=spec)
 
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission')
 
         upstream_endpoint = FakeSyncFilter()
@@ -1220,7 +1306,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_receive_parsing(self):
         logging.info('RouterServiceTest.test_receive_parsing')
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-in',
             timeout_start=5, timeout_data=5)
         with open('testdata/multipart.msg', 'rb') as f:
@@ -1268,7 +1354,7 @@ class RouterServiceTest(unittest.TestCase):
         url2, service2 = self._setup_router()
 
         # start a tx on self.service
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-msa',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
@@ -1283,7 +1369,7 @@ class RouterServiceTest(unittest.TestCase):
         # GET the tx from service2, point read should be serivced directly
         transaction_url=urljoin(url2, rest_endpoint.transaction_path)
         logging.debug(transaction_url)
-        endpoint2 = RestEndpoint(
+        endpoint2 = self.create_endpoint(
             transaction_url=transaction_url,
             static_http_host='submission',
             timeout_start=5, timeout_data=5)
@@ -1332,7 +1418,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(service2.shutdown())
 
     def test_add_route_sync_success(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             static_http_host='submission-sync-sor',
             timeout_start=5, timeout_data=5)
@@ -1375,7 +1461,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_add_route_sf_success(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             static_http_host='submission-sf-sor',
             timeout_start=5, timeout_data=5)
@@ -1418,7 +1504,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def test_output_handler_exception(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             static_http_host='submission',
             timeout_start=5, timeout_data=5)

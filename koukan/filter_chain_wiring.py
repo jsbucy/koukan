@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import importlib
 from functools import partial
@@ -15,7 +15,7 @@ from koukan.recipient_router_filter import (
     RecipientRouterFilter,
     RoutingPolicy )
 from koukan.recipient_router_factory import RecipientRouterFactory
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.dkim_endpoint import DkimEndpoint
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.message_parser_filter import MessageParserFilter
@@ -38,11 +38,17 @@ class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
     router_factory : Optional[RecipientRouterFactory] = None
     filter_chain_factory : Optional[FilterChainFactory] = None
+    rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
 
     def __init__(
             self,
             exploder_output_factory : Optional[StorageWriterFactory] = None):
         self.exploder_output_factory = exploder_output_factory
+        self.rest_endpoint_clients = []
+
+    def __del__(self):
+        for c in self.rest_endpoint_clients:
+            c[1].close()
 
     def wire(self, yaml, factory : FilterChainFactory):
         self.filter_chain_factory = factory
@@ -129,12 +135,21 @@ class FilterChainWiring:
         logging.info('Factory.rest_output %s', static_remote_host)
         rcpt_timeout = 30
         data_timeout = 300
+        client_args = { 'verify': yaml.get('verify', True) }
+        for c in self.rest_endpoint_clients:
+            if c[0] == client_args:
+                client = c[1]
+                break
+        else:
+            client = RestEndpointClientProvider(**client_args)
+            self.rest_endpoint_clients.append((client_args, client))
+
         return RestEndpoint(
             static_base_url = yaml.get('static_endpoint', None),
             static_http_host = yaml.get('http_host', None),
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
-            verify=yaml.get('verify', True),
+            client_provider=client,
             chunk_size=chunk_size)
 
     def dkim(self, yaml, next):

@@ -10,7 +10,7 @@ from parameterized import parameterized_class
 from koukan.gateway import SmtpGateway
 from koukan.fake_smtpd import FakeSmtpd
 from koukan.blob import InlineBlob
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 
 from requests.exceptions import ConnectionError
@@ -38,6 +38,8 @@ root_yaml = {
 @parameterized_class(('protocol','use_system_smtplib'), [
     ('smtp', False), ('smtp', True), ('lmtp', False)])
 class GatewayTest(unittest.TestCase):
+    client_provider : RestEndpointClientProvider
+
     def setUp(self):
         logging.info('GatewayTest.setUp protocol=%s', self.protocol)
 
@@ -45,6 +47,8 @@ class GatewayTest(unittest.TestCase):
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
         root_yaml['smtp_output']['use_system_smtplib'] = self.use_system_smtplib
         root_yaml['smtp_output']['hosts']['outbound']['protocol'] = self.protocol
+
+        self.client_provider = RestEndpointClientProvider()
 
         self.gw = SmtpGateway(root_yaml)
 
@@ -64,7 +68,7 @@ class GatewayTest(unittest.TestCase):
         for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')
             try:
-                rest_endpoint = RestEndpoint(
+                rest_endpoint = self.create_endpoint(
                     static_base_url=self.gw_rest_url,
                     static_http_host='outbound')
                 tx = TransactionMetadata(
@@ -93,8 +97,11 @@ class GatewayTest(unittest.TestCase):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             return s.server_address[1]
 
+    def create_endpoint(self, **kwargs):
+        return RestEndpoint(client_provider=self.client_provider, **kwargs)
+
     def test_rest_to_smtp_basic(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound', timeout_start=10, timeout_data=10)
         tx=TransactionMetadata(
@@ -119,7 +126,7 @@ class GatewayTest(unittest.TestCase):
 
 
     def test_rest_to_smtp_idle_gc(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound')
         tx=TransactionMetadata(

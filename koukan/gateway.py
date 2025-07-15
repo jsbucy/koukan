@@ -11,7 +11,7 @@ import asyncio
 from functools import partial
 import importlib
 
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.smtp_endpoint import Factory as SmtpFactory, SmtpEndpoint
 from koukan.smtp_service import (
     ControllerTls,
@@ -42,6 +42,7 @@ class SmtpGateway(EndpointFactory):
     smtp_factory : Dict[str, SmtpFactory]
 
     smtplib : Optional[ModuleType] = None
+    rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
 
     def __init__(self, config_yaml : Optional[dict] = None):
         self.config_yaml = config_yaml
@@ -53,6 +54,7 @@ class SmtpGateway(EndpointFactory):
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.smtp_services = []
+        self.rest_endpoint_clients = []
 
     def shutdown(self) -> bool:
         logging.info("SmtpGateway.shutdown()")
@@ -80,12 +82,22 @@ class SmtpGateway(EndpointFactory):
 
     def rest_factory(self, yaml):
         logging.debug('rest_factory %s', yaml)
+
+        client_args = { 'verify': yaml.get('verify', True) }
+        for c in self.rest_endpoint_clients:
+            if c[0] == client_args:
+                client = c[1]
+                break
+        else:
+            client = RestEndpointClientProvider(**client_args)
+            self.rest_endpoint_clients.append((client_args, client))
+
         return RestEndpoint(
-            yaml['endpoint'],
+            static_base_url=yaml['endpoint'],
             static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
-            verify=yaml.get('verify', True),
+            client_provider=client,
             chunk_size=yaml.get('chunk_size', 2**16))
 
     def rest_endpoint_yaml(self, name):

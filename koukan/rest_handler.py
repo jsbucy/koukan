@@ -108,9 +108,6 @@ class RestHandler(Handler):
         self.service_uri = service_uri
         if client is not None:
             self.client = client
-        else:
-            client = Client(follow_redirects=True)
-            self.client = client.get
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -583,6 +580,7 @@ class RestHandlerFactory(HandlerFactory):
     service_uri : Optional[str] = None
     rest_id_factory : Callable[[], str]
     chunk_size : Optional[int] = None
+    client : Client
 
     def __init__(self, executor,
                  endpoint_factory,
@@ -596,6 +594,7 @@ class RestHandlerFactory(HandlerFactory):
         self.session_uri = session_uri
         self.service_uri = service_uri
         self.chunk_size = chunk_size
+        self.client = Client(follow_redirects=True)
 
     def create_tx(self, http_host) -> RestHandler:
         endpoint, yaml = self.endpoint_factory.create(http_host)
@@ -610,6 +609,7 @@ class RestHandlerFactory(HandlerFactory):
             endpoint_yaml = yaml,
             session_uri = self.session_uri,
             service_uri = self.service_uri,
+            client = self.client.get,
             **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
@@ -624,4 +624,5 @@ class RestHandlerFactory(HandlerFactory):
             rest_id_factory=self.rest_id_factory,
             session_uri = self.session_uri,
             service_uri = self.service_uri,
+            client = self.client.get,
             **kwargs)
