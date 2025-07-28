@@ -15,7 +15,7 @@ from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
 from koukan.deadline import Deadline
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.rest_schema import FINALIZE_BLOB_HEADER
 from koukan.filter import (
     HostPort,
@@ -85,6 +85,7 @@ def eq_range(lhs, rhs):
 class RestEndpointTest(unittest.TestCase):
     requets : List[Request]
     responses : List[Response]
+    client_provider : RestEndpointClientProvider
 
     def __init__(self, name):
         self.requests = []
@@ -110,6 +111,8 @@ class RestEndpointTest(unittest.TestCase):
         self.server_thread.start()
         self.static_base_url='http://localhost:%d/' % self.port
         logging.info('RestEndpointTest server listening on %d', self.port)
+
+        self.client_provider = RestEndpointClientProvider()
 
     def tearDown(self):
         # i.e. all expected requests were sent
@@ -161,10 +164,13 @@ class RestEndpointTest(unittest.TestCase):
             resp_body.append(resp.body.encode('utf-8'))
         return resp_body
 
+    def create_endpoint(self, **kwargs):
+        return RestEndpoint(client_provider=self.client_provider, **kwargs)
+
     # low-level methods
 
     def testCreate(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata()
         self.responses.append(Response(
             http_resp = '201 created',
@@ -200,7 +206,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.request_timeout, 1)
 
     def testCreateBadResponse(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -210,7 +216,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateTimeoutPost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_start=1)
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -221,14 +227,14 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateTimeoutGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_start=1)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         upstream_delta = rest_endpoint.on_update(tx, tx.copy())
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateNoSpin(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         # POST
         self.responses.append(Response(
@@ -253,7 +259,7 @@ class RestEndpointTest(unittest.TestCase):
 
     # maybe drop this test, unclear what it's doing?
     def testUpdate(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             transaction_url=self.static_base_url + '/transactions/124')
 
         self.responses.append(Response(
@@ -266,15 +272,13 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(rest_resp.status_code, 201)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions/124')
-        self.assertEqual(
-            req.body,
-            json.dumps({'mail_from': {'m': 'alice'}}).encode('utf-8'))
+        self.assertEqual({'mail_from': {'m': 'alice'}}, json.loads(req.body))
         self.assertEqual(req.content_type, 'application/json')
         self.assertEqual(rest_resp.json(),
                          {'mail_response': {}})
 
     def testUpdateBadResponsePost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
@@ -295,7 +299,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
     def testUpdateBadResponseGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
@@ -323,7 +327,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
     def testUpdateTimeoutPost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_start=1)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
@@ -339,7 +343,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
     def testUpdateTimeoutGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_start=1)
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
@@ -351,7 +355,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def testPutBlob(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      chunk_size=8)
 
         # POST /transactions
@@ -426,7 +430,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def testPutBlobSingle(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
 
         # POST /transactions
         self.responses.append(Response(
@@ -464,7 +468,7 @@ class RestEndpointTest(unittest.TestCase):
     # is kind of weird, doesn't seem to have any additional coverage
     # beyond testPutBlob (above)
     def testPutBlobChunk(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url)
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
@@ -514,7 +518,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def testPutBlobBadResponse(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_data=1,
                                      chunk_size=4)
         tx = TransactionMetadata(
@@ -559,7 +563,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 450)
 
     def testPutBlobTimeout(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      timeout_data=1, chunk_size=4)
 
         self.responses.append(Response(
@@ -590,7 +594,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def testFilterApi(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1,
                                      chunk_size=8)
 
@@ -685,7 +689,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.etag, '1')
 
     def testFilterApiOneshot(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
 
         body = b'hello, world!'
@@ -731,7 +735,7 @@ class RestEndpointTest(unittest.TestCase):
             self.assertEqual(t.data_response.code, 203)
 
     def test_filter_api_internal_delta(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
 
         # POST /transactions
@@ -757,7 +761,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertTrue(upstream_delta.empty(WhichJson.ALL))
 
     def testFilterApiMultiRcpt(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
 
         # POST /transactions
@@ -812,7 +816,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202, 203])
 
     def testFilterApiEmptyLastChunk(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1)
 
         body = b'hello, world!'
@@ -892,7 +896,7 @@ class RestEndpointTest(unittest.TestCase):
         resolution = Resolution([
             HostPort('first', 25),
             HostPort('second', 25)])
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         # POST
@@ -929,7 +933,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
     def test_discovery_fail(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         resolution = Resolution([
@@ -946,7 +950,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 450)
 
     def test_bad_post_resp(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
+        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
                                      min_poll=0.1,
                                      chunk_size=8)
 
@@ -967,7 +971,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 450)
 
     def test_parsed(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         tx = TransactionMetadata(
@@ -1041,7 +1045,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def test_parsed_json_err(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         tx = TransactionMetadata(
@@ -1095,7 +1099,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(upstream_delta.data_response.code, 400)
 
     def test_parsed_blob_err(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         tx = TransactionMetadata(
@@ -1151,7 +1155,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(upstream_delta.data_response.code, 450)
 
     def test_all_rcpts_fail(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         body = b'hello, world'
@@ -1176,7 +1180,7 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(upstream_delta.data_response.code, 400)
 
     def test_data_resp_wait(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         body = b'hello, world'
@@ -1233,7 +1237,7 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def test_cancel(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
         tx = TransactionMetadata(

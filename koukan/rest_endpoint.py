@@ -40,6 +40,29 @@ def get_resp_json(resp):
     except json.decoder.JSONDecodeError:
         return None
 
+class RestEndpointClientProvider:
+    client : Optional[Client] = None
+    def __init__(self, **kwargs):
+        self.client_args = kwargs
+    def get(self):
+        if self.client is None:
+            self.client = Client(
+                http2=True, follow_redirects=True, **self.client_args)
+        return self.client
+
+    def close(self):
+        if self.client:
+            logging.debug('RestEndpointClientProvider.__del__() client')
+            # close keepalive connections, setting Client(limits=)
+            # doesn't seem to work? keepalive connections cause
+            # hypercorn to take a long time to shut down which is a
+            # problem in tests
+            self.client.close()
+            self.client = None
+
+    def __del__(self):
+        self.close()
+
 class RestEndpoint(SyncFilter):
     transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
@@ -74,6 +97,7 @@ class RestEndpoint(SyncFilter):
 
     # pass base_url/http_host or transaction_url
     def __init__(self,
+                 client_provider : RestEndpointClientProvider,
                  static_base_url=None,
                  static_http_host=None,
                  transaction_url=None,
@@ -81,8 +105,7 @@ class RestEndpoint(SyncFilter):
                  timeout_data=TIMEOUT_DATA,
                  min_poll=1,
                  max_inline=1024,
-                 chunk_size : Optional[int] = None,
-                 verify=True):
+                 chunk_size : Optional[int] = None):
         self.base_url = static_base_url
         self.static_http_host = static_http_host
         self.transaction_url = transaction_url
@@ -93,18 +116,8 @@ class RestEndpoint(SyncFilter):
         self.max_inline = max_inline
         self.chunk_size = chunk_size
 
-        self.client = Client(http2=True, verify=verify, follow_redirects=True)
+        self.client = client_provider.get()
         self.blob_readers = {}
-
-    def __del__(self):
-        if self.client:
-            logging.debug('RestEndpoint.__del__() client')
-            # close keepalive connections, setting Client(limits=)
-            # doesn't seem to work? keepalive connections cause
-            # hypercorn to take a long time to shut down which is a
-            # problem in tests
-            self.client.close()
-            self.client = None
 
     # -> full-url, path
     def _maybe_qualify_url(self, url) -> Tuple[str, str]:
