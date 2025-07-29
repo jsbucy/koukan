@@ -3,7 +3,7 @@ from functools import partial
 import logging
 import asyncio
 
-TransactionMetadata = dict
+from koukan.filter import TransactionMetadata
 
 class Filter:
     downstream : Optional[TransactionMetadata] = None
@@ -24,19 +24,13 @@ class ProxyFilter(Filter):
     def wire_upstream(self, tx):
         self.upstream = tx
 
-
-def dict_delta(x, y):
-    return {(i,j) for i,j in y.items() if i not in x}
-
 class FilterChain:
     filters : List[Filter]
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
     loop : asyncio.BaseEventLoop
 
-    def __init__(self, filters : List[Filter], tx : TransactionMetadata):
-        self.prev_tx = TransactionMetadata()
-        self.tx = tx
+    def __init__(self, filters : List[Filter]):
         self.filters = filters
 
         # placeholder to avoid deprecation warning creating Future
@@ -44,14 +38,21 @@ class FilterChain:
         # callbacks which we never register.
         self.loop = asyncio.new_event_loop()
 
-        for f in filters:
+
+    def init(self, tx : TransactionMetadata):
+        self.prev_tx = TransactionMetadata()
+        self.tx = tx
+
+        for f in self.filters:
             f.wire_downstream(tx)
             if isinstance(f, ProxyFilter):
                 tx = TransactionMetadata()
                 f.wire_upstream(tx)
 
     def update(self):
-        delta = dict_delta(self.prev_tx, self.tx)
+        logging.debug(self.tx)
+        delta = self.prev_tx.delta(self.tx)
+        logging.debug(delta)
         completion = []  # Tuple(filter, coroutine, future, tx)
 
         async def upstream(futures):
@@ -61,14 +62,16 @@ class FilterChain:
 
         tx = self.tx
         for f in self.filters:
-            prev = TransactionMetadata(tx)
+            prev = tx.copy()
+
             futures = [None]
             co = f.update(delta, partial(upstream, futures))
             try:
                 co.send(None)
             except StopIteration:
                 pass  # i.e. never called upstream()
-            delta = dict_delta(prev, tx)
+            delta = prev.delta(tx)
+            assert delta is not None
             fut = futures[0]
             futures = None
             completion.append((f, co, fut, prev))
@@ -97,51 +100,8 @@ class FilterChain:
                 except StopIteration:
                     pass
 
-            delta = dict_delta(prev, f.downstream)
+            delta = prev.delta(f.downstream)
+
+        self.prev_tx = self.tx.copy()
 
         return delta
-
-class Sink(Filter):
-    async def update(self, delta, upstream):
-        logging.debug('Sink.update %s', self.downstream)
-        self.downstream['sink'] = 'sink'
-
-class AddDownstream(Filter):
-    async def update(self, delta, upstream):
-        logging.debug('AddDownstream.start')
-        self.downstream['downstream'] = 'downstream'
-        await upstream()
-        logging.debug('AddDownstream.done')
-
-class AddUpstream(Filter):
-    async def update(self, delta, upstream):
-        logging.debug('AddUpstream.start')
-        await upstream()
-        self.downstream['upstream'] = 'upstream'
-        logging.debug('AddUpstream.done')
-
-class Proxy(ProxyFilter):
-    async def update(self, delta, upstream):
-        logging.debug(self.downstream)
-        logging.debug(delta)
-        self.upstream.update(delta)
-        self.upstream['proxy_downstream'] = 'x'
-        delta = await upstream()
-        self.downstream.update(delta)
-        self.downstream['proxy_upstream'] = 'y'
-
-
-
-def main():
-    tx = {}
-    chain = FilterChain([AddDownstream(), Proxy(), AddUpstream(), Sink()], tx)
-
-    chain.update()
-    logging.debug(tx)
-
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
-        '%(message)s')
-    main()

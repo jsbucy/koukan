@@ -113,7 +113,7 @@ root_yaml_template = {
                 }
             },
             'chain': [
-                {'filter': 'message_builder'},
+                # {'filter': 'message_builder'},
                 {'filter': 'sync'}
             ],
         },
@@ -276,6 +276,7 @@ class RouterServiceTest(unittest.TestCase):
 
         # probe for startup
         def exp(tx, tx_delta):
+            logging.debug(tx)
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201, 'probe mail ok'),
                 rcpt_response = [Response(202)])
@@ -372,6 +373,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             logging.debug(tx)
+            logging.debug(tx_delta)
             # xxx verify mail/rcpt
             upstream_delta=TransactionMetadata()
             if tx_delta.mail_from:

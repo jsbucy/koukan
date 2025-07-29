@@ -21,6 +21,7 @@ from koukan.output_handler import OutputHandler
 from koukan.executor import Executor
 from koukan.filter_chain_factory import FilterChainFactory
 from koukan.filter_chain_wiring import FilterChainWiring
+from koukan.filter_chain import FilterChain
 from koukan.filter import (
     AsyncFilter,
     SyncFilter,
@@ -234,7 +235,7 @@ class Service:
         if (endp := self.filter_chain_factory.build_filter_chain(http_host)
             ) is None:
             return None
-        endpoint, endpoint_yaml = endp
+        chain, endpoint_yaml = endp
 
         writer = StorageWriterFilter(
             storage=self.storage,
@@ -243,7 +244,7 @@ class Service:
             http_host = http_host,
             endpoint_yaml = self.get_endpoint_yaml)
         fut = self.output_executor.submit(
-            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
+            lambda: self._handle_new_tx(writer, chain, endpoint_yaml),
             0)
         if block_upstream and fut is None:
             # XXX leaves db tx leased?
@@ -263,7 +264,7 @@ class Service:
             endpoint_yaml = self.get_endpoint_yaml)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
-                       endpoint : SyncFilter,
+                       chain : FilterChain,
                        endpoint_yaml : dict):
         tx_cursor = writer.release_transaction_cursor()
         if tx_cursor is None:
@@ -272,7 +273,7 @@ class Service:
             return
         tx_cursor.load(start_attempt=True)
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
-        self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
+        self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
     def _notification_endpoint(self):
         return StorageWriterFilter(
@@ -281,12 +282,12 @@ class Service:
             create_leased=False)
 
     def handle_tx(self, storage_tx : TransactionCursor,
-                  endpoint : SyncFilter,
+                  chain : FilterChain,
                   endpoint_yaml):
         output_yaml = endpoint_yaml.get('output_handler', {})
 
         handler = OutputHandler(
-            storage_tx, endpoint,
+            storage_tx, chain,
             downstream_timeout = output_yaml.get('downstream_timeout', 60),
             upstream_refresh = output_yaml.get('upstream_refresh', 30),
             notification_endpoint_factory=self._notification_endpoint,
@@ -314,12 +315,12 @@ class Service:
         if storage_tx is None:
             return False
 
-        endpoint, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
+        chain, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
             storage_tx.tx.host)
         logging.debug('_dequeue %s %s',
                       storage_tx.id, storage_tx.rest_id)
 
-        self.handle_tx(storage_tx, endpoint, endpoint_yaml)
+        self.handle_tx(storage_tx, chain, endpoint_yaml)
 
         return True
 

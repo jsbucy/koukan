@@ -14,9 +14,9 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import FilterChain
 from koukan.dsn import read_headers, generate_dsn
 from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
@@ -27,7 +27,7 @@ def default_notification_endpoint_factory():
 
 class OutputHandler:
     cursor : TransactionCursor
-    endpoint : SyncFilter
+    filter_chain : FilterChain
     rest_id : str
     notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
@@ -46,7 +46,7 @@ class OutputHandler:
     heartbeat : Optional[Callable[[], None]] = None
     def __init__(self,
                  cursor : TransactionCursor,
-                 endpoint : SyncFilter,
+                 filter_chain : FilterChain,
                  downstream_timeout : int = 60,
                  upstream_refresh : int = 30,
                  notification_endpoint_factory = default_notification_endpoint_factory,
@@ -55,7 +55,7 @@ class OutputHandler:
                  notification_params : Optional[dict] = None,
                  heartbeat : Optional[Callable[[], None]] = None):
         self.cursor = cursor
-        self.endpoint = endpoint
+        self.filter_chain = filter_chain
         self.rest_id = self.cursor.rest_id
         self.downstream_timeout = downstream_timeout
         self.upstream_refresh = upstream_refresh
@@ -73,9 +73,9 @@ class OutputHandler:
         self.heartbeat = heartbeat
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
-        t = self.cursor.tx
-        assert t is not None
-        self.tx = t.copy()
+        delta = self.tx.delta(self.cursor.tx)
+        self.tx.merge_from(delta)
+
         # drop some fields from the tx that's going upstream
         # OH consumes these fields but they should not propagate to the
         # output chain/upstream rest/gateway etc
@@ -125,8 +125,7 @@ class OutputHandler:
 
         logging.debug('_handle_once %s %s', self.rest_id, self.tx)
 
-        upstream_delta = self.endpoint.on_update(self.tx, delta)
-        assert upstream_delta is not None
+        upstream_delta = self.filter_chain.update()
         # router output to an endpoint that retries/notifies is
         # probably a misconfiguration
         assert self.tx.notification is None
@@ -212,6 +211,8 @@ class OutputHandler:
 
 
     def handle(self):
+        self.filter_chain.init(self.tx)
+
         done = False
         logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
         while not done:

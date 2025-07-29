@@ -7,6 +7,7 @@ from functools import partial
 import inspect
 
 from koukan.filter import SyncFilter
+from koukan.filter_chain import FilterChain
 
 class FilterSpec:
     builder : Callable[[Any, SyncFilter], SyncFilter]
@@ -74,15 +75,13 @@ class FilterChainFactory:
         filter_name = filter_yaml['filter']
         spec = self.filters[filter_name]
         filter = spec.builder(filter_yaml, next)
-        assert isinstance(filter, SyncFilter)
+        # assert isinstance(filter, SyncFilter)
         return filter
 
-    def build_filter_chain(self, host) -> Optional[Tuple[SyncFilter, dict]]:
+    def build_filter_chain(self, host) -> Optional[Tuple[FilterChain, dict]]:
         if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
             return None
         next : Optional[SyncFilter] = None
-        chain = list(reversed(endpoint_yaml['chain']))
-        for filter_yaml in chain:
-            next = self._get_filter(filter_yaml, next)
-        assert next is not None
-        return next, endpoint_yaml
+        filters = [self._get_filter(filter_yaml, None)
+                   for filter_yaml in endpoint_yaml['chain']]
+        return FilterChain(filters), endpoint_yaml

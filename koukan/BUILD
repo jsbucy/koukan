@@ -30,6 +30,10 @@ py_test(name='filter_test',
               ':deadline',
               ':fake_endpoints'])
 
+pytype_library(name='filter_chain',
+               srcs=['filter_chain.py'],
+               deps=[':filter'])
+
 pytype_library(name='async_filter_wrapper',
                srcs=['async_filter_wrapper.py'],
                deps=[':backoff',
@@ -139,6 +143,7 @@ pytype_library(name='output_handler',
                deps=[':backoff',
                      ':rest_service_handler',
                      ':filter',
+                     ':filter_chain',
                      ':response',
                      ':storage',
                      ':storage_schema',
@@ -375,7 +380,8 @@ py_test(name='relay_auth_filter_test',
 
 pytype_library(name='filter_chain_factory',
                srcs=['filter_chain_factory.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 pytype_library(name='recipient_router_factory',
                srcs=['recipient_router_factory.py'],
@@ -428,6 +434,7 @@ pytype_library(name='router_service',
                      ':executor',
                      ':fastapi_service',
                      ':filter',
+                     ':filter_chain',
                      ':filter_chain_factory',
                      ':filter_chain_wiring',
                      ':hypercorn_main',
