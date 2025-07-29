@@ -277,11 +277,11 @@ class RouterServiceTest(unittest.TestCase):
         # probe for startup
         def exp(tx, tx_delta):
             logging.debug(tx)
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201, 'probe mail ok'),
-                rcpt_response = [Response(202)])
-            assert tx.merge_from(upstream_delta) is not None
-            return upstream_delta
+            if tx_delta.mail_from:
+                tx.mail_response = Response(201, 'probe mail ok')
+            if tx_delta.rcpt_to:
+                tx.rcpt_response = [Response(202)]
+
         def exp_cancel(tx, tx_delta):
             upstream_delta = TransactionMetadata()
             tx.fill_inflight_responses(Response(450), upstream_delta)
@@ -375,17 +375,14 @@ class RouterServiceTest(unittest.TestCase):
             logging.debug(tx)
             logging.debug(tx_delta)
             # xxx verify mail/rcpt
-            upstream_delta=TransactionMetadata()
             if tx_delta.mail_from:
-                upstream_delta.mail_response=Response(201)
+                tx.mail_response=Response(201)
             if tx_delta.rcpt_to:
-                upstream_delta.rcpt_response=[Response(202)]
+                tx.rcpt_response=[Response(202)]
             if tx.body and tx.body.finalized():
                 self.assertIn(body, tx.body.pread(0))
-                upstream_delta.data_response=Response(203)
+                tx.data_response=Response(203)
 
-            self.assertTrue(tx.merge_from(upstream_delta))
-            return upstream_delta
         upstream_endpoint = FakeSyncFilter()
         upstream_endpoint.add_expectation(exp)
         upstream_endpoint.add_expectation(exp)
