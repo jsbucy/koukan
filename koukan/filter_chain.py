@@ -1,0 +1,147 @@
+from typing import Callable, List, Optional
+from functools import partial
+import logging
+import asyncio
+
+TransactionMetadata = dict
+
+class Filter:
+    downstream : Optional[TransactionMetadata] = None
+    upstream : Optional[TransactionMetadata] = None
+
+    def __init__(self):
+        pass
+
+    def wire_downstream(self, tx : TransactionMetadata):
+        self.downstream = tx
+
+    # upstream() yields to scheduler, returns delta
+    async def update(self, delta : TransactionMetadata,
+                     upstream : Callable[[], TransactionMetadata]):
+        pass
+
+class ProxyFilter(Filter):
+    def wire_upstream(self, tx):
+        self.upstream = tx
+
+
+def dict_delta(x, y):
+    return {(i,j) for i,j in y.items() if i not in x}
+
+class FilterChain:
+    filters : List[Filter]
+    prev_tx : TransactionMetadata
+    tx : TransactionMetadata
+    loop : asyncio.BaseEventLoop
+
+    def __init__(self, filters : List[Filter], tx : TransactionMetadata):
+        self.prev_tx = TransactionMetadata()
+        self.tx = tx
+        self.filters = filters
+
+        # placeholder to avoid deprecation warning creating Future
+        # without a loop. AFAICT Future only uses it for scheduling
+        # callbacks which we never register.
+        self.loop = asyncio.new_event_loop()
+
+        for f in filters:
+            f.wire_downstream(tx)
+            if isinstance(f, ProxyFilter):
+                tx = TransactionMetadata()
+                f.wire_upstream(tx)
+
+    def update(self):
+        delta = dict_delta(self.prev_tx, self.tx)
+        completion = []  # Tuple(filter, coroutine, future, tx)
+
+        async def upstream(futures):
+            logging.debug('upstream')
+            futures[0] = self.loop.create_future()
+            return await futures[0]
+
+        tx = self.tx
+        for f in self.filters:
+            prev = TransactionMetadata(tx)
+            futures = [None]
+            co = f.update(delta, partial(upstream, futures))
+            try:
+                co.send(None)
+            except StopIteration:
+                pass  # i.e. never called upstream()
+            delta = dict_delta(prev, tx)
+            fut = futures[0]
+            futures = None
+            completion.append((f, co, fut, prev))
+            if f == self.filters[-1]:
+                assert fut is None  # i.e. RestEndpoint
+            if fut is None:
+                logging.debug('no fut')
+                break
+            if f.upstream is not None and f.downstream is not f.upstream:
+                tx = f.upstream
+
+        for f, co, fut, prev in reversed(completion):
+            if fut is not None:
+                fut.set_result(delta)
+                # TODO The filter impl could do multiple roundtrips
+                # with the upstream? That would manifest here as
+                # calling upstream again and not raising
+                # StopIteration? For the time being, we clear futures
+                # after the first call (above) so a subsequent call
+                # will throw.
+                # To implement this, we would loop around the whole
+                # thing here and restart the first downstream loop at
+                # the filter after f here.
+                try:
+                    co.send(None)
+                except StopIteration:
+                    pass
+
+            delta = dict_delta(prev, f.downstream)
+
+        return delta
+
+class Sink(Filter):
+    async def update(self, delta, upstream):
+        logging.debug('Sink.update %s', self.downstream)
+        self.downstream['sink'] = 'sink'
+
+class AddDownstream(Filter):
+    async def update(self, delta, upstream):
+        logging.debug('AddDownstream.start')
+        self.downstream['downstream'] = 'downstream'
+        await upstream()
+        logging.debug('AddDownstream.done')
+
+class AddUpstream(Filter):
+    async def update(self, delta, upstream):
+        logging.debug('AddUpstream.start')
+        await upstream()
+        self.downstream['upstream'] = 'upstream'
+        logging.debug('AddUpstream.done')
+
+class Proxy(ProxyFilter):
+    async def update(self, delta, upstream):
+        logging.debug(self.downstream)
+        logging.debug(delta)
+        self.upstream.update(delta)
+        self.upstream['proxy_downstream'] = 'x'
+        delta = await upstream()
+        self.downstream.update(delta)
+        self.downstream['proxy_upstream'] = 'y'
+
+
+
+def main():
+    tx = {}
+    chain = FilterChain([AddDownstream(), Proxy(), AddUpstream(), Sink()], tx)
+
+    chain.update()
+    logging.debug(tx)
+
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+        '%(message)s')
+    main()
