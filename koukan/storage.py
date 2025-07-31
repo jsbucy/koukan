@@ -442,10 +442,13 @@ class TransactionCursor:
         for i in range(0,5):
             try:
                 return self._load(db_id, rest_id, start_attempt)
-            # update_version_cache() throws if an update got in
+            # _update_version_cache() throws if an update got in
             # between the db read and cache update
             except VersionConflictException:
+                logging.debug('VersionConflictException')
                 if i == 4:
+                    # unexpected to repeatedly conflict but if so,
+                    # will leave an open attempt?
                     raise
                 backoff(i)
 
@@ -461,8 +464,11 @@ class TransactionCursor:
         else:
             assert db_id is not None or rest_id is not None
         with self.parent.begin_transaction() as db_tx:
-            return self._load_and_start_attempt_db(
+            rv = self._load_and_start_attempt_db(
                 db_tx, db_id, rest_id, start_attempt)
+        if rv:
+            self._update_version_cache()
+        return rv
 
     def _load_and_start_attempt_db(
             self, db_tx : Transaction,
@@ -474,7 +480,6 @@ class TransactionCursor:
             return None
         if start_attempt:
             self._start_attempt_db(db_tx, self.id, self.version)
-        self._update_version_cache()
         return tx
 
     def _load_db(self, db_tx : Transaction,
@@ -675,9 +680,6 @@ class TransactionCursor:
             assert (row := res.fetchone())
             self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
-        # xxx VersionConflictException
-        # will leave an open attempt
-        self._update_version_cache()
         self.in_attempt = True
 
     def wait(self, timeout : Optional[float] = None) -> bool:
@@ -799,6 +801,7 @@ class BlobCursor(Blob, WritableBlob):
             content_length >= (offset + len(d)))
 
         tx_version = None
+        cursor = None
         with (nullcontext(self.db_tx) if self.db_tx is not None
               else self.parent.begin_transaction() as db_tx):
             stmt = select(
@@ -871,10 +874,12 @@ class BlobCursor(Blob, WritableBlob):
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
+                    logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)
 
+        if cursor is not None:
             cursor._update_version_cache()
             self._session_uri = cursor.session_uri
         return True, self.length, self._content_length
@@ -1074,6 +1079,7 @@ class Storage():
         try:
             return self._load_one()
         except VersionConflictException:
+            logging.debug('VersionConflictException')
             return None
 
     def _load_one(self) -> Optional[TransactionCursor]:
@@ -1121,15 +1127,16 @@ class Storage():
             db_id = row[0]
             version = row[1]
 
-            tx = self.get_transaction_cursor()
-            tx._load_and_start_attempt_db(
+            cursor = self.get_transaction_cursor()
+            cursor._load_and_start_attempt_db(
                 db_tx, db_id=db_id, start_attempt=True)
 
             # TODO: if the last n consecutive attempts weren't
             # finalized, this transaction may be crashing the system
             # -> quarantine
 
-            return tx
+        cursor._update_version_cache()
+        return cursor
 
     def _gc(self, db_tx : Transaction, ttl : timedelta) -> Tuple[int, int]:
         # It would be fairly easy to support a staged policy like ttl

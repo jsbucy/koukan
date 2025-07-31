@@ -10,6 +10,7 @@ import logging
 import base64
 import os
 from datetime import datetime, timedelta
+from functools import partial
 
 from koukan.blob import Blob
 from koukan.storage import BlobCursor, Storage, TransactionCursor
@@ -468,7 +469,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertFalse(bool(reader.tx.rcpt_to))
 
         rv = [None]
-        t = Thread(target = lambda: self.wait_for(reader, rv))
+        t = Thread(target = partial(self.wait_for, reader, rv))
         t.start()
         time.sleep(0.1)
         logging.info('test append')
@@ -538,6 +539,57 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(d, dd[0])
         self.assertEqual(len(d), tx_reader.tx.body.content_length())
         self.assertEqual(len(d), tx_reader.tx.body.len())
+
+    def disabled_test_pingpong(self):
+        upstream = self.s.get_transaction_cursor()
+        upstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host'),
+            create_leased=True)
+        self.assertIsNotNone(upstream.load(start_attempt=True))
+
+        downstream = self.s.get_transaction_cursor()
+        self.assertIsNotNone(downstream.load(rest_id='tx_rest_id'))
+
+        def ping(cursor):
+            # add rcpt
+            delta = TransactionMetadata(
+                rcpt_to=[Mailbox('bob@example.com')])
+            delta.rcpt_to_list_offset = len(cursor.tx.rcpt_to)
+            cursor.write_envelope(delta)
+
+            # read rcpt response
+            while len(cursor.tx.rcpt_response) < len(cursor.tx.rcpt_to):
+                cursor.wait()
+                cursor.load()
+
+        def pong(cursor):
+            while len(cursor.tx.rcpt_response) == len(cursor.tx.rcpt_to):
+                cursor.wait()
+                cursor.load()
+            delta = TransactionMetadata()
+            delta.rcpt_response = []
+            delta.rcpt_response_list_offset = len(cursor.tx.rcpt_response)
+            for i in range(len(cursor.tx.rcpt_response), len(cursor.tx.rcpt_to)):
+                delta.rcpt_response.append(Response())
+            cursor.write_envelope(delta)
+
+        def runn(n, fn):
+            for i in range(0, n):
+                fn()
+
+        iters=1000
+
+        start = time.monotonic()
+        t1=Thread(target=partial(runn, iters, partial(ping, downstream)))
+        t1.start()
+        t2=Thread(target=partial(runn, iters, partial(pong, upstream)))
+        t2.start()
+        t1.join()
+        t2.join()
+        total = time.monotonic() - start
+        logging.warning('done %f %f', total, iters/total)
 
 
 class StorageTestSqlite(StorageTestBase):
