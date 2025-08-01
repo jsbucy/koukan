@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional
+from typing import Awaitable, Callable, List, Optional
 from functools import partial
 import logging
 import asyncio
@@ -21,7 +21,7 @@ class Filter:
 
     # upstream() yields to scheduler, returns delta
     async def update(self, delta : TransactionMetadata,
-                     upstream : Callable[[], TransactionMetadata]):
+                     upstream : Callable[[], Awaitable[TransactionMetadata]]):
         pass
 
 
@@ -31,7 +31,7 @@ class ProxyFilter(Filter):
 
 class FilterChain:
     filters : List[Filter]
-    loop : asyncio.BaseEventLoop
+    loop : asyncio.AbstractEventLoop
 
     def __init__(self, filters : List[Filter]):
         self.filters = filters
