@@ -85,7 +85,7 @@ class RecipientRouterFilter(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         routed = False
         if (tx.rest_endpoint is None and tx.options is None and
-                self.dest_delta is None and tx.rcpt_to):
+                self.dest_delta is None and tx_delta.rcpt_to):
             self.dest_delta = self._route(tx)
             # i.e. err
             if self.dest_delta is not None and self.dest_delta.rcpt_response:
