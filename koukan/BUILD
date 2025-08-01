@@ -34,6 +34,10 @@ pytype_library(name='filter_chain',
                srcs=['filter_chain.py'],
                deps=[':filter'])
 
+py_test(name='filter_chain_test',
+        srcs=['filter_chain_test.py'],
+        deps=[':filter_chain'])
+
 pytype_library(name='async_filter_wrapper',
                srcs=['async_filter_wrapper.py'],
                deps=[':backoff',
@@ -184,7 +188,6 @@ pytype_library(name='message_builder_filter',
 py_test(name='message_builder_filter_test',
         srcs=['message_builder_filter_test.py'],
         deps=[':blob',
-              ':fake_endpoints',
               ':filter',
               ':message_builder_filter',
               ':response',

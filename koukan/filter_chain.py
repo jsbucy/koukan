@@ -6,19 +6,24 @@ import asyncio
 from koukan.filter import TransactionMetadata
 
 class Filter:
+    prev_downstream : Optional[TransactionMetadata] = None
     downstream : Optional[TransactionMetadata] = None
+    prev_upstream : Optional[TransactionMetadata] = None
     upstream : Optional[TransactionMetadata] = None
 
     def __init__(self):
         pass
 
     def wire_downstream(self, tx : TransactionMetadata):
-        self.downstream = tx
+        self.downstream = self.upstream = tx
+        self.prev_downstream = TransactionMetadata()
+        self.prev_upstream = TransactionMetadata()
 
     # upstream() yields to scheduler, returns delta
     async def update(self, delta : TransactionMetadata,
                      upstream : Callable[[], TransactionMetadata]):
         pass
+
 
 class ProxyFilter(Filter):
     def wire_upstream(self, tx):
@@ -26,8 +31,6 @@ class ProxyFilter(Filter):
 
 class FilterChain:
     filters : List[Filter]
-    prev_tx : TransactionMetadata
-    tx : TransactionMetadata
     loop : asyncio.BaseEventLoop
 
     def __init__(self, filters : List[Filter]):
@@ -38,11 +41,7 @@ class FilterChain:
         # callbacks which we never register.
         self.loop = asyncio.new_event_loop()
 
-
     def init(self, tx : TransactionMetadata):
-        self.prev_tx = TransactionMetadata()
-        self.tx = tx
-
         for f in self.filters:
             f.wire_downstream(tx)
             if isinstance(f, ProxyFilter):
@@ -50,19 +49,18 @@ class FilterChain:
                 f.wire_upstream(tx)
 
     def update(self):
-        logging.debug(self.tx)
-        delta = self.prev_tx.delta(self.tx)
-        logging.debug(delta)
-        completion = []  # Tuple(filter, coroutine, future, tx)
+        completion = []  # Tuple(filter, coroutine, future)
 
         async def upstream(futures):
-            logging.debug('upstream')
+            # logging.debug('upstream')
             futures[0] = self.loop.create_future()
             return await futures[0]
 
-        tx = self.tx
+        prev = self.filters[0].downstream.copy()
+
         for f in self.filters:
-            prev = tx.copy()
+            delta = f.prev_downstream.delta(f.downstream)
+            f.prev_downstream = f.downstream.copy()
 
             futures = [None]
             co = f.update(delta, partial(upstream, futures))
@@ -70,22 +68,22 @@ class FilterChain:
                 co.send(None)
             except StopIteration:
                 pass  # i.e. never called upstream()
-            delta = prev.delta(tx)
-            assert delta is not None
+            f.prev_upstream = f.upstream.copy()
             fut = futures[0]
             futures = None
-            completion.append((f, co, fut, prev))
+            completion.append((f, co, fut))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
             if fut is None:
                 logging.debug('no fut')
                 break
-            if f.upstream is not None and f.downstream is not f.upstream:
-                tx = f.upstream
 
-        for f, co, fut, prev in reversed(completion):
+        for f, co, fut in reversed(completion):
             if fut is not None:
+                delta = f.prev_upstream.delta(f.upstream)
+                f.prev_upstream = f.upstream.copy()
                 fut.set_result(delta)
+
                 # TODO The filter impl could do multiple roundtrips
                 # with the upstream? That would manifest here as
                 # calling upstream again and not raising
@@ -100,8 +98,4 @@ class FilterChain:
                 except StopIteration:
                     pass
 
-            delta = prev.delta(f.downstream)
-
-        self.prev_tx = self.tx.copy()
-
-        return delta
+        return prev.delta(self.filters[0].downstream)

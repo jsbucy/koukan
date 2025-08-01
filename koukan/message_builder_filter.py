@@ -8,38 +8,34 @@ from contextlib import nullcontext
 from os import devnull
 
 from koukan.filter import (
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import ProxyFilter
 from koukan.response import Response
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 from koukan.blob import Blob, FileLikeBlob, InlineBlob
 from koukan.rest_schema import BlobUri
 
-class MessageBuilderFilter(SyncFilter):
-    upstream : Optional[SyncFilter] = None
+class MessageBuilderFilter(ProxyFilter):
     body : Optional[Blob] = None
     validation : Optional[bool]= None
 
-    def __init__(self, upstream):
-        self.upstream = upstream
+    def __init__(self):
+        pass
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata] :
+    async def update(self, tx_delta : TransactionMetadata, upstream):
         assert self.body is None
         assert self.validation is not False
-        body = tx.body
-        if not isinstance(body, MessageBuilderSpec):
-            return self.upstream.on_update(tx, tx_delta)
-        if not body.finalized() and body.json is None:
-            downstream_tx = tx.copy()
-            downstream_delta = tx_delta.copy()
-            downstream_tx.body = downstream_delta.body = None
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
 
+        body = self.downstream.body
+        delta = self.upstream.delta(self.downstream)
+        assert self.upstream.merge_from(delta) is not None
+        if not isinstance(body, MessageBuilderSpec):
+            assert self.downstream.merge_from(await upstream()) is not None
+            return
+        if not body.finalized() and body.json is None:
+            self.upstream.body = None
+            assert self.downstream.merge_from(await upstream()) is not None
+            return
 
         if body.finalized():
             blobs = { blob.rest_id(): blob for blob in tx_delta.body.blobs }
@@ -70,27 +66,17 @@ class MessageBuilderFilter(SyncFilter):
             # TODO add a validator/fixup filter in front of this to
             # catch these errors
             logging.exception('unexpected exception in MessageBuilder')
-            err = TransactionMetadata()
-            tx.fill_inflight_responses(
+            self.downstream.fill_inflight_responses(
                 Response(250, 'ok (MessageBuilderFilter no-op, '
-                         'DATA will fail)'),
-                err)
-            err.data_response = Response(
+                         'DATA will fail)'))
+            self.downstream.data_response = Response(
                 550, 'unexpected exception in MessageBuilder, '
                 'likely invalid message_builder json')
-            tx.merge_from(err)
-            return err
+            return
 
         if self.body:
             logging.debug('MessageBuilderFilter.on_update %d %s',
                           self.body.len(), self.body.content_length())
 
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-
-        downstream_tx.body = downstream_delta.body = self.body
-
-        upstream_delta = self.upstream.on_update(
-            downstream_tx, downstream_delta)
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+        self.upstream.body = self.body
+        assert self.downstream.merge_from(await upstream()) is not None

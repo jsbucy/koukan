@@ -195,6 +195,14 @@ class FileLikeBlob(Blob, WritableBlob):
             self._len = stat.st_size
             self._content_length = self._len
 
+    # this is currently only used in MessageBuilderFilter which writes
+    # it to completion when it renders the message so upstream won't
+    # see differing successive values.
+    def delta(self, rhs) -> Optional[bool]:
+        if not isinstance(rhs, FileLikeBlob):
+            return None
+        return False
+
     def rest_id(self):
         return self._rest_id
 

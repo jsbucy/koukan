@@ -128,7 +128,7 @@ root_yaml_template = {
                 }
             },
             'chain': [
-                # {'filter': 'message_builder'},
+                {'filter': 'message_builder'},
                 {'filter': 'sync'}
             ],
         },
@@ -287,6 +287,7 @@ class RouterServiceTest(unittest.TestCase):
         # probe for startup
         def exp(tx, tx_delta):
             logging.debug(tx)
+            logging.debug(tx_delta)
             if tx_delta.mail_from:
                 tx.mail_response = Response(201, 'probe mail ok')
             if tx_delta.rcpt_to:
@@ -1073,25 +1074,26 @@ class RouterServiceTest(unittest.TestCase):
 
 
     def disabled_test_micro(self):
-        # gc.disable()
+        #self._exploder_micro()
+        micro = self._rest_smoke_micro
+
         logging.debug('warmup')
-        self._exploder_micro()
+        micro()
         logging.debug('real')
         start = time.monotonic()
         iters=100
         para=1
-        def micro():
+        def run_micro():
             for i in range(0,int(iters/para)):
                 start = time.monotonic()
                 logging.debug('micro iter start')
-                #self._exploder_micro()
-                self._rest_smoke_micro()
+                micro()
                 logging.debug('micro iter done %f', time.monotonic() - start)
 
         def pmicro():
             threads = []
             for i in range(0,para):
-                t = Thread(target=micro)
+                t = Thread(target=run_micro)
                 t.start()
                 threads.append(t)
             for t in threads:
@@ -1303,26 +1305,20 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual(["bob1@example.com"],
                               [m.mailbox for m in tx.rcpt_to])
             self.assertIsNone(tx.body)
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response=[Response(202)])
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
+            tx.mail_response = Response(201)
+            tx.rcpt_response=[Response(202)]
 
         upstream_endpoint.add_expectation(exp_env)
 
         def exp_body(tx, tx_delta):
             logging.debug('test_message_builder.exp_body %s', tx)
-            if tx.body is None:
-                return TransactionMetadata()
+            if tx_delta.body is None or not tx_delta.body.finalized():
+                return
             body = tx.body.pread(0)
             logging.debug(body)
             self.assertIn(b'subject: hello\r\n', body)
             #self.assertIn(b, body)  # base64
-            upstream_delta = TransactionMetadata(
-                data_response = Response(203))
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
+            tx.data_response = Response(203)
 
         upstream_endpoint.add_expectation(exp_body)
         upstream_endpoint.add_expectation(exp_body)

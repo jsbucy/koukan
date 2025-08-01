@@ -184,4 +184,4 @@ class FilterChainWiring:
             literal=yaml.get('literal', None))
 
     def message_builder(self, yaml, next):
-        return MessageBuilderFilter(next)
+        return MessageBuilderFilter()

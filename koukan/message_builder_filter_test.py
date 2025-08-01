@@ -4,10 +4,10 @@ import unittest
 import logging
 from datetime import datetime, timezone
 import tempfile
+from functools import partial
 
 from koukan.blob import Blob, InlineBlob
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
 from koukan.storage_schema import BlobSpec
 from koukan.rest_schema import BlobUri
@@ -15,20 +15,21 @@ from koukan.rest_schema import BlobUri
 from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.message_builder import MessageBuilderSpec
 
-class MessageBuilderFilterTest(unittest.TestCase):
+class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
+        self.filter = MessageBuilderFilter()
+        self.filter.wire_downstream(TransactionMetadata())
+        self.filter.wire_upstream(TransactionMetadata())
 
-    def test_smoke(self):
-        upstream = FakeSyncFilter()
-        message_builder = MessageBuilderFilter(upstream)
-
-        tx = TransactionMetadata(
-            remote_host=HostPort('example.com', port=25000),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-        tx_delta = TransactionMetadata()
+    async def test_smoke(self):
+        tx = self.filter.downstream
+        tx.remote_host=HostPort('example.com', port=25000)
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('bob@domain')]
         tx.body = MessageBuilderSpec(
             {"text_body": [{
                 "content_type": "text/html",
@@ -39,11 +40,12 @@ class MessageBuilderFilterTest(unittest.TestCase):
         )
         tx.body.check_ids()
 
-        def exp(tx, delta):
-            self.assertTrue(isinstance(delta.body, Blob))
-            self.assertTrue(delta.body.finalized())
+        async def exp(tx):
+            logging.debug(tx)
+            self.assertTrue(isinstance(tx.body, Blob))
+            self.assertTrue(tx.body.finalized())
             self.assertNotEqual(
-                delta.body.pread(0).find(b'MIME-Version'), -1)
+                tx.body.pread(0).find(b'MIME-Version'), -1)
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
@@ -51,49 +53,46 @@ class MessageBuilderFilterTest(unittest.TestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
-        upstream.add_expectation(exp)
-        upstream_delta = message_builder.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
-        self.assertEqual(upstream_delta.data_response.code, 203)
+        await self.filter.update(
+            self.filter.downstream.copy(),
+            partial(exp, self.filter.upstream))
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 203)
 
-    def test_noop(self):
-        upstream = FakeSyncFilter()
-        message_builder = MessageBuilderFilter(upstream)
-
+    async def test_noop(self):
+        tx = self.filter.downstream
         body = InlineBlob(b'hello, world!')
-        tx = TransactionMetadata(
-            remote_host=HostPort('example.com', port=25000),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body=body)
+        tx.remote_host=HostPort('example.com', port=25000)
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('bob')]
+        tx.body=body
 
-        def exp(tx, delta):
+        async def exp(tx):
+            logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
             self.assertEqual(tx.body, body)
-            self.assertEqual(delta.body, body)
+            self.assertEqual(tx.body, body)
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
                 data_response=Response(203))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        upstream.add_expectation(exp)
-        upstream_delta = message_builder.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
-        self.assertEqual(upstream_delta.data_response.code, 203)
 
-    def test_exception(self):
-        upstream = FakeSyncFilter()
-        message_builder = MessageBuilderFilter(upstream)
+        await self.filter.update(
+            tx.copy(), partial(exp, self.filter.upstream))
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 203)
 
-        tx = TransactionMetadata(
-            remote_host=HostPort('example.com', port=25000),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-        tx_delta = TransactionMetadata()
+    async def test_exception(self):
+        tx = self.filter.downstream
+        tx.remote_host=HostPort('example.com', port=25000)
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('bob@domain')]
+
         # MessageBuilder currently raises ValueError() if date is
         # missing unix_secs
         tx.body = MessageBuilderSpec(
@@ -106,14 +105,13 @@ class MessageBuilderFilterTest(unittest.TestCase):
             blobs=[InlineBlob(b'hello, ', last=False,
                               rest_id='blob_rest_id')])
         tx.body.check_ids()
-        def exp(tx, delta):
+        async def exp():
             self.fail()
-        upstream.add_expectation(exp)
 
-        upstream_delta = message_builder.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 250)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [250])
-        self.assertEqual(upstream_delta.data_response.code, 550)
+        await self.filter.update(tx.copy(), exp)
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertEqual([r.code for r in tx.rcpt_response], [250])
+        self.assertEqual(tx.data_response.code, 550)
 
 
 if __name__ == '__main__':
