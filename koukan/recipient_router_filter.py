@@ -85,11 +85,11 @@ class RecipientRouterFilter(SyncFilter):
                   ) -> Optional[TransactionMetadata]:
         routed = False
         if (tx.rest_endpoint is None and tx.options is None and
-                self.dest_delta is None and tx.rcpt_to):
+                self.dest_delta is None and tx_delta.rcpt_to):
             self.dest_delta = self._route(tx)
             # i.e. err
             if self.dest_delta is not None and self.dest_delta.rcpt_response:
-                tx.merge_from(self.dest_delta)
+                assert tx.merge_from(self.dest_delta) is not None
                 return self.dest_delta
             routed = True
 
@@ -97,17 +97,20 @@ class RecipientRouterFilter(SyncFilter):
             if self.upstream is None:
                 return TransactionMetadata()
             return self.upstream.on_update(tx, tx_delta)
+        # noop/heartbeat update after previous failure
+        if self.dest_delta is not None and self.dest_delta.rcpt_response:
+            return TransactionMetadata()
 
         # cf "filter chain" doc 2024/8/6, we can't add internal fields
         # to the downstream tx because it will cause a delta/conflict
         # when we do the next db read in the OutputHandler
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
-        downstream_tx.merge_from(self.dest_delta)
+        assert downstream_tx.merge_from(self.dest_delta) is not None
         if routed:
-            downstream_delta.merge_from(self.dest_delta)
+            assert downstream_delta.merge_from(self.dest_delta) is not None
         upstream_delta = self.upstream.on_update(
             downstream_tx, downstream_delta)
         assert upstream_delta is not None
-        tx.merge_from(upstream_delta)
+        assert tx.merge_from(upstream_delta) is not None
         return upstream_delta

@@ -70,15 +70,17 @@ class Executor:
             fut = Future()
             t = Thread(target = partial(self._run, fut, fn),
                        daemon=True)
-            t.start()
+            self.inflight[t] = int(start)
+        t.start()
 
-            if fut and (self.debug_futures is not None):
+        if fut and (self.debug_futures is not None):
+            with self.lock:
                 self.debug_futures.append(fut)
-            return fut
+        return fut
 
     def _run(self, fut, fn):
         this_thread = current_thread()
-        self.inflight[this_thread] = int(time.monotonic())
+        assert this_thread in self.inflight
         try:
             return fut.set_result(fn())
         except Exception as e:
@@ -93,7 +95,9 @@ class Executor:
 
     def ping_watchdog(self):
         with self.lock:
-            self.inflight[current_thread()] = time.monotonic()
+            t = current_thread()
+            assert t in self.inflight
+            self.inflight[t] = time.monotonic()
         return True
 
     def shutdown(self, timeout : Optional[int] = None) -> bool:

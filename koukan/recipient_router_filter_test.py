@@ -28,8 +28,10 @@ class FailurePolicy(RoutingPolicy):
 
 class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def test_success(self):
         upstream = FakeSyncFilter()
@@ -87,7 +89,12 @@ class RecipientRouterFilterTest(unittest.TestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [500])
         self.assertIsNone(tx.data_response)
 
-
+        # noop/heartbeat update: should return without calling
+        # upstream or mutating transaction
+        prev = tx.copy()
+        upstream_delta = router.on_update(tx, TransactionMetadata())
+        self.assertFalse(upstream_delta)
+        self.assertFalse(prev.delta(tx))
 
 if __name__ == '__main__':
     unittest.main()

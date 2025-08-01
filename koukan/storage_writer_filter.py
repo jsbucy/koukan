@@ -172,6 +172,7 @@ class StorageWriterFilter(AsyncFilter):
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
                 except VersionConflictException:
+                    logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)

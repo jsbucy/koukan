@@ -80,6 +80,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)
                 break
             except VersionConflictException:
+                logging.debug('VersionConflictException')
                 if i == 4:
                     raise
                 backoff(i)
