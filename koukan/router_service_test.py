@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, List, Optional, Tuple
-from threading import Lock, Condition
+from threading import Lock, Condition, Thread
 import logging
 import logging.config
 import unittest
@@ -12,6 +12,8 @@ from urllib.parse import urljoin
 from datetime import timedelta
 import copy
 import cProfile
+from pstats import SortKey
+import gc
 
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
@@ -51,7 +53,20 @@ root_yaml_template = {
         # should be enabled for the rest
         'dequeue': False,
         'mailer_daemon_mailbox': 'mailer-daemon@d',
-        'rest_id_entropy': 2
+        'rest_id_entropy': 2,
+
+        'executor': {
+            'rest': {
+                'max_inflight': 100,
+                'watchdog_timeout': 10,
+                'testonly_debug_futures': True
+            },
+            'output': {
+                'max_inflight': 100,
+                'watchdog_timeout': 10,
+                'testonly_debug_futures': True
+            }
+        },
     },
     'rest_listener': {
     },
@@ -193,11 +208,6 @@ root_yaml_template = {
         'session_refresh_interval': 1,
         'gc_ttl': 0,
         'gc_interval': None,  # don't start, we'll invoke in the tests
-    },
-    'executor': {
-        'max_inflight': 10,
-        'watchdog_timeout': 10,
-        'testonly_debug_futures': True
     },
     'modules': {
         'sync_filter': {
@@ -349,7 +359,7 @@ class RouterServiceTest(unittest.TestCase):
     def _dequeue(self, n=1):
         deq = 0
         for i in range(0,10):
-            if self.service._dequeue():
+            if self.service.dequeue_one(self.service.output_executor):
                 deq += 1
                 logging.debug('RouterServiceTest._dequeue %d', deq)
             if deq == n:
@@ -754,13 +764,26 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug(self.service.storage.debug_dump())
         self._dequeue()
 
-        tx_json = rest_endpoint.get_json()
-        tx = TransactionMetadata.from_json(tx_json, WhichJson.REST_READ)
-        self.assertEqual(2, tx.attempt_count)
-        self.assertEqual(201, tx.mail_response.code)
-        self.assertEqual([202], [r.code for r in tx.rcpt_response])
-        self.assertEqual(203, tx.data_response.code)
-        self.assertEqual('upstream response success', tx.final_attempt_reason)
+        for i in range(0, 5):
+            tx_json = rest_endpoint.get_json()
+            logging.debug(tx_json)
+            if tx_json == {
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'body': {},
+                    'retry': {},
+                    'notification': {},
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                    'data_response': {'code': 203, 'message': 'ok'},
+                    'attempt_count': 2,
+                    'final_attempt_reason': 'upstream response success'}:
+                break
+            time.sleep(0.3)
+        else:
+            self.fail('expected tx')
+
+
 
     def test_reuse_body(self):
         logging.debug('RouterServiceTest.test_reuse_body')
@@ -948,48 +971,62 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual('upstream data 0 (Exploder same response)',
                          tx.data_response.message)
 
-
-    def _exploder_micro(self):
+    def _rest_smoke_micro(self):
+        logging.debug('_rest_smoke_micro')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
+        def exp(tx, tx_delta):
+            logging.debug(tx)
+            # xxx verify mail/rcpt
+            upstream_delta=TransactionMetadata()
+            if tx_delta.mail_from:
+                upstream_delta.mail_response=Response(201)
+            if tx_delta.rcpt_to:
+                upstream_delta.rcpt_response=[Response(202)]
+            if tx.body and tx.body.finalized():
+                self.assertIn(body, tx.body.pread(0))
+                upstream_delta.data_response=Response(203)
 
-        logging.info('testExploderMultiRcpt start tx')
+            self.assertTrue(tx.merge_from(upstream_delta))
+            return upstream_delta
+        upstream_endpoint = FakeSyncFilter()
+        upstream_endpoint.add_expectation(exp)
+        upstream_endpoint.add_expectation(exp)
+        upstream_endpoint.add_expectation(exp)
+        self.add_endpoint(upstream_endpoint)
+
+
+        body = b'hello, world!'
         tx = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
-            remote_host=HostPort('1.2.3.4', 12345))
+            rcpt_to=[Mailbox('bob@example.com')],
+            body=InlineBlob(body, last=True))
+
         rest_endpoint.on_update(tx, tx.copy())
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
 
-        # no rcpt -> buffered
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertIn('exploder noop', tx.mail_response.message)
-
-        # upstream tx #1
+    def _exploder_micro(self):
         upstream_endpoint = FakeSyncFilter()
         self.add_endpoint(upstream_endpoint)
-        def exp_rcpt1(tx, tx_delta):
+        def exp_rcpt(tx, tx_delta):
             logging.debug(tx)
             # set upstream responses so output (retry) succeeds
             # upstream success, retry succeeds, propagates down to rest
             updated_tx = tx.copy()
-            updated_tx.mail_response = Response(201)
-            updated_tx.rcpt_response.append(Response(202, 'upstream rcpt 1'))
+            if tx_delta.mail_from:
+                updated_tx.mail_response = Response(201)
+            if tx_delta.rcpt_to:
+                updated_tx.rcpt_response.append(Response(202, 'upstream rcpt 1'))
             upstream_delta = tx.delta(updated_tx)
             assert tx.merge_from(upstream_delta) is not None
             return upstream_delta
-        upstream_endpoint.add_expectation(exp_rcpt1)
-
-        logging.info('testExploderMultiRcpt patch rcpt1')
-        updated_tx = tx.copy()
-        updated_tx.rcpt_to.append(Mailbox('bob@example.com'))
-        tx_delta = tx.delta(updated_tx)
-        tx = updated_tx
-        rest_endpoint.on_update(tx, tx_delta)
-        self.assertRcptCodesEqual([202], tx.rcpt_response)
-        self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
+        upstream_endpoint.add_expectation(exp_rcpt)
 
         def exp_body(tx, tx_delta):
-            logging.debug('%s', tx)
+            logging.debug('exp_body')
             upstream_delta = TransactionMetadata()
             if tx.body and tx.body.finalized():
                 self.assertEqual(tx.body.pread(0), b'Hello, World!')
@@ -1002,7 +1039,30 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp_body)
 
 
-        logging.info('testExploderMultiRcpt patch body')
+        rest_endpoint = self.create_endpoint(
+            static_base_url=self.router_url, static_http_host='smtp-msa',
+            timeout_start=5, timeout_data=5)
+
+        logging.info('_exploder_micro start tx')
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'),
+            remote_host=HostPort('1.2.3.4', 12345))
+        rest_endpoint.on_update(tx, tx.copy())
+
+        # no rcpt -> buffered
+        self.assertEqual(tx.mail_response.code, 250)
+        self.assertIn('exploder noop', tx.mail_response.message)
+
+        logging.info('_exploder_micro patch rcpt')
+        updated_tx = tx.copy()
+        updated_tx.rcpt_to.append(Mailbox('bob@example.com'))
+        tx_delta = tx.delta(updated_tx)
+        tx = updated_tx
+        rest_endpoint.on_update(tx, tx_delta)
+        self.assertRcptCodesEqual([202], tx.rcpt_response)
+        self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
+
+        logging.info('_exploder_micro patch body')
 
         tx_delta = TransactionMetadata(
             body=InlineBlob(b'Hello, World!', last=True))
@@ -1010,19 +1070,38 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(tx, tx_delta)
         logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(205, tx.data_response.code)
-        self.assertEqual('upstream data',
-                         tx.data_response.message)
+        self.assertEqual('upstream data', tx.data_response.message)
 
 
-    def disabled_test_exploder_micro(self):
+    def disabled_test_micro(self):
+        # gc.disable()
         logging.debug('warmup')
         self._exploder_micro()
         logging.debug('real')
+        start = time.monotonic()
+        iters=100
+        para=1
         def micro():
-            for i in range(0,10):
-                self._exploder_micro()
-        cProfile.runctx('fn()', None, {'fn': partial(micro)})
-        logging.debug('done')
+            for i in range(0,int(iters/para)):
+                start = time.monotonic()
+                logging.debug('micro iter start')
+                #self._exploder_micro()
+                self._rest_smoke_micro()
+                logging.debug('micro iter done %f', time.monotonic() - start)
+
+        def pmicro():
+            threads = []
+            for i in range(0,para):
+                t = Thread(target=micro)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+        cProfile.runctx('fn()', None, {'fn': partial(pmicro)},
+                        #sort=SortKey.CUMULATIVE
+                        sort=SortKey.TIME)
+        total = time.monotonic() - start
+        logging.warning('done %f %f', total, iters/total)
 
 
     def test_notification_retry_timeout(self):

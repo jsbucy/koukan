@@ -243,7 +243,7 @@ class Service:
             http_host = http_host,
             endpoint_yaml = self.get_endpoint_yaml)
         fut = self.output_executor.submit(
-            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
+            partial(self._handle_new_tx, writer, endpoint, endpoint_yaml),
             0)
         if block_upstream and fut is None:
             # XXX leaves db tx leased?
@@ -326,24 +326,26 @@ class Service:
     def dequeue(self, executor):
         while True:
             executor.ping_watchdog()
-            deq = [None]
-            # fine to wait forever on this submit()
-            if (self.output_executor.submit(partial(self._dequeue, deq))
-                is None):
-                logging.error('unexpected executor overflow')
-                if self.wait_shutdown(1, executor):
-                    return
-                continue
-            with self.lock:
-                # Wait 1s for _dequeue()
-                self.cv.wait_for(
-                    lambda: (deq[0] is not None) or self._shutdown, 1)
-            # if we dequeued something, try again immediately in case
-            # there's another
-            if deq[0]:
+            if self.dequeue_one(executor):
                 continue
             if self.wait_shutdown(1, executor):
                 return
+
+    def dequeue_one(self, executor):
+        deq = [None]
+        # fine to wait forever on this submit()
+        if (self.output_executor.submit(partial(self._dequeue, deq))
+            is None):
+            logging.error('unexpected executor overflow')
+            return False
+        with self.lock:
+            # Wait 1s for _dequeue()
+            self.cv.wait_for(
+                lambda: (deq[0] is not None) or self._shutdown, 1)
+        # if we dequeued something, try again immediately in case
+        # there's another
+        return deq[0]
+
 
     def gc(self, executor):
         storage_yaml = self.root_yaml['storage']
