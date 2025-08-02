@@ -32,7 +32,7 @@ class OutputHandler:
     notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
 
-    prev_tx : TransactionMetadata
+    prev_downstream : TransactionMetadata
     tx : TransactionMetadata
 
     retry_params : Optional[dict] = None
@@ -64,7 +64,7 @@ class OutputHandler:
         self.retry_params = retry_params
         if self.retry_params and 'bug_retry' in self.retry_params:
             self._bug_retry = self.retry_params['bug_retry']
-        self.prev_tx = TransactionMetadata()
+        self.prev_downstream = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.notification_params = notification_params
         now = time.monotonic()
@@ -73,16 +73,17 @@ class OutputHandler:
         self.heartbeat = heartbeat
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
-        delta = self.tx.delta(self.cursor.tx)
-        self.tx.merge_from(delta)
+        delta = self.prev_downstream.delta(self.cursor.tx)
 
         # drop some fields from the tx that's going upstream
         # OH consumes these fields but they should not propagate to the
         # output chain/upstream rest/gateway etc
         for field in ['final_attempt_reason', 'notification', 'retry']:
-            setattr(self.tx, field, None)
-        delta = self.prev_tx.delta(self.tx)
-        assert delta is not None
+            setattr(delta, field, None)
+
+        self.tx.merge_from(delta)
+        self.prev_downstream = self.cursor.tx.copy()
+
         logging.debug(str(delta) if delta else '(empty delta)')
         return delta
 
@@ -118,7 +119,6 @@ class OutputHandler:
         refresh_dt = now - self._last_upstream_refresh
         recent_refresh = (refresh_dt < self.upstream_refresh)
         if ((not delta_minus_body) and ((delta.body is None) or (not delta.body.finalized()))) and recent_refresh:
-            assert self.prev_tx.merge_from(delta) is not None
             logging.debug('cooldown')
             return TransactionMetadata(), {}, False
         self._last_upstream_refresh = now
@@ -136,8 +136,6 @@ class OutputHandler:
         # necessary to clear e.g. attempt_count here.
 
         # postcondition check: !req_inflight() in handle() finally:
-
-        self.prev_tx = self.tx.copy()
 
         done = False
         # for oneshot tx (i.e. exploder downstream or rest without

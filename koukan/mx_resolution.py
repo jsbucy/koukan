@@ -7,7 +7,8 @@ from dns.resolver import NoNameservers
 from koukan.dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
-from koukan.filter import HostPort, Resolution, SyncFilter, TransactionMetadata
+from koukan.filter import HostPort, Resolution, TransactionMetadata
+from koukan.filter_chain import Filter
 from koukan.response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
@@ -41,8 +42,7 @@ def resolve(resolver, hostport : HostPort):
                 seen.append(aaa)
     return seen
 
-class DnsResolutionFilter(SyncFilter):
-    upstream : SyncFilter
+class DnsResolutionFilter(Filter):
     static_resolution : Optional[Resolution] = None
     resolution : Optional[Resolution] = None
     first = True
@@ -50,16 +50,14 @@ class DnsResolutionFilter(SyncFilter):
     literal : Optional[str] = None
     resolver : Resolver
 
-    def __init__(self, upstream : SyncFilter,
+    def __init__(self,
                  static_resolution : Optional[Resolution] = None,
                  suffix : Optional[str] = None,
                  literal : Optional[str] = None,
                  resolver : Optional[Resolver] = None):
         self.resolver = resolver if resolver else Resolver()
-        self.upstream = upstream
         self.suffix = suffix
         self.literal = literal
-        self.upstream = upstream
         self.static_resolution = static_resolution
 
     def _valid_ip(self, ip):
@@ -108,12 +106,11 @@ class DnsResolutionFilter(SyncFilter):
                 hosts_out.append(hp)
         return hosts_out
 
-    def on_update(self,
-                  tx : TransactionMetadata, tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
+    async def update(self, tx_delta : TransactionMetadata, upstream):
         if (self.resolution is None and
             not self._needs_resolution(tx_delta.resolution)):
-            return self.upstream.on_update(tx, tx_delta)
+            await upstream()
+            return
 
         resolution = None
         if self.resolution is None:
@@ -122,19 +119,14 @@ class DnsResolutionFilter(SyncFilter):
             # didn't _match() so this won't fail unless there were
             # none of those
             if not resolution.hosts:
-                err = TransactionMetadata()
-                tx.fill_inflight_responses(
+                self.downstream.fill_inflight_responses(
                     Response(450, 'DnsResolverFilter empty result'), err)
-                tx.merge_from(err)
-                return err
+                return
 
             self.resolution = resolution
 
-        downstream_tx = tx.copy()
-        downstream_tx.resolution = self.resolution
-        downstream_delta = tx_delta.copy()
-        downstream_delta.resolution = resolution
-        return self.upstream.on_update(downstream_tx, downstream_delta)
+        self.downstream.resolution = self.resolution
+        await upstream()
 
 
 if __name__ == '__main__':

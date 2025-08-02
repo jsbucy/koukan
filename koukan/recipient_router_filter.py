@@ -9,8 +9,8 @@ from koukan.filter import (
     HostPort,
     Mailbox,
     Resolution,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import Filter
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -43,74 +43,41 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(SyncFilter):
-    upstream: SyncFilter
+class RecipientRouterFilter(Filter):
     policy : RoutingPolicy
-    dest_delta : Optional[TransactionMetadata] = None
+    done = False
 
-    def __init__(self, policy : RoutingPolicy, upstream : SyncFilter):
+    def __init__(self, policy : RoutingPolicy):
         self.policy = policy
-        self.upstream = upstream
 
-    def _route(self, tx : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+    def _route(self):
+        tx = self.downstream
         logging.debug('RecipientRouterFilter._route() %s', tx)
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place
-        dest_delta = TransactionMetadata()
         if resp and resp.err():
-            if tx.mail_from and not tx.mail_response:
-                dest_delta.mail_response = Response(
+            if tx.mail_from and tx.mail_response is None:
+                tx.mail_response = Response(
                     250, 'MAIL ok (RecipientRouterFilter')
-            dest_delta.rcpt_response = [resp]
-            return dest_delta
+            tx.rcpt_response = [resp]
+            return
         elif dest is None:
-            return None
+            return
 
-        dest_delta.rest_endpoint = dest.rest_endpoint
+        tx.rest_endpoint = dest.rest_endpoint
         if dest.remote_host is not None:
-            dest_delta.resolution = Resolution(dest.remote_host)
+            tx.resolution = Resolution(dest.remote_host)
         if dest.http_host is not None:
-            dest_delta.upstream_http_host = dest.http_host
-        dest_delta.options = dest.options
-        logging.debug('RecipientRouterFilter._route() dest_delta %s',
-                      dest_delta)
-        return dest_delta
+            tx.upstream_http_host = dest.http_host
+        tx.options = dest.options
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        routed = False
-        if (tx.rest_endpoint is None and tx.options is None and
-                self.dest_delta is None and tx_delta.rcpt_to):
-            self.dest_delta = self._route(tx)
-            # i.e. err
-            if self.dest_delta is not None and self.dest_delta.rcpt_response:
-                assert tx.merge_from(self.dest_delta) is not None
-                return self.dest_delta
-            routed = True
-
-        if self.dest_delta is None:
-            if self.upstream is None:
-                return TransactionMetadata()
-            return self.upstream.on_update(tx, tx_delta)
-        # noop/heartbeat update after previous failure
-        if self.dest_delta is not None and self.dest_delta.rcpt_response:
-            return TransactionMetadata()
-
-        # cf "filter chain" doc 2024/8/6, we can't add internal fields
-        # to the downstream tx because it will cause a delta/conflict
-        # when we do the next db read in the OutputHandler
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-        assert downstream_tx.merge_from(self.dest_delta) is not None
-        if routed:
-            assert downstream_delta.merge_from(self.dest_delta) is not None
-        upstream_delta = self.upstream.on_update(
-            downstream_tx, downstream_delta)
-        assert upstream_delta is not None
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+    async def update(self, tx_delta : TransactionMetadata, upstream):
+        if not self.done and tx_delta.rcpt_to:
+            self._route()
+            self.done = True
+            if self.downstream.rcpt_response:  # i.e. err
+                return
+        await upstream()

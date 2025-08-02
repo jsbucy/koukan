@@ -87,5 +87,4 @@ class RecipientRouterFactory:
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)
-        return RecipientRouterFilter(policy, next)
-
+        return RecipientRouterFilter(policy)

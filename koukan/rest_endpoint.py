@@ -16,9 +16,9 @@ from koukan.deadline import Deadline
 from koukan.filter import (
     HostPort,
     Resolution,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import Filter
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
@@ -63,7 +63,7 @@ class RestEndpointClientProvider:
     def __del__(self):
         self.close()
 
-class RestEndpoint(SyncFilter):
+class RestEndpoint(Filter):
     transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -246,11 +246,13 @@ class RestEndpoint(SyncFilter):
                           rest_resp)
         return
 
-    def on_update(self,
-                  tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata,
-                  timeout : Optional[float] = None
-                  ) -> Optional[TransactionMetadata]:
+    async def update(self, tx_delta : TransactionMetadata,
+                     unused_upstream,
+                     timeout : Optional[float] = None):
+        self.do_update(tx_delta, timeout)
+
+    def do_update(self, tx_delta : TransactionMetadata,
+                  timeout : Optional[float] = None):
         if tx_delta.cancelled:
             self._cancel()
             upstream_delta = TransactionMetadata()
@@ -258,16 +260,15 @@ class RestEndpoint(SyncFilter):
             # requests in delta along with cancellation. This response
             # should never get as far as smtp since cancel only occurs
             # after the smtp transaction aborted due to rset/quit/timeout.
-            tx.fill_inflight_responses(
+            self.downstream.fill_inflight_responses(
                 Response(550, 'cancelled'), upstream_delta)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        elif tx.cancelled:
-            return TransactionMetadata()
+            return
+        elif self.downstream.cancelled:
+            return
 
         if self.http_host is None and self.transaction_url is None:
-            if tx.upstream_http_host:
-                self.http_host = tx.upstream_http_host
+            if self.downstream.upstream_http_host:
+                self.http_host = self.downstream.upstream_http_host
             elif self.static_http_host:
                 self.http_host = self.static_http_host
 
@@ -279,7 +280,7 @@ class RestEndpoint(SyncFilter):
 
         logging.debug('RestEndpoint.on_update start %s '
                       'timeout=%s downstream tx %s',
-                      self.transaction_url, timeout, tx)
+                      self.transaction_url, timeout, self.downstream)
 
         downstream_delta = tx_delta.copy()
         if downstream_delta.body:
@@ -293,8 +294,8 @@ class RestEndpoint(SyncFilter):
         # should not appear so it will merge cleanly with the original input.
         if self.upstream_tx is None:
             if self.base_url is None:
-                self.base_url = tx.rest_endpoint
-            self.upstream_tx = tx.copy_valid(WhichJson.REST_CREATE)
+                self.base_url = self.downstream.rest_endpoint
+            self.upstream_tx = self.downstream.copy_valid(WhichJson.REST_CREATE)
         else:
             assert self.upstream_tx.merge_from(downstream_delta) is not None
 
@@ -318,14 +319,12 @@ class RestEndpoint(SyncFilter):
         tx_update = False
         created = False
         if not self.transaction_url:
-            rest_resp = self._create(tx.resolution, self.upstream_tx, deadline)
+            rest_resp = self._create(self.downstream.resolution, self.upstream_tx, deadline)
             if rest_resp is None or rest_resp.status_code != 201:
                 # XXX maybe only needs to set mail_response?
-                err = TransactionMetadata()
-                tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream err creating tx'), err)
-                tx.merge_from(err)
-                return err
+                self.downstream.fill_inflight_responses(
+                    Response(450, 'RestEndpoint upstream err creating tx'))
+                return
             tx_update = True
             created = True
         else:
@@ -338,12 +337,9 @@ class RestEndpoint(SyncFilter):
                rest_resp = self._update(downstream_delta, deadline)
                # TODO handle 412 failed precondition
                if rest_resp is None or rest_resp.status_code != 200:
-                   err_delta = TransactionMetadata()
-                   tx.fill_inflight_responses(
-                       Response(450, 'RestEndpoint upstream http err'),
-                       err_delta)
-                   tx.merge_from(err_delta)
-                   return err_delta
+                   self.downstream.fill_inflight_responses(
+                       Response(450, 'RestEndpoint upstream http err'))
+                   return
 
                tx_update = True
 
@@ -364,11 +360,9 @@ class RestEndpoint(SyncFilter):
             if tx_out is None:
                 logging.debug('RestEndpoint.on_update bad resp_json %s',
                               resp_json)
-                err_delta = TransactionMetadata()
-                tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint bad resp_json'), err_delta)
-                tx.merge_from(err_delta)
-                return err_delta
+                self.downstream.fill_inflight_responses(
+                    Response(450, 'RestEndpoint bad resp_json'))
+                return
 
             # NOTE we cleared blobs from upstream_tx (above) to
             # prevent this for waiting for data_response since we
@@ -381,26 +375,21 @@ class RestEndpoint(SyncFilter):
             elif self.upstream_tx.req_inflight(tx_out):
                 err = 'upstream timeout'
             if err:
-                err_delta = TransactionMetadata()
-                tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint ' + err), err_delta)
-                tx.merge_from(err_delta)
-                return err_delta
+                self.downstream.fill_inflight_responses(
+                    Response(450, 'RestEndpoint ' + err))
+                return
 
             upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or
                 (self.upstream_tx.merge_from(upstream_delta) is None) or
-                (tx.merge_from(upstream_delta) is None)):
-                errs = TransactionMetadata()
-                tx.fill_inflight_responses(
+                (self.downstream.merge_from(upstream_delta) is None)):
+                self.downstream.fill_inflight_responses(
                     Response(450,
-                             'RestEndpoint upstream invalid resp/delta update'),
-                    errs)
-                assert tx.merge_from(errs) is not None
-                return errs
+                             'RestEndpoint upstream invalid resp/delta update'))
+                return
 
         if tx_delta.body is None:
-            return upstream_delta
+            return
 
         # rest receiving with message parsing sends message builder
         # spec out the back. Without pipelining, this will always be
@@ -412,28 +401,17 @@ class RestEndpoint(SyncFilter):
         if not created and message_builder:
             err = self._update_message_builder(tx_delta, deadline)
             if err is not None:
-                delta = TransactionMetadata(data_response = err)
-                tx.merge_from(delta)
-                return  delta
+                self.downstream.data_response = err
+                return
 
-        err = None
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
         # upstream_tx, not tx here
         if not any([r.ok() for r in self.upstream_tx.rcpt_response]):
-            err = "all rcpts failed"
-
-        if err is not None:
-            data_err = TransactionMetadata(
-                data_response=Response(
-                    400, "data failed precondition: " + err +
-                    " (RestEndpoint)"))
-            if upstream_delta is None:
-                upstream_delta = data_err
-            else:
-                assert upstream_delta.merge_from(data_err) is not None
-            assert tx.merge_from(data_err) is not None
-            return upstream_delta
+            self.downstream.data_response = Response(
+                    400, "data failed precondition: all rcpts failed"
+                    " (RestEndpoint)")
+            return
 
         blobs : List[Tuple[Blob, bool]]  # bool: non_body_blob
         if isinstance(tx_delta.body, Blob):
@@ -449,7 +427,7 @@ class RestEndpoint(SyncFilter):
 
         # NOTE _get() will wait on tx version even if nothing inflight
         if not blobs:
-            return upstream_delta
+            return
 
         # NOTE this assumes that message_builder includes all blobs on
         # the first call
@@ -457,10 +435,8 @@ class RestEndpoint(SyncFilter):
         for blob,non_body_blob in blobs:
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
             if not put_blob_resp.ok():
-                upstream_delta = TransactionMetadata(
-                    data_response = put_blob_resp)
-                assert tx.merge_from(upstream_delta) is not None
-                return upstream_delta
+                self.downstream.data_response = put_blob_resp
+                return
             if non_body_blob:
                 self.blob_url = None  # xxx wat?
             if not blob.finalized():
@@ -481,25 +457,16 @@ class RestEndpoint(SyncFilter):
             (blob_delta := self.upstream_tx.delta(
                 tx_out, WhichJson.REST_READ)) is None or
             (self.upstream_tx.merge_from(blob_delta) is None) or
-            (tx.merge_from(blob_delta) is None)):
-            errs = TransactionMetadata()
-            tx.fill_inflight_responses(
-                Response(450, 'RestEndpoint upstream invalid resp/delta get'),
-                errs)
-            assert tx.merge_from(errs) is not None
-            return errs
+            (self.downstream.merge_from(blob_delta) is None)):
+            self.downstream.fill_inflight_responses(
+                Response(450, 'RestEndpoint upstream invalid resp/delta get'))
+            return
 
-
-        errs = TransactionMetadata()
-        tx.fill_inflight_responses(
-            Response(450, 'RestEndpoint upstream timeout'), errs)
-        assert tx.merge_from(errs) is not None
+        self.downstream.fill_inflight_responses(
+            Response(450, 'RestEndpoint upstream timeout'))
         for t in [upstream_tx, tx_out]:
             t.remote_host = None
-        upstream_delta = upstream_tx.delta(tx_out, WhichJson.REST_READ)
-        assert upstream_delta is not None
-        assert upstream_delta.merge_from(errs) is not None
-        return upstream_delta
+
 
     # Send a finalized blob with a single http request.
     def _put_blob_single(self, blob : Blob,

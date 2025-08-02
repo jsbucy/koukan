@@ -121,25 +121,25 @@ endpoint:
       deadline: 30
 
   chain:
-  - filter: remote_host
+  # - filter: remote_host
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
   - filter: message_builder
-  - filter: received_header
-    received_hostname: gargantua1    
-  - filter: router
-    policy:
-      name: hello
+  # - filter: received_header
+  #   received_hostname: gargantua1    
+  # - filter: router
+  #   policy:
+  #     name: hello
   # send my own domains directly to my ingress
-  - filter: router
-    policy:
-      name: address_list
-      domains:
-      - example.com
-      - rest-application.example.com
-      destination:
-        endpoint: http://localhost:8000
-        http_host: mx-out
+  # - filter: router
+  #   policy:
+  #     name: address_list
+  #     domains:
+  #     - example.com
+  #     - rest-application.example.com
+  #     destination:
+  #       endpoint: http://localhost:8000
+  #       http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
@@ -147,15 +147,15 @@ endpoint:
       destination:
         endpoint: http://localhost:8001
         http_host: outbound
-  - filter: router
-    policy:
-      name: address_list
-      # no domains/dest -> reject all
+  # - filter: router
+  #   policy:
+  #     name: address_list
+  #     # no domains/dest -> reject all
   #- filter: dkim
   #  key: config/local-test/dkim.key
   #  domain: example.com
   #  selector: sel
-  - filter: hello
+  # - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
     static_hosts:

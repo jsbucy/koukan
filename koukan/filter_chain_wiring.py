@@ -178,7 +178,6 @@ class FilterChainWiring:
                 [HostPort.from_yaml(h) for h in host_list])
         # TODO add option for mx resolution (vs just A)
         return DnsResolutionFilter(
-            next,
             static_resolution=static_resolution,
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))

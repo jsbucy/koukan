@@ -254,6 +254,7 @@ class RestHandler(Handler):
         return resp
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
+        logging.debug('_get_tx')
         tx = self.async_filter.get()
         if tx is None:
             return None
@@ -276,7 +277,8 @@ class RestHandler(Handler):
     async def _get_tx_async(
             self, request
     ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
-        cfut = self.executor.submit(lambda: self._get_tx())
+        logging.debug('_get_tx_async')
+        cfut = self.executor.submit(self._get_tx)
         if cfut is None:
             return self.response(
                 code=500, msg='get tx async schedule read'), None
@@ -294,6 +296,7 @@ class RestHandler(Handler):
                                  msg='get tx async read fut done'), None
         if afut.result() is None:
             return self.response(code=404, msg='unknown tx'), None
+        logging.debug('_get_tx_async done')
         return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
@@ -329,7 +332,9 @@ class RestHandler(Handler):
         err, tx = await self._get_tx_async(request)
         if err is not None:
             return err
-        return self._get_tx_resp(request, tx)
+        resp = self._get_tx_resp(request, tx)
+        logging.debug('get_tx_async done')
+        return resp
 
     def patch_tx(self, request : HttpRequest, req_json : Optional[dict]
                  ) -> HttpResponse:

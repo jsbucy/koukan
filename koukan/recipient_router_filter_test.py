@@ -11,7 +11,6 @@ from koukan.recipient_router_filter import (
     RoutingPolicy )
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
 
 class SuccessPolicy(RoutingPolicy):
@@ -26,18 +25,19 @@ class FailurePolicy(RoutingPolicy):
             Optional[Destination], Optional[Response]]:
         return None, Response(500, 'not found')
 
-class RecipientRouterFilterTest(unittest.TestCase):
+class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 
-    def test_success(self):
-        upstream = FakeSyncFilter()
-        router = RecipientRouterFilter(SuccessPolicy(), upstream)
+    async def test_success(self):
+        router = RecipientRouterFilter(SuccessPolicy())
+        router.wire_downstream(TransactionMetadata())
+        tx = router.downstream
 
-        def exp(tx, delta):
+        async def upstream():
             self.assertEqual(tx.rest_endpoint, 'http://localhost:8001')
             self.assertEqual(tx.upstream_http_host, 'gateway')
             self.assertEqual(tx.resolution.hosts,
@@ -50,18 +50,18 @@ class RecipientRouterFilterTest(unittest.TestCase):
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob@domain')])
 
-        tx.body = InlineBlob(
+        delta.body = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
+        tx.merge_from(delta)
 
-        upstream.add_expectation(exp)
-        upstream_delta = router.on_update(tx, tx.copy())
+        await router.update(delta, upstream)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)

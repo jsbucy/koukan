@@ -311,13 +311,15 @@ class RouterServiceTest(unittest.TestCase):
                 static_base_url=self.router_url,
                 static_http_host='submission',
                 timeout_start=1, timeout_data=1)
-            tx = TransactionMetadata(
+            tx = rest_endpoint.downstream
+            delta = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i),
                 rcpt_to = [Mailbox('probe-to%d' % i)])
-            rest_endpoint.on_update(tx, tx.copy(), 5)
+            tx.merge_from(delta)
+            rest_endpoint.do_update(delta, 5)
             delta = TransactionMetadata(cancelled=True)
             tx.merge_from(delta)
-            rest_endpoint.on_update(tx, delta)
+            rest_endpoint.do_update(delta)
             logging.info('RouterServiceTest.setUp %s', tx.mail_response)
             if tx.mail_response.ok():
                 break
@@ -341,7 +343,9 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(self.service.shutdown())
 
     def create_endpoint(self, **kwargs):
-        return RestEndpoint(client_provider=self.client_provider, **kwargs)
+        endpoint = RestEndpoint(client_provider=self.client_provider, **kwargs)
+        endpoint.wire_downstream(TransactionMetadata())
+        return endpoint
 
     def dump_db(self):
         with self.service.storage.begin_transaction() as db_tx:
@@ -376,11 +380,13 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
+        tx = rest_endpoint.downstream
         body = b'hello, world!'
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
+        tx.merge_from(delta)
 
         def exp(tx, tx_delta):
             logging.debug(tx)
@@ -400,7 +406,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
 
-        rest_endpoint.on_update(tx, tx.copy())
+        rest_endpoint.do_update(delta)
 
         for i in range(0,5):
             tx_json = rest_endpoint.get_json(timeout=2)

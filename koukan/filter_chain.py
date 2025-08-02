@@ -24,6 +24,18 @@ class Filter:
                      upstream : Callable[[], Awaitable[TransactionMetadata]]):
         pass
 
+# TODO many filters are of the form
+# def update(delta, upstream):
+#   if err:
+#     self.downstream.fill_inflight_responses(Response(550))
+#     return
+#   await upstream()
+# iow never do anything with the upstream result so possibly we could create
+# a subclass LinearFilter that doesn't have the upstream callable and
+# the FilterChain machinery:
+# - aborts if the filter error'd all reqs
+# - continues upstream otherwise
+# analogous to Envoy Network::FilterStatus::StopIteration vs Continue
 
 class ProxyFilter(Filter):
     def wire_upstream(self, tx):

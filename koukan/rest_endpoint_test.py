@@ -82,7 +82,7 @@ def eq_range(lhs, rhs):
             lhs.stop == rhs.stop and
             lhs.length == rhs.length)
 
-class RestEndpointTest(unittest.TestCase):
+class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
     requets : List[Request]
     responses : List[Response]
     client_provider : RestEndpointClientProvider
@@ -165,7 +165,9 @@ class RestEndpointTest(unittest.TestCase):
         return resp_body
 
     def create_endpoint(self, **kwargs):
-        return RestEndpoint(client_provider=self.client_provider, **kwargs)
+        filter = RestEndpoint(client_provider=self.client_provider, **kwargs)
+        filter.wire_downstream(TransactionMetadata())
+        return filter
 
     # low-level methods
 
@@ -593,10 +595,12 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 450)
 
 
-    def testFilterApi(self):
-        rest_endpoint = self.create_endpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1,
-                                     chunk_size=8)
+    async def test_smoke(self):
+        rest_endpoint = self.create_endpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1,
+            chunk_size=8)
+        tx = rest_endpoint.downstream
 
         # POST
         self.responses.append(Response(
@@ -610,18 +614,20 @@ class RestEndpointTest(unittest.TestCase):
             etag = '1'))
 
         logging.debug('testFilterApi envelope')
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        tx.merge_from(delta)
+        async def upstream():
+            self.fail()
+        await rest_endpoint.update(delta, upstream)
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'POST')
         self.assertEqual(req.path, '/transactions')
 
-        for t in [upstream_delta, tx]:
-            self.assertEqual(t.mail_response.code, 201)
-            self.assertEqual([r.code for r in t.rcpt_response], [202])
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
         logging.debug('testFilterApi !last append')
         # PUT /transactions/123/body
@@ -636,10 +642,8 @@ class RestEndpointTest(unittest.TestCase):
         tx.body = tx_delta.body = CompositeBlob()
         b = InlineBlob(b'hello, ', last=True)
         tx.body.append(b, 0, b.len())
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta, 5)
-        self.assertIsNone(upstream_delta.mail_response)
-        self.assertFalse(upstream_delta.rcpt_response)
-        self.assertIsNone(upstream_delta.data_response)
+        await rest_endpoint.update(tx_delta, upstream)
+        self.assertIsNone(tx.data_response)
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'PUT')
@@ -673,7 +677,7 @@ class RestEndpointTest(unittest.TestCase):
                 'data_response': {'code': 203, 'message': 'ok'}}))
 
         # same tx/delta
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta, timeout=5)
+        await rest_endpoint.update(tx_delta, upstream)
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
 

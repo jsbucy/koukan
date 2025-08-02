@@ -5,7 +5,6 @@ import logging
 
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.fake_dns_wrapper import FakeResolver
 
 from dns.resolver import NXDOMAIN, NoNameservers
@@ -79,10 +78,12 @@ aaaa_answer = Answer(
     aaaa_message)
 
 
-class DnsResolutionFilterTest(unittest.TestCase):
+class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def test_static(self):
         upstream = FakeSyncFilter()
@@ -103,28 +104,27 @@ class DnsResolutionFilterTest(unittest.TestCase):
         tx.resolution = Resolution([HostPort('example.CoM', 25)])
         upstream_delta = filter.on_update(tx, tx.copy())
 
-    def test_dns(self):
-        upstream = FakeSyncFilter()
+    async def test_dns(self):
         resolver = FakeResolver([
             mx_answer,
             a_answer,
             dns.resolver.NoAnswer()])  # AAAA
 
         filter = DnsResolutionFilter(
-            upstream,
             suffix='',
             resolver=resolver)
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['1.2.3.4'])
+        async def upstream():
             return TransactionMetadata()
 
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata()
+        delta.resolution = Resolution([HostPort('example.CoM', 25)])
+        filter.downstream.merge_from(delta)
+        await filter.update(delta, upstream)
+        self.assertEqual([h.host for h in tx.resolution.hosts],
+                         ['1.2.3.4'])
 
     def test_no_mx(self):
         upstream = FakeSyncFilter()

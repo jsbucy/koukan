@@ -732,6 +732,9 @@ class BlobCursor(Blob, WritableBlob):
         self.update_tx = update_tx
         self.db_tx = db_tx
 
+    def __hash__(self):
+        return self.id
+
     def delta(self, rhs):
         if not isinstance(rhs, BlobCursor):
             return None
@@ -760,6 +763,7 @@ class BlobCursor(Blob, WritableBlob):
         return self.id == x.id
 
     def rest_id(self) -> Optional[str]:
+        # XXX this should not return TX_BODY?
         return self.blob_uri.blob if self.blob_uri else None
 
     def len(self):
