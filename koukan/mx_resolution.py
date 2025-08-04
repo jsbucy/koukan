@@ -8,7 +8,7 @@ from koukan.dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
 from koukan.filter import HostPort, Resolution, TransactionMetadata
-from koukan.filter_chain import Filter
+from koukan.filter_chain import ProxyFilter
 from koukan.response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
@@ -42,9 +42,8 @@ def resolve(resolver, hostport : HostPort):
                 seen.append(aaa)
     return seen
 
-class DnsResolutionFilter(Filter):
+class DnsResolutionFilter(ProxyFilter):
     static_resolution : Optional[Resolution] = None
-    resolution : Optional[Resolution] = None
     first = True
     suffix : Optional[str] = None  # empty = match all
     literal : Optional[str] = None
@@ -107,25 +106,27 @@ class DnsResolutionFilter(Filter):
         return hosts_out
 
     async def update(self, tx_delta : TransactionMetadata, upstream):
-        if (self.resolution is None and
-            not self._needs_resolution(tx_delta.resolution)):
+        downstream_resolution = tx_delta.resolution
+        tx_delta.resolution = None  # XXX ok to mutate this delta?
+        self.upstream.merge_from(tx_delta)
+        if (self.upstream.resolution is not None or
+            downstream_resolution is None or
+            not self._needs_resolution(downstream_resolution)):
+            self.upstream.resolution = downstream_resolution
             await upstream()
             return
 
-        resolution = None
-        if self.resolution is None:
-            resolution = Resolution(self._resolve(tx_delta.resolution))
-            # NOTE _resolve() passes through verbatim hosts that
-            # didn't _match() so this won't fail unless there were
-            # none of those
-            if not resolution.hosts:
-                self.downstream.fill_inflight_responses(
-                    Response(450, 'DnsResolverFilter empty result'), err)
-                return
+        resolution = Resolution(self._resolve(downstream_resolution))
+        logging.debug(resolution)
+        # NOTE _resolve() passes through verbatim hosts that
+        # didn't _match() so this won't fail unless there were
+        # none of those
+        if not resolution.hosts:
+            self.downstream.fill_inflight_responses(
+                Response(450, 'DnsResolverFilter empty result'))
+            return
 
-            self.resolution = resolution
-
-        self.downstream.resolution = self.resolution
+        self.upstream.resolution = resolution
         await upstream()
 
 
