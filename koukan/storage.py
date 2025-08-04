@@ -277,7 +277,7 @@ class TransactionCursor:
             blobrefs.append({ "transaction_id": self.id,
                               "tx_rest_id": self.rest_id,
                               "blob_id": blob_cursor.id,
-                              "rest_id": blob_cursor.rest_id() })
+                              "rest_id": blob_cursor.blob_uri.blob })
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
                       self.id, blobrefs, blobs_done)
@@ -292,7 +292,7 @@ class TransactionCursor:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
-        assert len(blobs) == 1 and blobs[0].rest_id() == TX_BODY
+        assert len(blobs) == 1 and blobs[0].blob_uri.blob == TX_BODY
         return True
 
     def _write(self,
@@ -606,7 +606,7 @@ class TransactionCursor:
         res = db_tx.execute(sel_blob)
         blobs = []
         for row in res:
-            blob_rest_id,blob_id,content_length,last_update,length = row
+            blob_rest_id, blob_id, content_length, last_update, length = row
             blob = BlobCursor(self.parent)
             blob.init(self.rest_id, blob_id, blob_rest_id,
                       content_length, last_update, length)
@@ -733,7 +733,7 @@ class BlobCursor(Blob, WritableBlob):
         self.db_tx = db_tx
 
     def __hash__(self):
-        return self.id
+        return hash(self.id)
 
     def delta(self, rhs):
         if not isinstance(rhs, BlobCursor):
@@ -763,8 +763,11 @@ class BlobCursor(Blob, WritableBlob):
         return self.id == x.id
 
     def rest_id(self) -> Optional[str]:
-        # XXX this should not return TX_BODY?
-        return self.blob_uri.blob if self.blob_uri else None
+        if self.blob_uri is None:
+            return None
+        if self.blob_uri.blob == TX_BODY:
+            return None
+        return self.blob_uri.blob
 
     def len(self):
         return self.length
@@ -795,7 +798,7 @@ class BlobCursor(Blob, WritableBlob):
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d %s %d length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.rest_id(), offset, self.length, len(d),
+                     self.id, self.blob_uri, offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:

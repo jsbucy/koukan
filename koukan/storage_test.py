@@ -83,6 +83,8 @@ class StorageTestBase(unittest.TestCase):
             TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = downstream.get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
+        self.assertIsNone(blob_writer.rest_id())
+        self.assertIsInstance(hash(blob_writer), int)
 
         with self.s.begin_transaction() as db_tx:
             self.assertFalse(downstream.check_input_done(db_tx))
@@ -264,6 +266,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(3, len(tx_writer.blobs))
         contents = []
         for i, blob in enumerate(tx_writer.blobs):
+            self.assertEqual('blob_rest_id%d' % (i + 1), blob.rest_id())
             b = b'hello, world %d!' % i
             contents.append(b)
             blob.append_data(0, b, last=True)
