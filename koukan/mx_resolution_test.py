@@ -6,6 +6,7 @@ import logging
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
 from koukan.fake_dns_wrapper import FakeResolver
+from koukan.response import Response
 
 from dns.resolver import NXDOMAIN, NoNameservers
 from dns.resolver import Answer
@@ -95,12 +96,16 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
         async def upstream():
             self.assertEqual(filter.upstream.resolution.hosts[0].host,
                              '1.2.3.4')
-            return TransactionMetadata()
+            delta = TransactionMetadata(mail_response=Response(201))
+            filter.upstream.merge_from(delta)
+            return delta
 
         delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
         await filter.update(delta, upstream)
+        self.assertEqual(201, filter.downstream.mail_response.code)
 
     async def test_dns(self):
         resolver = FakeResolver([
@@ -247,12 +252,16 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
         async def upstream():
             self.assertEqual(filter.upstream.resolution.hosts[0].host,
                              '1.2.3.4')
-            return TransactionMetadata()
+            delta = TransactionMetadata(mail_response=Response(201))
+            filter.upstream.merge_from(delta)
+            return delta
 
         delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
             resolution=Resolution([HostPort('1.2.3.4', 25)]))
         filter.downstream.merge_from(delta)
         await filter.update(delta, upstream)
+        self.assertEqual(201, filter.downstream.mail_response.code)
 
     async def test_noop_no_match(self):
         filter = DnsResolutionFilter(

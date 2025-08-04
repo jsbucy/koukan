@@ -113,7 +113,7 @@ class DnsResolutionFilter(ProxyFilter):
             downstream_resolution is None or
             not self._needs_resolution(downstream_resolution)):
             self.upstream.resolution = downstream_resolution
-            await upstream()
+            self.downstream.merge_from(await upstream())
             return
 
         resolution = Resolution(self._resolve(downstream_resolution))
@@ -127,8 +127,7 @@ class DnsResolutionFilter(ProxyFilter):
             return
 
         self.upstream.resolution = resolution
-        await upstream()
-
+        self.downstream.merge_from(await upstream())
 
 if __name__ == '__main__':
     import sys
