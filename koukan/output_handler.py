@@ -108,7 +108,7 @@ class OutputHandler:
             assert tx is not None
             now = time.monotonic()
             if self.cursor.version != self._last_downstream_version:
-                self._last_downstream_version = tx.version
+                self._last_downstream_version = self.cursor.version
                 self._last_downstream_update = now
             delta = self._fixup_downstream_tx()
             if (now - self._last_downstream_update) > self.downstream_timeout:
@@ -261,7 +261,10 @@ class OutputHandler:
                 self.tx.fill_inflight_responses(err_resp, delta)
                 for i in range(0,5):
                     try:
+                        prev = self.cursor.tx.copy()
                         self.cursor.write_envelope(delta, **env_kwargs)
+                        assert self.prev_downstream.merge_from(
+                            prev.delta(self.cursor.tx)) is not None
                         break
                     except VersionConflictException:
                         logging.debug('VersionConflictException')
