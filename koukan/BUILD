@@ -218,7 +218,8 @@ pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
                deps=[':message_parser',
                      ':blob',
-                     ':filter'])
+                     ':filter',
+                     ':filter_chain'])
 
 py_test(name='message_parser_filter_test',
         srcs=['message_parser_filter_test.py'],

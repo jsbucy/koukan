@@ -159,7 +159,7 @@ class FilterChainWiring:
             yaml['domain'], yaml['selector'], yaml['key'], next)
 
     def message_parser(self, yaml, next):
-        return MessageParserFilter(next)
+        return MessageParserFilter()
 
     def remote_host(self, yaml, next):
         return RemoteHostFilter(next)
