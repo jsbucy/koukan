@@ -109,5 +109,6 @@ class FilterChain:
                     co.send(None)
                 except StopIteration:
                     pass
+                f.prev_downstream = f.downstream.copy()
 
         return prev.delta(self.filters[0].downstream)
