@@ -27,10 +27,11 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_smoke(self):
         tx = self.filter.downstream
-        tx.remote_host=HostPort('example.com', port=25000)
-        tx.mail_from=Mailbox('alice')
-        tx.rcpt_to=[Mailbox('bob@domain')]
-        tx.body = MessageBuilderSpec(
+        delta = TransactionMetadata()
+        delta.remote_host=HostPort('example.com', port=25000)
+        delta.mail_from=Mailbox('alice')
+        delta.rcpt_to=[Mailbox('bob@domain')]
+        delta.body = MessageBuilderSpec(
             {"text_body": [{
                 "content_type": "text/html",
                 "content": {"create_id": "blob_rest_id"}
@@ -38,7 +39,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             blobs = [InlineBlob(b'hello, world!', last=True,
                                 rest_id='blob_rest_id')]
         )
-        tx.body.check_ids()
+        delta.body.check_ids()
 
         async def exp(tx):
             logging.debug(tx)
@@ -53,27 +54,26 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
+        tx.merge_from(delta)
         await self.filter.update(
-            self.filter.downstream.copy(),
-            partial(exp, self.filter.upstream))
+            delta, partial(exp, self.filter.upstream))
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
 
     async def test_noop(self):
         tx = self.filter.downstream
-        body = InlineBlob(b'hello, world!')
-        tx.remote_host=HostPort('example.com', port=25000)
-        tx.mail_from=Mailbox('alice')
-        tx.rcpt_to=[Mailbox('bob')]
-        tx.body=body
+        delta = TransactionMetadata(
+            remote_host=HostPort('example.com', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body=InlineBlob(b'hello, world!'))
 
         async def exp(tx):
             logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
-            self.assertEqual(tx.body, body)
-            self.assertEqual(tx.body, body)
+            self.assertEqual(delta.body, tx.body)
             upstream_delta = TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
@@ -81,21 +81,23 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
+        tx.merge_from(delta)
         await self.filter.update(
-            tx.copy(), partial(exp, self.filter.upstream))
+            delta, partial(exp, self.filter.upstream))
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
 
     async def test_exception(self):
         tx = self.filter.downstream
-        tx.remote_host=HostPort('example.com', port=25000)
-        tx.mail_from=Mailbox('alice')
-        tx.rcpt_to=[Mailbox('bob@domain')]
+        delta = TransactionMetadata(
+            remote_host=HostPort('example.com', port=25000),
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob@domain')])
 
         # MessageBuilder currently raises ValueError() if date is
         # missing unix_secs
-        tx.body = MessageBuilderSpec(
+        delta.body = MessageBuilderSpec(
             {'headers': [['date', {}]],
              "text_body": [{
                  "content_type": "text/html",
@@ -104,11 +106,12 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             # non-finalized blob to tickle early-reject path
             blobs=[InlineBlob(b'hello, ', last=False,
                               rest_id='blob_rest_id')])
-        tx.body.check_ids()
+        delta.body.check_ids()
         async def exp():
             self.fail()
 
-        await self.filter.update(tx.copy(), exp)
+        tx.merge_from(delta)
+        await self.filter.update(delta, exp)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
         self.assertEqual(tx.data_response.code, 550)

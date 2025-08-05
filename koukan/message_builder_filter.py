@@ -26,25 +26,25 @@ class MessageBuilderFilter(ProxyFilter):
         assert self.body is None
         assert self.validation is not False
 
-        body = self.downstream.body
-        delta = self.upstream.delta(self.downstream)
-        assert self.upstream.merge_from(delta) is not None
-        if not isinstance(body, MessageBuilderSpec):
-            assert self.downstream.merge_from(await upstream()) is not None
-            return
-        if not body.finalized() and body.json is None:
-            self.upstream.body = None
-            assert self.downstream.merge_from(await upstream()) is not None
+        body = None
+        if isinstance(tx_delta.body, MessageBuilderSpec):
+            body = tx_delta.body
+            tx_delta.body = None  # xxx ok to mutate this delta?
+        assert self.upstream.merge_from(tx_delta) is not None
+
+        if body is None:
+            upstream_delta = await upstream()
+            assert self.downstream.merge_from(upstream_delta) is not None
             return
 
         if body.finalized():
-            blobs = { blob.rest_id(): blob for blob in tx_delta.body.blobs }
+            blobs = { blob.rest_id(): blob for blob in body.blobs }
         elif self.validation is None:
             # do a dry run with placeholder blobs so we can fastfail
             # on invalid json before we possibly hang on the upstream
             blobs = { blob.rest_id(): InlineBlob(b'xyz', last=True)
-                      for blob in tx_delta.body.blobs }
-        builder = MessageBuilder(tx_delta.body.json, blobs)
+                      for blob in body.blobs }
+        builder = MessageBuilder(body.json, blobs)
 
         try:
             file = None
