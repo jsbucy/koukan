@@ -323,6 +323,7 @@ pytype_library(name='exploder',
                    ':blob',
                    ':deadline',
                    ':filter',
+                   ':filter_chain',
                    ':response',
                ])
 

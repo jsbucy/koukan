@@ -144,7 +144,7 @@ class Test:
         self.expected_data_resp = ed
 
 
-class ExploderTest(unittest.TestCase):
+class ExploderTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.pg, self.storage_url = postgres_test_utils.setup_postgres()
         self.storage = Storage.connect(self.storage_url, 'http://session_uri')
@@ -169,11 +169,16 @@ class ExploderTest(unittest.TestCase):
 
     # xxx all tests validate response message
 
-    def _test_one(self, msa, test : Test):
+    def _unexpected_upstream(self):
+        self.fail()
+
+    async def _test_one(self, msa, test : Test):
         logging.debug('_test_one()', stack_info=True)
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
                             rcpt_timeout=5)
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
 
         output_threads = []
         for r in test.rcpt:
@@ -185,18 +190,20 @@ class ExploderTest(unittest.TestCase):
             output_thread.start()
             output_threads.append(output_thread)
 
-        tx = TransactionMetadata(mail_from=Mailbox(test.mail_from))
+        delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()
-        downstream_cursor.create('downstream_rest_id', tx)
-
-        exploder.on_update(tx, tx.copy())
+        downstream_cursor.create('downstream_rest_id', delta)
+        exploder.downstream.merge_from(delta)
+        await exploder.update(delta, self._unexpected_upstream)
+        logging.debug(tx)
         self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
         for i,r in enumerate(test.rcpt):
-            updated = tx.copy()
-            updated.rcpt_to.append(Mailbox(r.addr))
-            tx_delta = tx.delta(updated)
-            tx = updated
-            upstream_delta = exploder.on_update(tx, tx_delta)
+            prev = tx.copy()
+            tx.rcpt_to.append(Mailbox(r.addr))
+            tx_delta = prev.delta(tx)
+            prev = tx.copy()
+            await exploder.update(tx_delta, self._unexpected_upstream)
+            upstream_delta = prev.delta(exploder.downstream)
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
                 [rr.code for rr in upstream_delta.rcpt_response])
@@ -205,14 +212,14 @@ class ExploderTest(unittest.TestCase):
                          [rr.code for rr in tx.rcpt_response])
 
         if test.data is not None:
-            downstream_cursor.write_envelope(
-                TransactionMetadata(body=BlobSpec(create_tx_body=True)))
+            delta =TransactionMetadata(body=BlobSpec(create_tx_body=True))
+            downstream_cursor.write_envelope(delta)
             blob_uri = BlobUri('downstream_rest_id', tx_body=True)
             blob_writer = downstream_cursor.get_blob_for_append(blob_uri)
             blob_writer.append_data(0, test.data, last=True)
             tx_delta = TransactionMetadata(body=blob_writer)
             tx.merge_from(tx_delta)
-            exploder.on_update(tx, tx_delta)
+            await exploder.update(tx_delta, self._unexpected_upstream)
         if test.expected_data_resp is not None:
             self.assertEqual(test.expected_data_resp.code,
                              tx.data_response.code)
@@ -226,8 +233,8 @@ class ExploderTest(unittest.TestCase):
         for r in test.rcpt:
             self.assertTrue(r.check_store_and_forward())
 
-    def test_mx_single_rcpt_mail_perm(self):
-        self._test_one(
+    async def test_mx_single_rcpt_mail_perm(self):
+        await self._test_one(
             msa=False,
             test=Test('alice',
                 [ Rcpt('bob', Response(501), Response(502), None,
@@ -238,8 +245,8 @@ class ExploderTest(unittest.TestCase):
                 None))
 
     # rcpt perm after mail temp doesn't make sense?
-    def test_mx_single_rcpt_mail_temp(self):
-        self._test_one(
+    async def test_mx_single_rcpt_mail_temp(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -251,8 +258,8 @@ class ExploderTest(unittest.TestCase):
                 [Response(401)],  # upstream
                 None))
 
-    def test_mx_single_rcpt_rcpt_perm(self):
-        self._test_one(
+    async def test_mx_single_rcpt_rcpt_perm(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -264,8 +271,8 @@ class ExploderTest(unittest.TestCase):
                 None,
             ))
 
-    def test_mx_single_rcpt_rcpt_temp(self):
-        self._test_one(
+    async def test_mx_single_rcpt_rcpt_temp(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -276,8 +283,8 @@ class ExploderTest(unittest.TestCase):
                 [Response(401)],  # upstreawm
                 None))
 
-    def test_mx_single_rcpt_data_last_perm(self):
-        self._test_one(
+    async def test_mx_single_rcpt_data_last_perm(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -290,8 +297,8 @@ class ExploderTest(unittest.TestCase):
                 Response(501),  # upstream
             ))
 
-    def test_mx_single_rcpt_data_last_temp(self):
-        self._test_one(
+    async def test_mx_single_rcpt_data_last_temp(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -303,8 +310,8 @@ class ExploderTest(unittest.TestCase):
                 Response(401),  # upstream
             ))
 
-    def test_mx_single_rcpt_success(self):
-        self._test_one(
+    async def test_mx_single_rcpt_success(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -317,8 +324,8 @@ class ExploderTest(unittest.TestCase):
                 Response(203),  # upstream
             ))
 
-    def test_mx_multi_rcpt_success_cutthrough(self):
-        self._test_one(
+    async def test_mx_multi_rcpt_success_cutthrough(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -335,8 +342,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # first succeeds, second fails at rcpt
-    def test_mx_multi_rcpt_rcpt_temp(self):
-        self._test_one(
+    async def test_mx_multi_rcpt_rcpt_temp(self):
+        await self._test_one(
             msa=False,
             test=Test(
                 'alice',
@@ -352,8 +359,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
 
-    def test_msa_single_rcpt_mail_perm(self):
-        self._test_one(
+    async def test_msa_single_rcpt_mail_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -365,8 +372,8 @@ class ExploderTest(unittest.TestCase):
                 None,
             ))
 
-    def test_msa_single_rcpt_mail_temp(self):
-        self._test_one(
+    async def test_msa_single_rcpt_mail_temp(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -378,8 +385,8 @@ class ExploderTest(unittest.TestCase):
                 Response(250),
             ))
 
-    def test_msa_single_rcpt_rcpt_perm(self):
-        self._test_one(
+    async def test_msa_single_rcpt_rcpt_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -391,8 +398,8 @@ class ExploderTest(unittest.TestCase):
                 None,
             ))
 
-    def test_msa_single_rcpt_rcpt_temp(self):
-        self._test_one(
+    async def test_msa_single_rcpt_rcpt_temp(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -404,8 +411,8 @@ class ExploderTest(unittest.TestCase):
                 Response(250),
             ))
 
-    def test_msa_single_rcpt_data_last_perm(self):
-        self._test_one(
+    async def test_msa_single_rcpt_data_last_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -418,8 +425,8 @@ class ExploderTest(unittest.TestCase):
                 Response(501),  # upstream
             ))
 
-    def test_msa_single_rcpt_data_last_temp(self):
-        self._test_one(
+    async def test_msa_single_rcpt_data_last_temp(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -432,8 +439,8 @@ class ExploderTest(unittest.TestCase):
                 Response(250),  # injected/upgraded
             ))
 
-    def test_msa_single_rcpt_success(self):
-        self._test_one(
+    async def test_msa_single_rcpt_success(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -447,8 +454,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # first recipient succeeds, second permfails after MAIL
-    def test_msa_multi_rcpt_mail_perm(self):
-        self._test_one(
+    async def test_msa_multi_rcpt_mail_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -464,8 +471,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # first recipient succeeds, second permfails after RCPT
-    def test_msa_multi_rcpt_rcpt_perm(self):
-        self._test_one(
+    async def test_msa_multi_rcpt_rcpt_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -481,8 +488,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # first recipient succeeds, second permfails after last data
-    def test_msa_multi_rcpt_data_last_perm(self):
-        self._test_one(
+    async def test_msa_multi_rcpt_data_last_perm(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -499,8 +506,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     # all rcpts tempfail data -> s&f
-    def test_msa_multi_rcpt_data_last_temp(self):
-        self._test_one(
+    async def test_msa_multi_rcpt_data_last_temp(self):
+        await self._test_one(
             msa=True,
             test=Test(
                 'alice',
@@ -516,22 +523,27 @@ class ExploderTest(unittest.TestCase):
                 Response(250),  # same response s&f
             ))
 
-    def test_upstream_busy(self):
+    async def test_upstream_busy(self):
         exploder = Exploder('output-chain',
                             lambda: None,
                             rcpt_timeout=5)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')])
-        upstream_delta = exploder.on_update(tx, tx.copy())
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')])
+        tx.merge_from(delta)
+        await exploder.update(delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(1, len(tx.rcpt_response))
         self.assertEqual(451, tx.rcpt_response[0].code)
 
-    def test_partial_body(self):
+    async def test_partial_body(self):
         upstream = MockAsyncFilter()
         exploder = Exploder('output-chain',
                             lambda: upstream,
                             rcpt_timeout=5)
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
 
         def exp_update(tx, delta):
             self.assertFalse(tx.body.finalized())
@@ -545,11 +557,12 @@ class ExploderTest(unittest.TestCase):
 
         body = b'hello, world'
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body))
-        upstream_delta = exploder.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        await exploder.update(delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
@@ -563,9 +576,9 @@ class ExploderTest(unittest.TestCase):
         upstream.expect_update(exp_body)
 
         body += b'!'
-        tx_delta = tx.copy()
-        tx.body = tx_delta.body = InlineBlob(body, last=True)
-        upstream_delta = exploder.on_update(tx, tx_delta)
+        tx_delta = TransactionMetadata(body = InlineBlob(body, last=True))
+        tx.merge_from(delta)
+        await exploder.update(tx_delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
