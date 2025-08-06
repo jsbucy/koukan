@@ -120,13 +120,14 @@ class SmtpGateway(EndpointFactory):
         # rdns. This stanza could select among multiple IPs in the
         # future, etc.
         endpoint = factory.new()
+        chain = FilterChain([endpoint])
 
         with self.lock:
             rest_id = self.rest_id_factory()
             if rest_id in self.inflight:
                 return None
 
-            executor = SyncFilterAdapter(self.executor, endpoint, rest_id)
+            executor = SyncFilterAdapter(self.executor, chain, rest_id)
             self.inflight[rest_id] = executor
 
             return executor, {'rest_lro': False}
@@ -148,8 +149,9 @@ class SmtpGateway(EndpointFactory):
 
                 logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                              tx.rest_id)
-                assert isinstance(tx.filter, SmtpEndpoint)
-                tx.filter._shutdown()
+                # XXX BEFORE MERGE is this actually necessary?
+                # assert isinstance(tx.filter, SmtpEndpoint)
+                # tx.filter._shutdown()
                 dele.append(rest_id)
 
         for d in dele:

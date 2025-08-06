@@ -19,12 +19,13 @@ from httpx import Response as HttpxResponse
 
 from koukan.blob import BlobReader, InlineBlob
 from koukan.sync_filter_adapter import SyncFilterAdapter
-from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
+from koukan.fake_endpoints import FakeFilter, MockAsyncFilter
 from koukan.executor import Executor
 from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response
 from koukan.executor import Executor
 from koukan.storage_schema import VersionConflictException
+from koukan.filter_chain import FilterChain
 
 class SyncFilterAdapterTest(unittest.TestCase):
     def setUp(self):
@@ -33,18 +34,15 @@ class SyncFilterAdapterTest(unittest.TestCase):
     def tearDown(self):
         self.executor.shutdown(timeout=5)
 
-    def test_basic(self):
-        upstream = FakeSyncFilter()
+    def test_smoke(self):
+        upstream = FakeFilter()
         sync_filter_adapter = SyncFilterAdapter(
-            self.executor, upstream, 'rest_id')
+            self.executor, FilterChain([upstream]), 'rest_id')
 
         def exp_mail(tx, tx_delta):
             logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
-            upstream_delta=TransactionMetadata(
-                mail_response = Response(201))
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
+            tx.mail_response = Response(201)
         upstream.add_expectation(exp_mail)
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
@@ -57,10 +55,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
             logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([r.mailbox for r in tx.rcpt_to], ['bob'])
-            upstream_delta=TransactionMetadata(
-                rcpt_response = [Response(202)])
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
+            tx.rcpt_response = [Response(202)]
         upstream.add_expectation(exp_rcpt)
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
@@ -126,9 +121,9 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertTrue(sync_filter_adapter.idle(time.time(), 0, 0))
 
     def test_upstream_filter_exceptions(self):
-        upstream = FakeSyncFilter()
+        upstream = FakeFilter()
         sync_filter_adapter = SyncFilterAdapter(
-            self.executor, upstream, 'rest_id')
+            self.executor, FilterChain([upstream]), 'rest_id')
 
         def exp(tx,delta):
             raise ValueError()

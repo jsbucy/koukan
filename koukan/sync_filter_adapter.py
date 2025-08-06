@@ -41,9 +41,9 @@ from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.rest_service_handler import Handler, HandlerFactory
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import FilterChain
 from koukan.executor import Executor
 
 from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
@@ -95,7 +95,7 @@ class SyncFilterAdapter(AsyncFilter):
             return True, self.offset, content_length
 
     executor : Executor
-    filter : SyncFilter
+    chain : FilterChain
     prev_tx : TransactionMetadata
     tx : TransactionMetadata
     mu : Lock
@@ -110,17 +110,18 @@ class SyncFilterAdapter(AsyncFilter):
     done : bool = False
     id_version : IdVersion
 
-    def __init__(self, executor : Executor, filter : SyncFilter, rest_id : str):
+    def __init__(self, executor : Executor, chain : FilterChain, rest_id : str):
         self.executor = executor
         self.mu = Lock()
         self.cv = Condition(self.mu)
-        self.filter = filter
+        self.chain = chain
         self.rest_id = rest_id
         self._last_update = time.monotonic()
         self.prev_tx = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.tx.rest_id = rest_id
         self.id_version = IdVersion(db_id=1, rest_id='1', version=1)
+        self.chain.init(TransactionMetadata())
 
     def incremental(self):
         return True
@@ -195,19 +196,19 @@ class SyncFilterAdapter(AsyncFilter):
 
         if not delta and not dequeued:
             return False
-        tx = self.tx.copy()
+        assert self.chain.tx.merge_from(delta) is not None
         self.mu.release()
         try:
-            upstream_delta = self.filter.on_update(tx, delta)
+            upstream_delta = self.chain.update()
         finally:
             self.mu.acquire()
         if self.body is not None:
             self.body.trim_front(self.body.len())
 
         logging.debug('SyncFilterAdapter._update_once() '
-                      'tx after upstream %s', tx)
+                      'tx after upstream %s', self.chain.tx)
         assert self.tx.merge_from(upstream_delta) is not None
-        self.prev_tx = tx.copy()
+        self.prev_tx = self.tx.copy()
 
         # TODO closer to req_inflight() logic i.e. tx has reached
         # a final state due to an error

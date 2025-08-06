@@ -11,8 +11,8 @@ from koukan.response import Response, Esmtp
 from koukan.filter import (
     EsmtpParam,
     HostPort,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import Filter
 
 class Factory:
     def __init__(self, smtplib : ModuleType, ehlo_hostname, timeout, protocol,
@@ -29,7 +29,7 @@ class Factory:
             self.smtplib, self.ehlo, self.timeout, self.protocol,
             self.enable_bdat, self.chunk_size)
 
-class SmtpEndpoint(SyncFilter):
+class SmtpEndpoint(Filter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[Any] = None
     good_rcpt : bool = False
@@ -133,16 +133,12 @@ class SmtpEndpoint(SyncFilter):
 
         return ehlo_resp
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
+    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
         if tx_delta.cancelled:
             self._shutdown()
             return TransactionMetadata()
 
-        upstream_delta = self._update(tx, tx_delta)
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+        self._update(self.downstream, tx_delta)
 
     def _check_esmtp(self, params : List[EsmtpParam]) -> Optional[Response]:
         for i,e in enumerate(params):
@@ -167,47 +163,42 @@ class SmtpEndpoint(SyncFilter):
                     'by peer: %s' % e.keyword)
         return None
 
-    def _update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-
-        upstream_delta = TransactionMetadata()
-
+    def _update(self, tx : TransactionMetadata, tx_delta : TransactionMetadata):
         if tx_delta.mail_from is not None:
             resp = self._connect(tx)
             if resp.err():
-                upstream_delta.mail_response = resp
+                tx.mail_response = resp
                 self._shutdown()
                 return
             assert self.smtp is not None
             if err := self._check_esmtp(tx_delta.mail_from.esmtp):
-                upstream_delta.mail_response = err
+                tx.mail_response = err
             else:
                 mailbox = tx_delta.mail_from.mailbox
                 esmtp = [e.to_str() for e in tx_delta.mail_from.esmtp]
                 logging.debug('SmtpEndpoint %s MAIL FROM %s %s',
                               tx.rest_id, mailbox, esmtp)
-                upstream_delta.mail_response = Response.from_smtp(
+                tx.mail_response = Response.from_smtp(
                     self.smtp.mail(mailbox, esmtp))
                 logging.debug('SmtpEndpoint %s mail resp %s',
-                              tx.rest_id, upstream_delta.mail_response)
-            if upstream_delta.mail_response.err():
+                              tx.rest_id, tx.mail_response)
+            if tx.mail_response.err():
                 self._shutdown()
-                return upstream_delta
+                return
 
         for rcpt in tx_delta.rcpt_to:
             # smtplib.LMTP doesn't support multi-rcpt transactions
             # https://github.com/python/cpython/issues/76984
             # as of this writing (2024/10) there is a PR in review to fix
             if self.protocol == 'lmtp' and self.any_rcpt:
-                upstream_delta.rcpt_response.append(
+                tx.rcpt_response.append(
                     Response(450, 'lmtp multi-rcpt unimplemented'))
                 continue
             self.any_rcpt = True
             bad_ext = None
 
             if err := self._check_esmtp(rcpt.esmtp):
-                upstream_delta.rcpt_response.append(err)
+                tx.rcpt_response.append(err)
                 continue
             else:
                 esmtp = [e.to_str() for e in rcpt.esmtp]
@@ -217,19 +208,19 @@ class SmtpEndpoint(SyncFilter):
             logging.debug('SmtpEndpoint %s rcpt resp %s', tx.rest_id, resp)
             if resp.ok():
                 self.good_rcpt = True
-            upstream_delta.rcpt_response.append(resp)
+            tx.rcpt_response.append(resp)
 
         if (tx_delta.body is not None) and not isinstance(tx_delta.body, Blob):
-            upstream_delta.data_response = Response(
+            tx.data_response = Response(
                 500, 'BUG: message_builder in SmtpEndpoint')
         body = tx.maybe_body_blob()
         if not tx.data_response and (body is not None):
             logging.info('SmtpEndpoint %s append_data len=%d',
                          tx.rest_id, body.len())
             if not self.good_rcpt:
-                upstream_delta.data_response = Response(
+                tx.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
-                return upstream_delta
+                return
 
             if self.body_reader is None:
                 self.body_reader = BlobReader(tx.body)
@@ -243,13 +234,12 @@ class SmtpEndpoint(SyncFilter):
                     self.body = b''
                 self.body += self.body_reader.read()
                 if not tx.body.finalized():
-                    return upstream_delta
-                upstream_delta.data_response = Response.from_smtp(
-                    self.smtp.data(self.body))
+                    return
+                tx.data_response = Response.from_smtp(self.smtp.data(self.body))
                 self.body = None
                 logging.info('SmtpEndpoint %s data_response %s',
-                             tx.rest_id, upstream_delta.data_response)
-                return upstream_delta
+                             tx.rest_id, tx.data_response)
+                return
 
             chunk_last = False
             data_resp = None
@@ -268,13 +258,11 @@ class SmtpEndpoint(SyncFilter):
             # returning a !last 250 here will probably trigger an
             # early-return elsewhere.
             if chunk_last or (data_resp is not None and data_resp.err()):
-                upstream_delta.data_response = data_resp
+                tx.data_response = data_resp
                 self._shutdown()
 
             logging.info('SmtpEndpoint %s data_resp %s',
-                         tx.rest_id, upstream_delta.data_response)
-
-        return upstream_delta
+                         tx.rest_id, tx.data_response)
 
     def abort(self):
         raise NotImplementedError()
