@@ -43,6 +43,8 @@ pytype_library(name='async_filter_wrapper',
                deps=[':backoff',
                      ':blob',
                      ':deadline',
+                     ':filter',
+                     ':filter_chain',
                      ':response',
                      ':storage_schema'])
 
@@ -61,6 +63,7 @@ pytype_library(name='rest_endpoint',
                deps=[':blob',
                      ':deadline',
                      ':filter',
+                     ':filter_chain',
                      ':response',
                      '@pypi//h2',
                      '@pypi//httpx',
@@ -131,6 +134,7 @@ pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
                deps=[':response',
                      ':filter',
+                     ':filter_chain',
                      ':storage_schema'])
 
 pytype_library(name='dsn',
@@ -236,6 +240,7 @@ pytype_library(name='address',
 pytype_library(name='recipient_router_filter',
                srcs=['recipient_router_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':response',
                      ':blob'])
 
@@ -343,7 +348,8 @@ py_test(name='exploder_test',
 
 pytype_library(name='add_route_filter',
                srcs=['add_route_filter.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 py_test(name='add_route_filter_test',
         srcs=['add_route_filter_test.py'],

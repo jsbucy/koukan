@@ -20,11 +20,15 @@ class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
             b = f.read()
         delta = TransactionMetadata(
             body=InlineBlob(b, len(b)))
-        delta.options = {'receive_parsing': None}
+        delta.options = {'receive_parsing': {}}
 
-        async def upstream(tx, delta):
-            upstream_delta = TransactionMetadata()
+        filter = MessageParserFilter()
+        filter.wire_downstream(TransactionMetadata())
+        filter.downstream.merge_from(delta)
+        filter.wire_upstream(TransactionMetadata())
 
+        async def upstream():
+            tx = filter.upstream
             exp_blobs = [b'yolocat', b'yolocat2']
             self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
             self.assertEqual(len(exp_blobs), len(tx.body.blobs))
@@ -34,14 +38,12 @@ class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 tx.body.json['parts']['content_type'],
                 'multipart/mixed')
-            upstream_delta.data_response = Response()
+            upstream_delta = TransactionMetadata(
+                data_response = Response())
             tx.merge_from(upstream_delta)
             return upstream_delta
 
-        filter = MessageParserFilter()
-        filter.wire_downstream(TransactionMetadata())
-        filter.downstream.merge_from(delta)
-        upstream_delta = filter.on_update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
 
 if __name__ == '__main__':

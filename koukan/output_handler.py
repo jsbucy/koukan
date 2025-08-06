@@ -74,7 +74,7 @@ class OutputHandler:
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         delta = self.prev_downstream.delta(self.cursor.tx)
-
+        assert delta is not None
         # drop some fields from the tx that's going upstream
         # OH consumes these fields but they should not propagate to the
         # output chain/upstream rest/gateway etc

@@ -135,7 +135,7 @@ class Exploder(Filter):
             return None
         return lhs
 
-    async def update(self, tx_delta : TransactionMetadata, unused_upstream):
+    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
         tx = self.downstream
 
         # NOTE: OutputHandler may send but Storage currently does not

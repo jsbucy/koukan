@@ -246,9 +246,9 @@ class RestEndpoint(Filter):
                           rest_resp)
         return
 
-    async def update(self, tx_delta : TransactionMetadata,
-                     unused_upstream,
-                     timeout : Optional[float] = None):
+    async def on_update(self, tx_delta : TransactionMetadata,
+                        unused_upstream,
+                        timeout : Optional[float] = None):
         self.do_update(tx_delta, timeout)
 
     def do_update(self, tx_delta : TransactionMetadata,

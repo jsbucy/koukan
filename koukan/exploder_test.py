@@ -194,7 +194,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
         downstream_cursor = self.storage.get_transaction_cursor()
         downstream_cursor.create('downstream_rest_id', delta)
         exploder.downstream.merge_from(delta)
-        await exploder.update(delta, self._unexpected_upstream)
+        await exploder.on_update(delta, self._unexpected_upstream)
         logging.debug(tx)
         self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
         for i,r in enumerate(test.rcpt):
@@ -202,7 +202,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
             tx.rcpt_to.append(Mailbox(r.addr))
             tx_delta = prev.delta(tx)
             prev = tx.copy()
-            await exploder.update(tx_delta, self._unexpected_upstream)
+            await exploder.on_update(tx_delta, self._unexpected_upstream)
             upstream_delta = prev.delta(exploder.downstream)
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
@@ -219,7 +219,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
             blob_writer.append_data(0, test.data, last=True)
             tx_delta = TransactionMetadata(body=blob_writer)
             tx.merge_from(tx_delta)
-            await exploder.update(tx_delta, self._unexpected_upstream)
+            await exploder.on_update(tx_delta, self._unexpected_upstream)
         if test.expected_data_resp is not None:
             self.assertEqual(test.expected_data_resp.code,
                              tx.data_response.code)
@@ -532,7 +532,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
         delta = TransactionMetadata(mail_from=Mailbox('alice'),
                                     rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
-        await exploder.update(delta, self._unexpected_upstream)
+        await exploder.on_update(delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(1, len(tx.rcpt_response))
         self.assertEqual(451, tx.rcpt_response[0].code)
@@ -562,7 +562,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body))
         tx.merge_from(delta)
-        await exploder.update(delta, self._unexpected_upstream)
+        await exploder.on_update(delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
@@ -578,7 +578,7 @@ class ExploderTest(unittest.IsolatedAsyncioTestCase):
         body += b'!'
         tx_delta = TransactionMetadata(body = InlineBlob(body, last=True))
         tx.merge_from(delta)
-        await exploder.update(tx_delta, self._unexpected_upstream)
+        await exploder.on_update(tx_delta, self._unexpected_upstream)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)

@@ -55,7 +55,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             return upstream_delta
 
         tx.merge_from(delta)
-        await self.filter.update(
+        await self.filter.on_update(
             delta, partial(exp, self.filter.upstream))
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
@@ -82,7 +82,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             return upstream_delta
 
         tx.merge_from(delta)
-        await self.filter.update(
+        await self.filter.on_update(
             delta, partial(exp, self.filter.upstream))
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
@@ -111,7 +111,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             self.fail()
 
         tx.merge_from(delta)
-        await self.filter.update(delta, exp)
+        await self.filter.on_update(delta, exp)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
         self.assertEqual(tx.data_response.code, 550)

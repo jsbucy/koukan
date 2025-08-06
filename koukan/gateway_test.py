@@ -71,11 +71,14 @@ class GatewayTest(unittest.TestCase):
                 rest_endpoint = self.create_endpoint(
                     static_base_url=self.gw_rest_url,
                     static_http_host='outbound')
-                tx = TransactionMetadata(
-                    remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-                tx.mail_from = Mailbox('probe-from%d' % i)
-                tx.rcpt_to = [Mailbox('probe-to%d' % i)]
-                upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+                tx = TransactionMetadata()
+                rest_endpoint.wire_downstream(tx)
+                delta = TransactionMetadata(
+                    remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+                    mail_from = Mailbox('probe-from%d' % i),
+                    rcpt_to = [Mailbox('probe-to%d' % i)])
+                tx.merge_from(delta)
+                upstream_delta = rest_endpoint.do_update(delta)
                 logging.debug('probe %s', tx.mail_response)
                 if tx.mail_response.code >= 300:
                     time.sleep(0.1)
@@ -104,11 +107,14 @@ class GatewayTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound', timeout_start=10, timeout_data=10)
-        tx=TransactionMetadata(
-            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx=TransactionMetadata()
+        rest_endpoint.wire_downstream(tx)
+        delta=TransactionMetadata(
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')])
+        tx.merge_from(delta)
+        rest_endpoint.do_update(delta)
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
@@ -116,11 +122,11 @@ class GatewayTest(unittest.TestCase):
         tx_delta = TransactionMetadata(
             body=InlineBlob(b'hello, '))
         self.assertIsNotNone(tx.merge_from(tx_delta))
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
-        self.assertIsNone(upstream_delta.data_response)
+        rest_endpoint.do_update(tx_delta)
+        self.assertIsNone(tx.data_response)
 
         tx.body.append(b'world!', last=True)
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        rest_endpoint.do_update(tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
         self.assertEqual(tx.data_response.code, 250)
 
@@ -129,10 +135,13 @@ class GatewayTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound')
-        tx=TransactionMetadata(
-            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-        tx.mail_from = Mailbox('alice')
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx=TransactionMetadata()
+        rest_endpoint.wire_downstream(tx)
+        delta=TransactionMetadata(
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+            mail_from = Mailbox('alice'))
+        tx.merge_from(delta)
+        rest_endpoint.do_update(delta)
         self.assertEqual(tx.mail_response.code, 250)
 
         for i in range(0,5):

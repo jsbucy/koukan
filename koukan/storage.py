@@ -305,6 +305,14 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
+        logging.debug(tx_delta)
+        dd = tx_delta.copy_valid(WhichJson.DB)
+        logging.debug(dd)
+        dd.copy_valid_from(WhichJson.DB_ATTEMPT, tx_delta)
+        # XXX body doesn't have DB validity?
+        dd.body = tx_delta.body
+        tx_delta = dd
+
         logging.debug('TxCursor._write %s %s %s',
                       self.rest_id, tx_delta,
                       finalize_attempt)
@@ -324,8 +332,7 @@ class TransactionCursor:
             raise ValueError()
         assert self.tx is not None
 
-        if (tx_delta.empty(WhichJson.DB) and
-            tx_delta.empty(WhichJson.DB_ATTEMPT) and
+        if (tx_delta.empty(WhichJson.ALL) and
             (not tx_delta.body) and
             (final_attempt_reason is None) and
             (notification_done is None) and

@@ -61,7 +61,7 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'hello\r\n')
         tx.merge_from(delta)
 
-        await router.update(delta, upstream)
+        await router.on_update(delta, upstream)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
@@ -69,22 +69,25 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
 
     # TODO: exercise "buffer mail"
 
-    def test_failure(self):
-        upstream = FakeSyncFilter()
-        router = RecipientRouterFilter(FailurePolicy(), upstream)
+    async def test_failure(self):
+        router = RecipientRouterFilter(FailurePolicy())
+        tx = TransactionMetadata()
+        router.wire_downstream(tx)
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
+            rcpt_to=[Mailbox('bob@domain')],
+            body = InlineBlob(
+                b'From: <alice>\r\n'
+                b'To: <bob>\r\n'
+                b'\r\n'
+                b'hello\r\n'))
 
-        tx.body = InlineBlob(
-            b'From: <alice>\r\n'
-            b'To: <bob>\r\n'
-            b'\r\n'
-            b'hello\r\n')
+        def unexpected_upstream():
+            self.fail()
 
-        # no expectation on upstream: should not be called
-        upstream_delta = router.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        await router.on_update(delta, unexpected_upstream)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [500])
         self.assertIsNone(tx.data_response)
@@ -92,8 +95,7 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
         # noop/heartbeat update: should return without calling
         # upstream or mutating transaction
         prev = tx.copy()
-        upstream_delta = router.on_update(tx, TransactionMetadata())
-        self.assertFalse(upstream_delta)
+        await router.on_update(TransactionMetadata(), unexpected_upstream)
         self.assertFalse(prev.delta(tx))
 
 if __name__ == '__main__':

@@ -15,7 +15,6 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata )
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
@@ -76,9 +75,9 @@ class StorageWriterFilter(AsyncFilter):
         with self.mu:
             if not self.cv.wait_for(
                     lambda: self.upstream_cursor is not None or
-                    self.create_err, 30):
+                    self.create_err, 3):
                 logging.warning(
-                    'StorageWriterFilter.get_transaction_cursor timeout')
+                    'StorageWriterFilter.get_transaction_cursor timeout %s', self.create_err)
                 return None
             elif self.upstream_cursor is None:
                 return None
@@ -150,7 +149,7 @@ class StorageWriterFilter(AsyncFilter):
             if needs_create and self.upstream_cursor is None:
                 # i.e. uncaught exception
                 with self.mu:
-                    self.created_err = True
+                    self.create_err = True
                     self.cv.notify_all()
 
     def _update(self,

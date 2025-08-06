@@ -11,7 +11,7 @@ from koukan.filter_chain import (
 from koukan.filter import TransactionMetadata
 
 class Sink(Filter):
-    async def update(self, delta, upstream):
+    async def on_update(self, delta, upstream):
         logging.debug('Sink.update %s', self.downstream)
         # self.downstream['sink'] = 'sink'
         if delta.mail_from:
@@ -20,21 +20,21 @@ class Sink(Filter):
             self.downstream.rcpt_response.append(Response(202))
 
 class AddDownstream(Filter):
-    async def update(self, delta, upstream):
+    async def on_update(self, delta, upstream):
         logging.debug('AddDownstream.start')
         # self.downstream['downstream'] = 'downstream'
         await upstream()
         logging.debug('AddDownstream.done')
 
 class AddUpstream(Filter):
-    async def update(self, delta, upstream):
+    async def on_update(self, delta, upstream):
         logging.debug('AddUpstream.start')
         await upstream()
         # self.downstream['upstream'] = 'upstream'
         logging.debug('AddUpstream.done')
 
 class Proxy(ProxyFilter):
-    async def update(self, delta, upstream):
+    async def on_update(self, delta, upstream):
         logging.debug(self.downstream)
         logging.debug(delta)
         logging.debug(self.upstream)

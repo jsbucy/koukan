@@ -12,7 +12,7 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.output_handler import OutputHandler
-from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
+from koukan.fake_endpoints import FakeFilter, MockAsyncFilter
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.filter_chain import FilterChain
 from koukan.rest_schema import BlobUri
@@ -63,7 +63,7 @@ class OutputHandlerTest(unittest.TestCase):
 
         del tx_cursor
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
@@ -104,7 +104,7 @@ class OutputHandlerTest(unittest.TestCase):
             create_leased=True)
         tx_id = tx_cursor.id
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp_mail(tx, tx_delta):
@@ -245,7 +245,7 @@ class OutputHandlerTest(unittest.TestCase):
             retry={})
         tx_cursor.write_envelope(tx)
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp_rcpt1(tx, tx_delta):
@@ -337,7 +337,7 @@ class OutputHandlerTest(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         tx_cursor.write_envelope(tx_meta)
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp_rcpt(tx, tx_delta):
@@ -442,7 +442,7 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer.append_data(0, d, len(d))
 
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
@@ -513,7 +513,7 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
@@ -596,7 +596,7 @@ class OutputHandlerTest(unittest.TestCase):
              b'hello\r\n')
         blob_writer.append_data(0, d, len(d))
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
@@ -647,7 +647,7 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta
         notification_endpoint.expect_update(exp_notification)
 
-        endpoint = FakeSyncFilter()
+        endpoint = FakeFilter()
         chain = FilterChain([endpoint])
 
         tx_cursor = self.storage.load_one()

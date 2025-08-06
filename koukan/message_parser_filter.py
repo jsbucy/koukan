@@ -32,8 +32,8 @@ class MessageParserFilter(ProxyFilter):
         return FileLikeBlob(file, blob_id)
 
     async def on_update(self, tx_delta : TransactionMetadata, upstream):
-        logging.debug('MessageParserFilter options %s', tx.options)
         tx = self.downstream
+        logging.debug('MessageParserFilter options %s', tx.options)
 
         body = tx.maybe_body_blob()
         if (body is not None and
@@ -42,7 +42,7 @@ class MessageParserFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None or not body.finalized() or self.parsed:
-            await upstream()
+            assert self.downstream.merge_from(await upstream()) is not None
             return
 
         parse_options = tx.options.get('receive_parsing', {})

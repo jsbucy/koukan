@@ -20,8 +20,9 @@ class Filter:
         self.prev_upstream = TransactionMetadata()
 
     # upstream() yields to scheduler, returns delta
-    async def update(self, delta : TransactionMetadata,
-                     upstream : Callable[[], Awaitable[TransactionMetadata]]):
+    async def on_update(
+            self, delta : TransactionMetadata,
+            upstream : Callable[[], Awaitable[TransactionMetadata]]):
         pass
 
 # TODO many filters are of the form
@@ -53,6 +54,11 @@ class FilterChain:
         # callbacks which we never register.
         self.loop = asyncio.new_event_loop()
 
+    def __del__(self):
+        if self.loop:
+            self.loop.close()
+            self.loop = None
+
     def init(self, tx : TransactionMetadata):
         for f in self.filters:
             f.wire_downstream(tx)
@@ -75,7 +81,7 @@ class FilterChain:
             f.prev_downstream = f.downstream.copy()
 
             futures = [None]
-            co = f.update(delta, partial(upstream, futures))
+            co = f.on_update(delta, partial(upstream, futures))
             try:
                 co.send(None)
             except StopIteration:

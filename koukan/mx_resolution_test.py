@@ -104,7 +104,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             mail_from = Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
         self.assertEqual(201, filter.downstream.mail_response.code)
 
     async def test_dns(self):
@@ -125,7 +125,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['1.2.3.4'])
 
@@ -147,7 +147,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('mx.example.com', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
     async def test_ipv6(self):
         resolver = FakeResolver([
@@ -169,7 +169,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
     async def test_needs_resolution(self):
         resolver = FakeResolver()
@@ -186,7 +186,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             resolution = Resolution([HostPort('1.2.3.4', 25),
                                      HostPort('example.com', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
     async def _unexpected_upstream():
         self.fail()
@@ -207,7 +207,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             mail_from=Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, self._unexpected_upstream)
+        await filter.on_update(delta, self._unexpected_upstream)
         self.assertTrue(filter.downstream.mail_response.code, 450)
         self.assertIn('empty', filter.downstream.mail_response.message)
 
@@ -221,7 +221,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             mail_from=Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, self._unexpected_upstream)
+        await filter.on_update(delta, self._unexpected_upstream)
         self.assertTrue(filter.downstream.mail_response.code, 450)
         self.assertIn('empty', filter.downstream.mail_response.message)
 
@@ -241,7 +241,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             resolution=Resolution([HostPort('us-west1.example.com', 25),
                                    HostPort('us-west2.example.com', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
 
     async def test_noop_ip(self):
@@ -260,7 +260,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             mail_from=Mailbox('alice'),
             resolution=Resolution([HostPort('1.2.3.4', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
         self.assertEqual(201, filter.downstream.mail_response.code)
 
     async def test_noop_no_match(self):
@@ -279,7 +279,7 @@ class DnsResolutionFilterTest(unittest.IsolatedAsyncioTestCase):
             resolution=Resolution([HostPort('example2.com', 25),
                                    HostPort('example1.com', 25)]))
         filter.downstream.merge_from(delta)
-        await filter.update(delta, upstream)
+        await filter.on_update(delta, upstream)
 
 
 

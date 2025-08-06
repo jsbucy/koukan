@@ -46,6 +46,7 @@ class RoutingPolicy(ABC):
 class RecipientRouterFilter(Filter):
     policy : RoutingPolicy
     done = False
+    err = False
 
     def __init__(self, policy : RoutingPolicy):
         self.policy = policy
@@ -56,13 +57,16 @@ class RecipientRouterFilter(Filter):
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
+        logging.debug('%s %s', dest, resp)
+
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place
         if resp and resp.err():
             if tx.mail_from and tx.mail_response is None:
                 tx.mail_response = Response(
-                    250, 'MAIL ok (RecipientRouterFilter')
+                    250, 'MAIL ok (RecipientRouterFilter)')
             tx.rcpt_response = [resp]
+            self.err = True
             return
         elif dest is None:
             return
@@ -74,10 +78,17 @@ class RecipientRouterFilter(Filter):
             tx.upstream_http_host = dest.http_host
         tx.options = dest.options
 
-    async def update(self, tx_delta : TransactionMetadata, upstream):
-        if not self.done and tx_delta.rcpt_to:
+    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+        logging.debug(self.downstream)
+        if self.err:
+            return
+        if (self.downstream.rest_endpoint is None and
+            self.downstream.options is None and
+            not self.done and
+            tx_delta.rcpt_to):
             self._route()
             self.done = True
-            if self.downstream.rcpt_response:  # i.e. err
+            logging.debug(self.downstream)
+            if self.err:
                 return
         await upstream()

@@ -324,6 +324,11 @@ _tx_fields = [
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
+def _valid_list_offset(which_js : WhichJson):
+    return which_js in [WhichJson.REST_UPDATE,
+                        WhichJson.DB,
+                        WhichJson.DB_ATTEMPT]
+
 # NOTE in the Filter api/stack, this is usually interpreted as a delta
 # where field == None means "not present in the delta" as opposed to
 # "set field to None." In terms of json patch, it's a delta that
@@ -409,6 +414,8 @@ class TransactionMetadata:
                 if (field.is_list and v == []) or v is None:
                     continue
                 out += '%s: %s\n' % (name, v)
+                if field.is_list and hasattr(self, field.list_offset()):
+                    out += '%s %d\n' % (field.list_offset(), getattr(self, field.list_offset()))
         return out
 
     def empty(self, which_js : WhichJson):
@@ -709,6 +716,7 @@ class TransactionMetadata:
         out.rcpt_response = list(self.rcpt_response)
         return out
 
+    # XXX refactor with copy_valid_from()
     def copy_valid(self, valid : WhichJson):
         out = TransactionMetadata()
         for name,field in tx_json_fields.items():
@@ -719,12 +727,27 @@ class TransactionMetadata:
                 continue
             if field.is_list:
                 v = list(v)
-                if valid == WhichJson.REST_UPDATE and (
+                if _valid_list_offset(valid) and (
                         hasattr(self, field.list_offset())):
                     setattr(out, field.list_offset(),
                             getattr(self, field.list_offset()))
             setattr(out, name, v)
         return out
+
+    def copy_valid_from(self, valid : WhichJson, src : 'TransactionMetadata'):
+        for name,field in tx_json_fields.items():
+            if not field.valid(valid):
+                continue
+            v = getattr(src, name, None)
+            if v is None:
+                continue
+            if field.is_list:
+                v = list(v)
+                if _valid_list_offset(valid) and (
+                        hasattr(src, field.list_offset())):
+                    setattr(self, field.list_offset(),
+                            getattr(src, field.list_offset()))
+            setattr(self, name, v)
 
     def body_blob(self) -> Blob:
         blob = self.body

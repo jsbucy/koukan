@@ -105,7 +105,7 @@ class DnsResolutionFilter(ProxyFilter):
                 hosts_out.append(hp)
         return hosts_out
 
-    async def update(self, tx_delta : TransactionMetadata, upstream):
+    async def on_update(self, tx_delta : TransactionMetadata, upstream):
         downstream_resolution = tx_delta.resolution
         tx_delta.resolution = None  # XXX ok to mutate this delta?
         self.upstream.merge_from(tx_delta)

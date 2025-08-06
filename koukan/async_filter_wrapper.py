@@ -3,8 +3,8 @@ import logging
 
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import Filter
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
@@ -19,7 +19,7 @@ from koukan.backoff import backoff
 # mail failed, etc.
 # 4: if store-and-forward is enabled, upgrades upstream temp errs to
 # success and enables retries/notifications on the upstream transaction.
-class AsyncFilterWrapper(AsyncFilter, SyncFilter):
+class AsyncFilterWrapper(AsyncFilter, Filter):
     filter : AsyncFilter
     timeout : float  # used for SyncFilter.on_update()
     store_and_forward : bool
@@ -145,11 +145,10 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             if overwrite or tx.data_response is None:
                 tx.data_response = self.timeout_resp.data_response
 
-    # TODO this may be effectively dead code since OH has fallthrough
-    # fill_inflight_responses(
-    #   'internal error: OutputHandler failed to populate response')
     def _set_precondition_resp(self, tx):
         # smtp preconditions: rcpt and no rcpt resp after mail err, etc.
+        # e.g. this happens if upstream mail failed after exploder
+        # returned a "250 exploder noop" mail response
         if tx.mail_response and tx.mail_response.err():
             # xxx code vs data_response (below)
             rcpt_err = Response(
@@ -206,17 +205,15 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        tx_orig = tx.copy()
-        upstream_delta = self.update(tx, tx_delta)
+    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
+        logging.debug(tx_delta)
+        tx_orig = self.downstream.copy()
+        upstream_delta = self.update(self.downstream, tx_delta)
         deadline = Deadline(self.timeout)
-        upstream_tx = tx.copy()
+        upstream_tx = self.downstream.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+        assert self.downstream.merge_from(upstream_delta) is not None

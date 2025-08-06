@@ -4,30 +4,15 @@ from typing import Optional
 import logging
 
 from koukan.filter import (
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import Filter, FilterChain
 from koukan.response import Response
 
 def _err(r : Optional[Response]) -> Optional[Response]:
     if r is None or r.ok():
         return None
     return Response(r.code, r.message + ' (AddRouteFilter upstream)')
-
-def _resp_err(tx : TransactionMetadata) -> Optional[TransactionMetadata]:
-    mail_err = _err(tx.mail_response)
-    rcpt_err = None
-    if len(tx.rcpt_response) == 1:  # cf assert in on_update()
-        rcpt_err = _err(tx.rcpt_response[0])
-    data_err = _err(tx.data_response)
-    if (mail_err is None) and (rcpt_err is None) and (data_err is None):
-        return None
-    err = TransactionMetadata()
-    err.mail_response = mail_err
-    if rcpt_err:
-        err.rcpt_response = [rcpt_err]
-    err.data_response = data_err
-    return err
 
 # AddRouteFilter forks a message to another SyncFilter in addition to the
 # primary/upstream. There are 2 likely configurations: chain with...
@@ -43,39 +28,44 @@ def _resp_err(tx : TransactionMetadata) -> Optional[TransactionMetadata]:
 # use case, it may make more sense to retry forever (and effectively
 # never bounce) and use monitoring to detect if that is persistently
 # failing.
-class AddRouteFilter(SyncFilter):
-    add_route : SyncFilter
-    upstream : SyncFilter
-    create = True
+class AddRouteFilter(Filter):
+    add_route : FilterChain
     add_route_tx : Optional[TransactionMetadata] = None
+    host : str
 
-    def __init__(self, add_route : SyncFilter,
-                 host : str,
-                 upstream : SyncFilter):
+    def __init__(self, add_route : FilterChain, host : str):
         self.add_route = add_route
-        self.upstream = upstream
         self.host = host
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
+    def _resp_err(self) -> bool:
+        if mail_err := _err(self.add_route_tx.mail_response):
+            self.downstream.mail_response = mail_err
+        rcpt_err = None
+        if len(self.add_route_tx.rcpt_response) == 1:  # cf assert in on_update()
+            if rcpt_err := _err(self.add_route_tx.rcpt_response[0]):
+                self.downstream.rcpt_response = [rcpt_err]
+        if data_err := _err(self.add_route_tx.data_response):
+            self.downstream.data_response = data_err
+        return any([r for r in [mail_err, rcpt_err, data_err] if r is not None])
+
+    async def on_update(self, tx_delta : TransactionMetadata, upstream):
         # post-exploder output chain/single-rcpt only for now
-        assert len(tx.rcpt_to) <= 1
+        assert len(self.downstream.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route_tx is None:
-            self.add_route_tx = tx.copy_valid(WhichJson.ADD_ROUTE)
-            self.add_route_tx.host = add_route_delta.host = self.host
-        else:
-            assert self.add_route_tx.merge_from(add_route_delta) is not None
-        add_route_upstream_delta = self.add_route.on_update(
-            self.add_route_tx, add_route_delta)
-        logging.debug(self.add_route_tx)
-        if not tx.cancelled and (err := _resp_err(self.add_route_tx)) is not None:
+            self.add_route_tx = TransactionMetadata()
+            self.add_route.init(self.add_route_tx)
+            add_route_delta.host = self.host
+        assert self.add_route_tx.merge_from(add_route_delta) is not None
+        #add_route_upstream_delta =
+        self.add_route.update()
+        # logging.debug(self.add_route_tx)
+        if not self.downstream.cancelled and self._resp_err():
+            logging.debug(self.downstream)
             # NOTE this returns any error from the add route
             # downstream verbatim, it's possible this might contain
             # debugging information internal to the site that you
             # don't want to return externally
-            tx.merge_from(err)
-            return add_route_upstream_delta
+            return
 
-        return self.upstream.on_update(tx, tx_delta)
+        await upstream()

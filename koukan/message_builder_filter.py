@@ -22,7 +22,7 @@ class MessageBuilderFilter(ProxyFilter):
     def __init__(self):
         pass
 
-    async def update(self, tx_delta : TransactionMetadata, upstream):
+    async def on_update(self, tx_delta : TransactionMetadata, upstream):
         assert self.body is None
         assert self.validation is not False
 

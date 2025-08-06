@@ -14,7 +14,7 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.storage_schema import VersionConflictException
 
 
-class AsyncFilterWrapperTest(unittest.TestCase):
+class AsyncFilterWrapperTest(unittest.IsolatedAsyncioTestCase):
     def test_async_smoke(self):
         async_filter = MockAsyncFilter()
 
@@ -192,7 +192,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         tx = wrapper.get()
         logging.debug(tx)
 
-    def test_sync_smoke(self):
+    async def test_sync_smoke(self):
         async_filter = MockAsyncFilter()
 
         wrapper = AsyncFilterWrapper(async_filter, 1)
@@ -220,8 +220,11 @@ class AsyncFilterWrapperTest(unittest.TestCase):
             mail_response=Response(250),
             version=2))
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        upstream_delta = wrapper.on_update(tx, tx.copy())
+        tx = TransactionMetadata()
+        wrapper.wire_downstream(tx)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        wrapper.downstream.merge_from(delta)
+        upstream_delta = await wrapper.on_update(delta, None)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(2, wrapper.version())
 

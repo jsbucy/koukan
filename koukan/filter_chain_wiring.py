@@ -24,6 +24,7 @@ from koukan.filter import (
     HostPort,
     Resolution,
     SyncFilter )
+from koukan.filter_chain import FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
@@ -112,18 +113,20 @@ class FilterChainWiring:
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream
             # chain
-            add_route = self.exploder_upstream(
+            sink = self.exploder_upstream(
                 yaml['output_chain'],
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors
                 store_and_forward=True,
                 block_upstream=False, notify=False, retry=False)
+            add_route = FilterChain([sink])
+            logging.debug(add_route)
         else:
             output = self.filter_chain_factory.build_filter_chain(
                 yaml['output_chain'])
             if output is None:
                 return None
             add_route, output_yaml = output
-        return AddRouteFilter(add_route, yaml['output_chain'], next)
+        return AddRouteFilter(add_route, yaml['output_chain'])
 
     def rest_output(self, yaml, next):
         logging.debug('Config.rest_output %s', yaml)
