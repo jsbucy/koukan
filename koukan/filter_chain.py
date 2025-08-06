@@ -45,6 +45,7 @@ class ProxyFilter(Filter):
 class FilterChain:
     filters : List[Filter]
     loop : asyncio.AbstractEventLoop
+    tx : Optional[TransactionMetadata] = None
 
     def __init__(self, filters : List[Filter]):
         self.filters = filters
@@ -60,6 +61,7 @@ class FilterChain:
             self.loop = None
 
     def init(self, tx : TransactionMetadata):
+        self.tx = tx
         for f in self.filters:
             f.wire_downstream(tx)
             if isinstance(f, ProxyFilter):
@@ -77,6 +79,8 @@ class FilterChain:
         prev = self.filters[0].downstream.copy()
 
         for f in self.filters:
+            logging.debug(f.prev_downstream)
+            logging.debug(f.downstream)
             delta = f.prev_downstream.delta(f.downstream)
             f.prev_downstream = f.downstream.copy()
 
@@ -115,6 +119,6 @@ class FilterChain:
                     co.send(None)
                 except StopIteration:
                     pass
-                f.prev_downstream = f.downstream.copy()
+            f.prev_downstream = f.downstream.copy()
 
         return prev.delta(self.filters[0].downstream)

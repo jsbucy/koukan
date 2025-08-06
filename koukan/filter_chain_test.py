@@ -13,7 +13,9 @@ from koukan.filter import TransactionMetadata
 class Sink(Filter):
     async def on_update(self, delta, upstream):
         logging.debug('Sink.update %s', self.downstream)
+        logging.debug(delta)
         # self.downstream['sink'] = 'sink'
+        assert delta.mail_response is None
         if delta.mail_from:
             self.downstream.mail_response = Response(201)
         for i in range(len(self.downstream.rcpt_response), len(self.downstream.rcpt_to)):
