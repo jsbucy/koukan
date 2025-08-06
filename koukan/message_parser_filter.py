@@ -37,11 +37,15 @@ class MessageParserFilter(ProxyFilter):
 
         body = tx.maybe_body_blob()
         if (body is not None and
+             body.finalized() and
+            not self.parsed and
             (tx.options is not None and 'receive_parsing' in tx.options)):
             tx_delta.body = None
+        else:
+            body = None
         self.upstream.merge_from(tx_delta)
 
-        if body is None or not body.finalized() or self.parsed:
+        if body is None:
             assert self.downstream.merge_from(await upstream()) is not None
             return
 

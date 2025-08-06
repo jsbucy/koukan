@@ -46,5 +46,23 @@ class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
         await filter.on_update(delta, upstream)
 
 
+    async def test_noop(self):
+        b = b'hello, world!'
+        delta = TransactionMetadata(body=InlineBlob(b, last=True))
+
+        filter = MessageParserFilter()
+        filter.wire_downstream(TransactionMetadata())
+        filter.downstream.merge_from(delta)
+        filter.wire_upstream(TransactionMetadata())
+
+        async def upstream():
+            self.assertEqual(b, filter.upstream.body.pread(0))
+            upstream_delta=TransactionMetadata(data_response=Response(201))
+            filter.upstream.merge_from(upstream_delta)
+            return upstream_delta
+        await filter.on_update(delta, upstream)
+        self.assertEqual(201, filter.downstream.data_response.code)
+
+
 if __name__ == '__main__':
     unittest.main()
