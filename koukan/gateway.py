@@ -19,6 +19,7 @@ from koukan.smtp_service import (
     service as smtp_service )
 import koukan.fastapi_service as fastapi_service
 from koukan.filter import AsyncFilter
+from koukan.filter_chain import FilterChain
 from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.rest_handler import (
     EndpointFactory,
@@ -80,7 +81,7 @@ class SmtpGateway(EndpointFactory):
         logging.info("SmtpGateway.shutdown() done")
         return success
 
-    def rest_factory(self, yaml):
+    def rest_factory(self, yaml) -> FilterChain:
         logging.debug('rest_factory %s', yaml)
 
         client_args = { 'verify': yaml.get('verify', True) }
@@ -92,13 +93,14 @@ class SmtpGateway(EndpointFactory):
             client = RestEndpointClientProvider(**client_args)
             self.rest_endpoint_clients.append((client_args, client))
 
-        return RestEndpoint(
+        endpoint = RestEndpoint(
             static_base_url=yaml['endpoint'],
             static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
             client_provider=client,
             chunk_size=yaml.get('chunk_size', 2**16))
+        return FilterChain([endpoint])
 
     def rest_endpoint_yaml(self, name):
         for endpoint_yaml in self.config_yaml['rest_output']:
@@ -228,7 +230,7 @@ class SmtpGateway(EndpointFactory):
             addr = service_yaml['addr']
             handler_factory = partial(
                 self.smtp_handler_factory,
-                endpoint_factory=partial(self.rest_factory, endpoint_yaml),
+                chain_factory=partial(self.rest_factory, endpoint_yaml),
                 executor=Executor(inflight_limit=100, watchdog_timeout=3600),
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 timeout_data=service_yaml.get('data_timeout', data_timeout),

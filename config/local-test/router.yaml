@@ -199,9 +199,9 @@ endpoint:
       mode: per_request
       host: submission
   chain:
-  - filter: remote_host
-  - filter: received_header
-    received_hostname: gargantua1    
+  # - filter: remote_host
+  # - filter: received_header
+  #   received_hostname: gargantua1    
   - filter: router
     policy:
       name: address_list

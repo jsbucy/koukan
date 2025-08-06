@@ -15,9 +15,10 @@ from aiosmtpd.controller import Controller
 from koukan.filter import TransactionMetadata
 from koukan.smtp_service import SmtpHandler, service
 from koukan.response import Response
-from koukan.fake_endpoints import FakeSyncFilter
+from koukan.fake_endpoints import FakeFilter
 from koukan.blob import InlineBlob
 from koukan.executor import Executor
+from koukan.filter_chain import FilterChain
 
 def find_unused_port() -> int:
     with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -25,11 +26,12 @@ def find_unused_port() -> int:
 
 class SmtpServiceTest(unittest.TestCase):
     def setUp(self):
-        self.endpoint = FakeSyncFilter()
+        self.endpoint = FakeFilter()
+        self.chain = FilterChain([self.endpoint])
 
         logging.basicConfig(level=logging.DEBUG)
         handler_factory = lambda: SmtpHandler(
-            endpoint_factory = lambda: self.endpoint,
+            chain_factory = lambda: self.chain,
             executor = Executor(inflight_limit=100, watchdog_timeout=3600),
             chunk_size = 64
         )
@@ -60,30 +62,28 @@ class SmtpServiceTest(unittest.TestCase):
         self.assertEqual(resp[0], 250)
 
         def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata()
+            logging.debug(tx)
             if tx_mail_resp:
-                upstream_delta.mail_response = tx_mail_resp
-            assert tx.merge_from(upstream_delta) is not None
-            return upstream_delta
+                tx.mail_response = tx_mail_resp
+
         self.endpoint.add_expectation(exp)
         resp = self.smtp_client.mail('alice')
         self.assertEqual(resp[0], exp_mail_resp.code)
 
         for i,(rcpt, tx_rcpt_resp, exp_rcpt_resp) in enumerate(rcpts):
             def exp(tx, tx_delta):
-                upstream_delta=TransactionMetadata()
-                updated_tx = tx.copy()
+                logging.debug(tx)
                 if tx_rcpt_resp:
-                    updated_tx.rcpt_response.append(tx_rcpt_resp)
-                upstream_delta = tx.delta(updated_tx)
-                self.assertIsNotNone(tx.merge_from(upstream_delta))
-                return upstream_delta
+                    tx.rcpt_response.append(tx_rcpt_resp)
             self.endpoint.add_expectation(exp)
             resp = self.smtp_client.rcpt(rcpt)
             self.assertEqual(resp[0], exp_rcpt_resp.code)
 
         # smtplib.SMTP.data throws SMTPDataError if no valid rcpt
         if exp_data_resp is None:
+            def exp_cancel(tx, delta):
+                pass
+            self.endpoint.add_expectation(exp)
             return
 
         b = b''
@@ -93,16 +93,13 @@ class SmtpServiceTest(unittest.TestCase):
 
         body = InlineBlob(b'')
         def exp_body(tx, tx_delta):
-            upstream_delta=TransactionMetadata()
             logging.debug(tx.body)
             if tx.body:
                 body.append(tx.body.pread(body.len()))
                 logging.debug(body.pread(0))
             if tx.body.finalized() and tx_data_resp:
                 self.assertEqual(b, body.pread(0))
-                upstream_delta.data_response = tx_data_resp
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
+                tx.data_response = tx_data_resp
         for i in range(0,11):
             self.endpoint.add_expectation(exp_body)
         resp = self.smtp_client.data(b)

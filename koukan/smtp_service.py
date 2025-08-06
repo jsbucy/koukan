@@ -23,8 +23,8 @@ from koukan.filter import (
     EsmtpParam,
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterChain
 from koukan.executor import Executor
 
 _next_cx = 0
@@ -36,14 +36,15 @@ def next_cx():
         _next_cx += 1
     return rv
 
+ChainFactory = Callable[[], FilterChain]
+
 class SmtpHandler:
-    endpoint_factory : Callable[[], SyncFilter]
+    chain_factory : ChainFactory
     executor : Executor
     smtp : Optional[SMTP] = None
     cx_id : str  # connection id, log token
 
-    endpoint : Optional[SyncFilter] = None
-    tx : Optional[TransactionMetadata] = None
+    chain : Optional[FilterChain] = None
 
     local_socket = None
     peername = None
@@ -58,14 +59,14 @@ class SmtpHandler:
     last_refresh : float = 0
     chunk_size : int
 
-    def __init__(self, endpoint_factory : Callable[[], SyncFilter],
+    def __init__(self, chain_factory : ChainFactory,
                  executor : Executor,
                  timeout_mail=10,
                  timeout_rcpt=60,
                  timeout_data=330,
                  refresh_interval=30,
                  chunk_size=2**20):
-        self.endpoint_factory = endpoint_factory
+        self.chain_factory = chain_factory
         self.executor = executor
 
         self.timeout_mail = timeout_mail
@@ -135,14 +136,14 @@ class SmtpHandler:
     def _cancel(self):
         self.prev_chunk = []
         self.prev_chunk_len = 0
-        if self.endpoint is None and self.tx is None:
+        if self.chain is None:
             return
-        if self.tx is not None:
+        if self.chain is not None:
+            self.chain.tx.cancelled = True
             fut = self.executor.submit(
                 partial(self._update_tx,
-                        self.cx_id, self.endpoint, self.tx,
-                        TransactionMetadata(cancelled=True)), timeout=0)
-        self.endpoint = self.tx = None
+                        self.cx_id, self.chain), timeout=0)
+        self.chain = None
 
     async def handle_QUIT(self, server : SMTP,
                           session : Session,
@@ -160,9 +161,9 @@ class SmtpHandler:
         self._cancel()
         return '250 ok'
 
-    def _update_tx(self, cx_id, endpoint, tx, tx_delta):
+    def _update_tx(self, cx_id, chain):
         logging.debug('SmtpHandler._update_tx %s', cx_id)
-        upstream_delta = endpoint.on_update(tx, tx_delta)
+        chain.update()
         logging.debug('SmtpHandler._update_tx %s done', cx_id)
 
     async def handle_MAIL(self, server : SMTP,
@@ -170,11 +171,10 @@ class SmtpHandler:
                           envelope : Envelope,
                           mail_from : str,
                           mail_esmtp : List[str]) -> str:
-        self.endpoint = self.endpoint_factory()
-        self.tx = TransactionMetadata()
+        self.chain = self.chain_factory()
+        self.chain.init(TransactionMetadata())
 
-        updated_tx = TransactionMetadata()
-        updated_tx.smtp_meta = {
+        self.chain.tx.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
             'tls': session.ssl is not None,
@@ -190,31 +190,28 @@ class SmtpHandler:
                 self.local_host = HostPort.from_seq(self.local_socket)
 
         if self.remote_host is not None:
-            updated_tx.remote_host = self.remote_host
+            self.chain.tx.remote_host = self.remote_host
         if self.local_host is not None:
-            updated_tx.local_host = self.local_host
+            self.chain.tx.local_host = self.local_host
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
-        updated_tx.mail_from = Mailbox(mail_from, params)
-        tx_delta = self.tx.delta(updated_tx)
-        self.tx = updated_tx
+        self.chain.tx.mail_from = Mailbox(mail_from, params)
         fut = self.executor.submit(
-            lambda: self._update_tx(
-                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
+            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
         if fut is None:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_mail)
         logging.debug('handle_MAIL wait fut done')
         logging.info('SmtpHandler.handle_MAIL %s resp %s',
-                     self.cx_id, self.tx.mail_response)
-        if self.tx.mail_response is None:
+                     self.cx_id, self.chain.tx.mail_response)
+        if self.chain.tx.mail_response is None:
             return '450 MAIL upstream timeout/internal err'
-        if self.tx.mail_response.ok():
+        if self.chain.tx.mail_response.ok():
             # aiosmtpd expects this
             envelope.mail_from = mail_from
             envelope.mail_options.extend(mail_esmtp)
-        return self.tx.mail_response.to_smtp_resp()
+        return self.chain.tx.mail_response.to_smtp_resp()
 
     async def handle_RCPT(self, server : SMTP,
                           session : Session,
@@ -225,26 +222,22 @@ class SmtpHandler:
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
 
-        rcpt_num = len(self.tx.rcpt_to)
-        updated_tx = self.tx.copy()
-        updated_tx.rcpt_to.append(Mailbox(rcpt_to, params))
-        tx_delta = self.tx.delta(updated_tx)
-        self.tx = updated_tx
+        rcpt_num = len(self.chain.tx.rcpt_to)
+        self.chain.tx.rcpt_to.append(Mailbox(rcpt_to, params))
         fut = self.executor.submit(
-            lambda: self._update_tx(
-                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
+            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
         if fut is None:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_rcpt)
 
         logging.info('SmtpHandler.handle_RCPT %s response %s',
-                     self.cx_id, self.tx.rcpt_response)
+                     self.cx_id, self.chain.tx.rcpt_response)
 
         # for now without pipelining we send one rcpt upstream at a time
-        if len(self.tx.rcpt_response) != len(self.tx.rcpt_to):
+        if len(self.chain.tx.rcpt_response) != len(self.chain.tx.rcpt_to):
             return '450 RCPT upstream timeout/internal err'
-        rcpt_resp = self.tx.rcpt_response[rcpt_num]
+        rcpt_resp = self.chain.tx.rcpt_response[rcpt_num]
 
         if rcpt_resp is None:
             return '450 RCPT upstream timeout/internal err'
@@ -270,14 +263,14 @@ class SmtpHandler:
                                 decoded_data : Optional[str],
                                 last : bool) -> Optional[str]:
         now = time.monotonic()
-        if self.tx.body is None:
-            self.tx.body = InlineBlob(b'')
+        if self.chain.tx.body is None:
+            self.chain.tx.body = InlineBlob(b'')
             self.last_refresh = now
-        body = self.tx.body
+        body = self.chain.tx.body
         assert isinstance(body, InlineBlob)
         assert body.content_length() is None
 
-        if last or (self.tx.body.available() + len(data) <= self.chunk_size):
+        if last or (self.chain.tx.body.available() + len(data) <= self.chunk_size):
             body.append(data, last)
             data = b''
         stale = now - self.last_refresh > self.refresh_interval
@@ -288,25 +281,23 @@ class SmtpHandler:
         logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
                      self.cx_id, body.available(), last)
 
-        tx_delta = TransactionMetadata(body = self.tx.body)
         fut = self.executor.submit(
-            lambda: self._update_tx(
-                self.cx_id, self.endpoint, self.tx, tx_delta), timeout=0)
+            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
         if fut is None:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
                            timeout=self.timeout_data)
         logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
-                     self.cx_id, self.tx.data_response)
-        self.tx.body.trim_front(self.tx.body.len())
+                     self.cx_id, self.chain.tx.data_response)
+        self.chain.tx.body.trim_front(self.chain.tx.body.len())
 
         if data:
             body.append(data, last)
 
-        if self.tx.data_response is None:
+        if self.chain.tx.data_response is None:
             assert not last
             return None
-        data_resp = self.tx.data_response.to_smtp_resp()
+        data_resp = self.chain.tx.data_response.to_smtp_resp()
         self.tx = None
         return data_resp
 
