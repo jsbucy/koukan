@@ -19,7 +19,6 @@ from koukan.response import Response
 from koukan.remote_host_filter import (
     RemoteHostFilter,
     Resolver )
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.fake_dns_wrapper import FakeResolver
 
 ptr_message_text = """id 1234
@@ -99,82 +98,83 @@ aaaa_answer = Answer(
     RdataClass.IN,
     aaaa_message)
 
-class RemoteHostFilterTest(unittest.TestCase):
+class RemoteHostFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
 
-    def _test(self, addr,
+    async def _test(self, addr,
               answers : List[Union[Answer, Exception]],
-              exp_hostname, exp_fcrdns, exp_resp=201):
-
+              exp_hostname, exp_fcrdns, exp_err=False):
         resolver = FakeResolver(answers)
+        filter = RemoteHostFilter(resolver)
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
 
-        upstream = FakeSyncFilter()
-        def exp(tx, tx_delta):
+        async def upstream():
             self.assertEqual(exp_hostname, tx.remote_hostname)
             self.assertEqual(exp_fcrdns, tx.fcrdns)
-            self.assertEqual(exp_hostname, tx_delta.remote_hostname)
-            self.assertEqual(exp_fcrdns, tx_delta.fcrdns)
 
-            resp = Response(201)
-            upstream_delta = TransactionMetadata()
-            tx.fill_inflight_responses(resp, upstream_delta)
+            upstream_delta = TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)])
             self.assertIsNotNone(tx.merge_from(upstream_delta))
             return upstream_delta
-        upstream.add_expectation(exp)
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             remote_host=HostPort(addr, 12345),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        filter = RemoteHostFilter(upstream, resolver)
-        upstream_delta = filter.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        await filter.on_update(delta, upstream)
         logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
-        self.assertEqual(exp_resp, tx.mail_response.code)
-        self.assertEqual(exp_resp, upstream_delta.mail_response.code)
-        self.assertEqual([exp_resp],
-                         [r.code for r in upstream_delta.rcpt_response])
+        self.assertEqual(450 if exp_err else 201, tx.mail_response.code)
+        # fill_inflight_responses populates rcpt resp with
+        # "503 failed precondition/bad sequence of commands" after mail err
+        self.assertEqual([503 if exp_err else 202],
+                         [r.code for r in tx.rcpt_response])
 
 
-    def test_success_ipv4(self):
-        self._test(
+    async def test_success_ipv4(self):
+        await self._test(
             '1.2.3.4',
             [ptr_answer, a_answer],
             'tachygraph.gloop.org.', True)
 
-    def test_success_ipv6(self):
-        self._test(
+    async def test_success_ipv6(self):
+        await self._test(
             '0123:4567:89ab:cdef:0123:4567:89ab:cdef',
             [ptr6_answer, aaaa_answer],
             'tachygraph.gloop.org.', True)
 
-    def test_nx_ptr(self):
-        self._test('1.2.3.4',
+    async def test_nx_ptr(self):
+        await self._test('1.2.3.4',
                    [dns.resolver.NXDOMAIN()],
                    '', False)
 
-    def test_nx_fwd(self):
-        self._test('1.2.3.4',
+    async def test_nx_fwd(self):
+        await self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NXDOMAIN(),   # A
                     dns.resolver.NXDOMAIN()],  # AAAA
                    'tachygraph.gloop.org.', False)
 
-    def test_servfail_ptr(self):
-        self._test('1.2.3.4',
+    async def test_servfail_ptr(self):
+        await self._test('1.2.3.4',
                    [dns.resolver.NoNameservers()],
                    None, None,
-                   exp_resp=450)
+                   exp_err=True)
 
-    def test_servfail_fwd(self):
-        self._test('1.2.3.4',
+    async def test_servfail_fwd(self):
+        await self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NoNameservers(),   # A
                     dns.resolver.NoNameservers()],  # AAAA
                    'tachygraph.gloop.org.', False,
-                   exp_resp=450)
+                   exp_err=True)
 
 
 if __name__ == '__main__':

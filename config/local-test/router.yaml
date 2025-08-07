@@ -33,7 +33,7 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
-  #- filter: relay_auth
+  - filter: relay_auth
   #  smtp_auth: true
   - filter: exploder
     output_chain: msa-output
@@ -60,7 +60,7 @@ endpoint:
       host: submission
 
   chain:
-  - filter: remote_host
+  - filter: remote_host  # xxx -> downstream exploder chain?
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
   - filter: message_builder
@@ -121,7 +121,7 @@ endpoint:
       deadline: 30
 
   chain:
-  # - filter: remote_host
+  - filter: remote_host
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
   - filter: message_builder
@@ -199,7 +199,7 @@ endpoint:
       mode: per_request
       host: submission
   chain:
-  # - filter: remote_host
+  - filter: remote_host
   - filter: received_header
     received_hostname: gargantua1    
   - filter: router

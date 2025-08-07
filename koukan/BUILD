@@ -362,18 +362,19 @@ py_test(name='add_route_filter_test',
 pytype_library(name='remote_host_filter',
                srcs=['remote_host_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':dns_wrapper'])
 
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter',
-              ':fake_endpoints',
               ':fake_dns_wrapper',
               '@pypi//dnspython'])
 
 pytype_library(name='received_header_filter',
                srcs=['received_header_filter.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 py_test(name='received_header_filter_test',
         srcs=['received_header_filter_test.py'],
@@ -383,6 +384,7 @@ py_test(name='received_header_filter_test',
 pytype_library(name='relay_auth_filter',
                srcs=['relay_auth_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':response'])
 
 py_test(name='relay_auth_filter_test',

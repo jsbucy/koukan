@@ -16,8 +16,10 @@ from koukan.fake_endpoints import FakeSyncFilter
 
 class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     async def test_smoke(self):
         delta = TransactionMetadata(

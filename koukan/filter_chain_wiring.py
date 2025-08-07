@@ -165,13 +165,13 @@ class FilterChainWiring:
         return MessageParserFilter()
 
     def remote_host(self, yaml, next):
-        return RemoteHostFilter(next)
+        return RemoteHostFilter()
 
     def received_header(self, yaml, next):
         return ReceivedHeaderFilter(yaml.get('received_hostname', None))
 
     def relay_auth(self, yaml, next):
-        return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
+        return RelayAuthFilter(smtp_auth = yaml.get('smtp_auth', False))
 
     def dns_resolution(self, yaml, next):
         host_list = yaml.get('static_hosts', None)
