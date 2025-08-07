@@ -42,6 +42,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
         delta.body.check_ids()
 
         async def exp(tx):
+            tx = self.filter.upstream
             logging.debug(tx)
             self.assertTrue(isinstance(tx.body, Blob))
             self.assertTrue(tx.body.finalized())
@@ -108,12 +109,18 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
                               rest_id='blob_rest_id')])
         delta.body.check_ids()
         async def exp():
-            self.fail()
+            tx = self.filter.upstream
+            self.assertIsNone(tx.body)
+            upstream_delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            tx.merge_from(upstream_delta)
+            return upstream_delta
 
         tx.merge_from(delta)
         await self.filter.on_update(delta, exp)
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertEqual([r.code for r in tx.rcpt_response], [250])
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 550)
 
 

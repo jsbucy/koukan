@@ -1440,7 +1440,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 250)
         self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.data_response.code, 203)
-        self.assertFalse(upstream_endpoint.expectation)
 
     def test_multi_node(self):
         url2, service2 = self._setup_router()

@@ -12,14 +12,15 @@ from koukan.message_builder import MessageBuilderSpec
 
 class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     async def test_smoke(self):
         with open('testdata/multipart.msg', 'rb') as f:
             b = f.read()
-        delta = TransactionMetadata(
-            body=InlineBlob(b, len(b)))
+        delta = TransactionMetadata(body=InlineBlob(b[0:10]))
         delta.options = {'receive_parsing': {}}
 
         filter = MessageParserFilter()
@@ -28,7 +29,13 @@ class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
         filter.wire_upstream(TransactionMetadata())
 
         async def upstream():
+            self.assertIsNone(filter.upstream.body)
+            return TransactionMetadata()
+        await filter.on_update(delta, upstream)
+
+        async def upstream():
             tx = filter.upstream
+            logging.debug(tx)
             exp_blobs = [b'yolocat', b'yolocat2']
             self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
             self.assertEqual(len(exp_blobs), len(tx.body.blobs))
@@ -43,6 +50,8 @@ class MessageParserFilterTest(unittest.IsolatedAsyncioTestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
+        delta = TransactionMetadata(body=InlineBlob(b, last=True))
+        filter.downstream.body = delta.body
         await filter.on_update(delta, upstream)
 
 

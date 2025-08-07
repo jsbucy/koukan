@@ -270,7 +270,7 @@ class End2EndTest(unittest.TestCase):
         with open(tx.body_path, 'rb') as f:
             body = f.read()
         logging.debug('raw %s', body)
-        # self.assertIn(b'Received:', body)
+        self.assertIn(b'Received:', body)
 
         parsed = tx.message_json
 
@@ -339,7 +339,7 @@ class End2EndTest(unittest.TestCase):
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler
             # self.assertIn(b'DKIM-Signature:', handler.data)
-            # self.assertIn(b'Received:', handler.data)
+            self.assertIn(b'Received:', handler.data)
 
         self.assertEqual(2, len(handlers))
 
@@ -389,7 +389,7 @@ class End2EndTest(unittest.TestCase):
             handlers[rcpt] = handler
             self.assertIn(b'from: alice a <alice@example.com>', handler.data)
             self.assertIn(b'DKIM-Signature:', handler.data)
-            # self.assertIn(b'Received:', handler.data)
+            self.assertIn(b'Received:', handler.data)
             self.assertIn(b'aGVsbG8sIHdvcmxkIQo=', handler.data)
 
         self.assertEqual(2, len(handlers))

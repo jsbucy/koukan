@@ -168,7 +168,7 @@ class FilterChainWiring:
         return RemoteHostFilter(next)
 
     def received_header(self, yaml, next):
-        return ReceivedHeaderFilter(next, yaml.get('received_hostname', None))
+        return ReceivedHeaderFilter(yaml.get('received_hostname', None))
 
     def relay_auth(self, yaml, next):
         return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))

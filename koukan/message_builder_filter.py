@@ -16,26 +16,29 @@ from koukan.blob import Blob, FileLikeBlob, InlineBlob
 from koukan.rest_schema import BlobUri
 
 class MessageBuilderFilter(ProxyFilter):
-    body : Optional[Blob] = None
-    validation : Optional[bool]= None
+    validation : Optional[bool] = None
 
     def __init__(self):
         pass
 
     async def on_update(self, tx_delta : TransactionMetadata, upstream):
-        assert self.body is None
-        assert self.validation is not False
-
-        body = None
-        if isinstance(tx_delta.body, MessageBuilderSpec):
-            body = tx_delta.body
-            tx_delta.body = None  # xxx ok to mutate this delta?
+        body = tx_delta.body
+        if isinstance(body, MessageBuilderSpec):
+            tx_delta.body = None
+            if (body is not None and
+                self.validation is not None and
+                not body.finalized()):
+                body = None
+        else:
+            body = None
         assert self.upstream.merge_from(tx_delta) is not None
 
         if body is None:
-            upstream_delta = await upstream()
-            assert self.downstream.merge_from(upstream_delta) is not None
+            assert self.downstream.merge_from(await upstream()) is not None
             return
+
+        assert self.validation is not False
+        assert self.upstream.body is None
 
         if body.finalized():
             blobs = { blob.rest_id(): blob for blob in body.blobs }
@@ -46,6 +49,8 @@ class MessageBuilderFilter(ProxyFilter):
                       for blob in body.blobs }
         builder = MessageBuilder(body.json, blobs)
 
+        upstream_body = None
+        data_err = None
         try:
             file = None
             if body.finalized():
@@ -57,7 +62,7 @@ class MessageBuilderFilter(ProxyFilter):
                 builder.build(f)
             if file is not None:
                 file.flush()
-                self.body = FileLikeBlob(file, finalized=True)
+                upstream_body = FileLikeBlob(file, finalized=True)
             else:
                 self.validation = True
         except:
@@ -66,17 +71,19 @@ class MessageBuilderFilter(ProxyFilter):
             # TODO add a validator/fixup filter in front of this to
             # catch these errors
             logging.exception('unexpected exception in MessageBuilder')
-            self.downstream.fill_inflight_responses(
-                Response(250, 'ok (MessageBuilderFilter no-op, '
-                         'DATA will fail)'))
-            self.downstream.data_response = Response(
+            data_err = Response(
                 550, 'unexpected exception in MessageBuilder, '
                 'likely invalid message_builder json')
-            return
 
-        if self.body:
+        if upstream_body:
             logging.debug('MessageBuilderFilter.on_update %d %s',
-                          self.body.len(), self.body.content_length())
+                          upstream_body.len(), upstream_body.content_length())
+            self.upstream.body = upstream_body
 
-        self.upstream.body = self.body
-        assert self.downstream.merge_from(await upstream()) is not None
+        # even if validation failed send any other new downstream
+        # fields upstream to get authoritative responses for them
+        if data_err is None or bool(tx_delta):
+            assert self.downstream.merge_from(await upstream()) is not None
+
+        if data_err is not None:
+            self.downstream.data_response = data_err

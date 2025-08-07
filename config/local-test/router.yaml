@@ -125,8 +125,8 @@ endpoint:
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
   - filter: message_builder
-  # - filter: received_header
-  #   received_hostname: gargantua1    
+  - filter: received_header
+    received_hostname: gargantua1    
   # - filter: router
   #   policy:
   #     name: hello
@@ -200,8 +200,8 @@ endpoint:
       host: submission
   chain:
   # - filter: remote_host
-  # - filter: received_header
-  #   received_hostname: gargantua1    
+  - filter: received_header
+    received_hostname: gargantua1    
   - filter: router
     policy:
       name: address_list

@@ -35,19 +35,19 @@ class MessageParserFilter(ProxyFilter):
         tx = self.downstream
         logging.debug('MessageParserFilter options %s', tx.options)
 
-        body = tx.maybe_body_blob()
-        if (body is not None and
-             body.finalized() and
-            not self.parsed and
-            (tx.options is not None and 'receive_parsing' in tx.options)):
+        body = tx_delta.maybe_body_blob()
+        enabled = tx.options is not None and 'receive_parsing' in tx.options
+        if enabled:
             tx_delta.body = None
-        else:
+        if not enabled or (body is not None and not body.finalized()):
             body = None
         self.upstream.merge_from(tx_delta)
 
         if body is None:
             assert self.downstream.merge_from(await upstream()) is not None
             return
+
+        assert self.upstream.body is None
 
         parse_options = tx.options.get('receive_parsing', {})
         file = TemporaryFile('w+b')
@@ -66,7 +66,8 @@ class MessageParserFilter(ProxyFilter):
             spec.check_ids()
             spec.body_blob = tx.body
             self.upstream.body = spec
-
-        # TODO option to fail/set data err on parse error?
+        else:
+            # TODO option to fail/set data err on parse error?
+            self.upstream_body = body
 
         assert self.downstream.merge_from(await upstream()) is not None
