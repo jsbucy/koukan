@@ -1,17 +1,16 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
-from koukan.filter import SyncFilter, TransactionMetadata
+from koukan.filter import TransactionMetadata
+from koukan.filter_chain import Filter, TransactionMetadata
 import logging
 
-class HelloFilter(SyncFilter):
-    def __init__(self, next):
-        self.next = next
-    def on_update(
-            self, tx : TransactionMetadata, tx_delta : TransactionMetadata
-    ) -> Optional[TransactionMetadata]:
-        logging.debug('HelloFilter.on_update %s', tx)
-        return self.next.on_update(tx, tx_delta)
+class HelloFilter(Filter):
+    def __init__(self):
+        pass
+    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+        logging.debug('HelloFilter.on_update %s', self.downstream)
+        await upstream()
 
-def factory(yaml, next : SyncFilter) -> SyncFilter:
-    return HelloFilter(next)
+def factory(yaml) -> Filter:
+    return HelloFilter()

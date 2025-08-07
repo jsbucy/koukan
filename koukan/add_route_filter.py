@@ -14,7 +14,7 @@ def _err(r : Optional[Response]) -> Optional[Response]:
         return None
     return Response(r.code, r.message + ' (AddRouteFilter upstream)')
 
-# AddRouteFilter forks a message to another SyncFilter in addition to the
+# AddRouteFilter forks a message to another Filter in addition to the
 # primary/upstream. There are 2 likely configurations: chain with...
 # 1: RestEndpoint if you want sync/cutthrough behavior, block on the
 #    add-route endpoint use this if the additional route is local, you

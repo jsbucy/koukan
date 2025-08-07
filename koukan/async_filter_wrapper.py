@@ -21,7 +21,7 @@ from koukan.backoff import backoff
 # success and enables retries/notifications on the upstream transaction.
 class AsyncFilterWrapper(AsyncFilter, Filter):
     filter : AsyncFilter
-    timeout : float  # used for SyncFilter.on_update()
+    timeout : float  # used by Filter.on_update()
     store_and_forward : bool
     do_store_and_forward : bool = False
     tx : TransactionMetadata  # most recent upstream

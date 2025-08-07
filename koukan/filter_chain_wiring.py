@@ -22,8 +22,7 @@ from koukan.message_parser_filter import MessageParserFilter
 from koukan.filter import (
     AsyncFilter,
     HostPort,
-    Resolution,
-    SyncFilter )
+    Resolution )
 from koukan.filter_chain import FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
@@ -86,8 +85,7 @@ class FilterChainWiring:
             upstream, rcpt_timeout, store_and_forward=store_and_forward,
             notify=notify, retry=retry)
 
-    def exploder(self, yaml, next):
-        assert next is None
+    def exploder(self, yaml):
         msa = msa=yaml.get('msa', False)
         rcpt_timeout = 30
         data_timeout = 300
@@ -108,7 +106,7 @@ class FilterChainWiring:
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
-    def add_route(self, yaml, next):
+    def add_route(self, yaml):
         if yaml.get('store_and_forward', None):
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream
@@ -128,9 +126,8 @@ class FilterChainWiring:
             add_route, output_yaml = output
         return AddRouteFilter(add_route, yaml['output_chain'])
 
-    def rest_output(self, yaml, next):
+    def rest_output(self, yaml):
         logging.debug('Config.rest_output %s', yaml)
-        assert next is None
         chunk_size = yaml.get('chunk_size', None)
         static_remote_host_yaml = yaml.get('static_remote_host', None)
         static_remote_host = (HostPort.from_yaml(static_remote_host_yaml)
@@ -155,25 +152,25 @@ class FilterChainWiring:
             client_provider=client,
             chunk_size=chunk_size)
 
-    def dkim(self, yaml, next):
+    def dkim(self, yaml):
         if 'key' not in yaml:
             return None
         return DkimEndpoint(
             yaml['domain'], yaml['selector'], yaml['key'])
 
-    def message_parser(self, yaml, next):
+    def message_parser(self, yaml):
         return MessageParserFilter()
 
-    def remote_host(self, yaml, next):
+    def remote_host(self, yaml):
         return RemoteHostFilter()
 
-    def received_header(self, yaml, next):
+    def received_header(self, yaml):
         return ReceivedHeaderFilter(yaml.get('received_hostname', None))
 
-    def relay_auth(self, yaml, next):
+    def relay_auth(self, yaml):
         return RelayAuthFilter(smtp_auth = yaml.get('smtp_auth', False))
 
-    def dns_resolution(self, yaml, next):
+    def dns_resolution(self, yaml):
         host_list = yaml.get('static_hosts', None)
         static_resolution = None
         if host_list:
@@ -185,5 +182,5 @@ class FilterChainWiring:
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
-    def message_builder(self, yaml, next):
+    def message_builder(self, yaml):
         return MessageBuilderFilter()

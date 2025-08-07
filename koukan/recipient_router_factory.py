@@ -13,8 +13,8 @@ from koukan.recipient_router_filter import (
     RoutingPolicy )
 from koukan.filter import (
     HostPort,
-    Resolution,
-    SyncFilter )
+    Resolution )
+from koukan.filter_chain import Filter
 
 class RecipientRouterFactory:
     router_policies : Dict[str, RoutingPolicy]
@@ -83,7 +83,7 @@ class RecipientRouterFactory:
             policy_yaml.get('prefixes', []),
             self._route_destination(policy_yaml))
 
-    def build_router(self, yaml : dict, next : SyncFilter) -> SyncFilter:
+    def build_router(self, yaml : dict) -> Filter:
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)

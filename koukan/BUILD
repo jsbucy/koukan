@@ -274,7 +274,6 @@ py_test(name='dkim_endpoint_test',
         srcs=['dkim_endpoint_test.py'],
         deps=[':dkim_endpoint',
               ':dest_domain_policy',
-              ':fake_endpoints',
               '@pypi//dkimpy'])
 
 pytype_library(name='dns_wrapper',
@@ -378,8 +377,7 @@ pytype_library(name='received_header_filter',
 
 py_test(name='received_header_filter_test',
         srcs=['received_header_filter_test.py'],
-        deps=[':received_header_filter',
-              ':fake_endpoints'])
+        deps=[':received_header_filter'])
 
 pytype_library(name='relay_auth_filter',
                srcs=['relay_auth_filter.py'],
@@ -400,6 +398,7 @@ pytype_library(name='filter_chain_factory',
 pytype_library(name='recipient_router_factory',
                srcs=['recipient_router_factory.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':address_list_policy',
                      ':dest_domain_policy',
                      ':recipient_router_filter'])

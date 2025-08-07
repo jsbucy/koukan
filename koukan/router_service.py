@@ -24,7 +24,6 @@ from koukan.filter_chain_wiring import FilterChainWiring
 from koukan.filter_chain import FilterChain
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata )
 from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.deadline import Deadline

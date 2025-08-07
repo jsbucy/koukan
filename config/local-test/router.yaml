@@ -127,19 +127,19 @@ endpoint:
   - filter: message_builder
   - filter: received_header
     received_hostname: gargantua1    
-  # - filter: router
-  #   policy:
-  #     name: hello
+  - filter: router
+    policy:
+      name: hello
   # send my own domains directly to my ingress
-  # - filter: router
-  #   policy:
-  #     name: address_list
-  #     domains:
-  #     - example.com
-  #     - rest-application.example.com
-  #     destination:
-  #       endpoint: http://localhost:8000
-  #       http_host: mx-out
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      - rest-application.example.com
+      destination:
+        endpoint: http://localhost:8000
+        http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
@@ -147,15 +147,15 @@ endpoint:
       destination:
         endpoint: http://localhost:8001
         http_host: outbound
-  # - filter: router
-  #   policy:
-  #     name: address_list
-  #     # no domains/dest -> reject all
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest -> reject all
   - filter: dkim
     # key: config/local-test/dkim.key
     domain: example.com
     selector: sel
-  # - filter: hello
+  - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
     static_hosts:

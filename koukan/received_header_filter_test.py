@@ -12,7 +12,6 @@ from koukan.filter import (
     Response,
     TransactionMetadata )
 from koukan.received_header_filter import ReceivedHeaderFilter
-from koukan.fake_endpoints import FakeSyncFilter
 
 class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

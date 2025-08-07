@@ -10,7 +10,6 @@ from dkim import dknewkey
 from koukan.blob import InlineBlob
 from koukan.dkim_endpoint import DkimEndpoint
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
 
 class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):

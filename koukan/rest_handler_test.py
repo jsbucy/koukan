@@ -19,7 +19,7 @@ from httpx import Response as HttpxResponse
 
 from koukan.blob import InlineBlob
 from koukan.rest_handler import RestHandler
-from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
+from koukan.fake_endpoints import MockAsyncFilter
 from koukan.executor import Executor
 from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response

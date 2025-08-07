@@ -770,19 +770,6 @@ class TransactionMetadata:
 # upstream_delta = sync_filter.on_update(new_tx, downstream_delta)
 # assert tx.merge(upstream_delta) == new_tx
 
-# output chain filters always return the upstream response or a
-# timeout error that terminates the OutputHandler
-class SyncFilter(ABC):
-    # tx is the full state vector
-    # tx_delta is what's new since the last call
-    # returns delta of what was added upstream
-    # only returns None on invalid delta i.e. dropped fields
-    @abstractmethod
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        pass
-
 # interface from rest handler to StorageWriterFilter
 class AsyncFilter(ABC):
     # returns whether this endpoint supports building up the

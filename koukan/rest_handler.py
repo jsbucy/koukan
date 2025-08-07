@@ -41,7 +41,6 @@ from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.rest_service_handler import Handler, HandlerFactory
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
 from koukan.executor import Executor
