@@ -28,7 +28,6 @@ from koukan.fake_endpoints import FakeFilter
 from koukan.filter import (
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
 from koukan.executor import Executor
@@ -228,7 +227,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.endpoints = []
 
-    def get_endpoint(self):
+    def get_endpoint(self, yaml):
         logging.debug('RouterServiceTest.get_endpoint')
         with self.lock:
             self.cv.wait_for(lambda: bool(self.endpoints))
@@ -255,7 +254,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertTrue(service.wait_started(5))
         # XXX
         service.filter_chain_factory.inject_filter(
-            'sync', lambda yaml, next: self.get_endpoint())
+            'sync', self.get_endpoint)
 
         return router_url, service
 

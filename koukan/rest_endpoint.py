@@ -330,6 +330,8 @@ class RestEndpoint(Filter):
         else:
             # as long as the delta isn't just the body, send a patch even
             # if it's empty as a heartbeat
+            # TODO maybe this should have nospin logic i.e. don't send
+            # a heartbeat more often than every n secs?
             delta_no_body = tx_delta.copy()
             delta_no_body.body = None
             if (tx_delta.empty(WhichJson.REST_UPDATE) or
@@ -408,8 +410,9 @@ class RestEndpoint(Filter):
         # known to drop response fields on subsequent calls so use
         # upstream_tx, not tx here
         if not any([r.ok() for r in self.upstream_tx.rcpt_response]):
+            # TODO this should be implemented centrally in FilterChain?
             self.downstream.data_response = Response(
-                    400, "data failed precondition: all rcpts failed"
+                    503, "5.1.1 data failed precondition: all rcpts failed"
                     " (RestEndpoint)")
             return
 
@@ -612,7 +615,7 @@ class RestEndpoint(Filter):
 
     def _get_json(self, timeout : Optional[float] = None,
                   testonly_point_read = False
-                 ) -> Optional[dict]:
+                  ) -> Optional[dict]:
         try:
             req_headers = {}
             if self.http_host:
@@ -652,22 +655,24 @@ class RestEndpoint(Filter):
             start = time.monotonic()
             prev_etag = self.etag
             tx_json = self._get_json(timeout=deadline.deadline_left())
+            # XXX this needs to distinguish 304 from errors
+            if tx_json is None:  # timeout or invalid json
+                return None
             delta = time.monotonic() - start
             logging.debug('RestEndpoint._get() %s done %s',
                           self.transaction_url, tx_json)
 
-            # TODO this should abort on some http errs? 4xx?
-
             if tx_json is not None:
                 tx_out = TransactionMetadata.from_json(
                     tx_json, WhichJson.REST_READ)
+                if tx_out is None:  # invalid json tx contents
+                    return None
 
             logging.debug('RestEndpoint._get() %s done tx_out %s',
                           self.transaction_url, tx_out)
 
-            if (tx_out is not None) and (
-                    not self.upstream_tx.req_inflight(tx_out) and not
-                    (self.sent_data_last and tx_out.data_response is None)):
+            if (not self.upstream_tx.req_inflight(tx_out) and not
+                (self.sent_data_last and tx_out.data_response is None)):
                 return tx_out
 
             # min delta

@@ -759,18 +759,9 @@ class TransactionMetadata:
             return None
         return self.body_blob()
 
-# NOTE Sync and Async here are with respect to the transaction
-# responses, not program execution.
-
-# state after previous call to sync_filter.on_update()
-# prev_tx : TransactionMetadata
-# delta : TransactionMetadata
-# tx = prev_tx.merge(delta)
-# new_tx = tx.copy()
-# upstream_delta = sync_filter.on_update(new_tx, downstream_delta)
-# assert tx.merge(upstream_delta) == new_tx
-
 # interface from rest handler to StorageWriterFilter
+# NOTE Async here is with respect to the transaction responses, not
+# program execution.
 class AsyncFilter(ABC):
     # returns whether this endpoint supports building up the
     # transaction incrementally a la smtp
