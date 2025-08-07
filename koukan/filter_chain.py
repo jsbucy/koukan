@@ -79,9 +79,10 @@ class FilterChain:
         prev = self.filters[0].downstream.copy()
 
         for f in self.filters:
+            logging.debug(f)
             logging.debug(f.prev_downstream)
             logging.debug(f.downstream)
-            delta = f.prev_downstream.delta(f.downstream)
+            assert (delta := f.prev_downstream.delta(f.downstream)) is not None
             f.prev_downstream = f.downstream.copy()
 
             futures = [None]

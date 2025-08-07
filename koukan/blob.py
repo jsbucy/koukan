@@ -261,6 +261,7 @@ class Chunk:
             length = self.length
         return self.blob.pread(offset, length)
 
+
 class CompositeBlob(Blob):
     chunks : List[Chunk]
     last = False
@@ -310,6 +311,19 @@ class CompositeBlob(Blob):
         if not self.last:
             return None
         return self.len()
+
+    # TODO CompositeBlob is currently only used in the output chain to
+    # prepend a header onto an already finalized message. As such,
+    # anything upstream will see body transition from None to
+    # finalized between successive calls. Moreover tx snapshot/delta
+    # in FilterChain does not deep-copy this so it will always be the
+    # same object between successive calls. cf TODO in
+    # received_header_filter, if one wanted to trickle out the body,
+    # this needs a real implementation.
+    def delta(self, rhs):
+        if not isinstance(rhs, CompositeBlob) or rhs is not self:
+            return None
+        return False
 
 
 class BlobReader(IOBase):

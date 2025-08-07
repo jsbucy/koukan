@@ -159,7 +159,7 @@ class FilterChainWiring:
         if 'key' not in yaml:
             return None
         return DkimEndpoint(
-            yaml['domain'], yaml['selector'], yaml['key'], next)
+            yaml['domain'], yaml['selector'], yaml['key'])
 
     def message_parser(self, yaml, next):
         return MessageParserFilter()

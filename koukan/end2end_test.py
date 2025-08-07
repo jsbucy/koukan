@@ -80,8 +80,6 @@ class End2EndTest(unittest.TestCase):
             self._update_address_list(policy)
 
     def _update_dkim(self, chain):
-        return
-
         last = 0
         dkim = None
         for i,f in enumerate(chain):
@@ -96,7 +94,7 @@ class End2EndTest(unittest.TestCase):
                                 'selector': 'sel',
                                 'key': None})
             dkim = last
-        filter_yaml = chain[last]
+        filter_yaml = chain[dkim]
         if not self.dkim_tempdir:
             self.dkim_tempdir = tempfile.TemporaryDirectory()
         dir = self.dkim_tempdir.name
@@ -230,6 +228,7 @@ class End2EndTest(unittest.TestCase):
             if handler.ehlo is None:
                 logging.debug('empty handler? %s', handler)
                 continue
+            logging.debug(handler)
             self.assertEqual(handler.ehlo, 'localhost')
             self.assertEqual(handler.mail_from, 'alice@example.com')
             self.assertEqual(len(handler.mail_options), 1)
@@ -389,7 +388,7 @@ class End2EndTest(unittest.TestCase):
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler
             self.assertIn(b'from: alice a <alice@example.com>', handler.data)
-            # self.assertIn(b'DKIM-Signature:', handler.data)
+            self.assertIn(b'DKIM-Signature:', handler.data)
             # self.assertIn(b'Received:', handler.data)
             self.assertIn(b'aGVsbG8sIHdvcmxkIQo=', handler.data)
 

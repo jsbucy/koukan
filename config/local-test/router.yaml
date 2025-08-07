@@ -90,10 +90,10 @@ endpoint:
     policy:
       name: address_list
       # no domains/dest -> reject all
-  #- filter: dkim
-  #  key: config/local-test/dkim.key
-  #  domain: example.com
-  #  selector: sel
+  - filter: dkim
+    # key: config/local-test/dkim.key
+    domain: example.com
+    selector: sel
   - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
@@ -151,10 +151,10 @@ endpoint:
   #   policy:
   #     name: address_list
   #     # no domains/dest -> reject all
-  #- filter: dkim
-  #  key: config/local-test/dkim.key
-  #  domain: example.com
-  #  selector: sel
+  - filter: dkim
+    # key: config/local-test/dkim.key
+    domain: example.com
+    selector: sel
   # - filter: hello
   - filter: dns_resolution
     suffix: ''  # match everything
@@ -234,8 +234,8 @@ endpoint:
       # no domains: match everything
       # dest == None: reject
   - filter: message_parser
-  # - filter: add_route
-  #   output_chain: sink
+  - filter: add_route
+    output_chain: sink
   - filter: dns_resolution
     literal: 'fake_smtpd'
     static_hosts:
