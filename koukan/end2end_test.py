@@ -86,14 +86,6 @@ class End2EndTest(unittest.TestCase):
             if f['filter'] == 'dkim':
                 dkim = i
                 break
-            if f['filter'] in ['message_builder', 'received_header']:
-                last = i
-        if dkim is None:
-            chain.insert(last, {'filter': 'dkim',
-                                'domain': 'd',
-                                'selector': 'sel',
-                                'key': None})
-            dkim = last
         filter_yaml = chain[dkim]
         if not self.dkim_tempdir:
             self.dkim_tempdir = tempfile.TemporaryDirectory()

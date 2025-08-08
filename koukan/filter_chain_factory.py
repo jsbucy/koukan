@@ -14,6 +14,8 @@ class FilterSpec:
     def __init__(self, builder):
         self.builder = builder
 
+_log_disabled_filter = {}
+
 class FilterChainFactory:
     endpoint_yaml : Optional[dict] = None
     filters : Dict[str, FilterSpec]
@@ -80,6 +82,17 @@ class FilterChainFactory:
     def build_filter_chain(self, host) -> Optional[Tuple[FilterChain, dict]]:
         if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
             return None
-        filters = [self._get_filter(filter_yaml)
-                   for filter_yaml in endpoint_yaml['chain']]
+        filters = []
+        for filter_yaml in endpoint_yaml['chain']:
+            f = self._get_filter(filter_yaml)
+            if f is not None:
+                filters.append(f)
+            elif host not in _log_disabled_filter:
+                # It can be convenient to leave disabled filters in
+                # the yaml e.g. in the examples, dkim is disabled by
+                # default (no key) but left as a placeholder for the
+                # end2end test setup. Log this the first time only.
+                logging.warning('filter disabled chain=%s filter=%s %s',
+                                host, filter_yaml['filter'], filter_yaml)
+        _log_disabled_filter[host] = True
         return FilterChain(filters), endpoint_yaml

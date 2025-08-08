@@ -50,6 +50,7 @@ class MessageParserFilter(ProxyFilter):
         assert self.upstream.body is None
 
         parse_options = tx.options.get('receive_parsing', {})
+        parse_options = parse_options if parse_options else {}  # may be None
         file = TemporaryFile('w+b')
         file.write(body.pread(0))
         file.flush()

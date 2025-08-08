@@ -1,12 +1,13 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 from threading import Lock, Condition
 import logging
 import time
 import json.decoder
 import copy
 from urllib.parse import urljoin, urlparse
+import enum
 
 from httpx import Client, Request, RequestError, Response as HttpResponse
 from werkzeug.datastructures import ContentRange
@@ -29,6 +30,9 @@ from koukan.rest_schema import FINALIZE_BLOB_HEADER
 # these are artificially low for testing
 TIMEOUT_START=5
 TIMEOUT_DATA=5
+
+class _Unchanged(enum.Enum):
+    UNCHANGED = object()
 
 # TODO maybe distinguish empty resp.content vs wrong content-type/invalid json?
 def get_resp_json(resp):
@@ -168,7 +172,9 @@ class RestEndpoint(Filter):
                 continue
             location = rest_resp.headers['location']
             self.transaction_url, self.transaction_path = self._maybe_qualify_url(location)
-            self.etag = rest_resp.headers.get('etag', None)
+            if 'etag' not in rest_resp.headers:
+                return None
+            self.etag = rest_resp.headers['etag']
             return rest_resp
         return rest_resp
 
@@ -180,6 +186,9 @@ class RestEndpoint(Filter):
             self.transaction_url, body_json, self.client.patch, deadline)
         if rest_resp is None:
             return None
+        if 'etag' not in rest_resp.headers:
+            return None
+        self.etag = rest_resp.headers['etag']
         resp_json = get_resp_json(rest_resp)
         logging.info('RestEndpoint._update resp_json %s', resp_json)
         if resp_json is None:
@@ -195,8 +204,8 @@ class RestEndpoint(Filter):
             req_headers['host'] = self.http_host
         deadline_left = deadline.deadline_left()
         self._set_request_timeout(req_headers, deadline_left)
-        if self.etag:
-            req_headers['if-match'] = self.etag
+        assert self.etag
+        req_headers['if-match'] = self.etag
         try:
             kwargs = {}
             if body_json:
@@ -214,12 +223,8 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.http_version)
 
-        if rest_resp.status_code < 300:
-            self.etag = rest_resp.headers.get('etag', None)
-        else:
-            self.etag = None
-            # xxx err?
-
+        if rest_resp.status_code != 200:
+            return rest_resp
         return rest_resp
 
     def _update_message_builder(self, delta : TransactionMetadata,
@@ -613,9 +618,11 @@ class RestEndpoint(Filter):
 
         return Response(), dlen
 
+
+
     def _get_json(self, timeout : Optional[float] = None,
                   testonly_point_read = False
-                  ) -> Optional[dict]:
+                  ) -> Union[None, dict, _Unchanged]:
         try:
             req_headers = {}
             if self.http_host:
@@ -632,18 +639,26 @@ class RestEndpoint(Filter):
             logging.debug('RestEndpoint.get_json() timeout %s',
                           self.transaction_url)
             return None
-        if rest_resp.status_code in [200, 304]:
-            self.etag = rest_resp.headers.get('etag', None)
-        else:
-            self.etag = None
-        if rest_resp.status_code != 200:
+        if rest_resp.status_code not in [200, 304]:
             return None
+        if 'etag' not in rest_resp.headers:
+            return None
+        etag = rest_resp.headers['etag']
+        if rest_resp.status_code == 304:
+            if etag != self.etag:
+                return None
+            return _Unchanged.UNCHANGED
+        else:  # 200
+            self.etag = etag
+
         return get_resp_json(rest_resp)
 
     # test only
     def get_json(self, timeout : Optional[float] = None
                  ) -> Optional[dict]:
-        return self._get_json(timeout, testonly_point_read=True)
+        json = self._get_json(timeout, testonly_point_read=True)
+        assert isinstance(json, Union[None, dict])
+        return json
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
@@ -655,25 +670,25 @@ class RestEndpoint(Filter):
             start = time.monotonic()
             prev_etag = self.etag
             tx_json = self._get_json(timeout=deadline.deadline_left())
-            # XXX this needs to distinguish 304 from errors
             if tx_json is None:  # timeout or invalid json
                 return None
             delta = time.monotonic() - start
-            logging.debug('RestEndpoint._get() %s done %s',
-                          self.transaction_url, tx_json)
 
-            if tx_json is not None:
+            if isinstance(tx_json, dict):
+                logging.debug('RestEndpoint._get() %s done %s',
+                              self.transaction_url, tx_json)
+
                 tx_out = TransactionMetadata.from_json(
                     tx_json, WhichJson.REST_READ)
                 if tx_out is None:  # invalid json tx contents
                     return None
 
-            logging.debug('RestEndpoint._get() %s done tx_out %s',
-                          self.transaction_url, tx_out)
+                logging.debug('RestEndpoint._get() %s done tx_out %s',
+                              self.transaction_url, tx_out)
 
-            if (not self.upstream_tx.req_inflight(tx_out) and not
-                (self.sent_data_last and tx_out.data_response is None)):
-                return tx_out
+                if (not self.upstream_tx.req_inflight(tx_out) and not
+                    (self.sent_data_last and tx_out.data_response is None)):
+                    return tx_out
 
             # min delta
             # XXX configurable

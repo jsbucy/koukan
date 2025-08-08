@@ -26,17 +26,19 @@ def create_app(receiver = None, path = None):
     @app.post('/transactions')
     async def create_transaction(request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
-        tx_id, tx_json = receiver.create_tx(req_json)
+        tx_id, tx_json, etag = receiver.create_tx(req_json)
         return FastApiJsonResponse(
             status_code=201,
-            headers={'location': '/transactions/' + tx_id},
+            headers={'location': '/transactions/' + tx_id,
+                     'etag': etag},
             content=tx_json)
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
-        tx_json = receiver.get_tx(tx_rest_id)
-        return FastApiJsonResponse(status_code=200, content=tx_json)
+        tx_json, etag = receiver.get_tx(tx_rest_id)
+        return FastApiJsonResponse(status_code=200, content=tx_json,
+                                   headers={'etag': etag})
 
     @app.post('/transactions/{tx_rest_id}/message_builder')
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,

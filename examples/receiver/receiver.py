@@ -29,6 +29,7 @@ class Transaction:
     dir : str
 
     last_update : int
+    version = 1
 
     def __init__(self, tx_id : str, tx_json,
                  dir : str):
@@ -133,6 +134,7 @@ class Transaction:
             assert isinstance(f, TextIOBase)
             json.dump(message_json, f)
             self.message_json_path = f.name
+        self.version += 1
 
     def _validate_put_req(self, req_headers,
                           tx_body : Optional[bool] = None,
@@ -179,7 +181,8 @@ class Transaction:
         with self._create_file('msg' if tx_body else blob_id) as file:
             while b := stream.read(self.CHUNK_SIZE):
                 file.write(b)
-            self.finalize_blob(file.name, tx_body, blob_id)
+            self._finalize_blob(file.name, tx_body, blob_id)
+        self.version += 1
         return 200, 'ok'
 
     # asgi/fastapi-only
@@ -275,11 +278,11 @@ class Receiver:
         tx_id = secrets.token_urlsafe()
         tx = Transaction(tx_id, tx_json, self.dir)
         self.transactions[tx_id] = tx
-        return tx_id, tx.get_json()
+        return tx_id, tx.get_json(), str(tx.version)
 
     def get_tx(self, tx_rest_id : str):
         tx = self._get_tx(tx_rest_id)
-        return tx.get_json()
+        return tx.get_json(), str(tx.version)
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
         tx = self._get_tx(tx_rest_id)

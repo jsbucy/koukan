@@ -178,11 +178,13 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
     # low-level methods
 
     def testCreate(self):
-        rest_endpoint, tx = self.create_endpoint(static_base_url=self.static_base_url)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={},
-            location='/transactions/123'))
+            location='/transactions/123',
+            etag='1'))
         rest_resp = rest_endpoint._create(
             resolution=None, tx=tx, deadline=Deadline())
         self.assertEqual(rest_resp.status_code, 201)
@@ -198,7 +200,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         js = {'hello': 'world'}
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json=js))
+            resp_json=js,
+            etag='1'))
         resp_json = rest_endpoint.get_json(timeout=None)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
@@ -206,7 +209,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json=js))
+            resp_json=js,
+            etag='2'))
         resp_json = rest_endpoint.get_json(timeout=2)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
@@ -218,7 +222,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = 'bad json'))
+            body = 'bad json',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
         self.assertEqual(tx.mail_response.code, 450)
@@ -240,7 +245,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         # GET /transactions/123 times out
         self.responses.append(Response(timeout=True))
         delta = TransactionMetadata(mail_from=Mailbox('alice'))
@@ -255,18 +261,21 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={ 'mail_from': {} },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json={ 'mail_from': {} }))
+            resp_json={ 'mail_from': {} },
+            etag='1'))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 234 }
-            }))
+            },
+            etag='2'))
 
         delta = TransactionMetadata(mail_from=Mailbox('alice'))
         tx.merge_from(delta)
@@ -283,7 +292,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200}},
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
         self.assertEqual(tx.mail_response.code, 200)
@@ -291,7 +301,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = 'bad json'))
+            body = 'bad json',
+            etag='2'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         assert tx.merge_from(tx_delta) is not None
         await rest_endpoint.on_update(tx_delta, None)
@@ -307,7 +318,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200}},
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
         self.assertEqual(tx.mail_response.code, 200)
@@ -317,11 +329,13 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200},
-                'rcpt_to': [{}]}))
+                'rcpt_to': [{}]},
+            etag='2'))
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = resp_json))
+            body = resp_json,
+            etag='3'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         assert tx.merge_from(tx_delta) is not None
         await rest_endpoint.on_update(tx_delta, None)
@@ -333,6 +347,56 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         await self._test_update_bad_response_get(
             json.dumps({'some_weird_stuff': 3.14159}))
 
+    async def test_update_get_unchanged_success(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        self.responses.append(Response(
+            http_resp = '304 unchanged',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            resp_json={'mail_from': {},
+                       'mail_response': {'code': 201}},
+            location = '/transactions/124',
+            etag = '2'))
+
+        tx.merge_from(delta)
+        await rest_endpoint.on_update(delta, None)
+        self.assertEqual(201, tx.mail_response.code)
+
+    async def test_update_get_unchanged_timeout(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=3)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        for i in range(0,3):
+            self.responses.append(Response(
+                http_resp = '304 unchanged',
+                content_type = 'application/json',
+                resp_json={'mail_from': {}},
+                location = '/transactions/124',
+                etag = '1'))
+
+        tx.merge_from(delta)
+        await rest_endpoint.on_update(delta, None)
+        self.assertEqual(450, tx.mail_response.code)
+
     async def testUpdateTimeoutPost(self):
         rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url, timeout_start=1)
@@ -340,7 +404,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={'mail_response': {'code': 200}},
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
         self.assertEqual(tx.mail_response.code, 200)
@@ -358,7 +423,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={'mail_response': {}},
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
         self.responses.append(Response(timeout=True))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
@@ -378,7 +444,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
-            }))
+            },
+            etag='1'))
 
         # PUT /transactions/123/body
         # range 0-7/*
@@ -454,7 +521,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
-            }))
+            },
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(http_resp = '201 created'))
@@ -495,7 +563,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}] },
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
@@ -532,7 +601,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
@@ -663,7 +733,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
@@ -681,7 +752,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'} }))
+                'data_response': {'code': 203, 'message': 'ok'} },
+            etag='2'))
 
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -709,7 +781,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json()]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -726,7 +799,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]}))
+                'rcpt_response': [rcpt0_resp.to_json()]},
+            etag='2'))
         # GET /transactions/123
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -735,7 +809,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json(),
-                                  rcpt1_resp.to_json()]}))
+                                  rcpt1_resp.to_json()]},
+            etag='3'))
 
         prev = tx.copy()
         tx.rcpt_to.append(Mailbox('bob2'))
@@ -758,7 +833,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # PUT /transactions/123/body
         self.responses.append(Response(
@@ -804,7 +880,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'} }))
+                'data_response': {'code': 203, 'message': 'ok'} },
+            etag='2'))
 
         tx.body.append(b'', last=True)
         await rest_endpoint.on_update(
@@ -835,7 +912,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'remote_host': ['second', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET
         self.responses.append(Response(
@@ -846,7 +924,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
         delta = TransactionMetadata(
             remote_host = HostPort('example.com', 25),
@@ -882,7 +961,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={'mail_from': {'m': 'alice'}},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         logging.debug('test_bad_delta envelope')
         delta = TransactionMetadata(
@@ -908,7 +988,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -919,7 +1000,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
@@ -962,7 +1044,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}}))
+                'data_response': {'code': 203, 'message': 'ok'}},
+            etag='3'))
 
         await rest_endpoint.on_update(parsed_delta, None)
         self.assertEqual(tx.data_response.code, 203)
@@ -982,7 +1065,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -993,7 +1077,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
@@ -1037,7 +1122,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -1048,7 +1134,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
@@ -1097,7 +1184,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 502, 'message': 'err'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
         self.assertEqual(201, tx.mail_response.code)
@@ -1122,12 +1210,12 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'err'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
-            http_resp = '200 created',
-            etag='1'))
+            http_resp = '200 created'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -1177,7 +1265,8 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         tx.merge_from(delta)
         await rest_endpoint.on_update(delta, None)
 
