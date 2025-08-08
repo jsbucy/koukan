@@ -24,4 +24,4 @@ class RelayAuthFilter(Filter):
                 err = Response(550, '5.7.1 not authorized')
                 tx.fill_inflight_responses(err)
                 return
-        assert self.downstream.merge_from(await upstream()) is not None
+        await upstream()

@@ -19,7 +19,6 @@ class RemoteHostFilter(Filter):
             if (err := self._resolve()) is not None:
                 self.downstream.fill_inflight_responses(err)
                 return
-
         await upstream()
 
     def _resolve(self) -> Optional[Response]:
@@ -73,5 +72,3 @@ class RemoteHostFilter(Filter):
                       'remote_hostname=%s fcrdns=%s',
                       tx.remote_hostname, tx.fcrdns)
 
-    def abort(self):
-        pass

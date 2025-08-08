@@ -42,15 +42,18 @@ class RelayAuthFilterTest(unittest.IsolatedAsyncioTestCase):
         filter.wire_downstream(tx)
         async def upstream():
             upstream_delta = TransactionMetadata(
-                mail_response=Response())
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
             self.assertIsNotNone(filter.downstream.merge_from(upstream_delta))
             return upstream_delta
 
         delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')],
                                     smtp_meta = {'auth': True})
         tx.merge_from(delta)
         await filter.on_update(delta, upstream)
-        self.assertTrue(tx.mail_response.ok())
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
 if __name__ == '__main__':
     unittest.main()

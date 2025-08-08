@@ -45,8 +45,6 @@ class RoutingPolicy(ABC):
 
 class RecipientRouterFilter(Filter):
     policy : RoutingPolicy
-    done = False
-    err = False
 
     def __init__(self, policy : RoutingPolicy):
         self.policy = policy
@@ -66,7 +64,6 @@ class RecipientRouterFilter(Filter):
                 tx.mail_response = Response(
                     250, 'MAIL ok (RecipientRouterFilter)')
             tx.rcpt_response = [resp]
-            self.err = True
             return
         elif dest is None:
             return
@@ -79,16 +76,13 @@ class RecipientRouterFilter(Filter):
         tx.options = dest.options
 
     async def on_update(self, tx_delta : TransactionMetadata, upstream):
-        logging.debug(self.downstream)
-        if self.err:
-            return
-        if (self.downstream.rest_endpoint is None and
-            self.downstream.options is None and
-            not self.done and
-            tx_delta.rcpt_to):
+        if (tx_delta.rcpt_to and
+            # this may be chained multiple times; noop if a previous
+            # instance already routed
+            self.downstream.rest_endpoint is None and
+            self.downstream.options is None):
             self._route()
-            self.done = True
-            logging.debug(self.downstream)
-            if self.err:
+            if (self.downstream.rcpt_response and
+                self.downstream.rcpt_response[0].err()):
                 return
         await upstream()

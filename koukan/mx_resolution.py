@@ -44,7 +44,6 @@ def resolve(resolver, hostport : HostPort):
 
 class DnsResolutionFilter(ProxyFilter):
     static_resolution : Optional[Resolution] = None
-    first = True
     suffix : Optional[str] = None  # empty = match all
     literal : Optional[str] = None
     resolver : Resolver
@@ -107,10 +106,9 @@ class DnsResolutionFilter(ProxyFilter):
 
     async def on_update(self, tx_delta : TransactionMetadata, upstream):
         downstream_resolution = tx_delta.resolution
-        if (self.upstream.resolution is None and
-            downstream_resolution is not None and
+        if (downstream_resolution is not None and
             self._needs_resolution(downstream_resolution)):
-            tx_delta.resolution = None  # XXX ok to mutate this delta?
+            tx_delta.resolution = None
         else:
             downstream_resolution = None
         self.upstream.merge_from(tx_delta)
@@ -118,6 +116,8 @@ class DnsResolutionFilter(ProxyFilter):
         if downstream_resolution is None:
             self.downstream.merge_from(await upstream())
             return
+
+        assert self.upstream.resolution is None
 
         resolution = Resolution(self._resolve(downstream_resolution))
         logging.debug(resolution)

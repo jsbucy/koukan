@@ -21,7 +21,6 @@ class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
-    err = False
 
     def __init__(self, received_hostname : Optional[str] = None,
                  inject_time = None,
@@ -133,11 +132,10 @@ class ReceivedHeaderFilter(ProxyFilter):
         # effectively buffering it all like this. However something
         # else in the chain is likely to do that anyway so it's
         # probably moot.
-        if (data_err := self._check_max_received_headers(body)) is not None:
-            self.err = True
-            # don't return data_err immediately in case e.g. we don't
-            # already have rcpt_response to get an authoritative
-            # result from upstream
+        data_err = self._check_max_received_headers(body)
+        # don't return data_err immediately in case e.g. we don't
+        # already have rcpt_response to get an authoritative
+        # result from upstream
 
         if data_err is None:
             upstream_body = CompositeBlob()
@@ -146,7 +144,7 @@ class ReceivedHeaderFilter(ProxyFilter):
             upstream_body.append(body, 0, body.len(), True)
             self.upstream.body = upstream_body
 
-        if data_err is None or bool(tx_delta):
+        if self.upstream.body is not None or bool(tx_delta):
             assert self.downstream.merge_from(await upstream()) is not None
 
         if data_err is not None:

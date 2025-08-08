@@ -222,5 +222,3 @@ class Exploder(Filter):
                     rcpt.update(retry_delta)
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
-
-        return

@@ -92,11 +92,6 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r.code for r in tx.rcpt_response], [500])
         self.assertIsNone(tx.data_response)
 
-        # noop/heartbeat update: should return without calling
-        # upstream or mutating transaction
-        prev = tx.copy()
-        await router.on_update(TransactionMetadata(), unexpected_upstream)
-        self.assertFalse(prev.delta(tx))
 
 if __name__ == '__main__':
     unittest.main()

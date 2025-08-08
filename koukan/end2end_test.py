@@ -37,16 +37,6 @@ def _get_router_endpoint_yaml(router_yaml : dict, name : str
             return endpoint
     return None
 
-def _add_filter_after(endpoint_yaml : dict, filter_name : str,
-                      filter_yaml : dict):
-    for i,filter in enumerate(endpoint_yaml['chain']):
-        if filter['filter'] == filter_name:
-            break
-    else:
-        assert False
-    endpoint_yaml['chain'].insert(i + 1, filter_yaml)
-
-
 class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
@@ -391,7 +381,10 @@ class End2EndTest(unittest.TestCase):
     def _test_add_route(self, filter_yaml):
         self._configure()
         endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'mx-out')
-        _add_filter_after(endpoint_yaml, 'message_parser', filter_yaml)
+
+        add_route_yaml = next(
+            y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route')
+        add_route_yaml.update(filter_yaml)
 
         self._run()
         time.sleep(1)
@@ -424,12 +417,10 @@ class End2EndTest(unittest.TestCase):
             self.fail('didn\'t receive message')
 
     def test_add_route_sync(self):
-        return self._test_add_route({'filter': 'add_route',
-                                     'output_chain': 'sink'})
+        return self._test_add_route({'output_chain': 'sink'})
 
     def test_add_route_async(self):
-        return self._test_add_route({'filter': 'add_route',
-                                     'output_chain': 'sink',
+        return self._test_add_route({'output_chain': 'sink',
                                      'store_and_forard': True})
 
 if __name__ == '__main__':

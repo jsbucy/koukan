@@ -235,7 +235,7 @@ endpoint:
       # dest == None: reject
   - filter: message_parser
   - filter: add_route
-    output_chain: sink
+  # output_chain: sink
   - filter: dns_resolution
     literal: 'fake_smtpd'
     static_hosts:

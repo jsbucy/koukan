@@ -75,8 +75,12 @@ class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata()
         dkim_endpoint.wire_downstream(tx)
         dkim_endpoint.wire_upstream(TransactionMetadata())
-        async def unexpected_upstream():
-            self.fail()
+        async def upstream():
+            delta = TransactionMetadata(
+                mail_response=Response(201),
+                rcpt_response=[Response(202)])
+            dkim_endpoint.upstream.merge_from(delta)
+            return delta
         delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
@@ -84,18 +88,11 @@ class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):
         delta.body = InlineBlob(
             b'definitely not valid rfc822\r\n', last=True)
         tx.merge_from(delta)
-        await dkim_endpoint.on_update(delta, unexpected_upstream)
+        await dkim_endpoint.on_update(delta, upstream)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(tx.data_response.code, 500)
 
-        return
-
-        def exp(tx, delta):
-            self.assertTrue(tx.cancelled)
-            return TransactionMetadata()
-        upstream.add_expectation(exp)
-        cancel = TransactionMetadata(cancelled=True)
-        tx.merge_from(cancel)
-        upstream_delta = dkim_endpoint.on_update(tx, cancel)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

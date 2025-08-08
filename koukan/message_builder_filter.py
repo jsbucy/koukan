@@ -82,7 +82,7 @@ class MessageBuilderFilter(ProxyFilter):
 
         # even if validation failed send any other new downstream
         # fields upstream to get authoritative responses for them
-        if data_err is None or bool(tx_delta):
+        if self.upstream.body is not None or bool(tx_delta):
             assert self.downstream.merge_from(await upstream()) is not None
 
         if data_err is not None:

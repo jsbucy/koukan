@@ -13,7 +13,6 @@ from koukan.filter import (
 from koukan.filter_chain import ProxyFilter
 
 class DkimEndpoint(ProxyFilter):
-    err = False
     domain : str
     selector :str
 
@@ -26,10 +25,7 @@ class DkimEndpoint(ProxyFilter):
     async def on_update(self, tx_delta : TransactionMetadata, upstream):
         built = False
         body = tx_delta.maybe_body_blob()
-
-        if (self.upstream.body is None and
-            not self.err and
-            body is not None):
+        if body is not None:
             tx_delta.body = None
         if body is not None and not body.finalized():
             body = None
@@ -39,17 +35,19 @@ class DkimEndpoint(ProxyFilter):
             assert self.downstream.merge_from(await upstream()) is not None
             return
 
+        assert self.upstream.body is None
+
         sig = self.sign(body)
+        if sig is not None:
+            self.upstream.body = CompositeBlob()
+            sig_blob = InlineBlob(sig)
+            self.upstream.body.append(sig_blob, 0, sig_blob.len())
+            self.upstream.body.append(body, 0, body.len(), True)
+        if self.upstream.body is not None or tx_delta:
+            assert self.downstream.merge_from(await upstream()) is not None
         if sig is None:
-            self.err = True
             self.downstream.data_response = Response(
                 500, 'signing failed (DkimEndpoint')
-            return
-        self.upstream.body = CompositeBlob()
-        sig_blob = InlineBlob(sig)
-        self.upstream.body.append(sig_blob, 0, sig_blob.len())
-        self.upstream.body.append(body, 0, body.len(), True)
-        assert self.downstream.merge_from(await upstream()) is not None
 
     def sign(self, blob : Blob) -> Optional[bytes]:
         data = blob.pread(0)

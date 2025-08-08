@@ -107,6 +107,8 @@ class FilterChainWiring:
             data_timeout=yaml.get('data_timeout', data_timeout))
 
     def add_route(self, yaml):
+        if 'output_chain' not in yaml:
+            return None
         if yaml.get('store_and_forward', None):
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream

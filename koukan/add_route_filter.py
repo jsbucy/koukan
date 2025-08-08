@@ -30,7 +30,6 @@ def _err(r : Optional[Response]) -> Optional[Response]:
 # failing.
 class AddRouteFilter(Filter):
     add_route : FilterChain
-    add_route_tx : Optional[TransactionMetadata] = None
     host : str
 
     def __init__(self, add_route : FilterChain, host : str):
@@ -38,13 +37,13 @@ class AddRouteFilter(Filter):
         self.host = host
 
     def _resp_err(self) -> bool:
-        if mail_err := _err(self.add_route_tx.mail_response):
+        if mail_err := _err(self.add_route.tx.mail_response):
             self.downstream.mail_response = mail_err
         rcpt_err = None
-        if len(self.add_route_tx.rcpt_response) == 1:  # cf assert in on_update()
-            if rcpt_err := _err(self.add_route_tx.rcpt_response[0]):
+        if len(self.add_route.tx.rcpt_response) == 1:  # cf assert in on_update()
+            if rcpt_err := _err(self.add_route.tx.rcpt_response[0]):
                 self.downstream.rcpt_response = [rcpt_err]
-        if data_err := _err(self.add_route_tx.data_response):
+        if data_err := _err(self.add_route.tx.data_response):
             self.downstream.data_response = data_err
         return any([r for r in [mail_err, rcpt_err, data_err] if r is not None])
 
@@ -52,16 +51,12 @@ class AddRouteFilter(Filter):
         # post-exploder output chain/single-rcpt only for now
         assert len(self.downstream.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
-        if self.add_route_tx is None:
-            self.add_route_tx = TransactionMetadata()
-            self.add_route.init(self.add_route_tx)
+        if self.add_route.tx is None:
+            self.add_route.init(TransactionMetadata())
             add_route_delta.host = self.host
-        assert self.add_route_tx.merge_from(add_route_delta) is not None
-        #add_route_upstream_delta =
+        assert self.add_route.tx.merge_from(add_route_delta) is not None
         self.add_route.update()
-        # logging.debug(self.add_route_tx)
-        if not self.downstream.cancelled and self._resp_err():
-            logging.debug(self.downstream)
+        if self._resp_err():
             # NOTE this returns any error from the add route
             # downstream verbatim, it's possible this might contain
             # debugging information internal to the site that you
