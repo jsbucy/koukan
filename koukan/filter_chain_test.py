@@ -6,8 +6,9 @@ from koukan.response import Response
 from koukan.filter_chain import (
     Filter,
     FilterChain,
+    FilterResult,
     ProxyFilter )
-
+from blob import InlineBlob
 from koukan.filter import TransactionMetadata
 
 class Sink(Filter):
@@ -47,6 +48,19 @@ class Proxy(ProxyFilter):
         # self.downstream['proxy_upstream'] = 'y'
 
 
+class ProxyDownstream(ProxyFilter):
+    async def on_update(self, delta, upstream):
+        body = delta.body
+        delta.body = None
+        self.upstream.merge_from(delta)
+        return FilterResult(TransactionMetadata(data_response=Response(501)))
+
+class ProxyDownstreamNone(ProxyFilter):
+    async def on_update(self, delta, upstream):
+        body = delta.body
+        delta.body = None
+        self.upstream.merge_from(delta)
+        return FilterResult()
 
 class FilterChainTest(unittest.TestCase):
     def test_smoke(self):
@@ -71,6 +85,30 @@ class FilterChainTest(unittest.TestCase):
         tx.rcpt_to.append(Mailbox('bob2'))
         chain.update()
         self.assertEqual([202, 202], [r.code for r in tx.rcpt_response])
+
+    def test_filter_result(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([ProxyDownstream(), sink])
+        chain.init(tx)
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            body = InlineBlob(b'hello, world!', last=True))
+        tx.merge_from(delta)
+        chain.update()
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual(501, tx.data_response.code)
+
+    def test_filter_result_none(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([ProxyDownstreamNone(), sink])
+        chain.init(tx)
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'))
+        tx.merge_from(delta)
+        chain.update()
+        self.assertEqual(201, tx.mail_response.code)
 
 if __name__ == '__main__':
     logging.basicConfig(

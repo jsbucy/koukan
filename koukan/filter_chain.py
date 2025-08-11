@@ -5,6 +5,12 @@ import asyncio
 
 from koukan.filter import TransactionMetadata
 
+class FilterResult:
+    # delta to be merged after upstream returns
+    downstream_delta : Optional[TransactionMetadata] = None
+    def __init__(self, delta : Optional[TransactionMetadata] = None):
+        self.downstream_delta = delta
+
 class Filter:
     prev_downstream : Optional[TransactionMetadata] = None
     downstream : Optional[TransactionMetadata] = None
@@ -22,21 +28,9 @@ class Filter:
     # upstream() yields to scheduler, returns delta
     async def on_update(
             self, delta : TransactionMetadata,
-            upstream : Callable[[], Awaitable[TransactionMetadata]]):
-        pass
-
-# TODO many filters are of the form
-# def update(delta, upstream):
-#   if err:
-#     self.downstream.fill_inflight_responses(Response(550))
-#     return
-#   await upstream()
-# iow never do anything with the upstream result so possibly we could create
-# a subclass LinearFilter that doesn't have the upstream callable and
-# the FilterChain machinery:
-# - aborts if the filter error'd all reqs
-# - continues upstream otherwise
-# analogous to Envoy Network::FilterStatus::StopIteration vs Continue
+            upstream : Callable[[], Awaitable[TransactionMetadata]]
+    ) -> FilterResult:
+        raise NotImplementedError()
 
 class ProxyFilter(Filter):
     def wire_upstream(self, tx):
@@ -69,7 +63,11 @@ class FilterChain:
                 f.wire_upstream(tx)
 
     def update(self):
-        completion = []  # Tuple(filter, coroutine, future)
+        completion = []  # Tuple(filter, coroutine, future, FilterResult)
+
+        # TODO maybe move noop/heartbeat/keepalive to a separate entry
+        # point which most impls don't need to implement
+        noop = not(self.filters[0].prev_downstream.delta(self.tx))
 
         async def upstream(futures):
             # logging.debug('upstream')
@@ -83,26 +81,36 @@ class FilterChain:
             logging.debug(f.prev_downstream)
             logging.debug(f.downstream)
             delta = f.prev_downstream.delta(f.downstream)
+            if not noop and not delta:
+                break
+
             f.prev_downstream = f.downstream.copy()
 
             futures = [None]
             co = f.on_update(delta, partial(upstream, futures))
+            filter_result = None
             try:
                 co.send(None)
-            except StopIteration:
-                pass  # i.e. never called upstream()
+            except StopIteration as e:
+                # i.e. returned without calling upstream()
+                co = None
+                if isinstance(e.value, FilterResult):
+                    filter_result = e.value
+
             f.prev_upstream = f.upstream.copy()
             fut = futures[0]
             futures = None
-            completion.append((f, co, fut))
+            completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-            if fut is None:
+
+            if fut is None and filter_result is None:
                 logging.debug('no fut')
                 break
 
-        for f, co, fut in reversed(completion):
-            if fut is not None:
+        for f, co, fut, prev_result in reversed(completion):
+            logging.debug('%s %s %s %s', f, co, fut, prev_result)
+            if co is not None and fut is not None:
                 delta = f.prev_upstream.delta(f.upstream)
                 f.prev_upstream = f.upstream.copy()
                 fut.set_result(delta)
@@ -116,10 +124,23 @@ class FilterChain:
                 # To implement this, we would loop around the whole
                 # thing here and restart the first downstream loop at
                 # the filter after f here.
+                filter_result = None
                 try:
                     co.send(None)
-                except StopIteration:
-                    pass
+                except StopIteration as e:
+                    if isinstance(e.value, FilterResult):
+                        filter_result = e.value
+                # unexpected for it *not* to raise?
+            elif prev_result is not None:
+                logging.debug(prev_result.downstream_delta)
+                delta = f.prev_upstream.delta(f.upstream)
+                f.prev_upstream = f.upstream.copy()
+
+                f.downstream.merge_from(delta)
+                if prev_result.downstream_delta is not None:
+                    f.downstream.merge_from(prev_result.downstream_delta)
+                logging.debug(f.downstream)
+
             f.prev_downstream = f.downstream.copy()
 
         return prev.delta(self.filters[0].downstream)

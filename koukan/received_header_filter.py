@@ -14,7 +14,7 @@ from koukan.filter import (
     Mailbox,
     TransactionMetadata,
     get_esmtp_param )
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
 class ReceivedHeaderFilter(ProxyFilter):
@@ -123,8 +123,7 @@ class ReceivedHeaderFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            self.downstream.merge_from(await upstream())
-            return
+            return FilterResult()
 
         # TODO in this case, since the received header that's being
         # prepended onto the body doesn't depend on the body contents,
@@ -144,8 +143,7 @@ class ReceivedHeaderFilter(ProxyFilter):
             upstream_body.append(body, 0, body.len(), True)
             self.upstream.body = upstream_body
 
-        if self.upstream.body is not None or bool(tx_delta):
-            self.downstream.merge_from(await upstream())
-
+        delta = None
         if data_err is not None:
-            self.downstream.data_response = data_err
+            delta = TransactionMetadata(data_response = data_err)
+        return FilterResult(delta)
