@@ -302,7 +302,7 @@ class RestEndpoint(Filter):
                 self.base_url = self.downstream.rest_endpoint
             self.upstream_tx = self.downstream.copy_valid(WhichJson.REST_CREATE)
         else:
-            assert self.upstream_tx.merge_from(downstream_delta) is not None
+            self.upstream_tx.merge_from(downstream_delta)
 
         # router_service_test uses this for submission and sends
         # BlobSpec for body reuse here.  Otherwise clear blobs so the

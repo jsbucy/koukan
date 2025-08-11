@@ -77,7 +77,7 @@ class Recipient:
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
-        assert self.tx.merge_from(delta) is not None
+        self.tx.merge_from(delta)
         if not delta:
             return TransactionMetadata()
         return self.filter.update(self.tx, delta)
@@ -90,7 +90,7 @@ class Recipient:
         tt = t.copy()
         for ti in [orig, tt]:
             ti.version = ti.body = None
-        assert orig.delta(tt) is not None  # check buggy filter
+        assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]

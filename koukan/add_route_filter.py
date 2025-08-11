@@ -54,7 +54,7 @@ class AddRouteFilter(Filter):
         if self.add_route.tx is None:
             self.add_route.init(TransactionMetadata())
             add_route_delta.host = self.host
-        assert self.add_route.tx.merge_from(add_route_delta) is not None
+        self.add_route.tx.merge_from(add_route_delta)
         self.add_route.update()
         if self._resp_err():
             # NOTE this returns any error from the add route

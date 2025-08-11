@@ -29,10 +29,10 @@ class DkimEndpoint(ProxyFilter):
             tx_delta.body = None
         if body is not None and not body.finalized():
             body = None
-        assert self.upstream.merge_from(tx_delta) is not None
+        self.upstream.merge_from(tx_delta)
 
         if body is None:
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
             return
 
         assert self.upstream.body is None
@@ -44,7 +44,7 @@ class DkimEndpoint(ProxyFilter):
             self.upstream.body.append(sig_blob, 0, sig_blob.len())
             self.upstream.body.append(body, 0, body.len(), True)
         if self.upstream.body is not None or tx_delta:
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
         if sig is None:
             self.downstream.data_response = Response(
                 500, 'signing failed (DkimEndpoint')

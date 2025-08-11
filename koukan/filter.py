@@ -627,13 +627,18 @@ class TransactionMetadata:
         return out
 
     # merge delta into self
-    def merge_from(self, delta):
+    def maybe_merge_from(self, delta):
         return self.merge(delta, self)
 
+    def merge_from(self, delta):
+        if (out := self.merge(delta, self)) is None:
+            raise ValueError()
+        return out
+
     # compute a delta from self to successor
-    def delta(self, successor : "TransactionMetadata",
-              which_json : Optional[WhichJson] = None
-              ) -> Optional["TransactionMetadata"]:
+    def maybe_delta(self, successor : "TransactionMetadata",
+                    which_json : Optional[WhichJson] = None
+                    ) -> Optional["TransactionMetadata"]:
         assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
@@ -704,6 +709,11 @@ class TransactionMetadata:
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)
 
+        return out
+
+    def delta(self, next, which_json : Optional[WhichJson] = None):
+        if (out := self.maybe_delta(next, which_json)) is None:
+            raise ValueError()
         return out
 
     # NOTE this copies the rcpt req/resp lists which we know we mutate

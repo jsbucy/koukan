@@ -40,10 +40,10 @@ class Proxy(ProxyFilter):
         logging.debug(self.downstream)
         logging.debug(delta)
         logging.debug(self.upstream)
-        assert self.upstream.merge_from(delta) is not None
+        self.upstream.merge_from(delta)
         # self.upstream['proxy_downstream'] = 'x'
         delta = await upstream()
-        assert self.downstream.merge_from(delta) is not None
+        self.downstream.merge_from(delta)
         # self.downstream['proxy_upstream'] = 'y'
 
 

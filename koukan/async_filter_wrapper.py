@@ -87,7 +87,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t
-                assert upstream_tx.merge_from(tx_delta) is not None
+                upstream_tx.merge_from(tx_delta)
         assert upstream_delta is not None
         return upstream_tx, upstream_delta
 
@@ -107,7 +107,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         logging.debug(upstream_tx)
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert downstream_tx.merge_from(upstream_delta) is not None
+        downstream_tx.merge_from(upstream_delta)
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:
@@ -216,4 +216,4 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             upstream_tx = self.get()
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert self.downstream.merge_from(upstream_delta) is not None
+        self.downstream.merge_from(upstream_delta)

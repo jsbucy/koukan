@@ -304,7 +304,7 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
             body = 'bad json',
             etag='2'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
+        tx.merge_from(tx_delta)
         await rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
@@ -337,7 +337,7 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
             body = resp_json,
             etag='3'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
+        tx.merge_from(tx_delta)
         await rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
@@ -412,7 +412,7 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         self.responses.append(Response(timeout=True))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
+        tx.merge_from(tx_delta)
         await rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
@@ -586,7 +586,7 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
         blob_bytes = b'hello'
         tx_delta = TransactionMetadata(
             body=InlineBlob(blob_bytes, last=True))
-        assert tx.merge_from(tx_delta) is not None
+        tx.merge_from(tx_delta)
         await rest_endpoint.on_update(tx_delta, None)
         self.assertEqual(tx.data_response.code, 450)
 
@@ -613,7 +613,7 @@ class RestEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         tx_delta = TransactionMetadata(
            body=InlineBlob(b'hello', last=True))
-        assert tx.merge_from(tx_delta) is not None
+        tx.merge_from(tx_delta)
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={'body': '/blob/123'},

@@ -44,7 +44,7 @@ class MessageParserFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
             return
 
         assert self.upstream.body is None
@@ -71,4 +71,4 @@ class MessageParserFilter(ProxyFilter):
             # TODO option to fail/set data err on parse error?
             self.upstream_body = body
 
-        assert self.downstream.merge_from(await upstream()) is not None
+        self.downstream.merge_from(await upstream())

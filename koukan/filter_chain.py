@@ -82,7 +82,7 @@ class FilterChain:
             logging.debug(f)
             logging.debug(f.prev_downstream)
             logging.debug(f.downstream)
-            assert (delta := f.prev_downstream.delta(f.downstream)) is not None
+            delta = f.prev_downstream.delta(f.downstream)
             f.prev_downstream = f.downstream.copy()
 
             futures = [None]

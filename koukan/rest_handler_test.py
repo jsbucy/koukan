@@ -65,7 +65,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             upstream_delta = TransactionMetadata(version=2)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_mail)
 
@@ -120,7 +120,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
                 version=4)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_rcpt)
 
@@ -175,7 +175,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(2, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
                 version=5)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_rcpt2)
 

@@ -175,7 +175,6 @@ class SyncFilterAdapter(AsyncFilter):
     def _update_once(self):
         assert self.inflight
         delta = self.prev_tx.delta(self.tx)  # new reqs
-        assert delta is not None
         logging.debug('SyncFilterAdapter._update_once() '
                       'downstream_delta %s staged %s', delta,
                       len(self.blob_writer.q) if self.blob_writer else None)
@@ -196,7 +195,7 @@ class SyncFilterAdapter(AsyncFilter):
 
         if not delta and not dequeued:
             return False
-        assert self.chain.tx.merge_from(delta) is not None
+        self.chain.tx.merge_from(delta)
         self.mu.release()
         try:
             upstream_delta = self.chain.update()
@@ -207,7 +206,7 @@ class SyncFilterAdapter(AsyncFilter):
 
         logging.debug('SyncFilterAdapter._update_once() '
                       'tx after upstream %s', self.chain.tx)
-        assert self.tx.merge_from(upstream_delta) is not None
+        self.tx.merge_from(upstream_delta)
         self.prev_tx = self.tx.copy()
 
         # TODO closer to req_inflight() logic i.e. tx has reached

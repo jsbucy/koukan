@@ -84,7 +84,7 @@ class AsyncFilterWrapperTest(unittest.IsolatedAsyncioTestCase):
 
         def exp_update(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=1)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_update)
 
@@ -116,7 +116,7 @@ class AsyncFilterWrapperTest(unittest.IsolatedAsyncioTestCase):
 
         def exp_update(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=1)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_update)
 
@@ -136,7 +136,7 @@ class AsyncFilterWrapperTest(unittest.IsolatedAsyncioTestCase):
 
         def exp_rcpt(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=2)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_rcpt)
 

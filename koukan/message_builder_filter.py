@@ -31,10 +31,10 @@ class MessageBuilderFilter(ProxyFilter):
                 body = None
         else:
             body = None
-        assert self.upstream.merge_from(tx_delta) is not None
+        self.upstream.merge_from(tx_delta)
 
         if body is None:
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
             return
 
         assert self.validation is not False
@@ -83,7 +83,7 @@ class MessageBuilderFilter(ProxyFilter):
         # even if validation failed send any other new downstream
         # fields upstream to get authoritative responses for them
         if self.upstream.body is not None or bool(tx_delta):
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
 
         if data_err is not None:
             self.downstream.data_response = data_err

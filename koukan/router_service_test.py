@@ -458,7 +458,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
                 data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -523,7 +523,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
                 data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -572,7 +572,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)])
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -586,7 +586,7 @@ class RouterServiceTest(unittest.TestCase):
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata(
                 data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp)
 
@@ -653,7 +653,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)])
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -667,7 +667,7 @@ class RouterServiceTest(unittest.TestCase):
         def exp(tx, tx_delta):
             upstream_delta=TransactionMetadata(
                 data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp)
 
@@ -721,7 +721,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(402)])
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -772,7 +772,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(202)],
                 data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp_body)
@@ -821,7 +821,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)])
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         def exp_body(tx, tx_delta):
             if tx.body is None or not tx.body.finalized():
@@ -829,7 +829,7 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual(tx.body.pread(0), body_utf8)
             upstream_delta = TransactionMetadata(
                 data_response = Response(203))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp_env)
         upstream_endpoint.add_expectation(exp_body)
@@ -872,7 +872,7 @@ class RouterServiceTest(unittest.TestCase):
                     self.assertEqual(tx.body.pread(0), body_utf8)
                     upstream_delta.data_response = Response(203)
 
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp2)
         upstream_endpoint.add_expectation(exp2)
@@ -990,7 +990,7 @@ class RouterServiceTest(unittest.TestCase):
                 self.assertIn(body, tx.body.pread(0))
                 upstream_delta.data_response=Response(203)
 
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -1023,7 +1023,7 @@ class RouterServiceTest(unittest.TestCase):
             if tx_delta.rcpt_to:
                 updated_tx.rcpt_response.append(Response(202, 'upstream rcpt 1'))
             upstream_delta = tx.delta(updated_tx)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp_rcpt)
 
@@ -1034,7 +1034,7 @@ class RouterServiceTest(unittest.TestCase):
                 self.assertEqual(tx.body.pread(0), b'Hello, World!')
                 upstream_delta.data_response = Response(
                     205, 'upstream data')
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
 
         upstream_endpoint.add_expectation(exp_body)
@@ -1119,7 +1119,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
             rcpt_response = [Response(402)])
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp)
@@ -1159,7 +1159,7 @@ class RouterServiceTest(unittest.TestCase):
                 upstream_delta = TransactionMetadata(
                     mail_response = Response(201),
                     rcpt_response = [Response(402)])
-                assert tx.merge_from(upstream_delta) is not None
+                tx.merge_from(upstream_delta)
                 return upstream_delta
             upstream_endpoint.add_expectation(exp)
             upstream_endpoint.add_expectation(exp_cancel)
@@ -1180,7 +1180,7 @@ class RouterServiceTest(unittest.TestCase):
                         mail_response = Response(203),
                         rcpt_response = [Response(204)],
                         data_response = Response(205))
-                    assert tx.merge_from(upstream_delta) is not None
+                    tx.merge_from(upstream_delta)
                     return upstream_delta
                 dsn_endpoint.add_expectation(exp_dsn)
 
@@ -1257,7 +1257,7 @@ class RouterServiceTest(unittest.TestCase):
                 logging.debug('test_notification %s', dsn)
                 self.assertIn(b'subject: Delivery Status Notification', dsn)
                 upstream_delta.data_response=Response(250)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
@@ -1426,7 +1426,7 @@ class RouterServiceTest(unittest.TestCase):
                                  b'yolocat2')
                 self.assertIsNotNone(tx_delta.body.json)
                 upstream_delta.data_response=Response(203)
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             logging.debug(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
@@ -1479,7 +1479,7 @@ class RouterServiceTest(unittest.TestCase):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(202)])
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp_rcpt)
 
@@ -1494,7 +1494,7 @@ class RouterServiceTest(unittest.TestCase):
         def exp_body(tx, tx_delta):
             time.sleep(1)
             upstream_delta=TransactionMetadata(data_response=Response(203))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint.add_expectation(exp_body)
 
@@ -1531,7 +1531,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(202),
                 rcpt_response=[Response(204)],
                 data_response=Response(206))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         add_route_endpoint = FakeFilter()
         add_route_endpoint.add_expectation(exp_add_route)
@@ -1544,7 +1544,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(203)],
                 data_response=Response(205))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp_upstream)
@@ -1578,7 +1578,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(202),
                 rcpt_response=[Response(204)],
                 data_response=Response(206))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         add_route_endpoint = FakeFilter()
         add_route_endpoint.add_expectation(exp_add_route)
@@ -1591,7 +1591,7 @@ class RouterServiceTest(unittest.TestCase):
                 mail_response=Response(201),
                 rcpt_response=[Response(203)],
                 data_response=Response(205))
-            self.assertTrue(tx.merge_from(upstream_delta))
+            tx.merge_from(upstream_delta)
             return upstream_delta
         upstream_endpoint = FakeFilter()
         upstream_endpoint.add_expectation(exp_upstream)

@@ -560,7 +560,7 @@ class RestHandler(Handler):
         if tx is None:
             return self.response(request)
         delta = TransactionMetadata(cancelled=True)
-        assert tx.merge_from(delta) is not None
+        tx.merge_from(delta)
         assert tx.cancelled
         self.async_filter.update(tx, delta)
         # TODO this should probably return the tx?

@@ -201,7 +201,7 @@ class OutputHandler:
         # self.tx via _fixup_downstream_tx() drops notification so
         # use cursor tx, but merge upstream responses
         tx = self.cursor.tx.copy()
-        assert tx.merge_from(upstream_delta) is not None
+        tx.merge_from(upstream_delta)
         if self._maybe_send_notification(final_attempt_reason, tx):
             kwargs['notification_done'] = True
 
@@ -263,8 +263,8 @@ class OutputHandler:
                     try:
                         prev = self.cursor.tx.copy()
                         self.cursor.write_envelope(delta, **env_kwargs)
-                        assert self.prev_downstream.merge_from(
-                            prev.delta(self.cursor.tx)) is not None
+                        self.prev_downstream.merge_from(
+                            prev.delta(self.cursor.tx))
                         break
                     except VersionConflictException:
                         logging.debug('VersionConflictException')

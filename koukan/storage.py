@@ -345,8 +345,6 @@ class TransactionCursor:
             return True
 
         tx_to_db = self.tx.merge(tx_delta)
-        # e.g. overwriting an existing field
-        # xxx return/throw
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = None
@@ -433,7 +431,7 @@ class TransactionCursor:
         # TODO or RETURNING json
         # XXX doesn't include response fields? tx.merge() should
         # handle that?
-        self.tx = self.tx.merge(tx_delta)
+        self.tx.merge_from(tx_delta)
 
         if finalize_attempt:
             self.in_attempt = False

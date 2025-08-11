@@ -75,7 +75,7 @@ class OutputHandlerTest(unittest.TestCase):
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(203))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp)
 
@@ -113,7 +113,7 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual(tx_delta.mail_from.mailbox, 'alice')
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp_mail)
 
@@ -127,7 +127,7 @@ class OutputHandlerTest(unittest.TestCase):
             for i in range(len(tx.rcpt_response), len(tx.rcpt_to)):
                 upstream_delta.rcpt_response.append(Response(202 + i))
 
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             logging.debug(tx)
             return upstream_delta
         for i in range(0,6):
@@ -195,7 +195,7 @@ class OutputHandlerTest(unittest.TestCase):
             self.assertEqual(tx_delta.body.pread(0), body)
             upstream_delta = TransactionMetadata(
                 data_response = Response(204))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp_body)
         endpoint.add_expectation(exp_body)
@@ -256,7 +256,7 @@ class OutputHandlerTest(unittest.TestCase):
             updated_tx.mail_response = Response(201)
             updated_tx.rcpt_response.append(Response(402))
             upstream_delta = tx.delta(updated_tx)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp_rcpt1)
 
@@ -271,7 +271,7 @@ class OutputHandlerTest(unittest.TestCase):
             if len(tx.rcpt_to) == 2 and len(tx.rcpt_response) == 1:
                 upstream_delta.rcpt_response_list_offset = 1
                 upstream_delta.rcpt_response = [Response(403)]
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         for i in range(0,2):
             endpoint.add_expectation(exp_rcpt2)
@@ -346,7 +346,7 @@ class OutputHandlerTest(unittest.TestCase):
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)])
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp_rcpt)
         def exp(tx, delta):
@@ -450,7 +450,7 @@ class OutputHandlerTest(unittest.TestCase):
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp)
 
@@ -522,7 +522,7 @@ class OutputHandlerTest(unittest.TestCase):
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp)
 
@@ -604,7 +604,7 @@ class OutputHandlerTest(unittest.TestCase):
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.add_expectation(exp)
 

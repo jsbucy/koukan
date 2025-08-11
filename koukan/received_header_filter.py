@@ -123,7 +123,7 @@ class ReceivedHeaderFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
             return
 
         # TODO in this case, since the received header that's being
@@ -145,7 +145,7 @@ class ReceivedHeaderFilter(ProxyFilter):
             self.upstream.body = upstream_body
 
         if self.upstream.body is not None or bool(tx_delta):
-            assert self.downstream.merge_from(await upstream()) is not None
+            self.downstream.merge_from(await upstream())
 
         if data_err is not None:
             self.downstream.data_response = data_err
