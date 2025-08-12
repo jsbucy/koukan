@@ -7,8 +7,9 @@ from koukan.filter_chain import (
     Filter,
     FilterChain,
     FilterResult,
-    ProxyFilter )
-from blob import InlineBlob
+    ProxyFilter,
+    OneshotProxyFilter )
+from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
 
 class Sink(Filter):
@@ -48,15 +49,15 @@ class Proxy(ProxyFilter):
         # self.downstream['proxy_upstream'] = 'y'
 
 
-class ProxyDownstream(ProxyFilter):
-    async def on_update(self, delta, upstream):
+class OneshotProxyDownstream(OneshotProxyFilter):
+    def on_update(self, delta):
         body = delta.body
         delta.body = None
         self.upstream.merge_from(delta)
         return FilterResult(TransactionMetadata(data_response=Response(501)))
 
-class ProxyDownstreamNone(ProxyFilter):
-    async def on_update(self, delta, upstream):
+class OneshotProxyDownstreamNone(OneshotProxyFilter):
+    def on_update(self, delta):
         body = delta.body
         delta.body = None
         self.upstream.merge_from(delta)
@@ -89,7 +90,7 @@ class FilterChainTest(unittest.TestCase):
     def test_filter_result(self):
         tx = TransactionMetadata()
         sink = Sink()
-        chain = FilterChain([ProxyDownstream(), sink])
+        chain = FilterChain([OneshotProxyDownstream(), sink])
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -102,7 +103,7 @@ class FilterChainTest(unittest.TestCase):
     def test_filter_result_none(self):
         tx = TransactionMetadata()
         sink = Sink()
-        chain = FilterChain([ProxyDownstreamNone(), sink])
+        chain = FilterChain([OneshotProxyDownstreamNone(), sink])
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'))

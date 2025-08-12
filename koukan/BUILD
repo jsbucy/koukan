@@ -36,7 +36,8 @@ pytype_library(name='filter_chain',
 
 py_test(name='filter_chain_test',
         srcs=['filter_chain_test.py'],
-        deps=[':filter_chain'])
+        deps=[':filter_chain',
+              ':blob'])
 
 pytype_library(name='async_filter_wrapper',
                srcs=['async_filter_wrapper.py'],

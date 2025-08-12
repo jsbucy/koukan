@@ -11,7 +11,7 @@ from koukan.filter import (
     Mailbox,
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 from koukan.blob import Blob
 from koukan.response import Response
 
@@ -95,7 +95,7 @@ class Recipient:
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
-class Exploder(Filter):
+class Exploder(OneshotFilter):
     upstream_factory : FilterFactory
     output_chain : str
     # TODO these timeouts move to AsyncFilterWrapper
@@ -135,7 +135,7 @@ class Exploder(Filter):
             return None
         return lhs
 
-    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream
 
         # NOTE: OutputHandler may send but Storage currently does not
@@ -192,7 +192,7 @@ class Exploder(Filter):
                 tx.data_response = rcpt.tx.data_response
 
         if (body is None) or (tx.data_response is not None):
-            return
+            return FilterResult()
 
         # If all rcpts with rcpt_response.ok() have the same
         # data_response.major_code(), return that.  The most likely
@@ -222,3 +222,4 @@ class Exploder(Filter):
                     rcpt.update(retry_delta)
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
+        return FilterResult()

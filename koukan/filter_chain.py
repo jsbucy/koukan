@@ -11,7 +11,7 @@ class FilterResult:
     def __init__(self, delta : Optional[TransactionMetadata] = None):
         self.downstream_delta = delta
 
-class Filter:
+class BaseFilter:
     prev_downstream : Optional[TransactionMetadata] = None
     downstream : Optional[TransactionMetadata] = None
     prev_upstream : Optional[TransactionMetadata] = None
@@ -25,16 +25,31 @@ class Filter:
         self.prev_downstream = TransactionMetadata()
         self.prev_upstream = TransactionMetadata()
 
+class ProxyBaseFilter(BaseFilter):
+    def wire_upstream(self, tx):
+        self.upstream = tx
+
+class FilterMixin:
     # upstream() yields to scheduler, returns delta
     async def on_update(
             self, delta : TransactionMetadata,
-            upstream : Callable[[], Awaitable[TransactionMetadata]]
-    ) -> FilterResult:
+            upstream : Callable[[], Awaitable[TransactionMetadata]]):
         raise NotImplementedError()
 
-class ProxyFilter(Filter):
-    def wire_upstream(self, tx):
-        self.upstream = tx
+class Filter(BaseFilter, FilterMixin):
+    pass
+
+class ProxyFilter(ProxyBaseFilter, FilterMixin):
+    pass
+
+class OneshotFilterMixin:
+    def on_update(self, delta : TransactionMetadata) -> FilterResult:
+        pass
+
+class OneshotFilter(BaseFilter, OneshotFilterMixin):
+    pass
+class OneshotProxyFilter(ProxyBaseFilter, OneshotFilterMixin):
+    pass
 
 class FilterChain:
     filters : List[Filter]
@@ -58,7 +73,7 @@ class FilterChain:
         self.tx = tx
         for f in self.filters:
             f.wire_downstream(tx)
-            if isinstance(f, ProxyFilter):
+            if isinstance(f, ProxyBaseFilter):
                 tx = TransactionMetadata()
                 f.wire_upstream(tx)
 
@@ -86,20 +101,25 @@ class FilterChain:
 
             f.prev_downstream = f.downstream.copy()
 
-            futures = [None]
-            co = f.on_update(delta, partial(upstream, futures))
+            co = None
+            fut = None
             filter_result = None
-            try:
-                co.send(None)
-            except StopIteration as e:
-                # i.e. returned without calling upstream()
-                co = None
-                if isinstance(e.value, FilterResult):
-                    filter_result = e.value
+            if isinstance(f, FilterMixin):
+                futures = [None]
+                co = f.on_update(delta, partial(upstream, futures))
+                try:
+                    co.send(None)
+                except StopIteration as e:
+                    # i.e. returned without calling upstream()
+                    co = None
+                fut = futures[0]
+                futures = None
+            elif isinstance(f, OneshotFilterMixin):
+                filter_result = f.on_update(delta)
+            else:
+                raise NotImplementedError()
 
             f.prev_upstream = f.upstream.copy()
-            fut = futures[0]
-            futures = None
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
@@ -110,9 +130,9 @@ class FilterChain:
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)
+            delta = f.prev_upstream.delta(f.upstream)
+            f.prev_upstream = f.upstream.copy()
             if co is not None and fut is not None:
-                delta = f.prev_upstream.delta(f.upstream)
-                f.prev_upstream = f.upstream.copy()
                 fut.set_result(delta)
 
                 # TODO The filter impl could do multiple roundtrips
@@ -133,10 +153,8 @@ class FilterChain:
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
                 logging.debug(prev_result.downstream_delta)
-                delta = f.prev_upstream.delta(f.upstream)
-                f.prev_upstream = f.upstream.copy()
-
-                f.downstream.merge_from(delta)
+                if f.upstream is not f.downstream:
+                    f.downstream.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream.merge_from(prev_result.downstream_delta)
                 logging.debug(f.downstream)

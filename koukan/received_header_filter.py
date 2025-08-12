@@ -14,10 +14,10 @@ from koukan.filter import (
     Mailbox,
     TransactionMetadata,
     get_esmtp_param )
-from koukan.filter_chain import FilterResult, ProxyFilter
+from koukan.filter_chain import FilterResult, OneshotProxyFilter
 from koukan.response import Response
 
-class ReceivedHeaderFilter(ProxyFilter):
+class ReceivedHeaderFilter(OneshotProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
@@ -112,7 +112,7 @@ class ReceivedHeaderFilter(ProxyFilter):
                                     'headers and is likely looping')
         return None
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         body = tx_delta.maybe_body_blob()
         tx_delta.body = None
         if body is not None and not body.finalized():

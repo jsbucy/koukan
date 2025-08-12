@@ -19,7 +19,7 @@ from koukan.filter import (
     Resolution,
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
@@ -67,7 +67,7 @@ class RestEndpointClientProvider:
     def __del__(self):
         self.close()
 
-class RestEndpoint(Filter):
+class RestEndpoint(OneshotFilter):
     transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -251,13 +251,12 @@ class RestEndpoint(Filter):
                           rest_resp)
         return
 
-    async def on_update(self, tx_delta : TransactionMetadata,
-                        unused_upstream,
-                        timeout : Optional[float] = None):
-        self.do_update(tx_delta, timeout)
+    def on_update(self, tx_delta : TransactionMetadata,
+                        timeout : Optional[float] = None) -> FilterResult:
+        return self.do_update(tx_delta, timeout)
 
     def do_update(self, tx_delta : TransactionMetadata,
-                  timeout : Optional[float] = None):
+                  timeout : Optional[float] = None) -> FilterResult:
         if tx_delta.cancelled:
             self._cancel()
             upstream_delta = TransactionMetadata()
@@ -267,9 +266,9 @@ class RestEndpoint(Filter):
             # after the smtp transaction aborted due to rset/quit/timeout.
             self.downstream.fill_inflight_responses(
                 Response(550, 'cancelled'), upstream_delta)
-            return
+            return FilterResult()
         elif self.downstream.cancelled:
-            return
+            return FilterResult()
 
         if self.http_host is None and self.transaction_url is None:
             if self.downstream.upstream_http_host:
@@ -329,7 +328,7 @@ class RestEndpoint(Filter):
                 # XXX maybe only needs to set mail_response?
                 self.downstream.fill_inflight_responses(
                     Response(450, 'RestEndpoint upstream err creating tx'))
-                return
+                return FilterResult()
             tx_update = True
             created = True
         else:
@@ -346,7 +345,7 @@ class RestEndpoint(Filter):
                if rest_resp is None or rest_resp.status_code != 200:
                    self.downstream.fill_inflight_responses(
                        Response(450, 'RestEndpoint upstream http err'))
-                   return
+                   return FilterResult()
 
                tx_update = True
 
@@ -369,7 +368,7 @@ class RestEndpoint(Filter):
                               resp_json)
                 self.downstream.fill_inflight_responses(
                     Response(450, 'RestEndpoint bad resp_json'))
-                return
+                return FilterResult()
 
             # NOTE we cleared blobs from upstream_tx (above) to
             # prevent this for waiting for data_response since we
@@ -384,7 +383,7 @@ class RestEndpoint(Filter):
             if err:
                 self.downstream.fill_inflight_responses(
                     Response(450, 'RestEndpoint ' + err))
-                return
+                return FilterResult()
 
             upstream_delta = self.upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or
@@ -393,10 +392,10 @@ class RestEndpoint(Filter):
                 self.downstream.fill_inflight_responses(
                     Response(450,
                              'RestEndpoint upstream invalid resp/delta update'))
-                return
+                return FilterResult()
 
         if tx_delta.body is None:
-            return
+            return FilterResult()
 
         # rest receiving with message parsing sends message builder
         # spec out the back. Without pipelining, this will always be
@@ -409,7 +408,7 @@ class RestEndpoint(Filter):
             err = self._update_message_builder(tx_delta, deadline)
             if err is not None:
                 self.downstream.data_response = err
-                return
+                return FilterResult()
 
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
@@ -419,7 +418,7 @@ class RestEndpoint(Filter):
             self.downstream.data_response = Response(
                     503, "5.1.1 data failed precondition: all rcpts failed"
                     " (RestEndpoint)")
-            return
+            return FilterResult()
 
         blobs : List[Tuple[Blob, bool]]  # bool: non_body_blob
         if isinstance(tx_delta.body, Blob):
@@ -429,13 +428,13 @@ class RestEndpoint(Filter):
             if tx_delta.body.body_blob is not None:
                 blobs.append((tx_delta.body.body_blob, False))
         elif isinstance(tx_delta.body, BlobSpec):
-            return upstream_delta
+            return FilterResult()
         else:
             raise ValueError()
 
         # NOTE _get() will wait on tx version even if nothing inflight
         if not blobs:
-            return
+            return FilterResult()
 
         # NOTE this assumes that message_builder includes all blobs on
         # the first call
@@ -444,7 +443,7 @@ class RestEndpoint(Filter):
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
             if not put_blob_resp.ok():
                 self.downstream.data_response = put_blob_resp
-                return
+                return FilterResult()
             if non_body_blob:
                 self.blob_url = None  # xxx wat?
             if not blob.finalized():
@@ -452,7 +451,7 @@ class RestEndpoint(Filter):
         if finalized:
             self.sent_data_last = True
         else:
-            return upstream_delta
+            return FilterResult()
 
 
         tx_out = self._get(deadline)
@@ -468,13 +467,13 @@ class RestEndpoint(Filter):
             (self.downstream.merge_from(blob_delta) is None)):
             self.downstream.fill_inflight_responses(
                 Response(450, 'RestEndpoint upstream invalid resp/delta get'))
-            return
+            return FilterResult()
 
         self.downstream.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'))
         for t in [upstream_tx, tx_out]:
             t.remote_host = None
-
+        return FilterResult()
 
     # Send a finalized blob with a single http request.
     def _put_blob_single(self, blob : Blob,

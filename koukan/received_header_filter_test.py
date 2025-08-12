@@ -14,14 +14,14 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult
 from koukan.received_header_filter import ReceivedHeaderFilter
 
-class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
+class ReceivedHeaderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 
-    async def test_smoke(self):
+    def test_smoke(self):
         delta = TransactionMetadata(
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice'))
@@ -41,11 +41,10 @@ class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
         filter.wire_downstream(tx)
         filter.wire_upstream(TransactionMetadata())
 
-        async def upstream():
-            assert filter.upstream.smtp_meta
-            return TransactionMetadata()
         tx.merge_from(delta)
-        await filter.on_update(delta, upstream)
+        result = filter.on_update(delta)
+        self.assertIsNotNone(filter.upstream.smtp_meta)
+        self.assertIsNone(result.downstream_delta)
 
         delta.rcpt_to.append(Mailbox('bob@domain'))
         body = (b'From: <alice>\r\n'
@@ -56,18 +55,18 @@ class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
                 b'hello\r\n')
         delta.body = InlineBlob(body[0:20], len(body))
         tx.merge_from(delta)
-        result = await filter.on_update(delta, None)
+        result = filter.on_update(delta)
         self.assertIsNone(result.downstream_delta)
 
         tx.body = InlineBlob(body[0:30], len(body))
         tx_delta = TransactionMetadata(body = tx.body)
 
-        result = await filter.on_update(tx_delta, None)
+        result = filter.on_update(tx_delta)
         self.assertIsNone(result.downstream_delta)
 
 
         tx.body = tx_delta.body = InlineBlob(body, len(body))
-        result = await filter.on_update(tx_delta, None)
+        result = filter.on_update(tx_delta)
         self.assertEqual(
             filter.upstream.body.pread(0),
             b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
@@ -110,7 +109,7 @@ class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
             '\tFri, 13 Feb 2009 23:31:30 +0000\r\n',
             filter._format_received())
 
-    async def test_max_received_headers(self):
+    def test_max_received_headers(self):
         filter = ReceivedHeaderFilter(
             received_hostname = 'gargantua1',
             inject_time = datetime.fromtimestamp(1234567890, timezone.utc),
@@ -135,7 +134,7 @@ class ReceivedHeaderFilterTest(unittest.IsolatedAsyncioTestCase):
             last=True)
 
         tx.merge_from(delta)
-        result = await filter.on_update(delta, None)
+        result = filter.on_update(delta)
         self.assertEqual(result.downstream_delta.data_response.code, 550)
         self.assertTrue(result.downstream_delta.data_response.message.startswith('5.4.6'))
 
