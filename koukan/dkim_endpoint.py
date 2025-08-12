@@ -10,9 +10,9 @@ from koukan.response import Response, Esmtp
 from koukan.blob import Blob, InlineBlob, CompositeBlob
 from koukan.filter import (
     TransactionMetadata )
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import FilterResult, OneshotProxyFilter
 
-class DkimEndpoint(ProxyFilter):
+class DkimEndpoint(OneshotProxyFilter):
     domain : str
     selector :str
 
@@ -22,8 +22,7 @@ class DkimEndpoint(ProxyFilter):
         with open(privkey, "rb") as f:
             self.privkey = f.read()
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
-        built = False
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         body = tx_delta.maybe_body_blob()
         if body is not None:
             tx_delta.body = None
@@ -32,8 +31,7 @@ class DkimEndpoint(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            self.downstream.merge_from(await upstream())
-            return
+            return FilterResult()
 
         assert self.upstream.body is None
 
@@ -43,11 +41,11 @@ class DkimEndpoint(ProxyFilter):
             sig_blob = InlineBlob(sig)
             self.upstream.body.append(sig_blob, 0, sig_blob.len())
             self.upstream.body.append(body, 0, body.len(), True)
-        if self.upstream.body is not None or tx_delta:
-            self.downstream.merge_from(await upstream())
+        delta = None
         if sig is None:
-            self.downstream.data_response = Response(
-                500, 'signing failed (DkimEndpoint')
+            delta = TransactionMetadata(
+                data_response = Response(500, 'signing failed (DkimEndpoint'))
+        return FilterResult(delta)
 
     def sign(self, blob : Blob) -> Optional[bytes]:
         data = blob.pread(0)

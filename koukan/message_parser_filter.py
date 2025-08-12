@@ -10,14 +10,14 @@ from koukan.blob import (
     FileLikeBlob,
     InlineBlob )
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import FilterResult, OneshotProxyFilter
 from koukan.message_parser import (
     MessageParser,
     ParsedMessage )
 
 from koukan.message_builder import MessageBuilderSpec
 
-class MessageParserFilter(ProxyFilter):
+class MessageParserFilter(OneshotProxyFilter):
     _blob_i = 0
     parsed : bool = False
 
@@ -31,7 +31,7 @@ class MessageParserFilter(ProxyFilter):
         self._blob_i += 1
         return FileLikeBlob(file, blob_id)
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream
         logging.debug('MessageParserFilter options %s', tx.options)
 
@@ -44,8 +44,7 @@ class MessageParserFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            self.downstream.merge_from(await upstream())
-            return
+            return FilterResult()
 
         assert self.upstream.body is None
 
@@ -71,4 +70,4 @@ class MessageParserFilter(ProxyFilter):
             # TODO option to fail/set data err on parse error?
             self.upstream_body = body
 
-        self.downstream.merge_from(await upstream())
+        return FilterResult()

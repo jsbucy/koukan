@@ -12,7 +12,7 @@ from koukan.dkim_endpoint import DkimEndpoint
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
 
-class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):
+class DkimEndpointTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
@@ -27,7 +27,7 @@ class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    async def test_smoke(self):
+    def test_smoke(self):
         dkim_endpoint = DkimEndpoint('example.com', 'selector123', self.privkey)
         dkim_endpoint.wire_downstream(TransactionMetadata())
         dkim_endpoint.wire_upstream(TransactionMetadata())
@@ -43,55 +43,41 @@ class DkimEndpointTest(unittest.IsolatedAsyncioTestCase):
                 b'hello\r\n',
                 last=False))
 
-        async def upstream():
+        def upstream():
             tx = dkim_endpoint.upstream
             upstream_delta = TransactionMetadata()
             if tx.mail_from and not tx.mail_response:
                 upstream_delta.mail_response=Response(201)
             if tx.rcpt_to and not tx.rcpt_response:
                 upstream_delta.rcpt_response=[Response(202)]
-            if tx.body is not None and tx.body.finalized():
-                logging.debug(tx.body.pread(0))
-                self.assertTrue(tx.body.pread(0).startswith(
-                    b'DKIM-Signature:'))
-                upstream_delta.data_response=Response(203)
             tx.merge_from(upstream_delta)
             return upstream_delta
 
         dkim_endpoint.downstream.merge_from(delta)
-        await dkim_endpoint.on_update(delta, upstream)
+        dkim_endpoint.on_update(delta)
         tx = dkim_endpoint.downstream
         tx.body.append(b'world!\r\n', last=True)
-        await dkim_endpoint.on_update(
-            TransactionMetadata(body=tx.body), upstream)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 203)
+        filter_result = dkim_endpoint.on_update(
+            TransactionMetadata(body=tx.body))
+        upstream_body = dkim_endpoint.upstream.body
+        self.assertTrue(upstream_body.finalized())
+        logging.debug(upstream_body.pread(0))
+        self.assertTrue(upstream_body.pread(0).startswith(
+            b'DKIM-Signature:'))
+        self.assertIsNone(filter_result.downstream_delta)
 
-
-    async def test_bad(self):
+    def test_bad(self):
         dkim_endpoint = DkimEndpoint('example.com', 'selector123',
                                      self.privkey)
         tx = TransactionMetadata()
         dkim_endpoint.wire_downstream(tx)
         dkim_endpoint.wire_upstream(TransactionMetadata())
-        async def upstream():
-            delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            dkim_endpoint.upstream.merge_from(delta)
-            return delta
         delta = TransactionMetadata(
-            remote_host=HostPort('example.com', port=25000),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-        delta.body = InlineBlob(
-            b'definitely not valid rfc822\r\n', last=True)
+            body = InlineBlob(b'definitely not valid rfc822\r\n', last=True))
         tx.merge_from(delta)
-        await dkim_endpoint.on_update(delta, upstream)
-        self.assertEqual(201, tx.mail_response.code)
-        self.assertEqual([202], [r.code for r in tx.rcpt_response])
-        self.assertEqual(tx.data_response.code, 500)
+        filter_result = dkim_endpoint.on_update(delta)
+        self.assertIsNone(dkim_endpoint.upstream.body)
+        self.assertEqual(500, filter_result.downstream_delta.data_response.code)
 
 
 if __name__ == '__main__':

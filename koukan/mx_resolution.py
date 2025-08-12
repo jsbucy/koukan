@@ -8,7 +8,7 @@ from koukan.dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
 from koukan.filter import HostPort, Resolution, TransactionMetadata
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import FilterResult, OneshotProxyFilter
 from koukan.response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
@@ -42,7 +42,7 @@ def resolve(resolver, hostport : HostPort):
                 seen.append(aaa)
     return seen
 
-class DnsResolutionFilter(ProxyFilter):
+class DnsResolutionFilter(OneshotProxyFilter):
     static_resolution : Optional[Resolution] = None
     suffix : Optional[str] = None  # empty = match all
     literal : Optional[str] = None
@@ -104,7 +104,7 @@ class DnsResolutionFilter(ProxyFilter):
                 hosts_out.append(hp)
         return hosts_out
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         downstream_resolution = tx_delta.resolution
         if (downstream_resolution is not None and
             self._needs_resolution(downstream_resolution)):
@@ -114,8 +114,7 @@ class DnsResolutionFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if downstream_resolution is None:
-            self.downstream.merge_from(await upstream())
-            return
+            return FilterResult()
 
         assert self.upstream.resolution is None
 
@@ -125,12 +124,13 @@ class DnsResolutionFilter(ProxyFilter):
         # didn't _match() so this won't fail unless there were
         # none of those
         if not resolution.hosts:
-            self.downstream.fill_inflight_responses(
-                Response(450, 'DnsResolverFilter empty result'))
-            return
+            return FilterResult(
+                delta=TransactionMetadata(
+                    mail_response =
+                      Response(450, 'DnsResolverFilter empty result')))
 
         self.upstream.resolution = resolution
-        self.downstream.merge_from(await upstream())
+        return FilterResult()
 
 if __name__ == '__main__':
     import sys

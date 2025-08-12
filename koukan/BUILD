@@ -289,6 +289,7 @@ pytype_library(name='fake_dns_wrapper',
 pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':dns_wrapper',
                      ':response',
                      '@pypi//dnspython'])

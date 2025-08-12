@@ -15,7 +15,7 @@ from koukan.rest_schema import BlobUri
 from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.message_builder import MessageBuilderSpec
 
-class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
+class MessageBuilderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
@@ -25,7 +25,7 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
         self.filter.wire_downstream(TransactionMetadata())
         self.filter.wire_upstream(TransactionMetadata())
 
-    async def test_smoke(self):
+    def test_smoke(self):
         tx = self.filter.downstream
         delta = TransactionMetadata()
         delta.remote_host=HostPort('example.com', port=25000)
@@ -41,55 +41,29 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
         )
         delta.body.check_ids()
 
-        async def exp(tx):
-            tx = self.filter.upstream
-            logging.debug(tx)
-            self.assertTrue(isinstance(tx.body, Blob))
-            self.assertTrue(tx.body.finalized())
-            self.assertNotEqual(
-                tx.body.pread(0).find(b'MIME-Version'), -1)
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
         tx.merge_from(delta)
-        await self.filter.on_update(
-            delta, partial(exp, self.filter.upstream))
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 203)
+        self.filter.on_update(delta)
+        upstream_body = self.filter.upstream.body
+        self.assertTrue(isinstance(upstream_body, Blob))
+        self.assertTrue(upstream_body.finalized())
+        self.assertNotEqual(
+            upstream_body.pread(0).find(b'MIME-Version'), -1)
 
-    async def test_noop(self):
+    def test_noop(self):
         tx = self.filter.downstream
+        body = InlineBlob(b'hello, world!')
         delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body=InlineBlob(b'hello, world!'))
-
-        async def exp(tx):
-            logging.debug(tx)
-            self.assertEqual(tx.mail_from.mailbox, 'alice')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
-            self.assertEqual(delta.body, tx.body)
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            body=body)
 
         tx.merge_from(delta)
-        await self.filter.on_update(
-            delta, partial(exp, self.filter.upstream))
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 203)
+        filter_result = self.filter.on_update(delta)
+        self.assertEqual(body, self.filter.upstream.body)
+        self.assertIsNone(filter_result.downstream_delta)
 
-    async def test_exception(self):
+    def test_exception(self):
         tx = self.filter.downstream
         delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
@@ -108,20 +82,10 @@ class MessageBuilderFilterTest(unittest.IsolatedAsyncioTestCase):
             blobs=[InlineBlob(b'hello, ', last=False,
                               rest_id='blob_rest_id')])
         delta.body.check_ids()
-        async def exp():
-            tx = self.filter.upstream
-            self.assertIsNone(tx.body)
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
 
         tx.merge_from(delta)
-        await self.filter.on_update(delta, exp)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 550)
+        filter_result = self.filter.on_update(delta)
+        self.assertEqual(550, filter_result.downstream_delta.data_response.code)
 
 
 if __name__ == '__main__':

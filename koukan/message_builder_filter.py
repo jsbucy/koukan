@@ -9,19 +9,19 @@ from os import devnull
 
 from koukan.filter import (
     TransactionMetadata )
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import FilterResult, OneshotProxyFilter
 from koukan.response import Response
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 from koukan.blob import Blob, FileLikeBlob, InlineBlob
 from koukan.rest_schema import BlobUri
 
-class MessageBuilderFilter(ProxyFilter):
+class MessageBuilderFilter(OneshotProxyFilter):
     validation : Optional[bool] = None
 
     def __init__(self):
         pass
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         body = tx_delta.body
         if isinstance(body, MessageBuilderSpec):
             tx_delta.body = None
@@ -34,8 +34,7 @@ class MessageBuilderFilter(ProxyFilter):
         self.upstream.merge_from(tx_delta)
 
         if body is None:
-            self.downstream.merge_from(await upstream())
-            return
+            return FilterResult()
 
         assert self.validation is not False
         assert self.upstream.body is None
@@ -80,10 +79,7 @@ class MessageBuilderFilter(ProxyFilter):
                           upstream_body.len(), upstream_body.content_length())
             self.upstream.body = upstream_body
 
-        # even if validation failed send any other new downstream
-        # fields upstream to get authoritative responses for them
-        if self.upstream.body is not None or bool(tx_delta):
-            self.downstream.merge_from(await upstream())
-
+        delta = None
         if data_err is not None:
-            self.downstream.data_response = data_err
+            delta = TransactionMetadata(data_response = data_err)
+        return FilterResult(delta)
