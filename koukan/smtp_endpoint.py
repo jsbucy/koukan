@@ -12,7 +12,7 @@ from koukan.filter import (
     EsmtpParam,
     HostPort,
     TransactionMetadata )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 
 class Factory:
     def __init__(self, smtplib : ModuleType, ehlo_hostname, timeout, protocol,
@@ -29,7 +29,7 @@ class Factory:
             self.smtplib, self.ehlo, self.timeout, self.protocol,
             self.enable_bdat, self.chunk_size)
 
-class SmtpEndpoint(Filter):
+class SmtpEndpoint(OneshotFilter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[Any] = None
     good_rcpt : bool = False
@@ -133,12 +133,12 @@ class SmtpEndpoint(Filter):
 
         return ehlo_resp
 
-    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         if tx_delta.cancelled:
             self._shutdown()
-            return TransactionMetadata()
-
-        self._update(self.downstream, tx_delta)
+        else:
+            self._update(self.downstream, tx_delta)
+        return FilterResult()
 
     def _check_esmtp(self, params : List[EsmtpParam]) -> Optional[Response]:
         for i,e in enumerate(params):

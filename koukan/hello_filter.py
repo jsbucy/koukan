@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import Filter, TransactionMetadata
+from koukan.filter_chain import FilterResult, OneshotFilter
 import logging
 
-class HelloFilter(Filter):
+class HelloFilter(OneshotFilter):
     def __init__(self):
         pass
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         logging.debug('HelloFilter.on_update %s', self.downstream)
-        await upstream()
+        return FilterResult()
 
-def factory(yaml) -> Filter:
+def factory(yaml) -> OneshotFilter:
     return HelloFilter()

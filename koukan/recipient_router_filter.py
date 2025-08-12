@@ -10,7 +10,7 @@ from koukan.filter import (
     Mailbox,
     Resolution,
     TransactionMetadata )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -43,7 +43,7 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(Filter):
+class RecipientRouterFilter(OneshotFilter):
     policy : RoutingPolicy
 
     def __init__(self, policy : RoutingPolicy):
@@ -75,14 +75,12 @@ class RecipientRouterFilter(Filter):
             tx.upstream_http_host = dest.http_host
         tx.options = dest.options
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if (tx_delta.rcpt_to and
             # this may be chained multiple times; noop if a previous
             # instance already routed
             self.downstream.rest_endpoint is None and
             self.downstream.options is None):
             self._route()
-            if (self.downstream.rcpt_response and
-                self.downstream.rcpt_response[0].err()):
-                return
-        await upstream()
+
+        return FilterResult()

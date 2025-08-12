@@ -98,7 +98,7 @@ aaaa_answer = Answer(
     RdataClass.IN,
     aaaa_message)
 
-class RemoteHostFilterTest(unittest.IsolatedAsyncioTestCase):
+class RemoteHostFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
@@ -106,7 +106,7 @@ class RemoteHostFilterTest(unittest.IsolatedAsyncioTestCase):
             '%(message)s')
 
 
-    async def _test(self, addr,
+    def _test(self, addr,
               answers : List[Union[Answer, Exception]],
               exp_hostname, exp_fcrdns, exp_err=False):
         resolver = FakeResolver(answers)
@@ -114,62 +114,52 @@ class RemoteHostFilterTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata()
         filter.wire_downstream(tx)
 
-        async def upstream():
-            self.assertEqual(exp_hostname, tx.remote_hostname)
-            self.assertEqual(exp_fcrdns, tx.fcrdns)
-
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response = [Response(202)])
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
-
         delta = TransactionMetadata(
             remote_host=HostPort(addr, 12345),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
-        await filter.on_update(delta, upstream)
+        filter.on_update(delta)
         logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
-        self.assertEqual(450 if exp_err else 201, tx.mail_response.code)
-        # fill_inflight_responses populates rcpt resp with
-        # "503 failed precondition/bad sequence of commands" after mail err
-        self.assertEqual([503 if exp_err else 202],
-                         [r.code for r in tx.rcpt_response])
+        if exp_err:
+            self.assertEqual(450, tx.mail_response.code)
+        else:
+            self.assertIsNone(tx.mail_response)
+        self.assertEqual(tx.remote_hostname, exp_hostname)
+        self.assertEqual(tx.fcrdns, exp_fcrdns)
 
-
-    async def test_success_ipv4(self):
-        await self._test(
+    def test_success_ipv4(self):
+        self._test(
             '1.2.3.4',
             [ptr_answer, a_answer],
             'tachygraph.gloop.org.', True)
 
-    async def test_success_ipv6(self):
-        await self._test(
+    def test_success_ipv6(self):
+        self._test(
             '0123:4567:89ab:cdef:0123:4567:89ab:cdef',
             [ptr6_answer, aaaa_answer],
             'tachygraph.gloop.org.', True)
 
-    async def test_nx_ptr(self):
-        await self._test('1.2.3.4',
+    def test_nx_ptr(self):
+        self._test('1.2.3.4',
                    [dns.resolver.NXDOMAIN()],
                    '', False)
 
-    async def test_nx_fwd(self):
-        await self._test('1.2.3.4',
+    def test_nx_fwd(self):
+        self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NXDOMAIN(),   # A
                     dns.resolver.NXDOMAIN()],  # AAAA
                    'tachygraph.gloop.org.', False)
 
-    async def test_servfail_ptr(self):
-        await self._test('1.2.3.4',
+    def test_servfail_ptr(self):
+        self._test('1.2.3.4',
                    [dns.resolver.NoNameservers()],
                    None, None,
                    exp_err=True)
 
-    async def test_servfail_fwd(self):
-        await self._test('1.2.3.4',
+    def test_servfail_fwd(self):
+        self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NoNameservers(),   # A
                     dns.resolver.NoNameservers()],  # AAAA

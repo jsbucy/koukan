@@ -6,7 +6,7 @@ import logging
 from koukan.filter import (
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import Filter, FilterChain
+from koukan.filter_chain import FilterChain, FilterResult, OneshotFilter
 from koukan.response import Response
 
 def _err(r : Optional[Response]) -> Optional[Response]:
@@ -28,7 +28,7 @@ def _err(r : Optional[Response]) -> Optional[Response]:
 # use case, it may make more sense to retry forever (and effectively
 # never bounce) and use monitoring to detect if that is persistently
 # failing.
-class AddRouteFilter(Filter):
+class AddRouteFilter(OneshotFilter):
     add_route : FilterChain
     host : str
 
@@ -45,9 +45,8 @@ class AddRouteFilter(Filter):
                 self.downstream.rcpt_response = [rcpt_err]
         if data_err := _err(self.add_route.tx.data_response):
             self.downstream.data_response = data_err
-        return any([r for r in [mail_err, rcpt_err, data_err] if r is not None])
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         # post-exploder output chain/single-rcpt only for now
         assert len(self.downstream.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
@@ -56,11 +55,9 @@ class AddRouteFilter(Filter):
             add_route_delta.host = self.host
         self.add_route.tx.merge_from(add_route_delta)
         self.add_route.update()
-        if self._resp_err():
-            # NOTE this returns any error from the add route
-            # downstream verbatim, it's possible this might contain
-            # debugging information internal to the site that you
-            # don't want to return externally
-            return
-
-        await upstream()
+        self._resp_err()
+        # NOTE this returns any error from the add route
+        # downstream verbatim, it's possible this might contain
+        # debugging information internal to the site that you
+        # don't want to return externally
+        return FilterResult()

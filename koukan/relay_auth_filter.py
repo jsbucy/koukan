@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 from koukan.response import Response
 
 # Filter that fails transaction in the absence of a positive signal to
 # authorize relaying.
-class RelayAuthFilter(Filter):
+class RelayAuthFilter(OneshotFilter):
     smtp_auth : Optional[bool] = False
 
     def __init__(self,
@@ -15,13 +15,13 @@ class RelayAuthFilter(Filter):
                  smtp_auth : Optional[bool] = False):
         self.smtp_auth = smtp_auth
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream
         if tx_delta.mail_from is not None:
+            assert tx.mail_response is None
             if (not self.smtp_auth or
                 tx.smtp_meta is None or
                 not tx.smtp_meta.get('auth', False)):
-                err = Response(550, '5.7.1 not authorized')
-                tx.fill_inflight_responses(err)
-                return
-        await upstream()
+                tx.mail_response = Response(550, '5.7.1 not authorized')
+
+        return FilterResult()

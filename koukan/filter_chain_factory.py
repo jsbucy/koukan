@@ -6,7 +6,7 @@ import importlib
 from functools import partial
 import inspect
 
-from koukan.filter_chain import Filter
+from koukan.filter_chain import BaseFilter, Filter
 from koukan.filter_chain import FilterChain
 
 class FilterSpec:
@@ -45,7 +45,8 @@ class FilterChainFactory:
         param = list(sig.parameters)
         assert len(param) == 1
         # assert sig.parameters[param[0]].annotation == dict  # yaml
-        assert sig.return_annotation == Filter
+        logging.debug(sig.return_annotation)
+        assert issubclass(sig.return_annotation, BaseFilter)
         self.inject_filter(name, fn)
 
     def add_filter(self, name, fn):

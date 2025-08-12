@@ -5,21 +5,20 @@ import dns.resolver
 import logging
 
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 from koukan.response import Response
 
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 
-class RemoteHostFilter(Filter):
+class RemoteHostFilter(OneshotFilter):
     def __init__(self, resolver : Optional[Resolver] = None):
         self.resolver = resolver if resolver else Resolver()
 
-    async def on_update(self, tx_delta : TransactionMetadata, upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         if tx_delta.mail_from is not None:
-            if (err := self._resolve()) is not None:
-                self.downstream.fill_inflight_responses(err)
-                return
-        await upstream()
+            assert self.downstream.mail_response is None
+            self.downstream.mail_response = self._resolve()
+        return FilterResult()
 
     def _resolve(self) -> Optional[Response]:
         tx = self.downstream

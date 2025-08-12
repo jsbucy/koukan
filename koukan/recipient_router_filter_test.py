@@ -11,7 +11,6 @@ from koukan.recipient_router_filter import (
     RoutingPolicy )
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
-from koukan.response import Response
 
 class SuccessPolicy(RoutingPolicy):
     def endpoint_for_rcpt(self, rcpt) -> Tuple[
@@ -25,30 +24,17 @@ class FailurePolicy(RoutingPolicy):
             Optional[Destination], Optional[Response]]:
         return None, Response(500, 'not found')
 
-class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
+class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 
-    async def test_success(self):
+    def test_success(self):
         router = RecipientRouterFilter(SuccessPolicy())
         router.wire_downstream(TransactionMetadata())
         tx = router.downstream
-
-        async def upstream():
-            self.assertEqual(tx.rest_endpoint, 'http://localhost:8001')
-            self.assertEqual(tx.upstream_http_host, 'gateway')
-            self.assertEqual(tx.resolution.hosts,
-                             [HostPort('example.com', 1234)])
-
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response = [Response(202)],
-                data_response = Response(203))
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
 
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -61,15 +47,16 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'hello\r\n')
         tx.merge_from(delta)
 
-        await router.on_update(delta, upstream)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-        self.assertEqual(tx.data_response.code, 203)
+        router.on_update(delta)
+        self.assertEqual(router.upstream.rest_endpoint, 'http://localhost:8001')
+        self.assertEqual(router.upstream.upstream_http_host, 'gateway')
+        self.assertEqual(router.upstream.resolution.hosts,
+                         [HostPort('example.com', 1234)])
 
 
     # TODO: exercise "buffer mail"
 
-    async def test_failure(self):
+    def test_failure(self):
         router = RecipientRouterFilter(FailurePolicy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
@@ -83,14 +70,9 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
                 b'\r\n'
                 b'hello\r\n'))
 
-        def unexpected_upstream():
-            self.fail()
-
         tx.merge_from(delta)
-        await router.on_update(delta, unexpected_upstream)
-        self.assertEqual(tx.mail_response.code, 250)
+        router.on_update(delta)
         self.assertEqual([r.code for r in tx.rcpt_response], [500])
-        self.assertIsNone(tx.data_response)
 
 
 if __name__ == '__main__':

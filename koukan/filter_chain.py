@@ -119,6 +119,8 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
+            # xxx check_preconditions()
+
             f.prev_upstream = f.upstream.copy()
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:

@@ -11,7 +11,7 @@ from koukan.filter import (
     AsyncFilter,
     Mailbox,
     TransactionMetadata )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 
 from koukan.storage_schema import VersionConflictException
 
@@ -86,7 +86,7 @@ class MockAsyncFilter(AsyncFilter):
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],
                        Optional[TransactionMetadata]]
-class FakeFilter(Filter):
+class FakeFilter(OneshotFilter):
     expectation : List[Expectation]
 
     def __init__(self):
@@ -95,10 +95,10 @@ class FakeFilter(Filter):
     def add_expectation(self, exp : Expectation):
         self.expectation.append(exp)
 
-    async def on_update(self, tx_delta : TransactionMetadata,
-                        upstream):  # unused
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if not self.expectation:
             raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
         exp(self.downstream, tx_delta)
+        return FilterResult()
