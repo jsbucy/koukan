@@ -39,7 +39,9 @@ class Recipient:
     def __init__(self, filter : Optional[AsyncFilter]):
         self.filter = filter
 
-    def _check_busy_err(self) -> Optional[TransactionMetadata]:
+    # returns True if this Recipient failed due to not being able to
+    # start the upstream tx
+    def _check_busy_err(self) -> bool:
         if self.filter is not None:
             return False
         # 453-4.3.2 "system not accepting network messages" is also

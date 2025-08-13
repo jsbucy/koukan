@@ -320,7 +320,7 @@ class End2EndTest(unittest.TestCase):
                 continue
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler
-            # self.assertIn(b'DKIM-Signature:', handler.data)
+            self.assertIn(b'DKIM-Signature:', handler.data)
             self.assertIn(b'Received:', handler.data)
 
         self.assertEqual(2, len(handlers))

@@ -253,10 +253,6 @@ class RestEndpoint(OneshotFilter):
 
     def on_update(self, tx_delta : TransactionMetadata,
                         timeout : Optional[float] = None) -> FilterResult:
-        return self.do_update(tx_delta, timeout)
-
-    def do_update(self, tx_delta : TransactionMetadata,
-                  timeout : Optional[float] = None) -> FilterResult:
         if tx_delta.cancelled:
             self._cancel()
             upstream_delta = TransactionMetadata()

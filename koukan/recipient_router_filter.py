@@ -55,7 +55,6 @@ class RecipientRouterFilter(OneshotFilter):
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
-        logging.debug('%s %s', dest, resp)
 
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place

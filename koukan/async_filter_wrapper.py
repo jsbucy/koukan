@@ -4,7 +4,7 @@ import logging
 from koukan.filter import (
     AsyncFilter,
     TransactionMetadata )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import FilterResult, OneshotFilter
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
@@ -19,7 +19,7 @@ from koukan.backoff import backoff
 # mail failed, etc.
 # 4: if store-and-forward is enabled, upgrades upstream temp errs to
 # success and enables retries/notifications on the upstream transaction.
-class AsyncFilterWrapper(AsyncFilter, Filter):
+class AsyncFilterWrapper(AsyncFilter, OneshotFilter):
     filter : AsyncFilter
     timeout : float  # used by Filter.on_update()
     store_and_forward : bool
@@ -205,7 +205,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 
-    async def on_update(self, tx_delta : TransactionMetadata, unused_upstream):
+    def on_update(self, tx_delta : TransactionMetadata):
         logging.debug(tx_delta)
         tx_orig = self.downstream.copy()
         upstream_delta = self.update(self.downstream, tx_delta)
@@ -217,3 +217,4 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         self.downstream.merge_from(upstream_delta)
+        return FilterResult()

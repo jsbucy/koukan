@@ -23,7 +23,7 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Resolution )
-from koukan.filter_chain import FilterChain
+from koukan.filter_chain import BaseFilter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
@@ -118,6 +118,7 @@ class FilterChainWiring:
                 0, 0,  # 0 upstream timeout ~ effectively swallow errors
                 store_and_forward=True,
                 block_upstream=False, notify=False, retry=False)
+            assert isinstance(sink, BaseFilter)
             add_route = FilterChain([sink])
             logging.debug(add_route)
         else:

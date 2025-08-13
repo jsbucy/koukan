@@ -19,7 +19,7 @@ from koukan.smtp_service import (
     service as smtp_service )
 import koukan.fastapi_service as fastapi_service
 from koukan.filter import AsyncFilter
-from koukan.filter_chain import FilterChain
+from koukan.filter_chain import BaseFilter, FilterChain
 from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.rest_handler import (
     EndpointFactory,
@@ -100,6 +100,7 @@ class SmtpGateway(EndpointFactory):
             timeout_data=yaml.get('data_timeout', 60),
             client_provider=client,
             chunk_size=yaml.get('chunk_size', 2**16))
+        assert isinstance(endpoint, BaseFilter)
         return FilterChain([endpoint])
 
     def rest_endpoint_yaml(self, name):

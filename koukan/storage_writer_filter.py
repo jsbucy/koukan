@@ -75,7 +75,7 @@ class StorageWriterFilter(AsyncFilter):
         with self.mu:
             if not self.cv.wait_for(
                     lambda: self.upstream_cursor is not None or
-                    self.create_err, 3):
+                    self.create_err, 30):
                 logging.warning(
                     'StorageWriterFilter.get_transaction_cursor timeout %s', self.create_err)
                 return None

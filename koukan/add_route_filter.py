@@ -36,7 +36,7 @@ class AddRouteFilter(OneshotFilter):
         self.add_route = add_route
         self.host = host
 
-    def _resp_err(self) -> bool:
+    def _resp_err(self):
         if mail_err := _err(self.add_route.tx.mail_response):
             self.downstream.mail_response = mail_err
         rcpt_err = None

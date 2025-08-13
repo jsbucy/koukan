@@ -48,7 +48,7 @@ class ProxyFilter(ProxyBaseFilter, FilterMixin):
 
 class OneshotFilterMixin:
     def on_update(self, delta : TransactionMetadata) -> FilterResult:
-        pass
+        raise NotImplementedError()
 
 class OneshotFilter(BaseFilter, OneshotFilterMixin):
     pass
@@ -56,11 +56,11 @@ class OneshotProxyFilter(ProxyBaseFilter, OneshotFilterMixin):
     pass
 
 class FilterChain:
-    filters : List[Filter]
+    filters : List[BaseFilter]
     loop : asyncio.AbstractEventLoop
     tx : Optional[TransactionMetadata] = None
 
-    def __init__(self, filters : List[Filter]):
+    def __init__(self, filters : List[BaseFilter]):
         self.filters = filters
 
         # placeholder to avoid deprecation warning creating Future

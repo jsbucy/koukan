@@ -83,7 +83,7 @@ class SmtpServiceTest(unittest.TestCase):
         if exp_data_resp is None:
             def exp_cancel(tx, delta):
                 pass
-            self.endpoint.add_expectation(exp)
+            self.endpoint.add_expectation(exp_cancel)
             return
 
         b = b''
