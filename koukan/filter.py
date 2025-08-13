@@ -536,6 +536,24 @@ class TransactionMetadata:
         elif self._body_last() and self.data_response is None:
             dest.data_response = resp
 
+    # populates responses with 503-5.1.1 if previous commands failed
+    # rcpt after mail, etc.
+    # returns false if the tx cannot make forward progress
+    def check_preconditions(self) -> bool:
+        live = True
+        if self.mail_response is not None and self.mail_response.err():
+            err = Response(503, '5.5.1 failed precondition: MAIL')
+            self.rcpt_response.extend(
+                [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
+            live = False
+        if self.data_response is None and (self.body is not None) and (
+                len(self.rcpt_to) == len(self.rcpt_response) and
+                not any([r.ok() for r in self.rcpt_response])):
+            err = Response(503, '5.5.1 failed precondition: all rcpts failed')
+            self.data_response = err
+            live = False
+        return live
+
     def _field_to_json(self, name : str, field : TxField,
                        which_js : WhichJson, json):
         if not field.valid(which_js):

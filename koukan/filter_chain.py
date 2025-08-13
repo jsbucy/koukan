@@ -25,6 +25,10 @@ class BaseFilter:
         self.prev_downstream = TransactionMetadata()
         self.prev_upstream = TransactionMetadata()
 
+# Whereas a "regular" filter only conservatively extends the tx, a
+# "proxy" filter can implement an arbitrary transformation. The common
+# case is modifying the body. Another example is rejecting individual
+# rcpts in a multi-rcpt tx, say rate limit downstream of exploder.
 class ProxyBaseFilter(BaseFilter):
     def wire_upstream(self, tx):
         self.upstream = tx
@@ -82,7 +86,7 @@ class FilterChain:
 
         # TODO maybe move noop/heartbeat/keepalive to a separate entry
         # point which most impls don't need to implement
-        noop = not(self.filters[0].prev_downstream.delta(self.tx))
+        noop = not self.filters[0].prev_downstream.delta(self.tx)
 
         async def upstream(futures):
             # logging.debug('upstream')
@@ -98,6 +102,9 @@ class FilterChain:
             delta = f.prev_downstream.delta(f.downstream)
             if not noop and not delta:
                 break
+            assert delta.mail_response is None
+            assert not delta.rcpt_response
+            assert delta.data_response is None
 
             f.prev_downstream = f.downstream.copy()
 
@@ -119,16 +126,13 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
-            # xxx check_preconditions()
+            if not f.downstream.check_preconditions():
+                break
 
             f.prev_upstream = f.upstream.copy()
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-
-            if fut is None and filter_result is None:
-                logging.debug('no fut')
-                break
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)

@@ -8,13 +8,14 @@ from koukan.filter_chain import (
     FilterChain,
     FilterResult,
     ProxyFilter,
+    OneshotFilter,
     OneshotProxyFilter )
 from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
 
 class Sink(Filter):
     async def on_update(self, delta, upstream):
-        logging.debug('Sink.update %s', self.downstream)
+        logging.debug('Sink.on_update %s', self.downstream)
         logging.debug(delta)
         # self.downstream['sink'] = 'sink'
         assert delta.mail_response is None
@@ -63,6 +64,14 @@ class OneshotProxyDownstreamNone(OneshotProxyFilter):
         self.upstream.merge_from(delta)
         return FilterResult()
 
+class RejectMail(OneshotFilter):
+    def on_update(self, delta):
+        logging.debug('RejectMail.on_update')
+        if delta.mail_from:
+            assert self.downstream.mail_response is None
+            self.downstream.mail_response = Response(550, 'bad')
+        return FilterResult()
+
 class FilterChainTest(unittest.TestCase):
     def test_smoke(self):
         tx = TransactionMetadata()
@@ -94,6 +103,7 @@ class FilterChainTest(unittest.TestCase):
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')],
             body = InlineBlob(b'hello, world!', last=True))
         tx.merge_from(delta)
         chain.update()
@@ -110,6 +120,19 @@ class FilterChainTest(unittest.TestCase):
         tx.merge_from(delta)
         chain.update()
         self.assertEqual(201, tx.mail_response.code)
+
+    def test_fail_mail(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([RejectMail(), sink])
+        chain.init(tx)
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob1'), Mailbox('bob2')])
+        tx.merge_from(delta)
+        chain.update()
+        self.assertEqual(550, tx.mail_response.code)
+        self.assertEqual([503,503], [r.code for r in tx.rcpt_response])
 
 if __name__ == '__main__':
     logging.basicConfig(

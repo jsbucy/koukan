@@ -41,16 +41,19 @@ class Recipient:
 
     def _check_busy_err(self) -> Optional[TransactionMetadata]:
         if self.filter is not None:
-            return None
-        err = TransactionMetadata()
+            return False
         # 453-4.3.2 "system not accepting network messages" is also
         # plausible here but maybe more likely for the client to abort
         # the whole transaction rather than do what we want: stop
         # sending rcpts and continue to data.
-        self.tx.fill_inflight_responses(
-            Response(451, '4.5.3 too many recipients'), err)
-        self.tx.merge_from(err)
-        return err
+        assert self.tx.mail_response is None
+        self.tx.mail_response = Response(
+            250, 'ok (exploder no-op, rcpt will fail)')
+        assert not self.tx.rcpt_response
+        self.tx.rcpt_response = [
+            Response(451, '4.5.3 too many recipients')] * len(self.tx.rcpt_to)
+        self.tx.check_preconditions()
+        return True
 
     def first_update(self,
                      tx : TransactionMetadata,
@@ -70,9 +73,9 @@ class Recipient:
         # case create_storage_writer wouldn't error out on the
         # executor overflow and AsyncFilterWrapper probably also wants
         # a hint to set the upstream response -> s&f timeout to 0.
-        if (err := self._check_busy_err()) is not None:
-            return err
-        return self.filter.update(self.tx, self.tx.copy())
+        if self._check_busy_err():
+            return
+        self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:

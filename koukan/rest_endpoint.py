@@ -324,11 +324,8 @@ class RestEndpoint(OneshotFilter):
         created = False
         if not self.transaction_url:
             rest_resp = self._create(self.downstream.resolution, self.upstream_tx, deadline)
-            if rest_resp is None or rest_resp.status_code != 201:
-                # XXX maybe only needs to set mail_response?
-                self.downstream.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream err creating tx'))
-                return FilterResult()
+            if rest_resp is not None and rest_resp.status_code != 201:
+                rest_resp = None
             tx_update = True
             created = True
         else:
@@ -342,32 +339,33 @@ class RestEndpoint(OneshotFilter):
                 not delta_no_body.empty(WhichJson.REST_UPDATE)):
                rest_resp = self._update(downstream_delta, deadline)
                # TODO handle 412 failed precondition
-               if rest_resp is None or rest_resp.status_code != 200:
-                   self.downstream.fill_inflight_responses(
-                       Response(450, 'RestEndpoint upstream http err'))
-                   return FilterResult()
+               if rest_resp is not None and rest_resp.status_code != 200:
+                   rest_resp = None
 
                tx_update = True
 
         upstream_delta = TransactionMetadata()
         if tx_update:
-            resp_json = get_resp_json(rest_resp) if rest_resp else None
-            resp_json = resp_json if resp_json else {}
+            tx_out = None
+            resp_json = None
+            if rest_resp is not None:
+                resp_json = get_resp_json(rest_resp) if rest_resp else None
+                resp_json = resp_json if resp_json else {}
 
-            logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
-                          self.transaction_url, resp_json)
+                logging.debug('RestEndpoint.on_update %s tx from POST/PATCH %s',
+                              self.transaction_url, resp_json)
 
-            tx_out = TransactionMetadata.from_json(
-                resp_json, WhichJson.REST_READ)
+                tx_out = TransactionMetadata.from_json(
+                    resp_json, WhichJson.REST_READ)
 
-            logging.debug('RestEndpoint.on_update %s tx_out %s',
-                          self.transaction_url, tx_out)
+                logging.debug('RestEndpoint.on_update %s tx_out %s',
+                              self.transaction_url, tx_out)
 
             if tx_out is None:
                 logging.debug('RestEndpoint.on_update bad resp_json %s',
                               resp_json)
                 self.downstream.fill_inflight_responses(
-                    Response(450, 'RestEndpoint bad resp_json'))
+                    Response(450, 'RestEndpoint upstream http err'))
                 return FilterResult()
 
             # NOTE we cleared blobs from upstream_tx (above) to
