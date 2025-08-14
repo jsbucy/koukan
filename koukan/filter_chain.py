@@ -33,17 +33,17 @@ class ProxyBaseFilter(BaseFilter):
     def wire_upstream(self, tx):
         self.upstream = tx
 
-class FilterMixin:
+class CoroutineFilterMixin:
     # upstream() yields to scheduler, returns delta
     async def on_update(
             self, delta : TransactionMetadata,
             upstream : Callable[[], Awaitable[TransactionMetadata]]):
         raise NotImplementedError()
 
-class Filter(BaseFilter, FilterMixin):
+class CoroutineFilter(BaseFilter, CoroutineFilterMixin):
     pass
 
-class ProxyFilter(ProxyBaseFilter, FilterMixin):
+class CoroutineProxyFilter(ProxyBaseFilter, CoroutineFilterMixin):
     pass
 
 class OneshotFilterMixin:
@@ -114,7 +114,7 @@ class FilterChain:
             co = None
             fut = None
             filter_result = None
-            if isinstance(f, FilterMixin):
+            if isinstance(f, CoroutineFilterMixin):
                 futures = [None]
                 co = f.on_update(delta, partial(upstream, futures))
                 try:

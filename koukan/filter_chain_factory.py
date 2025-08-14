@@ -7,11 +7,11 @@ from functools import partial
 import inspect
 import asyncio
 
-from koukan.filter_chain import BaseFilter, Filter
+from koukan.filter_chain import BaseFilter
 from koukan.filter_chain import FilterChain
 
 class FilterSpec:
-    builder : Callable[[Any], Filter]
+    builder : Callable[[Any], BaseFilter]
     def __init__(self, builder):
         self.builder = builder
 
@@ -64,7 +64,7 @@ class FilterChainFactory:
             self._load_filter(name, mod)
 
     def inject_filter(self, name : str,
-                      fac : Callable[[Any], Filter]):
+                      fac : Callable[[Any], BaseFilter]):
         self.filters[name] = FilterSpec(fac)
 
     def _inject_yaml(self, root_yaml):
@@ -76,11 +76,12 @@ class FilterChainFactory:
         if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
             self.load_user_modules(modules_yaml)
 
-    def _get_filter(self, filter_yaml):
+    def _get_filter(self, filter_yaml) -> Optional[BaseFilter]:
         filter_name = filter_yaml['filter']
         spec = self.filters[filter_name]
         filter = spec.builder(filter_yaml)
-        # assert isinstance(filter, Filter)
+        logging.debug(filter)
+        assert isinstance(filter, Optional[BaseFilter])
         return filter
 
     def build_filter_chain(self, host, endpoint_yaml : Optional[dict] = None

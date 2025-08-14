@@ -4,16 +4,17 @@ import logging
 from koukan.filter import Mailbox
 from koukan.response import Response
 from koukan.filter_chain import (
-    Filter,
+    CoroutineFilter,
+    CoroutineProxyFilter,
     FilterChain,
     FilterResult,
-    ProxyFilter,
     OneshotFilter,
     OneshotProxyFilter )
 from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
+import asyncio
 
-class Sink(Filter):
+class Sink(CoroutineFilter):
     async def on_update(self, delta, upstream):
         logging.debug('Sink.on_update %s', self.downstream)
         logging.debug(delta)
@@ -24,21 +25,21 @@ class Sink(Filter):
         for i in range(len(self.downstream.rcpt_response), len(self.downstream.rcpt_to)):
             self.downstream.rcpt_response.append(Response(202))
 
-class AddDownstream(Filter):
+class AddDownstream(CoroutineFilter):
     async def on_update(self, delta, upstream):
         logging.debug('AddDownstream.start')
         # self.downstream['downstream'] = 'downstream'
         await upstream()
         logging.debug('AddDownstream.done')
 
-class AddUpstream(Filter):
+class AddUpstream(CoroutineFilter):
     async def on_update(self, delta, upstream):
         logging.debug('AddUpstream.start')
         await upstream()
         # self.downstream['upstream'] = 'upstream'
         logging.debug('AddUpstream.done')
 
-class Proxy(ProxyFilter):
+class Proxy(CoroutineProxyFilter):
     async def on_update(self, delta, upstream):
         logging.debug(self.downstream)
         logging.debug(delta)
@@ -73,13 +74,17 @@ class RejectMail(OneshotFilter):
         return FilterResult()
 
 class FilterChainTest(unittest.TestCase):
+    def setUp(self):
+        self.loop = asyncio.new_event_loop()
+
     def test_smoke(self):
         tx = TransactionMetadata()
         sink = Sink()
         chain = FilterChain(
             [AddDownstream(),
              Proxy(), AddUpstream(),
-             sink])
+             sink],
+            self.loop)
         chain.init(tx)
         tx.mail_from = Mailbox('alice')
         chain.update()
@@ -99,7 +104,8 @@ class FilterChainTest(unittest.TestCase):
     def test_filter_result(self):
         tx = TransactionMetadata()
         sink = Sink()
-        chain = FilterChain([OneshotProxyDownstream(), sink])
+        chain = FilterChain([OneshotProxyDownstream(), sink],
+                            self.loop)
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -113,7 +119,8 @@ class FilterChainTest(unittest.TestCase):
     def test_filter_result_none(self):
         tx = TransactionMetadata()
         sink = Sink()
-        chain = FilterChain([OneshotProxyDownstreamNone(), sink])
+        chain = FilterChain([OneshotProxyDownstreamNone(), sink],
+                            self.loop)
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'))
@@ -124,7 +131,8 @@ class FilterChainTest(unittest.TestCase):
     def test_fail_mail(self):
         tx = TransactionMetadata()
         sink = Sink()
-        chain = FilterChain([RejectMail(), sink])
+        chain = FilterChain([RejectMail(), sink],
+                            self.loop)
         chain.init(tx)
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
