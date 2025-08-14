@@ -55,19 +55,21 @@ class OneshotFilter(BaseFilter, OneshotFilterMixin):
 class OneshotProxyFilter(ProxyBaseFilter, OneshotFilterMixin):
     pass
 
+
 class FilterChain:
     filters : List[BaseFilter]
     loop : asyncio.AbstractEventLoop
     # convenience alias for filters[0].downstream
     tx : Optional[TransactionMetadata] = None
 
-    def __init__(self, filters : List[BaseFilter]):
+    def __init__(self, filters : List[BaseFilter],
+                 loop : Optional[asyncio.AbstractEventLoop] = None):
         self.filters = filters
 
         # placeholder to avoid deprecation warning creating Future
         # without a loop. AFAICT Future only uses it for scheduling
         # callbacks which we never register.
-        self.loop = asyncio.new_event_loop()
+        self.loop = loop
 
     def __del__(self):
         if self.loop:
@@ -169,3 +171,4 @@ class FilterChain:
             f.prev_downstream = f.downstream.copy()
 
         return prev.delta(self.filters[0].downstream)
+

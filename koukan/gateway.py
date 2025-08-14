@@ -44,6 +44,7 @@ class SmtpGateway(EndpointFactory):
 
     smtplib : Optional[ModuleType] = None
     rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
+    loop : asyncio.AbstractEventLoop
 
     def __init__(self, config_yaml : Optional[dict] = None):
         self.config_yaml = config_yaml
@@ -56,6 +57,7 @@ class SmtpGateway(EndpointFactory):
         self.cv = Condition(self.lock)
         self.smtp_services = []
         self.rest_endpoint_clients = []
+        self.loop = asyncio.new_event_loop()
 
     def shutdown(self) -> bool:
         logging.info("SmtpGateway.shutdown()")
@@ -101,7 +103,7 @@ class SmtpGateway(EndpointFactory):
             client_provider=client,
             chunk_size=yaml.get('chunk_size', 2**16))
         assert isinstance(endpoint, BaseFilter)
-        return FilterChain([endpoint])
+        return FilterChain([endpoint], self.loop)
 
     def rest_endpoint_yaml(self, name):
         for endpoint_yaml in self.config_yaml['rest_output']:
@@ -121,7 +123,7 @@ class SmtpGateway(EndpointFactory):
         # rdns. This stanza could select among multiple IPs in the
         # future, etc.
         endpoint = factory.new()
-        chain = FilterChain([endpoint])
+        chain = FilterChain([endpoint], self.loop)
 
         with self.lock:
             rest_id = self.rest_id_factory()

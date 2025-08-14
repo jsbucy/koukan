@@ -69,6 +69,7 @@ class FilterChainWiring:
 
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
+        factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
 
     def exploder_upstream(self, http_host : str,
                           rcpt_timeout : float,
@@ -106,6 +107,16 @@ class FilterChainWiring:
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
+    def exploder_upstream_yaml(self, yaml):
+        return self.exploder_upstream(
+            yaml['http_host'],
+            yaml['rcpt_timeout'],
+            yaml['data_timeout'],
+            yaml['store_and_forward'],
+            yaml['block_upstream'],
+            yaml['notify'],
+            yaml['retry'])
+
     def add_route(self, yaml):
         if 'output_chain' not in yaml:
             return None
@@ -113,14 +124,19 @@ class FilterChainWiring:
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream
             # chain
-            sink = self.exploder_upstream(
-                yaml['output_chain'],
-                0, 0,  # 0 upstream timeout ~ effectively swallow errors
-                store_and_forward=True,
-                block_upstream=False, notify=False, retry=False)
-            assert isinstance(sink, BaseFilter)
-            add_route = FilterChain([sink])
-            logging.debug(add_route)
+            upstream_yaml = {
+                'chain': [{
+                    'filter': 'exploder_upstream',
+                    'http_host': yaml['output_chain'],
+                    'rcpt_timeout': 0,
+                    'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
+                    'store_and_forward': True,
+                    'block_upstream': False,
+                    'notify': False,
+                    'retry': False
+                }]
+            }
+            add_route, unused_yaml = self.filter_chain_factory.build_filter_chain('exploder_upstream', upstream_yaml)
         else:
             output = self.filter_chain_factory.build_filter_chain(
                 yaml['output_chain'])

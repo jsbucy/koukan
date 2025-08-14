@@ -5,6 +5,7 @@ import logging
 import importlib
 from functools import partial
 import inspect
+import asyncio
 
 from koukan.filter_chain import BaseFilter, Filter
 from koukan.filter_chain import FilterChain
@@ -20,11 +21,13 @@ class FilterChainFactory:
     endpoint_yaml : Optional[dict] = None
     filters : Dict[str, FilterSpec]
     root_yaml : dict
+    loop : asyncio.AbstractEventLoop
 
     def __init__(self, root_yaml : dict):
         self.router_policies = {}
         self.filters = {}
         self._inject_yaml(root_yaml)
+        self.loop = asyncio.new_event_loop()
 
     def _load_user_module(self, name, mod):
         colon = mod.find(':')
@@ -80,9 +83,12 @@ class FilterChainFactory:
         # assert isinstance(filter, Filter)
         return filter
 
-    def build_filter_chain(self, host) -> Optional[Tuple[FilterChain, dict]]:
-        if (endpoint_yaml := self.endpoint_yaml.get(host, None)) is None:
-            return None
+    def build_filter_chain(self, host, endpoint_yaml : Optional[dict] = None
+                           ) -> Optional[Tuple[FilterChain, dict]]:
+        if endpoint_yaml is None:
+            endpoint_yaml = self.endpoint_yaml.get(host, None)
+            if endpoint_yaml is None:
+                return None
         filters = []
         for filter_yaml in endpoint_yaml['chain']:
             f = self._get_filter(filter_yaml)
@@ -96,4 +102,4 @@ class FilterChainFactory:
                 logging.warning('filter disabled chain=%s filter=%s %s',
                                 host, filter_yaml['filter'], filter_yaml)
         _log_disabled_filter[host] = True
-        return FilterChain(filters), endpoint_yaml
+        return FilterChain(filters, self.loop), endpoint_yaml
