@@ -12,9 +12,9 @@ class FilterResult:
         self.downstream_delta = delta
 
 class BaseFilter:
-    _prev_downstream : Optional[TransactionMetadata] = None
+    _prev_downstream_tx : Optional[TransactionMetadata] = None
     downstream_tx : Optional[TransactionMetadata] = None
-    _prev_upstream : Optional[TransactionMetadata] = None
+    _prev_upstream_tx : Optional[TransactionMetadata] = None
     upstream_tx : Optional[TransactionMetadata] = None
 
     def __init__(self):
@@ -22,8 +22,8 @@ class BaseFilter:
 
     def wire_downstream(self, tx : TransactionMetadata):
         self.downstream_tx = self.upstream_tx = tx
-        self._prev_downstream = TransactionMetadata()
-        self._prev_upstream = TransactionMetadata()
+        self._prev_downstream_tx = TransactionMetadata()
+        self._prev_upstream_tx = TransactionMetadata()
 
 # Whereas a "regular" filter only conservatively extends the tx, a
 # "proxy" filter can implement an arbitrary transformation. The common
@@ -94,7 +94,7 @@ class FilterChain:
 
         # TODO maybe move noop/heartbeat/keepalive to a separate entry
         # point which most impls don't need to implement
-        noop = not self.filters[0]._prev_downstream.delta(self.tx)
+        noop = not self.filters[0]._prev_downstream_tx.delta(self.tx)
 
         async def upstream(futures):
             # logging.debug('upstream')
@@ -105,16 +105,16 @@ class FilterChain:
 
         for f in self.filters:
             logging.debug(f)
-            logging.debug(f._prev_downstream)
+            logging.debug(f._prev_downstream_tx)
             logging.debug(f.downstream_tx)
-            delta = f._prev_downstream.delta(f.downstream_tx)
+            delta = f._prev_downstream_tx.delta(f.downstream_tx)
             if not noop and not delta:
                 break
             assert delta.mail_response is None
             assert not delta.rcpt_response
             assert delta.data_response is None
 
-            f._prev_downstream = f.downstream_tx.copy()
+            f._prev_downstream_tx = f.downstream_tx.copy()
 
             co = None
             fut = None
@@ -134,7 +134,7 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
-            f._prev_upstream = f.upstream_tx.copy()
+            f._prev_upstream_tx = f.upstream_tx.copy()
 
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
@@ -144,8 +144,8 @@ class FilterChain:
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)
-            delta = f._prev_upstream.delta(f.upstream_tx)
-            f._prev_upstream = f.upstream_tx.copy()
+            delta = f._prev_upstream_tx.delta(f.upstream_tx)
+            f._prev_upstream_tx = f.upstream_tx.copy()
             if co is not None and fut is not None:
                 fut.set_result(delta)
 
@@ -173,7 +173,7 @@ class FilterChain:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)
                 logging.debug(f.downstream_tx)
 
-            f._prev_downstream = f.downstream_tx.copy()
+            f._prev_downstream_tx = f.downstream_tx.copy()
 
         return prev.delta(self.filters[0].downstream_tx)
 
