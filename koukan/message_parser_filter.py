@@ -10,14 +10,14 @@ from koukan.blob import (
     FileLikeBlob,
     InlineBlob )
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import FilterResult, OneshotProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.message_parser import (
     MessageParser,
     ParsedMessage )
 
 from koukan.message_builder import MessageBuilderSpec
 
-class MessageParserFilter(OneshotProxyFilter):
+class MessageParserFilter(ProxyFilter):
     _blob_i = 0
     parsed : bool = False
 

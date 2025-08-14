@@ -11,7 +11,7 @@ from koukan.filter import (
     Mailbox,
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 from koukan.blob import Blob
 from koukan.response import Response
 
@@ -100,7 +100,7 @@ class Recipient:
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
-class Exploder(OneshotFilter):
+class Exploder(Filter):
     upstream_factory : FilterFactory
     output_chain : str
     # TODO these timeouts move to AsyncFilterWrapper

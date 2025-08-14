@@ -6,7 +6,7 @@ import logging
 from koukan.filter import (
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import FilterChain, FilterResult, OneshotFilter
+from koukan.filter_chain import FilterChain, FilterResult, Filter
 from koukan.response import Response
 
 def _err(r : Optional[Response]) -> Optional[Response]:
@@ -28,7 +28,7 @@ def _err(r : Optional[Response]) -> Optional[Response]:
 # use case, it may make more sense to retry forever (and effectively
 # never bounce) and use monitoring to detect if that is persistently
 # failing.
-class AddRouteFilter(OneshotFilter):
+class AddRouteFilter(Filter):
     add_route : FilterChain
     host : str
 

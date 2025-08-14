@@ -8,8 +8,8 @@ from koukan.filter_chain import (
     CoroutineProxyFilter,
     FilterChain,
     FilterResult,
-    OneshotFilter,
-    OneshotProxyFilter )
+    Filter,
+    ProxyFilter )
 from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
 import asyncio
@@ -51,21 +51,21 @@ class Proxy(CoroutineProxyFilter):
         # self.downstream['proxy_upstream'] = 'y'
 
 
-class OneshotProxyDownstream(OneshotProxyFilter):
+class OneshotProxyDownstream(ProxyFilter):
     def on_update(self, delta):
         body = delta.body
         delta.body = None
         self.upstream.merge_from(delta)
         return FilterResult(TransactionMetadata(data_response=Response(501)))
 
-class OneshotProxyDownstreamNone(OneshotProxyFilter):
+class OneshotProxyDownstreamNone(ProxyFilter):
     def on_update(self, delta):
         body = delta.body
         delta.body = None
         self.upstream.merge_from(delta)
         return FilterResult()
 
-class RejectMail(OneshotFilter):
+class RejectMail(Filter):
     def on_update(self, delta):
         logging.debug('RejectMail.on_update')
         if delta.mail_from:

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response
 
 # Filter that fails transaction in the absence of a positive signal to
 # authorize relaying.
-class RelayAuthFilter(OneshotFilter):
+class RelayAuthFilter(Filter):
     smtp_auth : Optional[bool] = False
 
     def __init__(self,

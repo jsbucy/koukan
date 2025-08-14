@@ -8,7 +8,7 @@ from koukan.dns_wrapper import Resolver, NotFoundExceptions, ServFailExceptions
 import ipaddress
 
 from koukan.filter import HostPort, Resolution, TransactionMetadata
-from koukan.filter_chain import FilterResult, OneshotProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
 # TODO: need more sophisticated timeout handling? cumulative timeout rather
@@ -42,7 +42,7 @@ def resolve(resolver, hostport : HostPort):
                 seen.append(aaa)
     return seen
 
-class DnsResolutionFilter(OneshotProxyFilter):
+class DnsResolutionFilter(ProxyFilter):
     static_resolution : Optional[Resolution] = None
     suffix : Optional[str] = None  # empty = match all
     literal : Optional[str] = None

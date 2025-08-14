@@ -12,9 +12,9 @@ class FilterResult:
         self.downstream_delta = delta
 
 class BaseFilter:
-    prev_downstream : Optional[TransactionMetadata] = None
+    _prev_downstream : Optional[TransactionMetadata] = None
     downstream : Optional[TransactionMetadata] = None
-    prev_upstream : Optional[TransactionMetadata] = None
+    _prev_upstream : Optional[TransactionMetadata] = None
     upstream : Optional[TransactionMetadata] = None
 
     def __init__(self):
@@ -22,8 +22,8 @@ class BaseFilter:
 
     def wire_downstream(self, tx : TransactionMetadata):
         self.downstream = self.upstream = tx
-        self.prev_downstream = TransactionMetadata()
-        self.prev_upstream = TransactionMetadata()
+        self._prev_downstream = TransactionMetadata()
+        self._prev_upstream = TransactionMetadata()
 
 # Whereas a "regular" filter only conservatively extends the tx, a
 # "proxy" filter can implement an arbitrary transformation. The common
@@ -33,6 +33,20 @@ class ProxyBaseFilter(BaseFilter):
     def wire_upstream(self, tx):
         self.upstream = tx
 
+# A simple filter doesn't do anything in the downstream direction
+# except possibly merging an error response.
+class FilterMixin:
+    def on_update(self, delta : TransactionMetadata) -> FilterResult:
+        raise NotImplementedError()
+
+class Filter(BaseFilter, FilterMixin):
+    pass
+class ProxyFilter(ProxyBaseFilter, FilterMixin):
+    pass
+
+
+# Coroutine filters take a callable that "yields to the scheduler"
+# (FilterChain) and returns the upstream delta.
 class CoroutineFilterMixin:
     # upstream() yields to scheduler, returns delta
     async def on_update(
@@ -44,15 +58,6 @@ class CoroutineFilter(BaseFilter, CoroutineFilterMixin):
     pass
 
 class CoroutineProxyFilter(ProxyBaseFilter, CoroutineFilterMixin):
-    pass
-
-class OneshotFilterMixin:
-    def on_update(self, delta : TransactionMetadata) -> FilterResult:
-        raise NotImplementedError()
-
-class OneshotFilter(BaseFilter, OneshotFilterMixin):
-    pass
-class OneshotProxyFilter(ProxyBaseFilter, OneshotFilterMixin):
     pass
 
 
@@ -89,7 +94,7 @@ class FilterChain:
 
         # TODO maybe move noop/heartbeat/keepalive to a separate entry
         # point which most impls don't need to implement
-        noop = not self.filters[0].prev_downstream.delta(self.tx)
+        noop = not self.filters[0]._prev_downstream.delta(self.tx)
 
         async def upstream(futures):
             # logging.debug('upstream')
@@ -100,16 +105,16 @@ class FilterChain:
 
         for f in self.filters:
             logging.debug(f)
-            logging.debug(f.prev_downstream)
+            logging.debug(f._prev_downstream)
             logging.debug(f.downstream)
-            delta = f.prev_downstream.delta(f.downstream)
+            delta = f._prev_downstream.delta(f.downstream)
             if not noop and not delta:
                 break
             assert delta.mail_response is None
             assert not delta.rcpt_response
             assert delta.data_response is None
 
-            f.prev_downstream = f.downstream.copy()
+            f._prev_downstream = f.downstream.copy()
 
             co = None
             fut = None
@@ -124,12 +129,12 @@ class FilterChain:
                     co = None
                 fut = futures[0]
                 futures = None
-            elif isinstance(f, OneshotFilterMixin):
+            elif isinstance(f, FilterMixin):
                 filter_result = f.on_update(delta)
             else:
                 raise NotImplementedError()
 
-            f.prev_upstream = f.upstream.copy()
+            f._prev_upstream = f.upstream.copy()
 
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
@@ -139,8 +144,8 @@ class FilterChain:
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)
-            delta = f.prev_upstream.delta(f.upstream)
-            f.prev_upstream = f.upstream.copy()
+            delta = f._prev_upstream.delta(f.upstream)
+            f._prev_upstream = f.upstream.copy()
             if co is not None and fut is not None:
                 fut.set_result(delta)
 
@@ -168,7 +173,7 @@ class FilterChain:
                     f.downstream.merge_from(prev_result.downstream_delta)
                 logging.debug(f.downstream)
 
-            f.prev_downstream = f.downstream.copy()
+            f._prev_downstream = f.downstream.copy()
 
         return prev.delta(self.filters[0].downstream)
 

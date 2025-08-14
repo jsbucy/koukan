@@ -5,12 +5,12 @@ import dns.resolver
 import logging
 
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response
 
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 
-class RemoteHostFilter(OneshotFilter):
+class RemoteHostFilter(Filter):
     def __init__(self, resolver : Optional[Resolver] = None):
         self.resolver = resolver if resolver else Resolver()
 

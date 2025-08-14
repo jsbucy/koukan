@@ -19,7 +19,7 @@ from koukan.filter import (
     Resolution,
     TransactionMetadata,
     WhichJson )
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, BlobReader
 
@@ -67,7 +67,7 @@ class RestEndpointClientProvider:
     def __del__(self):
         self.close()
 
-class RestEndpoint(OneshotFilter):
+class RestEndpoint(Filter):
     transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
     base_url : Optional[str] = None

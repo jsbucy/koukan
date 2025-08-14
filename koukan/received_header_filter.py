@@ -14,10 +14,10 @@ from koukan.filter import (
     Mailbox,
     TransactionMetadata,
     get_esmtp_param )
-from koukan.filter_chain import FilterResult, OneshotProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
-class ReceivedHeaderFilter(OneshotProxyFilter):
+class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int

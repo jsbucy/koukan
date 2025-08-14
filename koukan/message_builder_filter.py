@@ -9,13 +9,13 @@ from os import devnull
 
 from koukan.filter import (
     TransactionMetadata )
-from koukan.filter_chain import FilterResult, OneshotProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 from koukan.blob import Blob, FileLikeBlob, InlineBlob
 from koukan.rest_schema import BlobUri
 
-class MessageBuilderFilter(OneshotProxyFilter):
+class MessageBuilderFilter(ProxyFilter):
     validation : Optional[bool] = None
 
     def __init__(self):

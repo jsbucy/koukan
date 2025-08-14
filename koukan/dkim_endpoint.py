@@ -10,9 +10,9 @@ from koukan.response import Response, Esmtp
 from koukan.blob import Blob, InlineBlob, CompositeBlob
 from koukan.filter import (
     TransactionMetadata )
-from koukan.filter_chain import FilterResult, OneshotProxyFilter
+from koukan.filter_chain import FilterResult, ProxyFilter
 
-class DkimEndpoint(OneshotProxyFilter):
+class DkimEndpoint(ProxyFilter):
     domain : str
     selector :str
 

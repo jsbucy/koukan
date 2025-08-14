@@ -10,7 +10,7 @@ from koukan.filter import (
     Mailbox,
     Resolution,
     TransactionMetadata )
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -43,7 +43,7 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(OneshotFilter):
+class RecipientRouterFilter(Filter):
     policy : RoutingPolicy
 
     def __init__(self, policy : RoutingPolicy):

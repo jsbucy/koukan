@@ -12,7 +12,7 @@ from koukan.filter import (
     EsmtpParam,
     HostPort,
     TransactionMetadata )
-from koukan.filter_chain import FilterResult, OneshotFilter
+from koukan.filter_chain import FilterResult, Filter
 
 class Factory:
     def __init__(self, smtplib : ModuleType, ehlo_hostname, timeout, protocol,
@@ -29,7 +29,7 @@ class Factory:
             self.smtplib, self.ehlo, self.timeout, self.protocol,
             self.enable_bdat, self.chunk_size)
 
-class SmtpEndpoint(OneshotFilter):
+class SmtpEndpoint(Filter):
     MAX_WITHOUT_SIZE = 8 * 1024 * 1024
     smtp : Optional[Any] = None
     good_rcpt : bool = False
