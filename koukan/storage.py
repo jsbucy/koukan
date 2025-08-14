@@ -305,7 +305,6 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
-        logging.debug(tx_delta)
         dd = tx_delta.copy_valid(WhichJson.DB)
         logging.debug(dd)
         dd.copy_valid_from(WhichJson.DB_ATTEMPT, tx_delta)

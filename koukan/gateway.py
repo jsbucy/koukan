@@ -152,9 +152,6 @@ class SmtpGateway(EndpointFactory):
 
                 logging.info('SmtpGateway.gc_inflight shutdown idle %s',
                              adapter.rest_id)
-                # XXX BEFORE MERGE is this actually necessary?
-                # assert isinstance(tx.filter, SmtpEndpoint)
-                # tx.filter._shutdown()
                 tx = adapter.get()
                 delta = TransactionMetadata(cancelled=True)
                 tx.merge_from(delta)

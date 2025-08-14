@@ -68,12 +68,14 @@ class FilterChain:
     tx : Optional[TransactionMetadata] = None
 
     def __init__(self, filters : List[BaseFilter],
-                 loop : asyncio.AbstractEventLoop):
+                 loop : Optional[asyncio.AbstractEventLoop] = None):
         self.filters = filters
 
         # placeholder to avoid deprecation warning creating Future
         # without a loop. AFAICT Future only uses it for scheduling
         # callbacks which we never register.
+        if loop is None:
+            loop = asyncio.new_event_loop()
         self.loop = loop
 
     def __del__(self):
@@ -97,16 +99,12 @@ class FilterChain:
         noop = not self.filters[0]._prev_downstream_tx.delta(self.tx)
 
         async def upstream(futures):
-            # logging.debug('upstream')
             futures[0] = self.loop.create_future()
             return await futures[0]
 
         prev = self.filters[0].downstream_tx.copy()
 
         for f in self.filters:
-            logging.debug(f)
-            logging.debug(f._prev_downstream_tx)
-            logging.debug(f.downstream_tx)
             delta = f._prev_downstream_tx.delta(f.downstream_tx)
             if not noop and not delta:
                 break
@@ -143,7 +141,6 @@ class FilterChain:
                 break
 
         for f, co, fut, prev_result in reversed(completion):
-            logging.debug('%s %s %s %s', f, co, fut, prev_result)
             delta = f._prev_upstream_tx.delta(f.upstream_tx)
             f._prev_upstream_tx = f.upstream_tx.copy()
             if co is not None and fut is not None:
@@ -165,14 +162,18 @@ class FilterChain:
                     pass
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
-                logging.debug(prev_result.downstream_delta)
                 if f.upstream_tx is not f.downstream_tx:
                     f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)
-                logging.debug(f.downstream_tx)
 
             f._prev_downstream_tx = f.downstream_tx.copy()
+
+        entries = []
+        for f, co, fut, prev_result in completion:
+            entries.append(f.__class__.__name__)
+        logging.debug(', '.join(entries))
+
 
         return prev.delta(self.filters[0].downstream_tx)
 
