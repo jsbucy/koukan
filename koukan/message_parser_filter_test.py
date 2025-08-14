@@ -25,7 +25,7 @@ class MessageParserFilterTest(unittest.TestCase):
 
         filter = MessageParserFilter()
         filter.wire_downstream(TransactionMetadata())
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.wire_upstream(TransactionMetadata())
 
         filter.on_update(delta)
@@ -33,7 +33,7 @@ class MessageParserFilterTest(unittest.TestCase):
 
 
         delta = TransactionMetadata(body=InlineBlob(b, last=True))
-        filter.downstream.body = delta.body
+        filter.downstream_tx.body = delta.body
         filter.on_update(delta)
 
         tx = filter.upstream
@@ -55,7 +55,7 @@ class MessageParserFilterTest(unittest.TestCase):
 
         filter = MessageParserFilter()
         filter.wire_downstream(TransactionMetadata())
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.wire_upstream(TransactionMetadata())
 
         filter.on_update(delta)

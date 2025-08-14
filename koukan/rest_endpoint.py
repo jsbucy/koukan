@@ -260,15 +260,15 @@ class RestEndpoint(Filter):
             # requests in delta along with cancellation. This response
             # should never get as far as smtp since cancel only occurs
             # after the smtp transaction aborted due to rset/quit/timeout.
-            self.downstream.fill_inflight_responses(
+            self.downstream_tx.fill_inflight_responses(
                 Response(550, 'cancelled'), upstream_delta)
             return FilterResult()
-        elif self.downstream.cancelled:
+        elif self.downstream_tx.cancelled:
             return FilterResult()
 
         if self.http_host is None and self.transaction_url is None:
-            if self.downstream.upstream_http_host:
-                self.http_host = self.downstream.upstream_http_host
+            if self.downstream_tx.upstream_http_host:
+                self.http_host = self.downstream_tx.upstream_http_host
             elif self.static_http_host:
                 self.http_host = self.static_http_host
 
@@ -280,7 +280,7 @@ class RestEndpoint(Filter):
 
         logging.debug('RestEndpoint.on_update start %s '
                       'timeout=%s downstream tx %s',
-                      self.transaction_url, timeout, self.downstream)
+                      self.transaction_url, timeout, self.downstream_tx)
 
         downstream_delta = tx_delta.copy()
         if downstream_delta.body:
@@ -294,8 +294,8 @@ class RestEndpoint(Filter):
         # should not appear so it will merge cleanly with the original input.
         if self.rest_upstream_tx is None:
             if self.base_url is None:
-                self.base_url = self.downstream.rest_endpoint
-            self.rest_upstream_tx = self.downstream.copy_valid(WhichJson.REST_CREATE)
+                self.base_url = self.downstream_tx.rest_endpoint
+            self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
         else:
             self.rest_upstream_tx.merge_from(downstream_delta)
 
@@ -319,7 +319,7 @@ class RestEndpoint(Filter):
         tx_update = False
         created = False
         if not self.transaction_url:
-            rest_resp = self._create(self.downstream.resolution, self.rest_upstream_tx, deadline)
+            rest_resp = self._create(self.downstream_tx.resolution, self.rest_upstream_tx, deadline)
             if rest_resp is not None and rest_resp.status_code != 201:
                 rest_resp = None
             tx_update = True
@@ -360,7 +360,7 @@ class RestEndpoint(Filter):
             if tx_out is None:
                 logging.debug('RestEndpoint.on_update bad resp_json %s',
                               resp_json)
-                self.downstream.fill_inflight_responses(
+                self.downstream_tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint upstream http err'))
                 return FilterResult()
 
@@ -375,15 +375,15 @@ class RestEndpoint(Filter):
             elif self.rest_upstream_tx.req_inflight(tx_out):
                 err = 'upstream timeout'
             if err:
-                self.downstream.fill_inflight_responses(
+                self.downstream_tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint ' + err))
                 return FilterResult()
 
             upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             if (upstream_delta is None or
                 (self.rest_upstream_tx.merge_from(upstream_delta) is None) or
-                (self.downstream.merge_from(upstream_delta) is None)):
-                self.downstream.fill_inflight_responses(
+                (self.downstream_tx.merge_from(upstream_delta) is None)):
+                self.downstream_tx.fill_inflight_responses(
                     Response(450,
                              'RestEndpoint upstream invalid resp/delta update'))
                 return FilterResult()
@@ -401,7 +401,7 @@ class RestEndpoint(Filter):
         if not created and message_builder:
             err = self._update_message_builder(tx_delta, deadline)
             if err is not None:
-                self.downstream.data_response = err
+                self.downstream_tx.data_response = err
                 return FilterResult()
 
         # delta/merge bugs in the chain downstream from here have been
@@ -409,7 +409,7 @@ class RestEndpoint(Filter):
         # upstream_tx, not tx here
         if not any([r.ok() for r in self.rest_upstream_tx.rcpt_response]):
             # TODO this should be implemented centrally in FilterChain?
-            self.downstream.data_response = Response(
+            self.downstream_tx.data_response = Response(
                     503, "5.1.1 data failed precondition: all rcpts failed"
                     " (RestEndpoint)")
             return FilterResult()
@@ -436,7 +436,7 @@ class RestEndpoint(Filter):
         for blob,non_body_blob in blobs:
             put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
             if not put_blob_resp.ok():
-                self.downstream.data_response = put_blob_resp
+                self.downstream_tx.data_response = put_blob_resp
                 return FilterResult()
             if non_body_blob:
                 self.blob_url = None  # xxx wat?
@@ -458,12 +458,12 @@ class RestEndpoint(Filter):
             (blob_delta := self.rest_upstream_tx.delta(
                 tx_out, WhichJson.REST_READ)) is None or
             (self.rest_upstream_tx.merge_from(blob_delta) is None) or
-            (self.downstream.merge_from(blob_delta) is None)):
-            self.downstream.fill_inflight_responses(
+            (self.downstream_tx.merge_from(blob_delta) is None)):
+            self.downstream_tx.fill_inflight_responses(
                 Response(450, 'RestEndpoint upstream invalid resp/delta get'))
             return FilterResult()
 
-        self.downstream.fill_inflight_responses(
+        self.downstream_tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'))
         for t in [upstream_tx, tx_out]:
             t.remote_host = None

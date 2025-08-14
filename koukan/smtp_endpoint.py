@@ -137,7 +137,7 @@ class SmtpEndpoint(Filter):
         if tx_delta.cancelled:
             self._shutdown()
         else:
-            self._update(self.downstream, tx_delta)
+            self._update(self.downstream_tx, tx_delta)
         return FilterResult()
 
     def _check_esmtp(self, params : List[EsmtpParam]) -> Optional[Response]:

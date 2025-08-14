@@ -100,5 +100,5 @@ class FakeFilter(Filter):
             raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
-        exp(self.downstream, tx_delta)
+        exp(self.downstream_tx, tx_delta)
         return FilterResult()

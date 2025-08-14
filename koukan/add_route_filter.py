@@ -38,17 +38,17 @@ class AddRouteFilter(Filter):
 
     def _resp_err(self):
         if mail_err := _err(self.add_route.tx.mail_response):
-            self.downstream.mail_response = mail_err
+            self.downstream_tx.mail_response = mail_err
         rcpt_err = None
         if len(self.add_route.tx.rcpt_response) == 1:  # cf assert in on_update()
             if rcpt_err := _err(self.add_route.tx.rcpt_response[0]):
-                self.downstream.rcpt_response = [rcpt_err]
+                self.downstream_tx.rcpt_response = [rcpt_err]
         if data_err := _err(self.add_route.tx.data_response):
-            self.downstream.data_response = data_err
+            self.downstream_tx.data_response = data_err
 
     def on_update(self, tx_delta : TransactionMetadata):
         # post-exploder output chain/single-rcpt only for now
-        assert len(self.downstream.rcpt_to) <= 1
+        assert len(self.downstream_tx.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route.tx is None:
             self.add_route.init(TransactionMetadata())

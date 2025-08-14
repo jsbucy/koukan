@@ -190,7 +190,7 @@ class ExploderTest(unittest.TestCase):
         delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()
         downstream_cursor.create('downstream_rest_id', delta)
-        exploder.downstream.merge_from(delta)
+        exploder.downstream_tx.merge_from(delta)
         exploder.on_update(delta)
         logging.debug(tx)
         self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
@@ -200,7 +200,7 @@ class ExploderTest(unittest.TestCase):
             tx_delta = prev.delta(tx)
             prev = tx.copy()
             exploder.on_update(tx_delta)
-            upstream_delta = prev.delta(exploder.downstream)
+            upstream_delta = prev.delta(exploder.downstream_tx)
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
                 [rr.code for rr in upstream_delta.rcpt_response])

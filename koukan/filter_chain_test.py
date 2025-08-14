@@ -16,14 +16,14 @@ import asyncio
 
 class Sink(CoroutineFilter):
     async def on_update(self, delta, upstream):
-        logging.debug('Sink.on_update %s', self.downstream)
+        logging.debug('Sink.on_update %s', self.downstream_tx)
         logging.debug(delta)
         # self.downstream['sink'] = 'sink'
         assert delta.mail_response is None
         if delta.mail_from:
-            self.downstream.mail_response = Response(201)
-        for i in range(len(self.downstream.rcpt_response), len(self.downstream.rcpt_to)):
-            self.downstream.rcpt_response.append(Response(202))
+            self.downstream_tx.mail_response = Response(201)
+        for i in range(len(self.downstream_tx.rcpt_response), len(self.downstream_tx.rcpt_to)):
+            self.downstream_tx.rcpt_response.append(Response(202))
 
 class AddDownstream(CoroutineFilter):
     async def on_update(self, delta, upstream):
@@ -41,13 +41,13 @@ class AddUpstream(CoroutineFilter):
 
 class Proxy(CoroutineProxyFilter):
     async def on_update(self, delta, upstream):
-        logging.debug(self.downstream)
+        logging.debug(self.downstream_tx)
         logging.debug(delta)
         logging.debug(self.upstream)
         self.upstream.merge_from(delta)
         # self.upstream['proxy_downstream'] = 'x'
         delta = await upstream()
-        self.downstream.merge_from(delta)
+        self.downstream_tx.merge_from(delta)
         # self.downstream['proxy_upstream'] = 'y'
 
 
@@ -69,8 +69,8 @@ class RejectMail(Filter):
     def on_update(self, delta):
         logging.debug('RejectMail.on_update')
         if delta.mail_from:
-            assert self.downstream.mail_response is None
-            self.downstream.mail_response = Response(550, 'bad')
+            assert self.downstream_tx.mail_response is None
+            self.downstream_tx.mail_response = Response(550, 'bad')
         return FilterResult()
 
 class FilterChainTest(unittest.TestCase):
@@ -89,7 +89,7 @@ class FilterChainTest(unittest.TestCase):
         tx.mail_from = Mailbox('alice')
         chain.update()
         logging.debug(tx)
-        logging.debug(sink.downstream)
+        logging.debug(sink.downstream_tx)
         #self.assertEqual('alice', sink.downstream.mail_from.mailbox)
         self.assertEqual(201, tx.mail_response.code)
 

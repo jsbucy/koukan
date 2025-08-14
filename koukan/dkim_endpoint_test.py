@@ -53,9 +53,9 @@ class DkimEndpointTest(unittest.TestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
-        dkim_endpoint.downstream.merge_from(delta)
+        dkim_endpoint.downstream_tx.merge_from(delta)
         dkim_endpoint.on_update(delta)
-        tx = dkim_endpoint.downstream
+        tx = dkim_endpoint.downstream_tx
         tx.body.append(b'world!\r\n', last=True)
         filter_result = dkim_endpoint.on_update(
             TransactionMetadata(body=tx.body))

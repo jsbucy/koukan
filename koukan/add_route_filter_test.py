@@ -35,7 +35,7 @@ class AddRouteFilterTest(unittest.TestCase):
         delta = TransactionMetadata(mail_from=Mailbox('alice'),
                                     rcpt_to=[Mailbox('bob')],
                                     body=InlineBlob(b, len(b)))
-        tx = filter.downstream
+        tx = filter.downstream_tx
         tx.merge_from(delta)
         filter_result = filter.on_update(delta)
         self.assertIsNone(filter_result.downstream_delta)

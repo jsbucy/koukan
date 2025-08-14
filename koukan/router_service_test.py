@@ -310,7 +310,7 @@ class RouterServiceTest(unittest.TestCase):
                 static_base_url=self.router_url,
                 static_http_host='submission',
                 timeout_start=1, timeout_data=1)
-            tx = rest_endpoint.downstream
+            tx = rest_endpoint.downstream_tx
             delta = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i),
                 rcpt_to = [Mailbox('probe-to%d' % i)])
@@ -379,7 +379,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
-        tx = rest_endpoint.downstream
+        tx = rest_endpoint.downstream_tx
         body = b'hello, world!'
         delta = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
@@ -1383,9 +1383,9 @@ class RouterServiceTest(unittest.TestCase):
             return upstream_delta
 
         upstream_endpoint.add_expectation(exp2)
-        rest_endpoint.downstream.merge_from(delta)
+        rest_endpoint.downstream_tx.merge_from(delta)
         rest_endpoint.on_update(delta, 10)
-        tx2 = rest_endpoint.downstream
+        tx2 = rest_endpoint.downstream_tx
         logging.debug(tx2)
         self.assertEqual(204, tx2.mail_response.code)
         self.assertEqual([205], [r.code for r in tx2.rcpt_response])
@@ -1487,7 +1487,7 @@ class RouterServiceTest(unittest.TestCase):
         # sends ping to self.service
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')])
         endpoint2.wire_downstream(tx.copy())
-        endpoint2.downstream.merge_from(tx_delta)
+        endpoint2.downstream_tx.merge_from(tx_delta)
         endpoint2.on_update(tx_delta, timeout=2)
 
         # send the body to service2
@@ -1500,7 +1500,7 @@ class RouterServiceTest(unittest.TestCase):
 
         tx_delta = TransactionMetadata(
             body=InlineBlob(body, last=True))
-        endpoint2.downstream.merge_from(tx_delta)
+        endpoint2.downstream_tx.merge_from(tx_delta)
         upstream_delta = endpoint2.on_update(tx_delta)
         logging.debug('%s %s', tx, upstream_delta)
 
@@ -1551,7 +1551,7 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
 
-        rest_endpoint.downstream.merge_from(delta)
+        rest_endpoint.downstream_tx.merge_from(delta)
         rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertRcptCodesEqual([203], tx.rcpt_response)

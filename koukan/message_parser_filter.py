@@ -32,7 +32,7 @@ class MessageParserFilter(ProxyFilter):
         return FileLikeBlob(file, blob_id)
 
     def on_update(self, tx_delta : TransactionMetadata):
-        tx = self.downstream
+        tx = self.downstream_tx
         logging.debug('MessageParserFilter options %s', tx.options)
 
         body = tx_delta.maybe_body_blob()

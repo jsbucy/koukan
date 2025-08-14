@@ -9,7 +9,7 @@ class HelloFilter(Filter):
     def __init__(self):
         pass
     def on_update(self, tx_delta : TransactionMetadata):
-        logging.debug('HelloFilter.on_update %s', self.downstream)
+        logging.debug('HelloFilter.on_update %s', self.downstream_tx)
         return FilterResult()
 
 def factory(yaml) -> Filter:

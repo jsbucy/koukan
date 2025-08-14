@@ -50,7 +50,7 @@ class RecipientRouterFilter(Filter):
         self.policy = policy
 
     def _route(self):
-        tx = self.downstream
+        tx = self.downstream_tx
         logging.debug('RecipientRouterFilter._route() %s', tx)
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
@@ -78,8 +78,8 @@ class RecipientRouterFilter(Filter):
         if (tx_delta.rcpt_to and
             # this may be chained multiple times; noop if a previous
             # instance already routed
-            self.downstream.rest_endpoint is None and
-            self.downstream.options is None):
+            self.downstream_tx.rest_endpoint is None and
+            self.downstream_tx.options is None):
             self._route()
 
         return FilterResult()

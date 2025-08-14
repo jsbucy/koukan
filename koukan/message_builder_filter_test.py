@@ -26,7 +26,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         self.filter.wire_upstream(TransactionMetadata())
 
     def test_smoke(self):
-        tx = self.filter.downstream
+        tx = self.filter.downstream_tx
         delta = TransactionMetadata()
         delta.remote_host=HostPort('example.com', port=25000)
         delta.mail_from=Mailbox('alice')
@@ -50,7 +50,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
             upstream_body.pread(0).find(b'MIME-Version'), -1)
 
     def test_noop(self):
-        tx = self.filter.downstream
+        tx = self.filter.downstream_tx
         body = InlineBlob(b'hello, world!')
         delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
@@ -64,7 +64,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
         self.assertIsNone(filter_result.downstream_delta)
 
     def test_exception(self):
-        tx = self.filter.downstream
+        tx = self.filter.downstream_tx
         delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),

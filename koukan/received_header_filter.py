@@ -37,7 +37,7 @@ class ReceivedHeaderFilter(ProxyFilter):
 #  Wed, 07 Feb 2024 14:47:24 -0800 (PST)
 
     def _format_received(self) -> str:
-        tx = self.downstream
+        tx = self.downstream_tx
         received_host = None
         received_host_literal = None
         if tx.remote_host and tx.remote_host.host:

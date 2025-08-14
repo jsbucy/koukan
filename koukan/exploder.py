@@ -141,7 +141,7 @@ class Exploder(Filter):
         return lhs
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
-        tx = self.downstream
+        tx = self.downstream_tx
 
         # NOTE: OutputHandler may send but Storage currently does not
         # accept reusing !finalized blob. Exploder passes it through

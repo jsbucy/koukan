@@ -13,7 +13,7 @@ class FilterResult:
 
 class BaseFilter:
     _prev_downstream : Optional[TransactionMetadata] = None
-    downstream : Optional[TransactionMetadata] = None
+    downstream_tx : Optional[TransactionMetadata] = None
     _prev_upstream : Optional[TransactionMetadata] = None
     upstream : Optional[TransactionMetadata] = None
 
@@ -21,7 +21,7 @@ class BaseFilter:
         pass
 
     def wire_downstream(self, tx : TransactionMetadata):
-        self.downstream = self.upstream = tx
+        self.downstream_tx = self.upstream = tx
         self._prev_downstream = TransactionMetadata()
         self._prev_upstream = TransactionMetadata()
 
@@ -101,20 +101,20 @@ class FilterChain:
             futures[0] = self.loop.create_future()
             return await futures[0]
 
-        prev = self.filters[0].downstream.copy()
+        prev = self.filters[0].downstream_tx.copy()
 
         for f in self.filters:
             logging.debug(f)
             logging.debug(f._prev_downstream)
-            logging.debug(f.downstream)
-            delta = f._prev_downstream.delta(f.downstream)
+            logging.debug(f.downstream_tx)
+            delta = f._prev_downstream.delta(f.downstream_tx)
             if not noop and not delta:
                 break
             assert delta.mail_response is None
             assert not delta.rcpt_response
             assert delta.data_response is None
 
-            f._prev_downstream = f.downstream.copy()
+            f._prev_downstream = f.downstream_tx.copy()
 
             co = None
             fut = None
@@ -139,7 +139,7 @@ class FilterChain:
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-            if not f.downstream.check_preconditions():
+            if not f.downstream_tx.check_preconditions():
                 break
 
         for f, co, fut, prev_result in reversed(completion):
@@ -167,13 +167,13 @@ class FilterChain:
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
                 logging.debug(prev_result.downstream_delta)
-                if f.upstream is not f.downstream:
-                    f.downstream.merge_from(delta)
+                if f.upstream is not f.downstream_tx:
+                    f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
-                    f.downstream.merge_from(prev_result.downstream_delta)
-                logging.debug(f.downstream)
+                    f.downstream_tx.merge_from(prev_result.downstream_delta)
+                logging.debug(f.downstream_tx)
 
-            f._prev_downstream = f.downstream.copy()
+            f._prev_downstream = f.downstream_tx.copy()
 
-        return prev.delta(self.filters[0].downstream)
+        return prev.delta(self.filters[0].downstream_tx)
 

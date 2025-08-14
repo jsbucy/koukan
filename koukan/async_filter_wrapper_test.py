@@ -223,7 +223,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         tx = TransactionMetadata()
         wrapper.wire_downstream(tx)
         delta = TransactionMetadata(mail_from=Mailbox('alice'))
-        wrapper.downstream.merge_from(delta)
+        wrapper.downstream_tx.merge_from(delta)
         upstream_delta = wrapper.on_update(delta)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(2, wrapper.version())

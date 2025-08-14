@@ -96,7 +96,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual(filter.upstream.resolution.hosts[0].host,
                          '1.2.3.4')
@@ -118,7 +118,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
 
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('example.CoM', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['1.2.3.4'])
@@ -135,7 +135,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
 
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('mx.example.com', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['1.2.3.4'])
@@ -154,7 +154,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
 
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('example.CoM', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['0123:4567:89ab:cdef:0123:4567:89ab:cdef'])
@@ -168,7 +168,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             resolution = Resolution([HostPort('1.2.3.4', 25),
                                      HostPort('example.com', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['1.2.3.4', 'example.com'])
@@ -188,7 +188,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter_result = filter.on_update(delta)
         self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
         self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
@@ -202,7 +202,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             resolution = Resolution([HostPort('example.CoM', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter_result = filter.on_update(delta)
         self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
         self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
@@ -217,7 +217,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             resolution=Resolution([HostPort('us-west1.example.com', 25),
                                    HostPort('us-west2.example.com', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['1.2.3.4'])
@@ -230,7 +230,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             resolution=Resolution([HostPort('1.2.3.4', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual(filter.upstream.resolution.hosts[0].host,
                          '1.2.3.4')
@@ -245,7 +245,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             resolution=Resolution([HostPort('example2.com', 25),
                                    HostPort('example1.com', 25)]))
-        filter.downstream.merge_from(delta)
+        filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
                          ['example2.com', '1.2.3.4'])

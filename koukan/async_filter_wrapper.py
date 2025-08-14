@@ -207,14 +207,14 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
 
     def on_update(self, tx_delta : TransactionMetadata):
         logging.debug(tx_delta)
-        tx_orig = self.downstream.copy()
-        upstream_delta = self.update(self.downstream, tx_delta)
+        tx_orig = self.downstream_tx.copy()
+        upstream_delta = self.update(self.downstream_tx, tx_delta)
         deadline = Deadline(self.timeout)
-        upstream_tx = self.downstream.copy()
+        upstream_tx = self.downstream_tx.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        self.downstream.merge_from(upstream_delta)
+        self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()

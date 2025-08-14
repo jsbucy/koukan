@@ -34,7 +34,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
     def test_success(self):
         router = RecipientRouterFilter(SuccessPolicy())
         router.wire_downstream(TransactionMetadata())
-        tx = router.downstream
+        tx = router.downstream_tx
 
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
