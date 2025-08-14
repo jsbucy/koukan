@@ -133,6 +133,8 @@ class FilterChainTest(unittest.TestCase):
         chain.update()
         self.assertEqual(550, tx.mail_response.code)
         self.assertEqual([503,503], [r.code for r in tx.rcpt_response])
+        tx.cancelled = True
+        chain.update()
 
 if __name__ == '__main__':
     logging.basicConfig(

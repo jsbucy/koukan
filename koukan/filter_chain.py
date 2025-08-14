@@ -58,6 +58,7 @@ class OneshotProxyFilter(ProxyBaseFilter, OneshotFilterMixin):
 class FilterChain:
     filters : List[BaseFilter]
     loop : asyncio.AbstractEventLoop
+    # convenience alias for filters[0].downstream
     tx : Optional[TransactionMetadata] = None
 
     def __init__(self, filters : List[BaseFilter]):
@@ -126,13 +127,13 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
-            if not f.downstream.check_preconditions():
-                break
-
             f.prev_upstream = f.upstream.copy()
+
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
+            if not f.downstream.check_preconditions():
+                break
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)
