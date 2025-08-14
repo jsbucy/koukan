@@ -264,5 +264,3 @@ class SmtpEndpoint(Filter):
             logging.info('SmtpEndpoint %s data_resp %s',
                          tx.rest_id, tx.data_response)
 
-    def abort(self):
-        raise NotImplementedError()

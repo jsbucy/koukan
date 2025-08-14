@@ -18,7 +18,7 @@ from koukan.smtp_service import (
     SmtpHandler,
     service as smtp_service )
 import koukan.fastapi_service as fastapi_service
-from koukan.filter import AsyncFilter
+from koukan.filter import AsyncFilter, TransactionMetadata
 from koukan.filter_chain import BaseFilter, FilterChain
 from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.rest_handler import (
@@ -142,19 +142,23 @@ class SmtpGateway(EndpointFactory):
     def _gc_inflight(self, now : float, ttl : int, done_ttl : int):
         with self.lock:
             dele = []
-            for (rest_id, tx) in self.inflight.items():
+            for (rest_id, adapter) in self.inflight.items():
                 # TODO policy should be something like
                 # not inflight upstream and (idle or done)
                 # grace period/lower but nonzero idle timeout for done
                 # to GET again, cost is ~responses in memory?
-                if not tx.idle(time.monotonic(), ttl, done_ttl):
+                if not adapter.idle(time.monotonic(), ttl, done_ttl):
                     continue
 
                 logging.info('SmtpGateway.gc_inflight shutdown idle %s',
-                             tx.rest_id)
+                             adapter.rest_id)
                 # XXX BEFORE MERGE is this actually necessary?
                 # assert isinstance(tx.filter, SmtpEndpoint)
                 # tx.filter._shutdown()
+                tx = adapter.get()
+                delta = TransactionMetadata(cancelled=True)
+                tx.merge_from(delta)
+                adapter.update(tx, delta)
                 dele.append(rest_id)
 
         for d in dele:
