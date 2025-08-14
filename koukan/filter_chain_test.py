@@ -43,8 +43,8 @@ class Proxy(CoroutineProxyFilter):
     async def on_update(self, delta, upstream):
         logging.debug(self.downstream_tx)
         logging.debug(delta)
-        logging.debug(self.upstream)
-        self.upstream.merge_from(delta)
+        logging.debug(self.upstream_tx)
+        self.upstream_tx.merge_from(delta)
         # self.upstream['proxy_downstream'] = 'x'
         delta = await upstream()
         self.downstream_tx.merge_from(delta)
@@ -55,14 +55,14 @@ class OneshotProxyDownstream(ProxyFilter):
     def on_update(self, delta):
         body = delta.body
         delta.body = None
-        self.upstream.merge_from(delta)
+        self.upstream_tx.merge_from(delta)
         return FilterResult(TransactionMetadata(data_response=Response(501)))
 
 class OneshotProxyDownstreamNone(ProxyFilter):
     def on_update(self, delta):
         body = delta.body
         delta.body = None
-        self.upstream.merge_from(delta)
+        self.upstream_tx.merge_from(delta)
         return FilterResult()
 
 class RejectMail(Filter):

@@ -44,7 +44,7 @@ class DkimEndpointTest(unittest.TestCase):
                 last=False))
 
         def upstream():
-            tx = dkim_endpoint.upstream
+            tx = dkim_endpoint.upstream_tx
             upstream_delta = TransactionMetadata()
             if tx.mail_from and not tx.mail_response:
                 upstream_delta.mail_response=Response(201)
@@ -59,7 +59,7 @@ class DkimEndpointTest(unittest.TestCase):
         tx.body.append(b'world!\r\n', last=True)
         filter_result = dkim_endpoint.on_update(
             TransactionMetadata(body=tx.body))
-        upstream_body = dkim_endpoint.upstream.body
+        upstream_body = dkim_endpoint.upstream_tx.body
         self.assertTrue(upstream_body.finalized())
         logging.debug(upstream_body.pread(0))
         self.assertTrue(upstream_body.pread(0).startswith(
@@ -76,7 +76,7 @@ class DkimEndpointTest(unittest.TestCase):
             body = InlineBlob(b'definitely not valid rfc822\r\n', last=True))
         tx.merge_from(delta)
         filter_result = dkim_endpoint.on_update(delta)
-        self.assertIsNone(dkim_endpoint.upstream.body)
+        self.assertIsNone(dkim_endpoint.upstream_tx.body)
         self.assertEqual(500, filter_result.downstream_delta.data_response.code)
 
 

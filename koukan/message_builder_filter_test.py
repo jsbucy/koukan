@@ -43,7 +43,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
 
         tx.merge_from(delta)
         self.filter.on_update(delta)
-        upstream_body = self.filter.upstream.body
+        upstream_body = self.filter.upstream_tx.body
         self.assertTrue(isinstance(upstream_body, Blob))
         self.assertTrue(upstream_body.finalized())
         self.assertNotEqual(
@@ -60,7 +60,7 @@ class MessageBuilderFilterTest(unittest.TestCase):
 
         tx.merge_from(delta)
         filter_result = self.filter.on_update(delta)
-        self.assertEqual(body, self.filter.upstream.body)
+        self.assertEqual(body, self.filter.upstream_tx.body)
         self.assertIsNone(filter_result.downstream_delta)
 
     def test_exception(self):

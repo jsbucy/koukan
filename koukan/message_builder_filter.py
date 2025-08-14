@@ -31,13 +31,13 @@ class MessageBuilderFilter(ProxyFilter):
                 body = None
         else:
             body = None
-        self.upstream.merge_from(tx_delta)
+        self.upstream_tx.merge_from(tx_delta)
 
         if body is None:
             return FilterResult()
 
         assert self.validation is not False
-        assert self.upstream.body is None
+        assert self.upstream_tx.body is None
 
         if body.finalized():
             blobs = { blob.rest_id(): blob for blob in body.blobs }
@@ -77,7 +77,7 @@ class MessageBuilderFilter(ProxyFilter):
         if upstream_body:
             logging.debug('MessageBuilderFilter.on_update %d %s',
                           upstream_body.len(), upstream_body.content_length())
-            self.upstream.body = upstream_body
+            self.upstream_tx.body = upstream_body
 
         delta = None
         if data_err is not None:

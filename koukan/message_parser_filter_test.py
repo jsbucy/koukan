@@ -29,14 +29,14 @@ class MessageParserFilterTest(unittest.TestCase):
         filter.wire_upstream(TransactionMetadata())
 
         filter.on_update(delta)
-        self.assertIsNone(filter.upstream.body)
+        self.assertIsNone(filter.upstream_tx.body)
 
 
         delta = TransactionMetadata(body=InlineBlob(b, last=True))
         filter.downstream_tx.body = delta.body
         filter.on_update(delta)
 
-        tx = filter.upstream
+        tx = filter.upstream_tx
         logging.debug(tx)
         exp_blobs = [b'yolocat', b'yolocat2']
         self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
@@ -59,7 +59,7 @@ class MessageParserFilterTest(unittest.TestCase):
         filter.wire_upstream(TransactionMetadata())
 
         filter.on_update(delta)
-        self.assertEqual(body, filter.upstream.body)
+        self.assertEqual(body, filter.upstream_tx.body)
 
 
 

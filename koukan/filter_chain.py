@@ -15,13 +15,13 @@ class BaseFilter:
     _prev_downstream : Optional[TransactionMetadata] = None
     downstream_tx : Optional[TransactionMetadata] = None
     _prev_upstream : Optional[TransactionMetadata] = None
-    upstream : Optional[TransactionMetadata] = None
+    upstream_tx : Optional[TransactionMetadata] = None
 
     def __init__(self):
         pass
 
     def wire_downstream(self, tx : TransactionMetadata):
-        self.downstream_tx = self.upstream = tx
+        self.downstream_tx = self.upstream_tx = tx
         self._prev_downstream = TransactionMetadata()
         self._prev_upstream = TransactionMetadata()
 
@@ -31,7 +31,7 @@ class BaseFilter:
 # rcpts in a multi-rcpt tx, say rate limit downstream of exploder.
 class ProxyBaseFilter(BaseFilter):
     def wire_upstream(self, tx):
-        self.upstream = tx
+        self.upstream_tx = tx
 
 # A simple filter doesn't do anything in the downstream direction
 # except possibly merging an error response.
@@ -134,7 +134,7 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
-            f._prev_upstream = f.upstream.copy()
+            f._prev_upstream = f.upstream_tx.copy()
 
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
@@ -144,8 +144,8 @@ class FilterChain:
 
         for f, co, fut, prev_result in reversed(completion):
             logging.debug('%s %s %s %s', f, co, fut, prev_result)
-            delta = f._prev_upstream.delta(f.upstream)
-            f._prev_upstream = f.upstream.copy()
+            delta = f._prev_upstream.delta(f.upstream_tx)
+            f._prev_upstream = f.upstream_tx.copy()
             if co is not None and fut is not None:
                 fut.set_result(delta)
 
@@ -167,7 +167,7 @@ class FilterChain:
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
                 logging.debug(prev_result.downstream_delta)
-                if f.upstream is not f.downstream_tx:
+                if f.upstream_tx is not f.downstream_tx:
                     f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)

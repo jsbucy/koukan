@@ -28,19 +28,19 @@ class DkimEndpoint(ProxyFilter):
             tx_delta.body = None
         if body is not None and not body.finalized():
             body = None
-        self.upstream.merge_from(tx_delta)
+        self.upstream_tx.merge_from(tx_delta)
 
         if body is None:
             return FilterResult()
 
-        assert self.upstream.body is None
+        assert self.upstream_tx.body is None
 
         sig = self.sign(body)
         if sig is not None:
-            self.upstream.body = CompositeBlob()
+            self.upstream_tx.body = CompositeBlob()
             sig_blob = InlineBlob(sig)
-            self.upstream.body.append(sig_blob, 0, sig_blob.len())
-            self.upstream.body.append(body, 0, body.len(), True)
+            self.upstream_tx.body.append(sig_blob, 0, sig_blob.len())
+            self.upstream_tx.body.append(body, 0, body.len(), True)
         delta = None
         if sig is None:
             delta = TransactionMetadata(

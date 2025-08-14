@@ -118,9 +118,9 @@ class ReceivedHeaderFilter(ProxyFilter):
         if body is not None and not body.finalized():
             body = None
         else:
-            assert self.upstream.body is None
+            assert self.upstream_tx.body is None
 
-        self.upstream.merge_from(tx_delta)
+        self.upstream_tx.merge_from(tx_delta)
 
         if body is None:
             return FilterResult()
@@ -141,7 +141,7 @@ class ReceivedHeaderFilter(ProxyFilter):
             received = InlineBlob(self._format_received().encode('ascii'))
             upstream_body.append(received, 0, received.len())
             upstream_body.append(body, 0, body.len(), True)
-            self.upstream.body = upstream_body
+            self.upstream_tx.body = upstream_body
 
         delta = None
         if data_err is not None:

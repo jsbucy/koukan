@@ -98,7 +98,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual(filter.upstream.resolution.hosts[0].host,
+        self.assertEqual(filter.upstream_tx.resolution.hosts[0].host,
                          '1.2.3.4')
 
     def test_dns(self):
@@ -120,7 +120,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['1.2.3.4'])
 
     def test_no_mx(self):
@@ -137,7 +137,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('mx.example.com', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['1.2.3.4'])
 
     def test_ipv6(self):
@@ -156,7 +156,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['0123:4567:89ab:cdef:0123:4567:89ab:cdef'])
 
     def test_needs_resolution(self):
@@ -170,7 +170,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
                                      HostPort('example.com', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['1.2.3.4', 'example.com'])
 
     def test_empty_result(self):
@@ -219,7 +219,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
                                    HostPort('us-west2.example.com', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['1.2.3.4'])
 
     def test_noop_ip(self):
@@ -232,7 +232,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution=Resolution([HostPort('1.2.3.4', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual(filter.upstream.resolution.hosts[0].host,
+        self.assertEqual(filter.upstream_tx.resolution.hosts[0].host,
                          '1.2.3.4')
 
     def test_noop_no_match(self):
@@ -247,7 +247,7 @@ class DnsResolutionFilterTest(unittest.TestCase):
                                    HostPort('example1.com', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter.on_update(delta)
-        self.assertEqual([h.host for h in filter.upstream.resolution.hosts],
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['example2.com', '1.2.3.4'])
 
 

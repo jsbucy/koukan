@@ -111,12 +111,12 @@ class DnsResolutionFilter(ProxyFilter):
             tx_delta.resolution = None
         else:
             downstream_resolution = None
-        self.upstream.merge_from(tx_delta)
+        self.upstream_tx.merge_from(tx_delta)
 
         if downstream_resolution is None:
             return FilterResult()
 
-        assert self.upstream.resolution is None
+        assert self.upstream_tx.resolution is None
 
         resolution = Resolution(self._resolve(downstream_resolution))
         logging.debug(resolution)
@@ -129,7 +129,7 @@ class DnsResolutionFilter(ProxyFilter):
                     mail_response =
                       Response(450, 'DnsResolverFilter empty result')))
 
-        self.upstream.resolution = resolution
+        self.upstream_tx.resolution = resolution
         return FilterResult()
 
 if __name__ == '__main__':

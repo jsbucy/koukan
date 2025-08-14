@@ -48,9 +48,9 @@ class RecipientRouterFilterTest(unittest.TestCase):
         tx.merge_from(delta)
 
         router.on_update(delta)
-        self.assertEqual(router.upstream.rest_endpoint, 'http://localhost:8001')
-        self.assertEqual(router.upstream.upstream_http_host, 'gateway')
-        self.assertEqual(router.upstream.resolution.hosts,
+        self.assertEqual(router.upstream_tx.rest_endpoint, 'http://localhost:8001')
+        self.assertEqual(router.upstream_tx.upstream_http_host, 'gateway')
+        self.assertEqual(router.upstream_tx.resolution.hosts,
                          [HostPort('example.com', 1234)])
 
 

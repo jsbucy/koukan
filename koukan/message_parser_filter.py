@@ -41,12 +41,12 @@ class MessageParserFilter(ProxyFilter):
             tx_delta.body = None
         if not enabled or (body is not None and not body.finalized()):
             body = None
-        self.upstream.merge_from(tx_delta)
+        self.upstream_tx.merge_from(tx_delta)
 
         if body is None:
             return FilterResult()
 
-        assert self.upstream.body is None
+        assert self.upstream_tx.body is None
 
         parse_options = tx.options.get('receive_parsing', {})
         parse_options = parse_options if parse_options else {}  # may be None
@@ -65,7 +65,7 @@ class MessageParserFilter(ProxyFilter):
                 parsed_message.json, parsed_message.blobs)
             spec.check_ids()
             spec.body_blob = tx.body
-            self.upstream.body = spec
+            self.upstream_tx.body = spec
         else:
             # TODO option to fail/set data err on parse error?
             self.upstream_body = body

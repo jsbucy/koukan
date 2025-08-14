@@ -43,7 +43,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         tx.merge_from(delta)
         result = filter.on_update(delta)
-        self.assertIsNotNone(filter.upstream.smtp_meta)
+        self.assertIsNotNone(filter.upstream_tx.smtp_meta)
         self.assertIsNone(result.downstream_delta)
 
         delta.rcpt_to.append(Mailbox('bob@domain'))
@@ -68,7 +68,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx.body = tx_delta.body = InlineBlob(body, len(body))
         result = filter.on_update(tx_delta)
         self.assertEqual(
-            filter.upstream.body.pread(0),
+            filter.upstream_tx.body.pread(0),
             b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
             b'\tby gargantua1\r\n'
             b'\twith ESMTPS\r\n'
