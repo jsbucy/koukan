@@ -15,7 +15,9 @@ from koukan.filter import TransactionMetadata
 import asyncio
 
 class Sink(CoroutineFilter):
+    updates = 0
     async def on_update(self, delta, upstream):
+        self.updates += 1
         logging.debug('Sink.on_update %s', self.downstream_tx)
         logging.debug(delta)
         # self.downstream['sink'] = 'sink'
@@ -24,6 +26,8 @@ class Sink(CoroutineFilter):
             self.downstream_tx.mail_response = Response(201)
         for i in range(len(self.downstream_tx.rcpt_response), len(self.downstream_tx.rcpt_to)):
             self.downstream_tx.rcpt_response.append(Response(202))
+        if delta.body and delta.body.finalized():
+            self.downstream_tx.data_response = Response(203)
 
 class AddDownstream(CoroutineFilter):
     async def on_update(self, delta, upstream):
@@ -50,7 +54,6 @@ class Proxy(CoroutineProxyFilter):
         self.downstream_tx.merge_from(delta)
         # self.downstream['proxy_upstream'] = 'y'
 
-
 class OneshotProxyDownstream(ProxyFilter):
     def on_update(self, delta):
         body = delta.body
@@ -63,6 +66,18 @@ class OneshotProxyDownstreamNone(ProxyFilter):
         body = delta.body
         delta.body = None
         self.upstream_tx.merge_from(delta)
+        return FilterResult()
+
+class RewriteBody(ProxyFilter):
+    def on_update(self, delta):
+        body = delta.body
+        delta.body = None
+        self.upstream_tx.merge_from(delta)
+        if body is None or not body.finalized():
+            body = None
+        else:
+            self.upstream_tx.body = InlineBlob(
+                'new body' + body.pread(0), last=True)
         return FilterResult()
 
 class RejectMail(Filter):
@@ -100,6 +115,12 @@ class FilterChainTest(unittest.TestCase):
         tx.rcpt_to.append(Mailbox('bob2'))
         chain.update()
         self.assertEqual([202, 202], [r.code for r in tx.rcpt_response])
+
+        # noop
+        logging.debug('noop')
+        sink_count = sink.updates
+        chain.update()
+        self.assertEqual(sink_count + 1, sink.updates)
 
     def test_filter_result(self):
         tx = TransactionMetadata()
@@ -143,6 +164,28 @@ class FilterChainTest(unittest.TestCase):
         self.assertEqual([503,503], [r.code for r in tx.rcpt_response])
         tx.cancelled = True
         chain.update()
+
+    def test_proxy(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([RewriteBody(), sink], self.loop)
+        chain.init(tx)
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        chain.update()
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertIsNone(tx.data_response)
+        logging.debug(tx)
+        sink_count = sink.updates
+        tx.body = InlineBlob('hello, ')
+        chain.update()
+        self.assertIsNone(tx.data_response)
+
+        self.assertEqual(sink_count, sink.updates)
+        tx.body = InlineBlob('hello, world!', last=True)
+        chain.update()
+        self.assertEqual(203, tx.data_response.code)
 
 if __name__ == '__main__':
     logging.basicConfig(

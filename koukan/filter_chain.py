@@ -68,7 +68,7 @@ class FilterChain:
     tx : Optional[TransactionMetadata] = None
 
     def __init__(self, filters : List[BaseFilter],
-                 loop : Optional[asyncio.AbstractEventLoop] = None):
+                 loop : asyncio.AbstractEventLoop):
         self.filters = filters
 
         # placeholder to avoid deprecation warning creating Future
@@ -162,8 +162,7 @@ class FilterChain:
                 try:
                     co.send(None)
                 except StopIteration as e:
-                    if isinstance(e.value, FilterResult):
-                        filter_result = e.value
+                    pass
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
                 logging.debug(prev_result.downstream_delta)
