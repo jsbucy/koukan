@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Coroutine, List, Optional, Tuple
 from functools import partial
 import logging
 import asyncio
@@ -90,7 +90,7 @@ class FilterChain:
                 f.wire_upstream(tx)
 
     def update(self):
-        completion = []  # Tuple(filter, coroutine, future, FilterResult)
+        completion : List[Tuple[BaseFilter, Coroutine, asyncio.Future, FilterResult]] = []
 
         # TODO maybe move noop/heartbeat/keepalive to a separate entry
         # point which most impls don't need to implement
