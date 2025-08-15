@@ -5,8 +5,8 @@ import logging
 
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.fake_dns_wrapper import FakeResolver
+from koukan.response import Response
 
 from dns.resolver import NXDOMAIN, NoNameservers
 from dns.resolver import Answer
@@ -81,118 +81,97 @@ aaaa_answer = Answer(
 
 class DnsResolutionFilterTest(unittest.TestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def test_static(self):
-        upstream = FakeSyncFilter()
-
         filter = DnsResolutionFilter(
-            upstream,
             static_resolution=Resolution([HostPort('1.2.3.4', 25)]),
             suffix='.com')
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual(tx.resolution.hosts[0].host,
-                             '1.2.3.4')
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            resolution = Resolution([HostPort('example.CoM', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual(filter.upstream_tx.resolution.hosts[0].host,
+                         '1.2.3.4')
 
     def test_dns(self):
-        upstream = FakeSyncFilter()
         resolver = FakeResolver([
             mx_answer,
             a_answer,
             dns.resolver.NoAnswer()])  # AAAA
 
         filter = DnsResolutionFilter(
-            upstream,
             suffix='',
             resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['1.2.3.4'])
+        def upstream():
             return TransactionMetadata()
 
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(
+            resolution = Resolution([HostPort('example.CoM', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['1.2.3.4'])
 
     def test_no_mx(self):
-        upstream = FakeSyncFilter()
         resolver = FakeResolver([
             dns.resolver.NoAnswer(),
             a_answer,
             dns.resolver.NoAnswer()])  # AAAA
 
-        filter = DnsResolutionFilter(
-            upstream,
-            suffix='',
-            resolver=resolver)
+        filter = DnsResolutionFilter(suffix='', resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['1.2.3.4'])
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('mx.example.com', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(
+            resolution = Resolution([HostPort('mx.example.com', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['1.2.3.4'])
 
     def test_ipv6(self):
-        upstream = FakeSyncFilter()
         resolver = FakeResolver([
             mx_answer,
             dns.resolver.NoAnswer(),  # A
             aaaa_answer])
 
         filter = DnsResolutionFilter(
-            upstream,
             suffix='',
             resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['0123:4567:89ab:cdef:0123:4567:89ab:cdef'])
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(
+            resolution = Resolution([HostPort('example.CoM', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['0123:4567:89ab:cdef:0123:4567:89ab:cdef'])
 
     def test_needs_resolution(self):
-        upstream = FakeSyncFilter()
         resolver = FakeResolver()
+        filter = DnsResolutionFilter(suffix='.net', resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        filter = DnsResolutionFilter(
-            upstream,
-            suffix='.net',
-            resolver=resolver)
-
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['1.2.3.4', 'example.com'])
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata()
-        tx.resolution = Resolution([HostPort('1.2.3.4', 25),
-                                    HostPort('example.com', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
-
+        delta = TransactionMetadata(
+            resolution = Resolution([HostPort('1.2.3.4', 25),
+                                     HostPort('example.com', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['1.2.3.4', 'example.com'])
 
     def test_empty_result(self):
         resolver = FakeResolver([
@@ -201,92 +180,75 @@ class DnsResolutionFilterTest(unittest.TestCase):
             NXDOMAIN()])
 
         filter = DnsResolutionFilter(
-            upstream=None,
             suffix='',
             resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
-        self.assertTrue(tx.mail_response.code, 450)
-        self.assertIn('empty', tx.mail_response.message)
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            resolution = Resolution([HostPort('example.CoM', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+        self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
+        self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
 
     def test_servfail(self):
-        resolver = FakeResolver([
-            NoNameservers()])
+        resolver = FakeResolver([NoNameservers()])
+        filter = DnsResolutionFilter(suffix='', resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        filter = DnsResolutionFilter(
-            upstream=None,
-            suffix='',
-            resolver=resolver)
-
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        tx.resolution = Resolution([HostPort('example.CoM', 25)])
-        upstream_delta = filter.on_update(tx, tx.copy())
-        self.assertTrue(tx.mail_response.code, 450)
-        self.assertIn('empty', tx.mail_response.message)
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            resolution = Resolution([HostPort('example.CoM', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+        self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
+        self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
 
     def test_duplicate_ip(self):
-        upstream = FakeSyncFilter()
-
         filter = DnsResolutionFilter(
-            upstream,
             static_resolution=Resolution([HostPort('1.2.3.4', 25)]),
             suffix='.example.com')
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['1.2.3.4'])
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             resolution=Resolution([HostPort('us-west1.example.com', 25),
                                    HostPort('us-west2.example.com', 25)]))
-        upstream_delta = filter.on_update(tx, tx.copy())
-
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['1.2.3.4'])
 
     def test_noop_ip(self):
-        upstream = FakeSyncFilter()
-        resolver = FakeResolver()
+        filter = DnsResolutionFilter(suffix='', resolver=FakeResolver())
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        filter = DnsResolutionFilter(
-            upstream,
-            suffix='',
-            resolver=resolver)
-
-        def exp(tx, delta):
-            self.assertEqual(tx.resolution.hosts[0].host,
-                             '1.2.3.4')
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
             resolution=Resolution([HostPort('1.2.3.4', 25)]))
-        upstream_delta = filter.on_update(tx, tx.copy())
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual(filter.upstream_tx.resolution.hosts[0].host,
+                         '1.2.3.4')
 
     def test_noop_no_match(self):
-        upstream = FakeSyncFilter()
-
         filter = DnsResolutionFilter(
-            upstream,
             static_resolution=Resolution([HostPort('1.2.3.4', 25)]),
             literal='example1.com')
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
 
-        def exp(tx, delta):
-            self.assertEqual([h.host for h in tx.resolution.hosts],
-                             ['example2.com', '1.2.3.4'])
-            return TransactionMetadata()
-
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             resolution=Resolution([HostPort('example2.com', 25),
                                    HostPort('example1.com', 25)]))
-        upstream_delta = filter.on_update(tx, tx.copy())
-
+        filter.downstream_tx.merge_from(delta)
+        filter.on_update(delta)
+        self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
+                         ['example2.com', '1.2.3.4'])
 
 
 if __name__ == '__main__':

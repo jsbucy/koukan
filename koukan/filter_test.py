@@ -15,11 +15,9 @@ from koukan.deadline import Deadline
 from koukan.fake_endpoints import MockAsyncFilter
 
 class FilterTest(unittest.TestCase):
-
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
-
 
     def testSingleField(self):
         tx = TransactionMetadata()
@@ -30,7 +28,7 @@ class FilterTest(unittest.TestCase):
         self.assertIsNone(TransactionMetadata.from_json({'rcpt_to': []}))
 
         succ = TransactionMetadata(mail_from=Mailbox('alice'))
-        delta = tx.delta(succ)
+        delta = tx.maybe_delta(succ)
         self.assertEqual(delta.rcpt_to, [])
         self.assertEqual(delta.to_json(), {'mail_from': {'m': 'alice'}})
 
@@ -40,7 +38,7 @@ class FilterTest(unittest.TestCase):
     def testBadSingleField(self):
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         succ = TransactionMetadata(mail_from=Mailbox('bob'))
-        self.assertIsNone(tx.delta(succ))
+        self.assertIsNone(tx.maybe_delta(succ))
 
     def testRcptFirst(self):
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
@@ -48,7 +46,7 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
-        delta = tx.delta(succ)
+        delta = tx.maybe_delta(succ)
         self.assertEqual(delta.to_json(), {'rcpt_to': [{'m': 'bob'}]})
 
         merged = tx.merge(delta)
@@ -62,7 +60,7 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
 
-        delta = tx.delta(succ)
+        delta = tx.maybe_delta(succ)
         self.assertEqual(delta.to_json(WhichJson.REST_UPDATE), {
             'rcpt_to': [{'m': 'bob2'}],
             'rcpt_to_list_offset': 1 })
@@ -87,7 +85,7 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob'), Mailbox('bob2')])
 
-        delta = tx.delta(succ)
+        delta = tx.maybe_delta(succ)
         self.assertEqual(delta.to_json(WhichJson.REST_UPDATE), {
             'rcpt_to': [{'m': 'bob2'}],
             'rcpt_to_list_offset': 1 })
@@ -100,13 +98,13 @@ class FilterTest(unittest.TestCase):
         logging.debug('test_rest_placeholder invalid delta: truncate rcpt_to')
         self.assertIsNotNone(merged.mail_from)
         self.assertEqual(len(merged.rcpt_to), 2)
-        self.assertIsNone(merged.delta(
+        self.assertIsNone(merged.maybe_delta(
             TransactionMetadata(
                 mail_from=None,
                 rcpt_to=[None])), WhichJson.REST_READ)
 
         logging.debug('test_rest_placeholder invalid delta: non-placeholder')
-        self.assertIsNone(merged.delta(
+        self.assertIsNone(merged.maybe_delta(
             TransactionMetadata(
                 mail_from=None,
                 rcpt_to=[None, Mailbox('bob2')])), WhichJson.REST_READ)
@@ -119,7 +117,7 @@ class FilterTest(unittest.TestCase):
             rcpt_to=[None, None],
             body=InlineBlob(b'xyz', last=True))
 
-        delta = merged.delta(succ, WhichJson.REST_READ)
+        delta = merged.maybe_delta(succ, WhichJson.REST_READ)
         self.assertEqual(delta.to_json(), {'body': {'inline': 'xyz'}})
 
         merged = merged.merge(delta)
@@ -136,7 +134,7 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob2'), Mailbox('bob2')])
         # not a prefix
-        self.assertIsNone(tx.delta(succ))
+        self.assertIsNone(tx.maybe_delta(succ))
 
     def testEmptyDict(self):
         tx = TransactionMetadata(retry = {})
@@ -211,7 +209,7 @@ class FilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob1')])
         updated_tx = tx.copy()
         updated_tx.rcpt_to.append(Mailbox('bob2'))
-        delta = tx.delta(updated_tx)
+        delta = tx.maybe_delta(updated_tx)
         self.assertIsNotNone(delta)
         self.assertEqual(delta.rcpt_to_list_offset, 1)
         self.assertEqual(
@@ -236,7 +234,7 @@ class FilterTest(unittest.TestCase):
         updated_tx = tx.copy()
         updated_tx.rcpt_response.append(Response(201))
         updated_tx.rcpt_response.append(Response(202))
-        delta = tx.delta(updated_tx)
+        delta = tx.maybe_delta(updated_tx)
         self.assertEqual(delta.rcpt_response_list_offset, 0)
 
         merged = tx.merge(delta)

@@ -15,7 +15,6 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata )
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
@@ -78,7 +77,7 @@ class StorageWriterFilter(AsyncFilter):
                     lambda: self.upstream_cursor is not None or
                     self.create_err, 30):
                 logging.warning(
-                    'StorageWriterFilter.get_transaction_cursor timeout')
+                    'StorageWriterFilter.get_transaction_cursor timeout %s', self.create_err)
                 return None
             elif self.upstream_cursor is None:
                 return None
@@ -150,7 +149,7 @@ class StorageWriterFilter(AsyncFilter):
             if needs_create and self.upstream_cursor is None:
                 # i.e. uncaught exception
                 with self.mu:
-                    self.created_err = True
+                    self.create_err = True
                     self.cv.notify_all()
 
     def _update(self,
@@ -172,11 +171,18 @@ class StorageWriterFilter(AsyncFilter):
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
                 except VersionConflictException:
+                    logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)
                     self.tx_cursor.load()
             assert self.tx_cursor is not None
+            version = TransactionMetadata(version=self.tx_cursor.version)
+            tx.merge_from(version)
+            return version
+
+        if not tx_delta:
+            self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
             version = TransactionMetadata(version=self.tx_cursor.version)
             tx.merge_from(version)
             return version

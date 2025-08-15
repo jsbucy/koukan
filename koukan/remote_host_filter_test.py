@@ -19,7 +19,6 @@ from koukan.response import Response
 from koukan.remote_host_filter import (
     RemoteHostFilter,
     Resolver )
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.fake_dns_wrapper import FakeResolver
 
 ptr_message_text = """id 1234
@@ -101,42 +100,33 @@ aaaa_answer = Answer(
 
 class RemoteHostFilterTest(unittest.TestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
 
     def _test(self, addr,
               answers : List[Union[Answer, Exception]],
-              exp_hostname, exp_fcrdns, exp_resp=201):
-
+              exp_hostname, exp_fcrdns, exp_err=False):
         resolver = FakeResolver(answers)
+        filter = RemoteHostFilter(resolver)
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
 
-        upstream = FakeSyncFilter()
-        def exp(tx, tx_delta):
-            self.assertEqual(exp_hostname, tx.remote_hostname)
-            self.assertEqual(exp_fcrdns, tx.fcrdns)
-            self.assertEqual(exp_hostname, tx_delta.remote_hostname)
-            self.assertEqual(exp_fcrdns, tx_delta.fcrdns)
-
-            resp = Response(201)
-            upstream_delta = TransactionMetadata()
-            tx.fill_inflight_responses(resp, upstream_delta)
-            self.assertIsNotNone(tx.merge_from(upstream_delta))
-            return upstream_delta
-        upstream.add_expectation(exp)
-
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             remote_host=HostPort(addr, 12345),
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        filter = RemoteHostFilter(upstream, resolver)
-        upstream_delta = filter.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        filter.on_update(delta)
         logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
-        self.assertEqual(exp_resp, tx.mail_response.code)
-        self.assertEqual(exp_resp, upstream_delta.mail_response.code)
-        self.assertEqual([exp_resp],
-                         [r.code for r in upstream_delta.rcpt_response])
-
+        if exp_err:
+            self.assertEqual(450, tx.mail_response.code)
+        else:
+            self.assertIsNone(tx.mail_response)
+        self.assertEqual(tx.remote_hostname, exp_hostname)
+        self.assertEqual(tx.fcrdns, exp_fcrdns)
 
     def test_success_ipv4(self):
         self._test(
@@ -166,7 +156,7 @@ class RemoteHostFilterTest(unittest.TestCase):
         self._test('1.2.3.4',
                    [dns.resolver.NoNameservers()],
                    None, None,
-                   exp_resp=450)
+                   exp_err=True)
 
     def test_servfail_fwd(self):
         self._test('1.2.3.4',
@@ -174,7 +164,7 @@ class RemoteHostFilterTest(unittest.TestCase):
                     dns.resolver.NoNameservers(),   # A
                     dns.resolver.NoNameservers()],  # AAAA
                    'tachygraph.gloop.org.', False,
-                   exp_resp=450)
+                   exp_err=True)
 
 
 if __name__ == '__main__':

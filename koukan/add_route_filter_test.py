@@ -7,54 +7,47 @@ import logging
 from functools import partial
 
 from koukan.add_route_filter import AddRouteFilter
-from koukan.fake_endpoints import FakeSyncFilter
-from koukan.filter import (Mailbox, TransactionMetadata)
+from koukan.fake_endpoints import FakeFilter
+from koukan.filter import Mailbox, TransactionMetadata
+from koukan.filter_chain import FilterChain
 from koukan.response import Response
 from koukan.blob import InlineBlob
 
 class AddRouteFilterTest(unittest.TestCase):
     def test_smoke(self):
-        upstream = FakeSyncFilter()
-        add_route = FakeSyncFilter()
+        add_route = FakeFilter()
+        chain = FilterChain([add_route])
 
         b = 'hello, world!'
-        def exp(i, tx, tx_delta):
+        def exp(tx, tx_delta):
             self.assertEqual(b, tx.body.pread(0))
             upstream_delta=TransactionMetadata(
-                mail_response=Response(201 + i),
-                rcpt_response=[Response(203 + i)],
-                data_response=Response(205 + i))
+                mail_response=Response(202),
+                rcpt_response=[Response(204)],
+                data_response=Response(206))
             tx.merge_from(upstream_delta)
             return upstream_delta
+        add_route.add_expectation(exp)
 
-        upstream.add_expectation(partial(exp, 0))
-        add_route.add_expectation(partial(exp, 1))
+        filter = AddRouteFilter(chain, 'add-route')
+        filter.wire_downstream(TransactionMetadata())
 
-        filter = AddRouteFilter(add_route, 'add-route', upstream)
-
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')],
-                                 body=InlineBlob(b, len(b)))
-        filter.on_update(tx, tx.copy())
-        self.assertEqual(201, tx.mail_response.code)
-        self.assertEqual([203], [r.code for r in tx.rcpt_response])
-        self.assertEqual(205, tx.data_response.code)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')],
+                                    body=InlineBlob(b, len(b)))
+        tx = filter.downstream_tx
+        tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+        self.assertIsNone(filter_result.downstream_delta)
 
     def test_add_route_err(self):
-        upstream = FakeSyncFilter()
-        add_route = FakeSyncFilter()
+        add_route = FakeFilter()
+        chain = FilterChain([add_route])
+        filter = AddRouteFilter(chain, 'add-route')
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(203)],
-                data_response=Response(205))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
-        upstream.add_expectation(exp)
-
-        def exp_err(tx, tx_delta):
+        def exp_add_route_err(tx, tx_delta):
             upstream_delta=TransactionMetadata(
                 mail_response=Response(401),
                 rcpt_response=[Response(403)],
@@ -62,16 +55,16 @@ class AddRouteFilterTest(unittest.TestCase):
             tx.merge_from(upstream_delta)
             return upstream_delta
 
-        add_route.add_expectation(exp_err)
-
-        filter = AddRouteFilter(add_route, 'add-route', upstream)
+        add_route.add_expectation(exp_add_route_err)
 
         b = 'hello, world!'
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')],
-                                 body=InlineBlob(b, len(b)))
-        filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')],
+                                    body=InlineBlob(b, len(b)))
+        tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
         logging.debug(tx)
+
         self.assertEqual(401, tx.mail_response.code)
         self.assertEqual([403], [r.code for r in tx.rcpt_response])
         self.assertEqual(405, tx.data_response.code)

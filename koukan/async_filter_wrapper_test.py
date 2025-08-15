@@ -84,7 +84,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
 
         def exp_update(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=1)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_update)
 
@@ -116,7 +116,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
 
         def exp_update(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=1)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_update)
 
@@ -136,7 +136,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
 
         def exp_rcpt(tx, tx_delta):
             upstream_delta = TransactionMetadata(version=2)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         async_filter.expect_update(exp_rcpt)
 
@@ -220,8 +220,11 @@ class AsyncFilterWrapperTest(unittest.TestCase):
             mail_response=Response(250),
             version=2))
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        upstream_delta = wrapper.on_update(tx, tx.copy())
+        tx = TransactionMetadata()
+        wrapper.wire_downstream(tx)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        wrapper.downstream_tx.merge_from(delta)
+        upstream_delta = wrapper.on_update(delta)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(2, wrapper.version())
 

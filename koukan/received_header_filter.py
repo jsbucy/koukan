@@ -12,24 +12,19 @@ from koukan.blob import Blob, InlineBlob, CompositeBlob
 from koukan.filter import (
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata,
     get_esmtp_param )
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
-class ReceivedHeaderFilter(SyncFilter):
-    upstream : Optional[SyncFilter]
+class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None
     max_received_headers : int
-    body : Optional[Blob] = None
-    data_err : Optional[Response] = None
 
-    def __init__(self, upstream : Optional[SyncFilter] = None,
-                 received_hostname : Optional[str] = None,
+    def __init__(self, received_hostname : Optional[str] = None,
                  inject_time = None,
                  max_received_headers = 30):
-        self.upstream = upstream
         self.inject_time = inject_time
         self.received_hostname = received_hostname
         self.max_received_headers = max_received_headers
@@ -41,7 +36,8 @@ class ReceivedHeaderFilter(SyncFilter):
 #  (version=TLS1_2 cipher=ECDHE-ECDSA-AES128-GCM-SHA256 bits=128/128);
 #  Wed, 07 Feb 2024 14:47:24 -0800 (PST)
 
-    def _format_received(self, tx : TransactionMetadata) -> str:
+    def _format_received(self) -> str:
+        tx = self.downstream_tx
         received_host = None
         received_host_literal = None
         if tx.remote_host and tx.remote_host.host:
@@ -116,43 +112,38 @@ class ReceivedHeaderFilter(SyncFilter):
                                     'headers and is likely looping')
         return None
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        built = False
-        body = tx.maybe_body_blob()
-        if (self.body is None) and (body is not None) and body.finalized():
-            # TODO in this case, since the received header that's being
-            # prepended onto the body doesn't depend on the body contents,
-            # we could trickle out the body as it comes through rather than
-            # effectively buffering it all like this. However something
-            # else in the chain is likely to do that anyway so it's
-            # probably moot.
-            self.data_err = self._check_max_received_headers(body)
-            # don't return data_err immediately in case e.g. we don't
-            # already have rcpt_response to get an authoritative
-            # result from upstream
-            if self.data_err is None:
-                self.body = CompositeBlob()
-                received = InlineBlob(self._format_received(tx).encode('ascii'))
-                self.body.append(received, 0, received.len())
-                self.body.append(tx.body, 0, body.len(), True)
-            built = True
-
-        assert not(self.data_err and self.body)
-
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-        downstream_tx.body = self.body
-        downstream_delta.body = self.body if built else None
-        if bool(downstream_delta):
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        body = tx_delta.maybe_body_blob()
+        tx_delta.body = None
+        if body is not None and not body.finalized():
+            body = None
         else:
-            upstream_delta = TransactionMetadata()
-        if self.data_err:
-            assert (upstream_delta is not None and
-                    upstream_delta.data_response is None)
-            upstream_delta.data_response = self.data_err
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+            assert self.upstream_tx.body is None
+
+        self.upstream_tx.merge_from(tx_delta)
+
+        if body is None:
+            return FilterResult()
+
+        # TODO in this case, since the received header that's being
+        # prepended onto the body doesn't depend on the body contents,
+        # we could trickle out the body as it comes through rather than
+        # effectively buffering it all like this. However something
+        # else in the chain is likely to do that anyway so it's
+        # probably moot.
+        data_err = self._check_max_received_headers(body)
+        # don't return data_err immediately in case e.g. we don't
+        # already have rcpt_response to get an authoritative
+        # result from upstream
+
+        if data_err is None:
+            upstream_body = CompositeBlob()
+            received = InlineBlob(self._format_received().encode('ascii'))
+            upstream_body.append(received, 0, received.len())
+            upstream_body.append(body, 0, body.len(), True)
+            self.upstream_tx.body = upstream_body
+
+        delta = None
+        if data_err is not None:
+            delta = TransactionMetadata(data_response = data_err)
+        return FilterResult(delta)

@@ -10,7 +10,7 @@ from parameterized import parameterized_class
 from koukan.gateway import SmtpGateway
 from koukan.fake_smtpd import FakeSmtpd
 from koukan.blob import InlineBlob
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 
 from requests.exceptions import ConnectionError
@@ -24,8 +24,10 @@ root_yaml = {
         'gc_blob_ttl': 1,
     },
     'smtp_output': {
-        'outbound': {
-            'ehlo_host': 'gateway_test',
+        'hosts': {
+            'outbound': {
+                'ehlo_host': 'gateway_test',
+            }
         }
     },
     'smtp_listener': {
@@ -33,19 +35,20 @@ root_yaml = {
     }
 }
 
-@parameterized_class(('use_fastapi', 'protocol'),
-                     [(True, 'smtp'),
-                      (True, 'lmtp'),
-                      (False, 'smtp')])
+@parameterized_class(('protocol','use_system_smtplib'), [
+    ('smtp', False), ('smtp', True), ('lmtp', False)])
 class GatewayTest(unittest.TestCase):
+    client_provider : RestEndpointClientProvider
+
     def setUp(self):
-        logging.info('GatewayTest.setUp use_fastapi=%s protocol=%s',
-                     self.use_fastapi, self.protocol)
+        logging.info('GatewayTest.setUp protocol=%s', self.protocol)
 
         rest_port = self.find_unused_port()
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
-        root_yaml['rest_listener']['use_fastapi'] = self.use_fastapi
-        root_yaml['smtp_output']['outbound']['protocol'] = self.protocol
+        root_yaml['smtp_output']['use_system_smtplib'] = self.use_system_smtplib
+        root_yaml['smtp_output']['hosts']['outbound']['protocol'] = self.protocol
+
+        self.client_provider = RestEndpointClientProvider()
 
         self.gw = SmtpGateway(root_yaml)
 
@@ -65,14 +68,17 @@ class GatewayTest(unittest.TestCase):
         for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')
             try:
-                rest_endpoint = RestEndpoint(
+                rest_endpoint = self.create_endpoint(
                     static_base_url=self.gw_rest_url,
                     static_http_host='outbound')
-                tx = TransactionMetadata(
-                    remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-                tx.mail_from = Mailbox('probe-from%d' % i)
-                tx.rcpt_to = [Mailbox('probe-to%d' % i)]
-                upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+                tx = TransactionMetadata()
+                rest_endpoint.wire_downstream(tx)
+                delta = TransactionMetadata(
+                    remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+                    mail_from = Mailbox('probe-from%d' % i),
+                    rcpt_to = [Mailbox('probe-to%d' % i)])
+                tx.merge_from(delta)
+                upstream_delta = rest_endpoint.on_update(delta)
                 logging.debug('probe %s', tx.mail_response)
                 if tx.mail_response.code >= 300:
                     time.sleep(0.1)
@@ -94,34 +100,48 @@ class GatewayTest(unittest.TestCase):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             return s.server_address[1]
 
+    def create_endpoint(self, **kwargs):
+        return RestEndpoint(client_provider=self.client_provider, **kwargs)
+
     def test_rest_to_smtp_basic(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound', timeout_start=10, timeout_data=10)
-        tx=TransactionMetadata(
-            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-        tx.mail_from = Mailbox('alice')
-        tx.rcpt_to = [Mailbox('bob')]
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx=TransactionMetadata()
+        rest_endpoint.wire_downstream(tx)
+        delta=TransactionMetadata(
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         logging.info('test_rest_to_smtp_basic mail_resp %s', tx.mail_response)
         self.assertEqual(tx.mail_response.code, 250)
         self.assertEqual([r.code for r in tx.rcpt_response], [250])
+
         tx_delta = TransactionMetadata(
-            body=InlineBlob(b'hello', last=True))
+            body=InlineBlob(b'hello, '))
         self.assertIsNotNone(tx.merge_from(tx_delta))
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        rest_endpoint.on_update(tx_delta)
+        self.assertIsNone(tx.data_response)
+
+        tx.body.append(b'world!', last=True)
+        rest_endpoint.on_update(tx_delta)
         logging.debug('test_rest_to_smtp_basic body tx response %s', tx)
         self.assertEqual(tx.data_response.code, 250)
 
 
     def test_rest_to_smtp_idle_gc(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
             static_http_host='outbound')
-        tx=TransactionMetadata(
-            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port))
-        tx.mail_from = Mailbox('alice')
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx=TransactionMetadata()
+        rest_endpoint.wire_downstream(tx)
+        delta=TransactionMetadata(
+            remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
+            mail_from = Mailbox('alice'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 250)
 
         for i in range(0,5):

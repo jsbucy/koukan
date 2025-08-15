@@ -21,9 +21,9 @@ from koukan.output_handler import OutputHandler
 from koukan.executor import Executor
 from koukan.filter_chain_factory import FilterChainFactory
 from koukan.filter_chain_wiring import FilterChainWiring
+from koukan.filter_chain import FilterChain
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata )
 from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.deadline import Deadline
@@ -78,7 +78,8 @@ class Service:
             executor.ping_watchdog()
             with self.lock:
                 self.cv.wait_for(lambda: self._shutdown,
-                                 min(deadline.deadline_left(), 30))
+                                 # xxx align to watchdog timeout
+                                 min(deadline.deadline_left(), 5))
                 if self._shutdown:
                     return True
         return False
@@ -148,7 +149,9 @@ class Service:
 
         if self.storage is None:
             self.storage=Storage.connect(
-                storage_yaml['url'], listener_yaml['session_uri'])
+                storage_yaml['url'], listener_yaml['session_uri'],
+                blob_tx_refresh_interval=
+                  storage_yaml.get('blob_tx_refresh_interval', 10))
 
         session_refresh_interval = storage_yaml.get(
             'session_refresh_interval', 30)
@@ -178,7 +181,8 @@ class Service:
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
             session_uri=listener_yaml.get('session_uri', None),
-            service_uri=listener_yaml.get('service_uri', None))
+            service_uri=listener_yaml.get('service_uri', None),
+            chunk_size=listener_yaml.get('chunk_size', None))
 
         with self.lock:
             self.started = True
@@ -230,7 +234,7 @@ class Service:
         if (endp := self.filter_chain_factory.build_filter_chain(http_host)
             ) is None:
             return None
-        endpoint, endpoint_yaml = endp
+        chain, endpoint_yaml = endp
 
         writer = StorageWriterFilter(
             storage=self.storage,
@@ -239,7 +243,7 @@ class Service:
             http_host = http_host,
             endpoint_yaml = self.get_endpoint_yaml)
         fut = self.output_executor.submit(
-            lambda: self._handle_new_tx(writer, endpoint, endpoint_yaml),
+            partial(self._handle_new_tx, writer, chain, endpoint_yaml),
             0)
         if block_upstream and fut is None:
             # XXX leaves db tx leased?
@@ -259,7 +263,7 @@ class Service:
             endpoint_yaml = self.get_endpoint_yaml)
 
     def _handle_new_tx(self, writer : StorageWriterFilter,
-                       endpoint : SyncFilter,
+                       chain : FilterChain,
                        endpoint_yaml : dict):
         tx_cursor = writer.release_transaction_cursor()
         if tx_cursor is None:
@@ -268,7 +272,7 @@ class Service:
             return
         tx_cursor.load(start_attempt=True)
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
-        self.handle_tx(tx_cursor, endpoint, endpoint_yaml)
+        self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
     def _notification_endpoint(self):
         return StorageWriterFilter(
@@ -277,21 +281,20 @@ class Service:
             create_leased=False)
 
     def handle_tx(self, storage_tx : TransactionCursor,
-                  endpoint : SyncFilter,
+                  chain : FilterChain,
                   endpoint_yaml):
         output_yaml = endpoint_yaml.get('output_handler', {})
 
         handler = OutputHandler(
-            storage_tx, endpoint,
-            downstream_env_timeout =
-            output_yaml.get('downstream_env_timeout', 30),
-            downstream_data_timeout =
-            output_yaml.get('downstream_data_timeout', 60),
+            storage_tx, chain,
+            downstream_timeout = output_yaml.get('downstream_timeout', 60),
+            upstream_refresh = output_yaml.get('upstream_refresh', 30),
             notification_endpoint_factory=self._notification_endpoint,
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', None),
-            notification_params = output_yaml.get('notification', None))
+            notification_params = output_yaml.get('notification', None),
+            heartbeat=self.output_executor.ping_watchdog)
         try:
             handler.handle()
         except Exception as e:
@@ -311,36 +314,38 @@ class Service:
         if storage_tx is None:
             return False
 
-        endpoint, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
+        chain, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
             storage_tx.tx.host)
         logging.debug('_dequeue %s %s',
                       storage_tx.id, storage_tx.rest_id)
 
-        self.handle_tx(storage_tx, endpoint, endpoint_yaml)
+        self.handle_tx(storage_tx, chain, endpoint_yaml)
 
         return True
 
     def dequeue(self, executor):
         while True:
             executor.ping_watchdog()
-            deq = [None]
-            # fine to wait forever on this submit()
-            if (self.output_executor.submit(partial(self._dequeue, deq))
-                is None):
-                logging.error('unexpected executor overflow')
-                if self.wait_shutdown(1, executor):
-                    return
-                continue
-            with self.lock:
-                # Wait 1s for _dequeue()
-                self.cv.wait_for(
-                    lambda: (deq[0] is not None) or self._shutdown, 1)
-            # if we dequeued something, try again immediately in case
-            # there's another
-            if deq[0]:
+            if self.dequeue_one(executor):
                 continue
             if self.wait_shutdown(1, executor):
                 return
+
+    def dequeue_one(self, executor):
+        deq = [None]
+        # fine to wait forever on this submit()
+        if (self.output_executor.submit(partial(self._dequeue, deq))
+            is None):
+            logging.error('unexpected executor overflow')
+            return False
+        with self.lock:
+            # Wait 1s for _dequeue()
+            self.cv.wait_for(
+                lambda: (deq[0] is not None) or self._shutdown, 1)
+        # if we dequeued something, try again immediately in case
+        # there's another
+        return deq[0]
+
 
     def gc(self, executor):
         storage_yaml = self.root_yaml['storage']

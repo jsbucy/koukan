@@ -9,9 +9,9 @@ from koukan.deadline import Deadline
 from koukan.filter import (
     AsyncFilter,
     Mailbox,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import FilterResult, Filter
 from koukan.blob import Blob
 from koukan.response import Response
 
@@ -39,18 +39,23 @@ class Recipient:
     def __init__(self, filter : Optional[AsyncFilter]):
         self.filter = filter
 
-    def _check_busy_err(self) -> Optional[TransactionMetadata]:
+    # returns True if this Recipient failed due to not being able to
+    # start the upstream tx
+    def _check_busy_err(self) -> bool:
         if self.filter is not None:
-            return None
-        err = TransactionMetadata()
+            return False
         # 453-4.3.2 "system not accepting network messages" is also
         # plausible here but maybe more likely for the client to abort
         # the whole transaction rather than do what we want: stop
         # sending rcpts and continue to data.
-        self.tx.fill_inflight_responses(
-            Response(451, '4.5.3 too many recipients'), err)
-        self.tx.merge_from(err)
-        return err
+        assert self.tx.mail_response is None
+        self.tx.mail_response = Response(
+            250, 'ok (exploder no-op, rcpt will fail)')
+        assert not self.tx.rcpt_response
+        self.tx.rcpt_response = [
+            Response(451, '4.5.3 too many recipients')] * len(self.tx.rcpt_to)
+        self.tx.check_preconditions()
+        return True
 
     def first_update(self,
                      tx : TransactionMetadata,
@@ -70,14 +75,14 @@ class Recipient:
         # case create_storage_writer wouldn't error out on the
         # executor overflow and AsyncFilterWrapper probably also wants
         # a hint to set the upstream response -> s&f timeout to 0.
-        if (err := self._check_busy_err()) is not None:
-            return err
-        return self.filter.update(self.tx, self.tx.copy())
+        if self._check_busy_err():
+            return
+        self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
-        assert self.tx.merge_from(delta) is not None
+        self.tx.merge_from(delta)
         if not delta:
             return TransactionMetadata()
         return self.filter.update(self.tx, delta)
@@ -90,12 +95,12 @@ class Recipient:
         tt = t.copy()
         for ti in [orig, tt]:
             ti.version = ti.body = None
-        assert orig.delta(tt) is not None  # check buggy filter
+        assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
-class Exploder(SyncFilter):
+class Exploder(Filter):
     upstream_factory : FilterFactory
     output_chain : str
     # TODO these timeouts move to AsyncFilterWrapper
@@ -135,25 +140,26 @@ class Exploder(SyncFilter):
             return None
         return lhs
 
-    def on_update(self,
-                  tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        tx_orig = tx.copy()
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        tx = self.downstream_tx
 
         # NOTE: OutputHandler may send but Storage currently does not
         # accept reusing !finalized blob. Exploder passes it through
         # but AsyncFilterWrapper buffers.
 
         if tx_delta.mail_from:
-            tx.mail_response = tx_delta.mail_response = Response(
-                250, 'MAIL ok (exploder noop)')
+            # note: mail_response doesn't have EXPLODER_CREATE
+            # validity so won't be copied to the upstream tx. If mail
+            # then fails upstream,
+            # AsyncFilterWrapper._set_precondition_resp() will return
+            # that through rcpt_response.
+            tx.mail_response = Response(250, 'MAIL ok (exploder noop)')
 
         for i in range(0, len(tx.rcpt_to)):
             if i >= len(self.recipients):
                 rcpt = Recipient(self.upstream_factory())
                 self.recipients.append(rcpt)
-                rcpt.first_update(tx_orig, self.output_chain, i)
+                rcpt.first_update(tx, self.output_chain, i)
             else:
                 rcpt = self.recipients[i]
                 rcpt.update(tx_delta)
@@ -191,9 +197,7 @@ class Exploder(SyncFilter):
                 tx.data_response = rcpt.tx.data_response
 
         if (body is None) or (tx.data_response is not None):
-            upstream_delta = tx_orig.delta(tx)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return FilterResult()
 
         # If all rcpts with rcpt_response.ok() have the same
         # data_response.major_code(), return that.  The most likely
@@ -223,5 +227,4 @@ class Exploder(SyncFilter):
                     rcpt.update(retry_delta)
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
-
-        return tx_orig.delta(tx)
+        return FilterResult()

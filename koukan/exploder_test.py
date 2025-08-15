@@ -174,6 +174,8 @@ class ExploderTest(unittest.TestCase):
         exploder = Exploder('output-chain',
                             partial(self.factory, msa),
                             rcpt_timeout=5)
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
 
         output_threads = []
         for r in test.rcpt:
@@ -185,18 +187,20 @@ class ExploderTest(unittest.TestCase):
             output_thread.start()
             output_threads.append(output_thread)
 
-        tx = TransactionMetadata(mail_from=Mailbox(test.mail_from))
+        delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()
-        downstream_cursor.create('downstream_rest_id', tx)
-
-        exploder.on_update(tx, tx.copy())
+        downstream_cursor.create('downstream_rest_id', delta)
+        exploder.downstream_tx.merge_from(delta)
+        exploder.on_update(delta)
+        logging.debug(tx)
         self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
         for i,r in enumerate(test.rcpt):
-            updated = tx.copy()
-            updated.rcpt_to.append(Mailbox(r.addr))
-            tx_delta = tx.delta(updated)
-            tx = updated
-            upstream_delta = exploder.on_update(tx, tx_delta)
+            prev = tx.copy()
+            tx.rcpt_to.append(Mailbox(r.addr))
+            tx_delta = prev.delta(tx)
+            prev = tx.copy()
+            exploder.on_update(tx_delta)
+            upstream_delta = prev.delta(exploder.downstream_tx)
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
                 [rr.code for rr in upstream_delta.rcpt_response])
@@ -205,14 +209,14 @@ class ExploderTest(unittest.TestCase):
                          [rr.code for rr in tx.rcpt_response])
 
         if test.data is not None:
-            downstream_cursor.write_envelope(
-                TransactionMetadata(body=BlobSpec(create_tx_body=True)))
+            delta =TransactionMetadata(body=BlobSpec(create_tx_body=True))
+            downstream_cursor.write_envelope(delta)
             blob_uri = BlobUri('downstream_rest_id', tx_body=True)
             blob_writer = downstream_cursor.get_blob_for_append(blob_uri)
             blob_writer.append_data(0, test.data, last=True)
             tx_delta = TransactionMetadata(body=blob_writer)
             tx.merge_from(tx_delta)
-            exploder.on_update(tx, tx_delta)
+            exploder.on_update(tx_delta)
         if test.expected_data_resp is not None:
             self.assertEqual(test.expected_data_resp.code,
                              tx.data_response.code)
@@ -520,9 +524,12 @@ class ExploderTest(unittest.TestCase):
         exploder = Exploder('output-chain',
                             lambda: None,
                             rcpt_timeout=5)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')])
-        upstream_delta = exploder.on_update(tx, tx.copy())
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')])
+        tx.merge_from(delta)
+        exploder.on_update(delta)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual(1, len(tx.rcpt_response))
         self.assertEqual(451, tx.rcpt_response[0].code)
@@ -532,6 +539,8 @@ class ExploderTest(unittest.TestCase):
         exploder = Exploder('output-chain',
                             lambda: upstream,
                             rcpt_timeout=5)
+        tx = TransactionMetadata()
+        exploder.wire_downstream(tx)
 
         def exp_update(tx, delta):
             self.assertFalse(tx.body.finalized())
@@ -545,11 +554,12 @@ class ExploderTest(unittest.TestCase):
 
         body = b'hello, world'
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body))
-        upstream_delta = exploder.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        exploder.on_update(delta)
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
@@ -563,9 +573,8 @@ class ExploderTest(unittest.TestCase):
         upstream.expect_update(exp_body)
 
         body += b'!'
-        tx_delta = tx.copy()
-        tx.body = tx_delta.body = InlineBlob(body, last=True)
-        upstream_delta = exploder.on_update(tx, tx_delta)
+        tx.body = InlineBlob(body, last=True)
+        exploder.on_update(TransactionMetadata(body=tx.body))
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)

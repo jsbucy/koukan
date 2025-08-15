@@ -324,6 +324,11 @@ _tx_fields = [
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
+def _valid_list_offset(which_js : WhichJson):
+    return which_js in [WhichJson.REST_UPDATE,
+                        WhichJson.DB,
+                        WhichJson.DB_ATTEMPT]
+
 # NOTE in the Filter api/stack, this is usually interpreted as a delta
 # where field == None means "not present in the delta" as opposed to
 # "set field to None." In terms of json patch, it's a delta that
@@ -409,6 +414,8 @@ class TransactionMetadata:
                 if (field.is_list and v == []) or v is None:
                     continue
                 out += '%s: %s\n' % (name, v)
+                if field.is_list and hasattr(self, field.list_offset()):
+                    out += '%s %d\n' % (field.list_offset(), getattr(self, field.list_offset()))
         return out
 
     def empty(self, which_js : WhichJson):
@@ -529,6 +536,24 @@ class TransactionMetadata:
         elif self._body_last() and self.data_response is None:
             dest.data_response = resp
 
+    # populates responses with 503-5.1.1 if previous commands failed
+    # rcpt after mail, etc.
+    # returns false if the tx cannot make forward progress
+    def check_preconditions(self) -> bool:
+        live = True
+        if self.mail_response is not None and self.mail_response.err():
+            err = Response(503, '5.5.1 failed precondition: MAIL')
+            self.rcpt_response.extend(
+                [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
+            live = False
+        if self.data_response is None and (self.body is not None) and (
+                len(self.rcpt_to) == len(self.rcpt_response) and
+                not any([r.ok() for r in self.rcpt_response])):
+            err = Response(503, '5.5.1 failed precondition: all rcpts failed')
+            self.data_response = err
+            live = False
+        return live
+
     def _field_to_json(self, name : str, field : TxField,
                        which_js : WhichJson, json):
         if not field.valid(which_js):
@@ -620,13 +645,18 @@ class TransactionMetadata:
         return out
 
     # merge delta into self
-    def merge_from(self, delta):
+    def maybe_merge_from(self, delta):
         return self.merge(delta, self)
 
+    def merge_from(self, delta):
+        if (out := self.merge(delta, self)) is None:
+            raise ValueError()
+        return out
+
     # compute a delta from self to successor
-    def delta(self, successor : "TransactionMetadata",
-              which_json : Optional[WhichJson] = None
-              ) -> Optional["TransactionMetadata"]:
+    def maybe_delta(self, successor : "TransactionMetadata",
+                    which_json : Optional[WhichJson] = None
+                    ) -> Optional["TransactionMetadata"]:
         assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
@@ -699,6 +729,11 @@ class TransactionMetadata:
 
         return out
 
+    def delta(self, next, which_json : Optional[WhichJson] = None):
+        if (out := self.maybe_delta(next, which_json)) is None:
+            raise ValueError()
+        return out
+
     # NOTE this copies the rcpt req/resp lists which we know we mutate
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
@@ -709,6 +744,7 @@ class TransactionMetadata:
         out.rcpt_response = list(self.rcpt_response)
         return out
 
+    # XXX refactor with copy_valid_from()
     def copy_valid(self, valid : WhichJson):
         out = TransactionMetadata()
         for name,field in tx_json_fields.items():
@@ -719,12 +755,27 @@ class TransactionMetadata:
                 continue
             if field.is_list:
                 v = list(v)
-                if valid == WhichJson.REST_UPDATE and (
+                if _valid_list_offset(valid) and (
                         hasattr(self, field.list_offset())):
                     setattr(out, field.list_offset(),
                             getattr(self, field.list_offset()))
             setattr(out, name, v)
         return out
+
+    def copy_valid_from(self, valid : WhichJson, src : 'TransactionMetadata'):
+        for name,field in tx_json_fields.items():
+            if not field.valid(valid):
+                continue
+            v = getattr(src, name, None)
+            if v is None:
+                continue
+            if field.is_list:
+                v = list(v)
+                if _valid_list_offset(valid) and (
+                        hasattr(src, field.list_offset())):
+                    setattr(self, field.list_offset(),
+                            getattr(src, field.list_offset()))
+            setattr(self, name, v)
 
     def body_blob(self) -> Blob:
         blob = self.body
@@ -736,31 +787,9 @@ class TransactionMetadata:
             return None
         return self.body_blob()
 
-# NOTE Sync and Async here are with respect to the transaction
-# responses, not program execution.
-
-# state after previous call to sync_filter.on_update()
-# prev_tx : TransactionMetadata
-# delta : TransactionMetadata
-# tx = prev_tx.merge(delta)
-# new_tx = tx.copy()
-# upstream_delta = sync_filter.on_update(new_tx, downstream_delta)
-# assert tx.merge(upstream_delta) == new_tx
-
-# output chain filters always return the upstream response or a
-# timeout error that terminates the OutputHandler
-class SyncFilter(ABC):
-    # tx is the full state vector
-    # tx_delta is what's new since the last call
-    # returns delta of what was added upstream
-    # only returns None on invalid delta i.e. dropped fields
-    @abstractmethod
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        pass
-
 # interface from rest handler to StorageWriterFilter
+# NOTE Async here is with respect to the transaction responses, not
+# program execution.
 class AsyncFilter(ABC):
     # returns whether this endpoint supports building up the
     # transaction incrementally a la smtp

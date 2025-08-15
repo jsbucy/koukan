@@ -18,6 +18,33 @@ class BlobTest(unittest.TestCase):
         self.assertEqual(b.pread(1,2), b'xy')
         self.assertEqual(b.pread(1,None), b'xyz')
 
+    def test_inline_fifo(self):
+        b = InlineBlob(b'u')
+        self.assertEqual(b'u', b.pread(0))
+        b.append(b'v')
+        self.assertEqual(b'uv', b.pread(0))
+        b.trim_front(1)
+        self.assertEqual(2, b.len())
+        with self.assertRaises(ValueError):
+            b.pread(0)
+        self.assertEqual(b'v', b.pread(1))
+        b.append_data(2, b'w')
+        self.assertEqual(b'vw', b.pread(1))
+        b.trim_front(3)
+        self.assertEqual(3, b.len())
+
+    def test_inline_fifo_delta(self):
+        b1 = InlineBlob(b'uv')
+        self.assertFalse(b1.delta(b1))
+        b1.trim_front(1)
+        b2 = InlineBlob(b'uvw')
+        self.assertTrue(b1.delta(b2))
+        self.assertIsNone(b2.delta(b1))
+
+        b3 = InlineBlob(b'uxw')
+        self.assertIsNone(b1.delta(b3))
+
+
     def test_composite(self):
         b = CompositeBlob()
         self.assertEqual(b.content_length(), None)

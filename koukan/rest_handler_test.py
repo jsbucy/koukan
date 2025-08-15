@@ -19,7 +19,7 @@ from httpx import Response as HttpxResponse
 
 from koukan.blob import InlineBlob
 from koukan.rest_handler import RestHandler
-from koukan.fake_endpoints import FakeSyncFilter, MockAsyncFilter
+from koukan.fake_endpoints import MockAsyncFilter
 from koukan.executor import Executor
 from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response
@@ -65,7 +65,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             upstream_delta = TransactionMetadata(version=2)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_mail)
 
@@ -120,7 +120,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
                 version=4)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_rcpt)
 
@@ -175,7 +175,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(2, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
                 version=5)
-            assert tx.merge_from(upstream_delta) is not None
+            tx.merge_from(upstream_delta)
             return upstream_delta
         endpoint.expect_update(exp_rcpt2)
 
@@ -485,6 +485,92 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assert_eq_content_range(
             parse_content_range_header(resp.headers['content-range']),
             ContentRange('bytes', 0, len(b) + len(b2), len(b) + len(b2)))
+
+    async def test_finalize_blob(self):
+        endpoint = MockAsyncFilter(incremental=True)
+
+        # suppose that body had previously been sent and the client is
+        # trying to finalize
+        # PUT /tx/123/body
+        # content-length: 0
+        # x-finalize-blob-length: 13
+        body = b'hello, world!'
+        endpoint.body = InlineBlob(body)
+        handler = RestHandler(
+            async_filter=endpoint,
+            http_host='msa',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+
+        handler = RestHandler(
+            async_filter=endpoint, blob_rest_id='blob-rest-id',
+            http_host='msa',
+            rest_id_factory = lambda: 'rest-id',
+            tx_rest_id='tx_rest_id',
+            executor=self.executor)
+
+        # invalid header
+        scope = {'type': 'http',
+                 'headers': self._headers([
+                     ('x-finalize-blob-length', 'quux')
+                 ])}
+
+        async def input():
+            return {'type': 'http.request',
+                    'body': b'',
+                    'more_body': False}
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        self.assertEqual(resp.status_code, 400)
+
+        # valid header with non-empty request
+        scope = {'type': 'http',
+                 'headers': self._headers([
+                     ('x-finalize-blob-length', str(len(body)))
+                 ])}
+
+        async def input():
+            return {'type': 'http.request',
+                    'body': b'extra body',
+                    'more_body': False}
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        self.assertEqual(resp.status_code, 400)
+
+        # header value vs blob mismatch
+        scope = {'type': 'http',
+                 'headers': self._headers([
+                     ('x-finalize-blob-length', '123')
+                 ])}
+
+        async def input():
+            return {'type': 'http.request',
+                    'body': b'',
+                    'more_body': False}
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        logging.debug(resp)
+        self.assertEqual(resp.status_code, 416)
+        self.assert_eq_content_range(
+            parse_content_range_header(resp.headers['content-range']),
+            ContentRange('bytes', 0, len(body), None))
+
+        # success
+        scope = {'type': 'http',
+                 'headers': self._headers([
+                     ('x-finalize-blob-length', str(len(body)))
+                 ])}
+
+        async def input():
+            return {'type': 'http.request',
+                    'body': b'',
+                    'more_body': False}
+        req = FastApiRequest(scope, input)
+        resp = await handler.put_blob_async(req, 'blob-rest-id')
+        self.assertEqual(resp.status_code, 200)
+        self.assert_eq_content_range(
+            parse_content_range_header(resp.headers['content-range']),
+            ContentRange('bytes', 0, len(body), len(body)))
 
 
     async def _test_uri_qualification(

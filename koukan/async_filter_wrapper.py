@@ -3,8 +3,8 @@ import logging
 
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterResult, Filter
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
@@ -19,9 +19,9 @@ from koukan.backoff import backoff
 # mail failed, etc.
 # 4: if store-and-forward is enabled, upgrades upstream temp errs to
 # success and enables retries/notifications on the upstream transaction.
-class AsyncFilterWrapper(AsyncFilter, SyncFilter):
+class AsyncFilterWrapper(AsyncFilter, Filter):
     filter : AsyncFilter
-    timeout : float  # used for SyncFilter.on_update()
+    timeout : float  # used by Filter.on_update()
     store_and_forward : bool
     do_store_and_forward : bool = False
     tx : TransactionMetadata  # most recent upstream
@@ -80,13 +80,14 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
                 upstream_delta = self.filter.update(upstream_tx, tx_delta)
                 break
             except VersionConflictException:
+                logging.debug('VersionConflictException')
                 if i == 4:
                     raise
                 backoff(i)
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t
-                assert upstream_tx.merge_from(tx_delta) is not None
+                upstream_tx.merge_from(tx_delta)
         assert upstream_delta is not None
         return upstream_tx, upstream_delta
 
@@ -99,8 +100,6 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         # reusing !finalized blob so we must buffer incomplete body here.
         if tx.body is not None and not tx.body.finalized():
             tx.body = tx_delta.body = None
-            if not tx_delta:
-                return TransactionMetadata()
         tx_orig = tx.copy()
         upstream_tx, upstream_delta = self._update(tx, tx_delta)
         self.tx = upstream_tx.copy()
@@ -108,7 +107,7 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
         logging.debug(upstream_tx)
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert downstream_tx.merge_from(upstream_delta) is not None
+        downstream_tx.merge_from(upstream_delta)
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:
@@ -146,11 +145,10 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             if overwrite or tx.data_response is None:
                 tx.data_response = self.timeout_resp.data_response
 
-    # TODO this may be effectively dead code since OH has fallthrough
-    # fill_inflight_responses(
-    #   'internal error: OutputHandler failed to populate response')
     def _set_precondition_resp(self, tx):
         # smtp preconditions: rcpt and no rcpt resp after mail err, etc.
+        # e.g. this happens if upstream mail failed after exploder
+        # returned a "250 exploder noop" mail response
         if tx.mail_response and tx.mail_response.err():
             # xxx code vs data_response (below)
             rcpt_err = Response(
@@ -207,17 +205,16 @@ class AsyncFilterWrapper(AsyncFilter, SyncFilter):
             tx.merge_from(retry_delta)
             self._update(tx, retry_delta)
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        tx_orig = tx.copy()
-        upstream_delta = self.update(tx, tx_delta)
+    def on_update(self, tx_delta : TransactionMetadata):
+        logging.debug(tx_delta)
+        tx_orig = self.downstream_tx.copy()
+        upstream_delta = self.update(self.downstream_tx, tx_delta)
         deadline = Deadline(self.timeout)
-        upstream_tx = tx.copy()
+        upstream_tx = self.downstream_tx.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
             self.wait(self.version(), deadline.deadline_left())
             upstream_tx = self.get()
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+        self.downstream_tx.merge_from(upstream_delta)
+        return FilterResult()

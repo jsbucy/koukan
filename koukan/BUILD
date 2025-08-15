@@ -30,11 +30,22 @@ py_test(name='filter_test',
               ':deadline',
               ':fake_endpoints'])
 
+pytype_library(name='filter_chain',
+               srcs=['filter_chain.py'],
+               deps=[':filter'])
+
+py_test(name='filter_chain_test',
+        srcs=['filter_chain_test.py'],
+        deps=[':filter_chain',
+              ':blob'])
+
 pytype_library(name='async_filter_wrapper',
                srcs=['async_filter_wrapper.py'],
                deps=[':backoff',
                      ':blob',
                      ':deadline',
+                     ':filter',
+                     ':filter_chain',
                      ':response',
                      ':storage_schema'])
 
@@ -53,6 +64,7 @@ pytype_library(name='rest_endpoint',
                deps=[':blob',
                      ':deadline',
                      ':filter',
+                     ':filter_chain',
                      ':response',
                      '@pypi//h2',
                      '@pypi//httpx',
@@ -123,6 +135,7 @@ pytype_library(name='fake_endpoints',
                srcs=['fake_endpoints.py'],
                deps=[':response',
                      ':filter',
+                     ':filter_chain',
                      ':storage_schema'])
 
 pytype_library(name='dsn',
@@ -139,6 +152,7 @@ pytype_library(name='output_handler',
                deps=[':backoff',
                      ':rest_service_handler',
                      ':filter',
+                     ':filter_chain',
                      ':response',
                      ':storage',
                      ':storage_schema',
@@ -171,6 +185,7 @@ pytype_library(name='message_builder_filter',
                srcs=['message_builder_filter.py'],
                deps=[':blob',
                      ':filter',
+                     ':filter_chain',
                      ':message_builder',
                      ':response',
                      ':rest_schema',
@@ -179,7 +194,6 @@ pytype_library(name='message_builder_filter',
 py_test(name='message_builder_filter_test',
         srcs=['message_builder_filter_test.py'],
         deps=[':blob',
-              ':fake_endpoints',
               ':filter',
               ':message_builder_filter',
               ':response',
@@ -209,7 +223,8 @@ pytype_library(name='message_parser_filter',
                srcs=['message_parser_filter.py'],
                deps=[':message_parser',
                      ':blob',
-                     ':filter'])
+                     ':filter',
+                     ':filter_chain'])
 
 py_test(name='message_parser_filter_test',
         srcs=['message_parser_filter_test.py'],
@@ -226,6 +241,7 @@ pytype_library(name='address',
 pytype_library(name='recipient_router_filter',
                srcs=['recipient_router_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':response',
                      ':blob'])
 
@@ -259,7 +275,6 @@ py_test(name='dkim_endpoint_test',
         srcs=['dkim_endpoint_test.py'],
         deps=[':dkim_endpoint',
               ':dest_domain_policy',
-              ':fake_endpoints',
               '@pypi//dkimpy'])
 
 pytype_library(name='dns_wrapper',
@@ -274,6 +289,7 @@ pytype_library(name='fake_dns_wrapper',
 pytype_library(name='mx_resolution',
                srcs=['mx_resolution.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':dns_wrapper',
                      ':response',
                      '@pypi//dnspython'])
@@ -315,6 +331,7 @@ pytype_library(name='exploder',
                    ':blob',
                    ':deadline',
                    ':filter',
+                   ':filter_chain',
                    ':response',
                ])
 
@@ -332,7 +349,8 @@ py_test(name='exploder_test',
 
 pytype_library(name='add_route_filter',
                srcs=['add_route_filter.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 py_test(name='add_route_filter_test',
         srcs=['add_route_filter_test.py'],
@@ -345,27 +363,28 @@ py_test(name='add_route_filter_test',
 pytype_library(name='remote_host_filter',
                srcs=['remote_host_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':dns_wrapper'])
 
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter',
-              ':fake_endpoints',
               ':fake_dns_wrapper',
               '@pypi//dnspython'])
 
 pytype_library(name='received_header_filter',
                srcs=['received_header_filter.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 py_test(name='received_header_filter_test',
         srcs=['received_header_filter_test.py'],
-        deps=[':received_header_filter',
-              ':fake_endpoints'])
+        deps=[':received_header_filter'])
 
 pytype_library(name='relay_auth_filter',
                srcs=['relay_auth_filter.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':response'])
 
 py_test(name='relay_auth_filter_test',
@@ -375,11 +394,13 @@ py_test(name='relay_auth_filter_test',
 
 pytype_library(name='filter_chain_factory',
                srcs=['filter_chain_factory.py'],
-               deps=[':filter'])
+               deps=[':filter',
+                     ':filter_chain'])
 
 pytype_library(name='recipient_router_factory',
                srcs=['recipient_router_factory.py'],
                deps=[':filter',
+                     ':filter_chain',
                      ':address_list_policy',
                      ':dest_domain_policy',
                      ':recipient_router_filter'])
@@ -428,6 +449,7 @@ pytype_library(name='router_service',
                      ':executor',
                      ':fastapi_service',
                      ':filter',
+                     ':filter_chain',
                      ':filter_chain_factory',
                      ':filter_chain_wiring',
                      ':hypercorn_main',
@@ -485,9 +507,11 @@ pytype_library(name='smtp_service',
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
         deps=[':smtp_service',
+              ':executor',
               ':filter',
               ':response',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              '//koukan_cpython_smtplib:smtplib'])
 
 pytype_library(name='rest_handler',
                srcs=['rest_handler.py'],
@@ -543,7 +567,7 @@ py_test(name='sync_filter_adapter_test',
 
 pytype_library(name='smtp_endpoint',
                srcs=['smtp_endpoint.py'],
-               deps=[])
+               deps=['//koukan_cpython_smtplib:smtplib'])
 
 pytype_library(name='gateway_lib',
                srcs=['gateway.py'],
@@ -568,7 +592,8 @@ pytype_library(name='fake_smtpd',
                srcs=['fake_smtpd.py'])
 
 pytype_library(name='ssmtp',
-               srcs=['ssmtp.py'])
+               srcs=['ssmtp.py'],
+               deps=['//koukan_cpython_smtplib:smtplib'])
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],

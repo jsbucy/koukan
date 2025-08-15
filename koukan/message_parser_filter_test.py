@@ -9,41 +9,58 @@ from koukan.filter import TransactionMetadata
 from koukan.response import Response
 from koukan.message_builder import MessageBuilderSpec
 
-from koukan.fake_endpoints import FakeSyncFilter
-
 
 class MessageParserFilterTest(unittest.TestCase):
     def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+            '%(message)s')
 
     def test_smoke(self):
         with open('testdata/multipart.msg', 'rb') as f:
             b = f.read()
-        tx=TransactionMetadata(
-            body=InlineBlob(b, len(b)))
-        tx.options = {'receive_parsing': None}
+        delta = TransactionMetadata(body=InlineBlob(b[0:10]))
+        delta.options = {'receive_parsing': {}}
 
-        upstream = FakeSyncFilter()
-        def exp(tx, delta):
-            upstream_delta = TransactionMetadata()
+        filter = MessageParserFilter()
+        filter.wire_downstream(TransactionMetadata())
+        filter.downstream_tx.merge_from(delta)
+        filter.wire_upstream(TransactionMetadata())
 
-            exp_blobs = [b'yolocat', b'yolocat2']
-            self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
-            self.assertEqual(len(exp_blobs), len(tx.body.blobs))
-            for i in range(0, len(exp_blobs)):
-                self.assertEqual(tx.body.blobs[i].pread(0), exp_blobs[i])
+        filter.on_update(delta)
+        self.assertIsNone(filter.upstream_tx.body)
 
-            self.assertEqual(
-                tx.body.json['parts']['content_type'],
-                'multipart/mixed')
-            upstream_delta.data_response = Response()
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream.add_expectation(exp)  # raw/body
 
-        filter = MessageParserFilter(upstream)
-        upstream_delta = filter.on_update(tx, tx.copy())
+        delta = TransactionMetadata(body=InlineBlob(b, last=True))
+        filter.downstream_tx.body = delta.body
+        filter.on_update(delta)
+
+        tx = filter.upstream_tx
+        logging.debug(tx)
+        exp_blobs = [b'yolocat', b'yolocat2']
+        self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
+        self.assertEqual(len(exp_blobs), len(tx.body.blobs))
+        for i in range(0, len(exp_blobs)):
+            self.assertEqual(tx.body.blobs[i].pread(0), exp_blobs[i])
+
+        self.assertEqual(
+            tx.body.json['parts']['content_type'],
+            'multipart/mixed')
+
+    def test_noop(self):
+        # receive_parsing not in options
+        body = InlineBlob(b'hello, world!', last=True)
+        delta = TransactionMetadata(body=body)
+
+        filter = MessageParserFilter()
+        filter.wire_downstream(TransactionMetadata())
+        filter.downstream_tx.merge_from(delta)
+        filter.wire_upstream(TransactionMetadata())
+
+        filter.on_update(delta)
+        self.assertEqual(body, filter.upstream_tx.body)
+
 
 
 if __name__ == '__main__':

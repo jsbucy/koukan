@@ -9,56 +9,43 @@ import dkim
 from koukan.response import Response, Esmtp
 from koukan.blob import Blob, InlineBlob, CompositeBlob
 from koukan.filter import (
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterResult, ProxyFilter
 
-class DkimEndpoint(SyncFilter):
-    data : bytes = None
-    upstream : SyncFilter
-    body : Optional[Blob] = None
-    err = False
+class DkimEndpoint(ProxyFilter):
+    domain : str
+    selector :str
 
-    def __init__(self, domain : str, selector : str, privkey,
-                 upstream : SyncFilter):
+    def __init__(self, domain : str, selector : str, privkey):
         self.domain = domain
         self.selector = selector
         with open(privkey, "rb") as f:
             self.privkey = f.read()
-        self.upstream = upstream
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        built = False
-        body = tx.maybe_body_blob()
-        if (self.body is None and
-            not self.err and
-            (body is not None) and body.finalized()):
-            self.body = CompositeBlob()
-            sig = self.sign(body)
-            if sig is None:
-                self.err = True
-                err = TransactionMetadata(data_response=Response(
-                    500, 'signing failed (DkimEndpoint'))
-                tx.merge_from(err)
-                return err
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        body = tx_delta.maybe_body_blob()
+        if body is not None:
+            tx_delta.body = None
+        if body is not None and not body.finalized():
+            body = None
+        self.upstream_tx.merge_from(tx_delta)
+
+        if body is None:
+            return FilterResult()
+
+        assert self.upstream_tx.body is None
+
+        sig = self.sign(body)
+        if sig is not None:
+            self.upstream_tx.body = CompositeBlob()
             sig_blob = InlineBlob(sig)
-            self.body.append(sig_blob, 0, sig_blob.len())
-            self.body.append(tx.body, 0, body.len(), True)
-            built = True
-
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-        downstream_tx.body = self.body
-        downstream_delta.body = self.body if built else None
-
-        if bool(downstream_delta):
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
-        else:
-            upstream_delta = TransactionMetadata()
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+            self.upstream_tx.body.append(sig_blob, 0, sig_blob.len())
+            self.upstream_tx.body.append(body, 0, body.len(), True)
+        delta = None
+        if sig is None:
+            delta = TransactionMetadata(
+                data_response = Response(500, 'signing failed (DkimEndpoint'))
+        return FilterResult(delta)
 
     def sign(self, blob : Blob) -> Optional[bytes]:
         data = blob.pread(0)

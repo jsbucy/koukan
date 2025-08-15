@@ -9,8 +9,8 @@ from koukan.filter import (
     HostPort,
     Mailbox,
     Resolution,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterResult, Filter
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -43,71 +43,43 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(SyncFilter):
-    upstream: SyncFilter
+class RecipientRouterFilter(Filter):
     policy : RoutingPolicy
-    dest_delta : Optional[TransactionMetadata] = None
 
-    def __init__(self, policy : RoutingPolicy, upstream : SyncFilter):
+    def __init__(self, policy : RoutingPolicy):
         self.policy = policy
-        self.upstream = upstream
 
-    def _route(self, tx : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+    def _route(self):
+        tx = self.downstream_tx
         logging.debug('RecipientRouterFilter._route() %s', tx)
         mailbox = tx.rcpt_to[0]
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
+
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place
-        dest_delta = TransactionMetadata()
         if resp and resp.err():
-            if tx.mail_from and not tx.mail_response:
-                dest_delta.mail_response = Response(
-                    250, 'MAIL ok (RecipientRouterFilter')
-            dest_delta.rcpt_response = [resp]
-            return dest_delta
+            if tx.mail_from and tx.mail_response is None:
+                tx.mail_response = Response(
+                    250, 'MAIL ok (RecipientRouterFilter)')
+            tx.rcpt_response = [resp]
+            return
         elif dest is None:
-            return None
+            return
 
-        dest_delta.rest_endpoint = dest.rest_endpoint
+        tx.rest_endpoint = dest.rest_endpoint
         if dest.remote_host is not None:
-            dest_delta.resolution = Resolution(dest.remote_host)
+            tx.resolution = Resolution(dest.remote_host)
         if dest.http_host is not None:
-            dest_delta.upstream_http_host = dest.http_host
-        dest_delta.options = dest.options
-        logging.debug('RecipientRouterFilter._route() dest_delta %s',
-                      dest_delta)
-        return dest_delta
+            tx.upstream_http_host = dest.http_host
+        tx.options = dest.options
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
-        routed = False
-        if (tx.rest_endpoint is None and tx.options is None and
-                self.dest_delta is None and tx.rcpt_to):
-            self.dest_delta = self._route(tx)
-            # i.e. err
-            if self.dest_delta is not None and self.dest_delta.rcpt_response:
-                tx.merge_from(self.dest_delta)
-                return self.dest_delta
-            routed = True
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        if (tx_delta.rcpt_to and
+            # this may be chained multiple times; noop if a previous
+            # instance already routed
+            self.downstream_tx.rest_endpoint is None and
+            self.downstream_tx.options is None):
+            self._route()
 
-        if self.dest_delta is None:
-            if self.upstream is None:
-                return TransactionMetadata()
-            return self.upstream.on_update(tx, tx_delta)
-
-        # cf "filter chain" doc 2024/8/6, we can't add internal fields
-        # to the downstream tx because it will cause a delta/conflict
-        # when we do the next db read in the OutputHandler
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-        downstream_tx.merge_from(self.dest_delta)
-        if routed:
-            downstream_delta.merge_from(self.dest_delta)
-        upstream_delta = self.upstream.on_update(
-            downstream_tx, downstream_delta)
-        assert upstream_delta is not None
-        tx.merge_from(upstream_delta)
-        return upstream_delta
+        return FilterResult()

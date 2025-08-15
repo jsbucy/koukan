@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import importlib
 from functools import partial
@@ -15,15 +15,15 @@ from koukan.recipient_router_filter import (
     RecipientRouterFilter,
     RoutingPolicy )
 from koukan.recipient_router_factory import RecipientRouterFactory
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.dkim_endpoint import DkimEndpoint
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.message_parser_filter import MessageParserFilter
 from koukan.filter import (
     AsyncFilter,
     HostPort,
-    Resolution,
-    SyncFilter )
+    Resolution )
+from koukan.filter_chain import BaseFilter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
@@ -38,11 +38,17 @@ class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
     router_factory : Optional[RecipientRouterFactory] = None
     filter_chain_factory : Optional[FilterChainFactory] = None
+    rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
 
     def __init__(
             self,
             exploder_output_factory : Optional[StorageWriterFactory] = None):
         self.exploder_output_factory = exploder_output_factory
+        self.rest_endpoint_clients = []
+
+    def __del__(self):
+        for c in self.rest_endpoint_clients:
+            c[1].close()
 
     def wire(self, yaml, factory : FilterChainFactory):
         self.filter_chain_factory = factory
@@ -63,6 +69,7 @@ class FilterChainWiring:
 
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
+        factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
 
     def exploder_upstream(self, http_host : str,
                           rcpt_timeout : float,
@@ -79,8 +86,7 @@ class FilterChainWiring:
             upstream, rcpt_timeout, store_and_forward=store_and_forward,
             notify=notify, retry=retry)
 
-    def exploder(self, yaml, next):
-        assert next is None
+    def exploder(self, yaml):
         msa = msa=yaml.get('msa', False)
         rcpt_timeout = 30
         data_timeout = 300
@@ -101,27 +107,46 @@ class FilterChainWiring:
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
-    def add_route(self, yaml, next):
+    def exploder_upstream_yaml(self, yaml):
+        return self.exploder_upstream(
+            yaml['http_host'],
+            yaml['rcpt_timeout'],
+            yaml['data_timeout'],
+            yaml['store_and_forward'],
+            yaml['block_upstream'],
+            yaml['notify'],
+            yaml['retry'])
+
+    def add_route(self, yaml):
+        if 'output_chain' not in yaml:
+            return None
         if yaml.get('store_and_forward', None):
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream
             # chain
-            add_route = self.exploder_upstream(
-                yaml['output_chain'],
-                0, 0,  # 0 upstream timeout ~ effectively swallow errors
-                store_and_forward=True,
-                block_upstream=False, notify=False, retry=False)
+            upstream_yaml = {
+                'chain': [{
+                    'filter': 'exploder_upstream',
+                    'http_host': yaml['output_chain'],
+                    'rcpt_timeout': 0,
+                    'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
+                    'store_and_forward': True,
+                    'block_upstream': False,
+                    'notify': False,
+                    'retry': False
+                }]
+            }
+            add_route, unused_yaml = self.filter_chain_factory.build_filter_chain('exploder_upstream', upstream_yaml)
         else:
             output = self.filter_chain_factory.build_filter_chain(
                 yaml['output_chain'])
             if output is None:
                 return None
             add_route, output_yaml = output
-        return AddRouteFilter(add_route, yaml['output_chain'], next)
+        return AddRouteFilter(add_route, yaml['output_chain'])
 
-    def rest_output(self, yaml, next):
+    def rest_output(self, yaml):
         logging.debug('Config.rest_output %s', yaml)
-        assert next is None
         chunk_size = yaml.get('chunk_size', None)
         static_remote_host_yaml = yaml.get('static_remote_host', None)
         static_remote_host = (HostPort.from_yaml(static_remote_host_yaml)
@@ -129,33 +154,42 @@ class FilterChainWiring:
         logging.info('Factory.rest_output %s', static_remote_host)
         rcpt_timeout = 30
         data_timeout = 300
+        client_args = { 'verify': yaml.get('verify', True) }
+        for c in self.rest_endpoint_clients:
+            if c[0] == client_args:
+                client = c[1]
+                break
+        else:
+            client = RestEndpointClientProvider(**client_args)
+            self.rest_endpoint_clients.append((client_args, client))
+
         return RestEndpoint(
             static_base_url = yaml.get('static_endpoint', None),
             static_http_host = yaml.get('http_host', None),
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
-            verify=yaml.get('verify', True),
+            client_provider=client,
             chunk_size=chunk_size)
 
-    def dkim(self, yaml, next):
+    def dkim(self, yaml):
         if 'key' not in yaml:
             return None
         return DkimEndpoint(
-            yaml['domain'], yaml['selector'], yaml['key'], next)
+            yaml['domain'], yaml['selector'], yaml['key'])
 
-    def message_parser(self, yaml, next):
-        return MessageParserFilter(next)
+    def message_parser(self, yaml):
+        return MessageParserFilter()
 
-    def remote_host(self, yaml, next):
-        return RemoteHostFilter(next)
+    def remote_host(self, yaml):
+        return RemoteHostFilter()
 
-    def received_header(self, yaml, next):
-        return ReceivedHeaderFilter(next, yaml.get('received_hostname', None))
+    def received_header(self, yaml):
+        return ReceivedHeaderFilter(yaml.get('received_hostname', None))
 
-    def relay_auth(self, yaml, next):
-        return RelayAuthFilter(next, smtp_auth = yaml.get('smtp_auth', False))
+    def relay_auth(self, yaml):
+        return RelayAuthFilter(smtp_auth = yaml.get('smtp_auth', False))
 
-    def dns_resolution(self, yaml, next):
+    def dns_resolution(self, yaml):
         host_list = yaml.get('static_hosts', None)
         static_resolution = None
         if host_list:
@@ -163,10 +197,9 @@ class FilterChainWiring:
                 [HostPort.from_yaml(h) for h in host_list])
         # TODO add option for mx resolution (vs just A)
         return DnsResolutionFilter(
-            next,
             static_resolution=static_resolution,
             suffix=yaml.get('suffix', None),
             literal=yaml.get('literal', None))
 
-    def message_builder(self, yaml, next):
-        return MessageBuilderFilter(next)
+    def message_builder(self, yaml):
+        return MessageBuilderFilter()

@@ -28,7 +28,13 @@ def create_app(handler_factory : HandlerFactory):
     @app.patch('/transactions/{tx_rest_id}')
     async def update_transaction(tx_rest_id : str,
                                  request : FastApiRequest) -> FastApiResponse:
-        req_json = await request.json()
+        if request.headers.get('content-type', '') == 'application/json':
+            req_json = await request.json()
+        else:
+            body = await request.body()
+            if bool(body):
+                return FastApiResponse(status_code=400)
+            req_json = None
         handler = handler_factory.get_tx(tx_rest_id)
         return await handler.handle_async(
             request, lambda: handler.patch_tx(request, req_json=req_json))

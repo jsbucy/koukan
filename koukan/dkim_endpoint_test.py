@@ -10,7 +10,6 @@ from dkim import dknewkey
 from koukan.blob import InlineBlob
 from koukan.dkim_endpoint import DkimEndpoint
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
-from koukan.fake_endpoints import FakeSyncFilter
 from koukan.response import Response
 
 class DkimEndpointTest(unittest.TestCase):
@@ -28,63 +27,61 @@ class DkimEndpointTest(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def test_basic(self):
-        upstream = FakeSyncFilter()
-        dkim_endpoint = DkimEndpoint('example.com', 'selector123',
-                                     self.privkey, upstream)
+    def test_smoke(self):
+        dkim_endpoint = DkimEndpoint('example.com', 'selector123', self.privkey)
+        dkim_endpoint.wire_downstream(TransactionMetadata())
+        dkim_endpoint.wire_upstream(TransactionMetadata())
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             remote_host=HostPort('example.com', port=25000),
             mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-        tx.body = InlineBlob(
-            b'From: <alice>\r\n'
-            b'To: <bob>\r\n'
-            b'\r\n'
-            b'hello\r\n',
-            last=True)
+            rcpt_to=[Mailbox('bob@domain')],
+            body = InlineBlob(
+                b'From: <alice>\r\n'
+                b'To: <bob>\r\n'
+                b'\r\n'
+                b'hello\r\n',
+                last=False))
 
-        def exp(tx, delta):
-            logging.debug(delta.body.pread(0))
-            self.assertTrue(delta.body.pread(0).startswith(
-                b'DKIM-Signature:'))
-
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
+        def upstream():
+            tx = dkim_endpoint.upstream_tx
+            upstream_delta = TransactionMetadata()
+            if tx.mail_from and not tx.mail_response:
+                upstream_delta.mail_response=Response(201)
+            if tx.rcpt_to and not tx.rcpt_response:
+                upstream_delta.rcpt_response=[Response(202)]
             tx.merge_from(upstream_delta)
             return upstream_delta
-        upstream.add_expectation(exp)
 
-        upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
-        self.assertEqual(upstream_delta.data_response.code, 203)
-
+        dkim_endpoint.downstream_tx.merge_from(delta)
+        dkim_endpoint.on_update(delta)
+        tx = dkim_endpoint.downstream_tx
+        tx.body.append(b'world!\r\n', last=True)
+        filter_result = dkim_endpoint.on_update(
+            TransactionMetadata(body=tx.body))
+        upstream_body = dkim_endpoint.upstream_tx.body
+        self.assertTrue(upstream_body.finalized())
+        logging.debug(upstream_body.pread(0))
+        self.assertTrue(upstream_body.pread(0).startswith(
+            b'DKIM-Signature:'))
+        self.assertIsNone(filter_result.downstream_delta)
 
     def test_bad(self):
-        upstream = FakeSyncFilter()
         dkim_endpoint = DkimEndpoint('example.com', 'selector123',
-                                     self.privkey, upstream)
+                                     self.privkey)
+        tx = TransactionMetadata()
+        dkim_endpoint.wire_downstream(tx)
+        dkim_endpoint.wire_upstream(TransactionMetadata())
+        delta = TransactionMetadata(
+            body = InlineBlob(b'definitely not valid rfc822\r\n', last=True))
+        tx.merge_from(delta)
+        filter_result = dkim_endpoint.on_update(delta)
+        self.assertIsNone(dkim_endpoint.upstream_tx.body)
+        self.assertEqual(500, filter_result.downstream_delta.data_response.code)
 
-        tx = TransactionMetadata(
-            remote_host=HostPort('example.com', port=25000),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-        tx.body = InlineBlob(
-            b'definitely not valid rfc822\r\n', last=True)
-        upstream_delta = dkim_endpoint.on_update(tx, tx.copy())
-        self.assertEqual(tx.data_response.code, 500)
-        self.assertEqual(upstream_delta.data_response.code, 500)
-
-        def exp(tx, delta):
-            self.assertTrue(tx.cancelled)
-            return TransactionMetadata()
-        upstream.add_expectation(exp)
-        cancel = TransactionMetadata(cancelled=True)
-        tx.merge_from(cancel)
-        upstream_delta = dkim_endpoint.on_update(tx, cancel)
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(filename)s:%(lineno)d %(message)s')
     unittest.main()

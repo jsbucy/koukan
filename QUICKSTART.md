@@ -6,6 +6,18 @@ reasonably recent python3 (\>= 3.7 for `aiosmtpd`)
 a supported database: [sqlite3](https://www.sqlite.org/) or
 [PostgreSQL](https://www.postgresql.org/)
 
+We are in the process of making some scalability improvements to
+aiosmtpd and cpython smtplib. Unless you are handling a lot of large
+messages, this isn't critical. Koukan will take advantage of both if
+available but remains compatible with mainline.
+
+Our fork of aiosmtpd is at
+[github](https://github.com/jsbucy/aiosmtpd/tree/data_chunk3). For the
+time being, we are maintaining smtplib in a fork of the cpython tree
+at [github](https://github.com/jsbucy/cpython/tree/smtplib_bdat).
+However we are shipping a copy of our fork of smtplib in the Koukan
+tree and use this by default.
+
 # Caveats
 
 1. The HTTP/REST endpoints have NO AUTHENTICATION and thus must not be open to an untrusted network. Use a front proxy/sidecar to control access to this.
@@ -65,17 +77,17 @@ routes all addresses to `fake_smtpd` via gateway
 ## Send some messages
 
 - mx receive  
-`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1025 --ehlo=localhost --mail_from=alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 
 - mx receive to rest receiver
-`python koukan/ssmtp.py localhost 1025 localhost alice@example.com bob@rest-application.example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1025 --ehlo=localhost --mail_from=alice@example.com bob@rest-application.example.com <<< 'hello, world!'`
 
 should print out on the `examples/receiver` console
 
 - smtp submission  
-`python koukan/ssmtp.py localhost 1587 localhost alice@example.com bob@example.com <<< 'hello, world!'`
+`python koukan/ssmtp.py --host=localhost --port=1587 --ehlo=localhost --mail_from=alice@example.com bob@example.com <<< 'hello, world!'`
 
 should print out on the `fake_smtpd` console
 

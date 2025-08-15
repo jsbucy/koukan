@@ -8,48 +8,48 @@ from contextlib import nullcontext
 from os import devnull
 
 from koukan.filter import (
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 from koukan.blob import Blob, FileLikeBlob, InlineBlob
 from koukan.rest_schema import BlobUri
 
-class MessageBuilderFilter(SyncFilter):
-    upstream : Optional[SyncFilter] = None
-    body : Optional[Blob] = None
-    validation : Optional[bool]= None
+class MessageBuilderFilter(ProxyFilter):
+    validation : Optional[bool] = None
 
-    def __init__(self, upstream):
-        self.upstream = upstream
+    def __init__(self):
+        pass
 
-    def on_update(self, tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata] :
-        assert self.body is None
+    def on_update(self, tx_delta : TransactionMetadata):
+        body = tx_delta.body
+        if isinstance(body, MessageBuilderSpec):
+            tx_delta.body = None
+            if (body is not None and
+                self.validation is not None and
+                not body.finalized()):
+                body = None
+        else:
+            body = None
+        self.upstream_tx.merge_from(tx_delta)
+
+        if body is None:
+            return FilterResult()
+
         assert self.validation is not False
-        body = tx.body
-        if not isinstance(body, MessageBuilderSpec):
-            return self.upstream.on_update(tx, tx_delta)
-        if not body.finalized() and body.json is None:
-            downstream_tx = tx.copy()
-            downstream_delta = tx_delta.copy()
-            downstream_tx.body = downstream_delta.body = None
-            upstream_delta = self.upstream.on_update(
-                downstream_tx, downstream_delta)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
+        assert self.upstream_tx.body is None
 
         if body.finalized():
-            blobs = { blob.rest_id(): blob for blob in tx_delta.body.blobs }
+            blobs = { blob.rest_id(): blob for blob in body.blobs }
         elif self.validation is None:
             # do a dry run with placeholder blobs so we can fastfail
             # on invalid json before we possibly hang on the upstream
             blobs = { blob.rest_id(): InlineBlob(b'xyz', last=True)
-                      for blob in tx_delta.body.blobs }
-        builder = MessageBuilder(tx_delta.body.json, blobs)
+                      for blob in body.blobs }
+        builder = MessageBuilder(body.json, blobs)
 
+        upstream_body = None
+        data_err = None
         try:
             file = None
             if body.finalized():
@@ -61,7 +61,7 @@ class MessageBuilderFilter(SyncFilter):
                 builder.build(f)
             if file is not None:
                 file.flush()
-                self.body = FileLikeBlob(file, finalized=True)
+                upstream_body = FileLikeBlob(file, finalized=True)
             else:
                 self.validation = True
         except:
@@ -70,27 +70,16 @@ class MessageBuilderFilter(SyncFilter):
             # TODO add a validator/fixup filter in front of this to
             # catch these errors
             logging.exception('unexpected exception in MessageBuilder')
-            err = TransactionMetadata()
-            tx.fill_inflight_responses(
-                Response(250, 'ok (MessageBuilderFilter no-op, '
-                         'DATA will fail)'),
-                err)
-            err.data_response = Response(
+            data_err = Response(
                 550, 'unexpected exception in MessageBuilder, '
                 'likely invalid message_builder json')
-            tx.merge_from(err)
-            return err
 
-        if self.body:
+        if upstream_body:
             logging.debug('MessageBuilderFilter.on_update %d %s',
-                          self.body.len(), self.body.content_length())
+                          upstream_body.len(), upstream_body.content_length())
+            self.upstream_tx.body = upstream_body
 
-        downstream_tx = tx.copy()
-        downstream_delta = tx_delta.copy()
-
-        downstream_tx.body = downstream_delta.body = self.body
-
-        upstream_delta = self.upstream.on_update(
-            downstream_tx, downstream_delta)
-        assert tx.merge_from(upstream_delta) is not None
-        return upstream_delta
+        delta = None
+        if data_err is not None:
+            delta = TransactionMetadata(data_response = data_err)
+        return FilterResult(delta)

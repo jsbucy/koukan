@@ -207,14 +207,16 @@ class TransactionCursor:
                        final_attempt_reason : Optional[str] = None,
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
-                       notification_done : Optional[bool] = None):
+                       notification_done : Optional[bool] = None,
+                       ping_tx : bool = False):
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
                         final_attempt_reason=final_attempt_reason,
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
-                        notification_done=notification_done)
+                        notification_done=notification_done,
+                        ping_tx=ping_tx)
         self._update_version_cache()
 
     def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata
@@ -275,7 +277,7 @@ class TransactionCursor:
             blobrefs.append({ "transaction_id": self.id,
                               "tx_rest_id": self.rest_id,
                               "blob_id": blob_cursor.id,
-                              "rest_id": blob_cursor.rest_id() })
+                              "rest_id": blob_cursor.blob_uri.blob })
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
                       self.id, blobrefs, blobs_done)
@@ -290,7 +292,7 @@ class TransactionCursor:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
-        assert len(blobs) == 1 and blobs[0].rest_id() == TX_BODY
+        assert len(blobs) == 1 and blobs[0].blob_uri.blob == TX_BODY
         return True
 
     def _write(self,
@@ -303,6 +305,13 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
+        dd = tx_delta.copy_valid(WhichJson.DB)
+        logging.debug(dd)
+        dd.copy_valid_from(WhichJson.DB_ATTEMPT, tx_delta)
+        # XXX body doesn't have DB validity?
+        dd.body = tx_delta.body
+        tx_delta = dd
+
         logging.debug('TxCursor._write %s %s %s',
                       self.rest_id, tx_delta,
                       finalize_attempt)
@@ -322,8 +331,7 @@ class TransactionCursor:
             raise ValueError()
         assert self.tx is not None
 
-        if (tx_delta.empty(WhichJson.DB) and
-            tx_delta.empty(WhichJson.DB_ATTEMPT) and
+        if (tx_delta.empty(WhichJson.ALL) and
             (not tx_delta.body) and
             (final_attempt_reason is None) and
             (notification_done is None) and
@@ -336,8 +344,6 @@ class TransactionCursor:
             return True
 
         tx_to_db = self.tx.merge(tx_delta)
-        # e.g. overwriting an existing field
-        # xxx return/throw
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = None
@@ -424,7 +430,7 @@ class TransactionCursor:
         # TODO or RETURNING json
         # XXX doesn't include response fields? tx.merge() should
         # handle that?
-        self.tx = self.tx.merge(tx_delta)
+        self.tx.merge_from(tx_delta)
 
         if finalize_attempt:
             self.in_attempt = False
@@ -440,10 +446,13 @@ class TransactionCursor:
         for i in range(0,5):
             try:
                 return self._load(db_id, rest_id, start_attempt)
-            # update_version_cache() throws if an update got in
+            # _update_version_cache() throws if an update got in
             # between the db read and cache update
             except VersionConflictException:
+                logging.debug('VersionConflictException')
                 if i == 4:
+                    # unexpected to repeatedly conflict but if so,
+                    # will leave an open attempt?
                     raise
                 backoff(i)
 
@@ -459,8 +468,11 @@ class TransactionCursor:
         else:
             assert db_id is not None or rest_id is not None
         with self.parent.begin_transaction() as db_tx:
-            return self._load_and_start_attempt_db(
+            rv = self._load_and_start_attempt_db(
                 db_tx, db_id, rest_id, start_attempt)
+        if rv:
+            self._update_version_cache()
+        return rv
 
     def _load_and_start_attempt_db(
             self, db_tx : Transaction,
@@ -472,7 +484,6 @@ class TransactionCursor:
             return None
         if start_attempt:
             self._start_attempt_db(db_tx, self.id, self.version)
-        self._update_version_cache()
         return tx
 
     def _load_db(self, db_tx : Transaction,
@@ -599,7 +610,7 @@ class TransactionCursor:
         res = db_tx.execute(sel_blob)
         blobs = []
         for row in res:
-            blob_rest_id,blob_id,content_length,last_update,length = row
+            blob_rest_id, blob_id, content_length, last_update, length = row
             blob = BlobCursor(self.parent)
             blob.init(self.rest_id, blob_id, blob_rest_id,
                       content_length, last_update, length)
@@ -673,9 +684,6 @@ class TransactionCursor:
             assert (row := res.fetchone())
             self.attempt_id = row[0]
         self._load_db(db_tx, db_id=db_id)
-        # xxx VersionConflictException
-        # will leave an open attempt
-        self._update_version_cache()
         self.in_attempt = True
 
     def wait(self, timeout : Optional[float] = None) -> bool:
@@ -728,6 +736,9 @@ class BlobCursor(Blob, WritableBlob):
         self.update_tx = update_tx
         self.db_tx = db_tx
 
+    def __hash__(self):
+        return hash(self.id)
+
     def delta(self, rhs):
         if not isinstance(rhs, BlobCursor):
             return None
@@ -756,7 +767,11 @@ class BlobCursor(Blob, WritableBlob):
         return self.id == x.id
 
     def rest_id(self) -> Optional[str]:
-        return self.blob_uri.blob if self.blob_uri else None
+        if self.blob_uri is None:
+            return None
+        if self.blob_uri.blob == TX_BODY:
+            return None
+        return self.blob_uri.blob
 
     def len(self):
         return self.length
@@ -787,7 +802,7 @@ class BlobCursor(Blob, WritableBlob):
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d %s %d length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.rest_id(), offset, self.length, len(d),
+                     self.id, self.blob_uri, offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:
@@ -797,15 +812,18 @@ class BlobCursor(Blob, WritableBlob):
             content_length >= (offset + len(d)))
 
         tx_version = None
+        cursor = None
         with (nullcontext(self.db_tx) if self.db_tx is not None
               else self.parent.begin_transaction() as db_tx):
             stmt = select(
                 func.length(self.parent.blob_table.c.content),
-                self.parent.blob_table.c.length).where(
+                self.parent.blob_table.c.length,
+                self.parent.blob_table.c.last_update,
+                self.parent._current_timestamp_epoch()).where(
                     self.parent.blob_table.c.id == self.id)
             res = db_tx.execute(stmt)
             row = res.fetchone()
-            db_length, db_content_length = row
+            db_length, db_content_length, last_update, db_now = row
             if offset != db_length:
                 return False, db_length, db_content_length
             if (db_content_length is not None) and (
@@ -835,6 +853,8 @@ class BlobCursor(Blob, WritableBlob):
             assert row is not None
             logging.debug('append_data %d %d %d', row[0], self.length, len(d))
             assert row[0] == (self.length + len(d))
+            blob_done = content_length is not None and (
+                row[0] == content_length)
 
             self.length = row[0]
             self._content_length = content_length
@@ -842,8 +862,8 @@ class BlobCursor(Blob, WritableBlob):
             logging.debug('append_data %d %s last=%s',
                           self.length, self._content_length, self.last)
 
-
-        if self.update_tx is not None:
+        stale = (db_now - last_update) > self.parent.blob_tx_refresh_interval
+        if self.update_tx is not None and (stale or blob_done):
             cursor = self.parent.get_transaction_cursor()
             for i in range(0,5):
                 try:
@@ -865,10 +885,12 @@ class BlobCursor(Blob, WritableBlob):
                         cursor._write(db_tx, TransactionMetadata(), **kwargs)
                         break
                 except VersionConflictException:
+                    logging.debug('VersionConflictException')
                     if i == 4:
                         raise
                     backoff(i)
 
+        if cursor is not None:
             cursor._update_version_cache()
             self._session_uri = cursor.session_uri
         return True, self.length, self._content_length
@@ -906,16 +928,19 @@ class Storage():
     tx_blobref_table : Optional[Table] = None
     attempt_table : Optional[Table] = None
     session_uri : Optional[str] = None
+    blob_tx_refresh_interval : int
 
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
                  engine : Optional[Engine] = None,
-                 session_uri : Optional[str] = None):
+                 session_uri : Optional[str] = None,
+                 blob_tx_refresh_interval : int = 10):
         if version_cache is not None:
             self.tx_versions = version_cache
         else:
             self.tx_versions = IdVersionMap()
         self.engine = engine
         self.session_uri = session_uri
+        self.blob_tx_refresh_interval = blob_tx_refresh_interval
 
     @staticmethod
     def _sqlite_pragma(dbapi_conn, con_record):
@@ -929,12 +954,13 @@ class Storage():
         dbapi_conn.execute("PRAGMA auto_vacuum=2")
 
     @staticmethod
-    def connect(url, session_uri):
+    def connect(url, session_uri, blob_tx_refresh_interval : int = 10):
         engine = create_engine(url)
         if 'sqlite' in url:
             event.listen(engine, 'connect', Storage._sqlite_pragma)
 
-        s = Storage(engine=engine, session_uri=session_uri)
+        s = Storage(engine=engine, session_uri=session_uri,
+                    blob_tx_refresh_interval=blob_tx_refresh_interval)
         s._init_session()
         return s
 
@@ -1064,6 +1090,7 @@ class Storage():
         try:
             return self._load_one()
         except VersionConflictException:
+            logging.debug('VersionConflictException')
             return None
 
     def _load_one(self) -> Optional[TransactionCursor]:
@@ -1111,15 +1138,16 @@ class Storage():
             db_id = row[0]
             version = row[1]
 
-            tx = self.get_transaction_cursor()
-            tx._load_and_start_attempt_db(
+            cursor = self.get_transaction_cursor()
+            cursor._load_and_start_attempt_db(
                 db_tx, db_id=db_id, start_attempt=True)
 
             # TODO: if the last n consecutive attempts weren't
             # finalized, this transaction may be crashing the system
             # -> quarantine
 
-            return tx
+        cursor._update_version_cache()
+        return cursor
 
     def _gc(self, db_tx : Transaction, ttl : timedelta) -> Tuple[int, int]:
         # It would be fairly easy to support a staged policy like ttl

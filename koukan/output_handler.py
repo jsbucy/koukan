@@ -14,9 +14,9 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Mailbox,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.filter_chain import FilterChain
 from koukan.dsn import read_headers, generate_dsn
 from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
@@ -27,52 +27,63 @@ def default_notification_endpoint_factory():
 
 class OutputHandler:
     cursor : TransactionCursor
-    endpoint : SyncFilter
+    filter_chain : FilterChain
     rest_id : str
     notification_endpoint_factory : Callable[[], AsyncFilter]
     mailer_daemon_mailbox : Optional[str] = None
 
-    prev_tx : TransactionMetadata
+    prev_downstream : TransactionMetadata
     tx : TransactionMetadata
 
     retry_params : Optional[dict] = None
     notification_params : Optional[dict] = None
     _bug_retry : int = 3600
-
+    downstream_timeout : int
+    upstream_refresh : int
+    _last_downstream_update : float
+    _last_upstream_refresh : float
+    _last_downstream_version : int = 0
+    heartbeat : Optional[Callable[[], None]] = None
     def __init__(self,
                  cursor : TransactionCursor,
-                 endpoint : SyncFilter,
-                 downstream_env_timeout=None,
-                 downstream_data_timeout=None,
+                 filter_chain : FilterChain,
+                 downstream_timeout : int = 60,
+                 upstream_refresh : int = 30,
                  notification_endpoint_factory = default_notification_endpoint_factory,
                  mailer_daemon_mailbox : Optional[str] = None,
                  retry_params : Optional[dict] = None,
-                 notification_params : Optional[dict] = None):
+                 notification_params : Optional[dict] = None,
+                 heartbeat : Optional[Callable[[], None]] = None):
         self.cursor = cursor
-        self.endpoint = endpoint
+        self.filter_chain = filter_chain
         self.rest_id = self.cursor.rest_id
-        self.env_timeout = downstream_env_timeout
-        self.data_timeout = downstream_data_timeout
+        self.downstream_timeout = downstream_timeout
+        self.upstream_refresh = upstream_refresh
         self.notification_endpoint_factory = notification_endpoint_factory
         self.mailer_daemon_mailbox = mailer_daemon_mailbox
         self.retry_params = retry_params
         if self.retry_params and 'bug_retry' in self.retry_params:
             self._bug_retry = self.retry_params['bug_retry']
-        self.prev_tx = TransactionMetadata()
+        self.prev_downstream = TransactionMetadata()
         self.tx = TransactionMetadata()
         self.notification_params = notification_params
+        now = time.monotonic()
+        self._last_downstream_update = now
+        self._last_upstream_refresh = 0
+        self.heartbeat = heartbeat
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
-        t = self.cursor.tx
-        assert t is not None
-        self.tx = t.copy()
+        delta = self.prev_downstream.delta(self.cursor.tx)
+        assert delta is not None
         # drop some fields from the tx that's going upstream
         # OH consumes these fields but they should not propagate to the
         # output chain/upstream rest/gateway etc
         for field in ['final_attempt_reason', 'notification', 'retry']:
-            setattr(self.tx, field, None)
-        delta = self.prev_tx.delta(self.tx)
-        assert delta is not None
+            setattr(delta, field, None)
+
+        self.tx.merge_from(delta)
+        self.prev_downstream = self.cursor.tx.copy()
+
         logging.debug(str(delta) if delta else '(empty delta)')
         return delta
 
@@ -80,47 +91,51 @@ class OutputHandler:
     # - wait for delta from downstream if necessary
     # - emit delta to output chain
     # - completion/next attempt/notification logic
-    # -> delta, kwargs for write_envelope()
-    def _handle_once(self) -> Tuple[TransactionMetadata, dict]:
+    # -> delta, kwargs for write_envelope(), upstream refresh
+    def _handle_once(self) -> Tuple[TransactionMetadata, dict, bool]:
         assert not self.cursor.no_final_notification
         # very first call or there's a small chance we the previous
         # write_envelope() may have picked up a delta from downstream
         downstream_timeout = False
         delta = self._fixup_downstream_tx()
+        now = time.monotonic()
         if (not self.cursor.input_done and
             delta.empty(WhichJson.ALL) and  # no new downstream
             not self.tx.cancelled):
-            # TODO until we get chunked uploads merged in aiosmtpd,
-            # probably want gateway/SmtpHandler to keepalive/ping
-            # during data upload so this can time out quickly if the
-            # gw crashed
-            if not self.cursor.wait(self.env_timeout):  # xxx
-                logging.debug('downstream timeout')
+            self.cursor.wait(
+                self.upstream_refresh - (now - self._last_upstream_refresh))
+            tx = self.cursor.load()
+            assert tx is not None
+            now = time.monotonic()
+            if self.cursor.version != self._last_downstream_version:
+                self._last_downstream_version = self.cursor.version
+                self._last_downstream_update = now
+            delta = self._fixup_downstream_tx()
+            if (now - self._last_downstream_update) > self.downstream_timeout:
+                logging.debug('%s downstream timeout', self.rest_id)
                 downstream_timeout = True
-            else:
-                tx = self.cursor.load()
-                assert tx is not None
-                delta = self._fixup_downstream_tx()
+        delta_minus_body = delta.copy()
+        delta_minus_body.body = None
+        refresh_dt = now - self._last_upstream_refresh
+        recent_refresh = (refresh_dt < self.upstream_refresh)
+        if ((not delta_minus_body) and ((delta.body is None) or (not delta.body.finalized()))) and recent_refresh:
+            logging.debug('cooldown')
+            return TransactionMetadata(), {}, False
+        self._last_upstream_refresh = now
 
         logging.debug('_handle_once %s %s', self.rest_id, self.tx)
 
-        if not delta.empty(WhichJson.ALL) or self.tx.cancelled:
-            upstream_delta = self.endpoint.on_update(self.tx, delta)
-            assert upstream_delta is not None
-            # router output to an endpoint that retries/notifies is
-            # probably a misconfiguration
-            assert self.tx.notification is None
-            assert self.tx.retry is None
+        upstream_delta = self.filter_chain.update()
+        # router output to an endpoint that retries/notifies is
+        # probably a misconfiguration
+        assert self.tx.notification is None
+        assert self.tx.retry is None
 
-            # note: Exploder does not propagate any fields other than
-            # rcpt_response, data_response from upstream so it is no longer
-            # necessary to clear e.g. attempt_count here.
+        # note: Exploder does not propagate any fields other than
+        # rcpt_response, data_response from upstream so it is no longer
+        # necessary to clear e.g. attempt_count here.
 
-            # postcondition check: !req_inflight() in handle() finally:
-        else:
-            upstream_delta = TransactionMetadata()
-
-        self.prev_tx = self.tx.copy()
+        # postcondition check: !req_inflight() in handle() finally:
 
         done = False
         # for oneshot tx (i.e. exploder downstream or rest without
@@ -168,7 +183,7 @@ class OutputHandler:
                 final_attempt_reason = 'upstream response permfail'
 
         if not done:
-            return upstream_delta, {}
+            return upstream_delta, {}, True
 
         kwargs = {'finalize_attempt': True}
 
@@ -186,17 +201,21 @@ class OutputHandler:
         # self.tx via _fixup_downstream_tx() drops notification so
         # use cursor tx, but merge upstream responses
         tx = self.cursor.tx.copy()
-        assert tx.merge_from(upstream_delta) is not None
+        tx.merge_from(upstream_delta)
         if self._maybe_send_notification(final_attempt_reason, tx):
             kwargs['notification_done'] = True
 
-        return upstream_delta, kwargs
+        return upstream_delta, kwargs, True
 
 
     def handle(self):
+        self.filter_chain.init(self.tx)
+
         done = False
         logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
         while not done:
+            if self.heartbeat is not None:
+                self.heartbeat()
             try:
                 # pre-load results as a last resort against bugs:
                 # _handle_once() could be terminated by an uncaught
@@ -228,7 +247,9 @@ class OutputHandler:
                         self.cursor.final_attempt_reason, self.cursor.tx):
                         env_kwargs['notification_done'] = True
                 else:
-                    delta, env_kwargs = self._handle_once()
+                    delta, env_kwargs, refresh = self._handle_once()
+                    if not delta and not env_kwargs and not refresh:
+                        continue
 
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
@@ -240,7 +261,10 @@ class OutputHandler:
                 self.tx.fill_inflight_responses(err_resp, delta)
                 for i in range(0,5):
                     try:
+                        prev = self.cursor.tx.copy()
                         self.cursor.write_envelope(delta, **env_kwargs)
+                        self.prev_downstream.merge_from(
+                            prev.delta(self.cursor.tx))
                         break
                     except VersionConflictException:
                         logging.debug('VersionConflictException')

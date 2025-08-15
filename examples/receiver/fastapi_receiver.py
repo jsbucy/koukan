@@ -26,17 +26,19 @@ def create_app(receiver = None, path = None):
     @app.post('/transactions')
     async def create_transaction(request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
-        tx_id, tx_json = receiver.create_tx(req_json)
+        tx_id, tx_json, etag = receiver.create_tx(req_json)
         return FastApiJsonResponse(
             status_code=201,
-            headers={'location': '/transactions/' + tx_id},
+            headers={'location': '/transactions/' + tx_id,
+                     'etag': etag},
             content=tx_json)
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
-        tx_json = receiver.get_tx(tx_rest_id)
-        return FastApiJsonResponse(status_code=200, content=tx_json)
+        tx_json, etag = receiver.get_tx(tx_rest_id)
+        return FastApiJsonResponse(status_code=200, content=tx_json,
+                                   headers={'etag': etag})
 
     @app.post('/transactions/{tx_rest_id}/message_builder')
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
@@ -49,18 +51,17 @@ def create_app(receiver = None, path = None):
 
     @app.put('/transactions/{tx_rest_id}/body')
     async def create_tx_body(tx_rest_id : str,
-                             request : FastApiRequest,
-                             upload : Union[str, None] = None
-                             ) -> FastApiResponse:
-        await receiver.create_tx_body_async(tx_rest_id, request.stream())
+                             request : FastApiRequest) -> FastApiResponse:
+        await receiver.put_blob_async(
+            tx_rest_id, request.headers, request.stream(), tx_body=True)
         return FastApiResponse(status_code=200)
 
     @app.put('/transactions/{tx_rest_id}/blob/{blob_id}')
     async def put_blob(tx_rest_id : str, blob_id : str,
                        request : FastApiRequest) -> FastApiResponse:
-        code = await receiver.put_blob_async(
-            tx_rest_id, blob_id, request.stream())
-        return FastApiResponse(status_code=code)
+        code, msg = await receiver.put_blob_async(
+            tx_rest_id, request.headers, request.stream(), blob_id=blob_id)
+        return FastApiResponse(status_code=code, content=msg)
 
     @app.post('/transactions/{tx_rest_id}/cancel')
     async def cancel_tx(tx_rest_id) -> FastApiResponse:

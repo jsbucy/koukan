@@ -41,12 +41,16 @@ from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.rest_service_handler import Handler, HandlerFactory
 from koukan.filter import (
     AsyncFilter,
-    SyncFilter,
     TransactionMetadata,
     WhichJson )
 from koukan.executor import Executor
 
-from koukan.rest_schema import BlobUri, make_blob_uri, make_tx_uri, parse_blob_uri
+from koukan.rest_schema import (
+    FINALIZE_BLOB_HEADER,
+    BlobUri,
+    make_blob_uri,
+    make_tx_uri,
+    parse_blob_uri )
 from koukan.version_cache import IdVersion
 from koukan.storage_schema import BlobSpec, VersionConflictException
 
@@ -68,6 +72,8 @@ class RestHandler(Handler):
     range : Optional[ContentRange] = None
     blob : Optional[WritableBlob] = None
     bytes_read : Optional[int] = None
+    final_blob_length : Optional[int] = None
+
     endpoint_yaml : Optional[dict] = None
     session_uri : Optional[str] = None
     service_uri : Optional[str] = None
@@ -81,7 +87,7 @@ class RestHandler(Handler):
                  blob_rest_id : Optional[str] = None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  http_host : Optional[str] = None,
-                 chunk_size : int = 1048576,
+                 chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
                  session_uri : Optional[str] = None,
                  service_uri : Optional[str] = None,
@@ -101,9 +107,6 @@ class RestHandler(Handler):
         self.service_uri = service_uri
         if client is not None:
             self.client = client
-        else:
-            client = Client(follow_redirects=True)
-            self.client = client.get
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -250,6 +253,7 @@ class RestHandler(Handler):
         return resp
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
+        logging.debug('_get_tx')
         tx = self.async_filter.get()
         if tx is None:
             return None
@@ -272,7 +276,8 @@ class RestHandler(Handler):
     async def _get_tx_async(
             self, request
     ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
-        cfut = self.executor.submit(lambda: self._get_tx())
+        logging.debug('_get_tx_async')
+        cfut = self.executor.submit(self._get_tx)
         if cfut is None:
             return self.response(
                 code=500, msg='get tx async schedule read'), None
@@ -290,6 +295,7 @@ class RestHandler(Handler):
                                  msg='get tx async read fut done'), None
         if afut.result() is None:
             return self.response(code=404, msg='unknown tx'), None
+        logging.debug('_get_tx_async done')
         return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
@@ -325,13 +331,22 @@ class RestHandler(Handler):
         err, tx = await self._get_tx_async(request)
         if err is not None:
             return err
-        return self._get_tx_resp(request, tx)
+        resp = self._get_tx_resp(request, tx)
+        logging.debug('get_tx_async done')
+        return resp
 
-    def patch_tx(self, request : HttpRequest, req_json : dict) -> HttpResponse:
+    def patch_tx(self, request : HttpRequest, req_json : Optional[dict]
+                 ) -> HttpResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         logging.debug('RestHandler.patch_tx %s %s',
                       self._tx_rest_id, req_json)
-        downstream_delta = TransactionMetadata.from_json(
-            req_json, WhichJson.REST_UPDATE)
+        if req_json is not None:
+            downstream_delta = TransactionMetadata.from_json(
+                req_json, WhichJson.REST_UPDATE)
+        else:
+             downstream_delta = TransactionMetadata()
         if downstream_delta is None:
             return self.response(code=400, msg='invalid request')
         body = downstream_delta.body
@@ -345,7 +360,9 @@ class RestHandler(Handler):
             return self.response(
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
-        if not self.async_filter.incremental():
+        if req_json is None:  # heartbeat/ping
+            pass
+        elif not self.async_filter.incremental():
             return self.response(
                 code=400,
                 msg='endpoint does not accept incremental updates')
@@ -426,6 +443,9 @@ class RestHandler(Handler):
             self, request : FastApiRequest,
             tx_body : bool = False,
             blob_rest_id : Optional[str] = None) -> FastApiResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         cfut = self.executor.submit(
             lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
         if cfut is None:
@@ -441,6 +461,15 @@ class RestHandler(Handler):
         logging.debug('RestHandler._put_blob_async')
         b = bytes()
         self.bytes_read = 0
+        finalize_blob_header = request.headers.get(FINALIZE_BLOB_HEADER, None)
+        if finalize_blob_header:
+            finalize_blob_header.strip()
+            try:
+                final_blob_length = int(finalize_blob_header)
+            except:
+                return self.response(code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
+            self.final_blob_length = final_blob_length
+
         async for chunk in request.stream():
             # copy from chunk to b until it contains chunk_size, then
             # send upstream
@@ -457,6 +486,7 @@ class RestHandler(Handler):
                     return resp
                 b = bytes()
                 chunk = chunk[count:]
+
         # send any leftover
         resp = await self._put_blob_chunk_async(request, b, last=True)
         if resp.status_code != 200:
@@ -487,7 +517,14 @@ class RestHandler(Handler):
         content_length = result_len = None
 
         start = 0
-        if self.range is not None:
+        if self.final_blob_length is not None:
+            start = self.final_blob_length
+            length = self.final_blob_length
+            if len(b):
+                return self.response(
+                    code=400,
+                    msg=FINALIZE_BLOB_HEADER + ' with non-empty PUT',)
+        elif self.range is not None:
             start = self.range.start
             length = self.range.length
         elif last:
@@ -515,12 +552,15 @@ class RestHandler(Handler):
         return self.response(resp_json={}, headers=headers)
 
     def cancel_tx(self, request : HttpRequest) -> HttpResponse:
+        if self.async_filter is None:
+            return self.response(code=404, msg='transaction not found')
+
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get()
         if tx is None:
             return self.response(request)
         delta = TransactionMetadata(cancelled=True)
-        assert tx.merge_from(delta) is not None
+        tx.merge_from(delta)
         assert tx.cancelled
         self.async_filter.update(tx, delta)
         # TODO this should probably return the tx?
@@ -543,20 +583,28 @@ class RestHandlerFactory(HandlerFactory):
     session_uri : Optional[str] = None
     service_uri : Optional[str] = None
     rest_id_factory : Callable[[], str]
+    chunk_size : Optional[int] = None
+    client : Client
 
     def __init__(self, executor,
                  endpoint_factory,
                  rest_id_factory : Callable[[], str],
                  session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None):
+                 service_uri : Optional[str] = None,
+                 chunk_size : Optional[int] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
         self.session_uri = session_uri
         self.service_uri = service_uri
+        self.chunk_size = chunk_size
+        self.client = Client(follow_redirects=True)
 
     def create_tx(self, http_host) -> RestHandler:
         endpoint, yaml = self.endpoint_factory.create(http_host)
+        kwargs = {}
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
         return RestHandler(
             executor=self.executor,
             async_filter=endpoint,
@@ -564,14 +612,21 @@ class RestHandlerFactory(HandlerFactory):
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
             session_uri = self.session_uri,
-            service_uri = self.service_uri)
+            service_uri = self.service_uri,
+            client = self.client.get,
+            **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
         filter = self.endpoint_factory.get(tx_rest_id)
+        kwargs = {}
+        if self.chunk_size:
+            kwargs['chunk_size'] = self.chunk_size
         return RestHandler(
             executor=self.executor,
             async_filter=filter,
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory,
             session_uri = self.session_uri,
-            service_uri = self.service_uri)
+            service_uri = self.service_uri,
+            client = self.client.get,
+            **kwargs)

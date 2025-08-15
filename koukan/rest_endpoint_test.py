@@ -15,7 +15,8 @@ from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
 from koukan.deadline import Deadline
-from koukan.rest_endpoint import RestEndpoint
+from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
+from koukan.rest_schema import FINALIZE_BLOB_HEADER
 from koukan.filter import (
     HostPort,
     Mailbox,
@@ -35,6 +36,8 @@ class Request:
     request_timeout : Optional[int] = None
     body = None
     etag = None
+    finalize_length = None
+
     def __init__(self,
                  method = None,
                  path = None,
@@ -55,6 +58,7 @@ class Response:
     content_range = None
     location = None
     etag = None
+    timeout = False
     def __init__(self,
                  http_resp = None,
                  content_type = None,
@@ -62,7 +66,8 @@ class Response:
                  content_range = None,
                  location = None,
                  resp_json = None,
-                 etag = None):
+                 etag = None,
+                 timeout = False):
         self.http_resp = http_resp
         self.content_type = content_type
         self.body = body
@@ -72,6 +77,7 @@ class Response:
             self.body = json.dumps(resp_json)
             self.content_type = 'application/json'
         self.etag = etag
+        self.timeout = timeout
 
 def eq_range(lhs, rhs):
     return (lhs.units == rhs.units and
@@ -80,8 +86,9 @@ def eq_range(lhs, rhs):
             lhs.length == rhs.length)
 
 class RestEndpointTest(unittest.TestCase):
-    requets : List[Request]
+    requests : List[Request]
     responses : List[Response]
+    client_provider : RestEndpointClientProvider
 
     def __init__(self, name):
         self.requests = []
@@ -108,6 +115,8 @@ class RestEndpointTest(unittest.TestCase):
         self.static_base_url='http://localhost:%d/' % self.port
         logging.info('RestEndpointTest server listening on %d', self.port)
 
+        self.client_provider = RestEndpointClientProvider()
+
     def tearDown(self):
         # i.e. all expected requests were sent
         self.assertFalse(self.responses)
@@ -118,7 +127,7 @@ class RestEndpointTest(unittest.TestCase):
             self.fail()
 
     def wsgi_app(self, environ, start_response):
-        #logging.debug(environ)
+        # logging.debug(environ)
         req = Request()
         req.method = environ['REQUEST_METHOD']
         req.path = environ['PATH_INFO']
@@ -131,12 +140,19 @@ class RestEndpointTest(unittest.TestCase):
         if timeout_header := environ.get('HTTP_REQUEST_TIMEOUT', None):
             req.request_timeout = int(timeout_header)
 
+        header = 'HTTP_' + FINALIZE_BLOB_HEADER.upper().replace('-', '_')
+        if finalize_length := environ.get(header, None):
+            finalize_length.strip()
+            req.finalize_length = int(finalize_length)
+
         if ((wsgi_input := environ.get('wsgi.input', None)) and
             (length := environ.get('CONTENT_LENGTH', None))):
             req.body = wsgi_input.read(int(length))
         self.requests.append(req)
 
         resp = self.responses.pop(0)
+        if resp.timeout:
+            time.sleep(5)
         resp_headers = []
         if resp.content_type:
             resp_headers.append(('content-type', resp.content_type))
@@ -153,15 +169,22 @@ class RestEndpointTest(unittest.TestCase):
             resp_body.append(resp.body.encode('utf-8'))
         return resp_body
 
+    def create_endpoint(self, **kwargs):
+        filter = RestEndpoint(client_provider=self.client_provider, **kwargs)
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
+        return filter, tx
+
     # low-level methods
 
     def testCreate(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-        tx = TransactionMetadata()
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={},
-            location='/transactions/123'))
+            location='/transactions/123',
+            etag='1'))
         rest_resp = rest_endpoint._create(
             resolution=None, tx=tx, deadline=Deadline())
         self.assertEqual(rest_resp.status_code, 201)
@@ -177,7 +200,8 @@ class RestEndpointTest(unittest.TestCase):
         js = {'hello': 'world'}
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json=js))
+            resp_json=js,
+            etag='1'))
         resp_json = rest_endpoint.get_json(timeout=None)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
@@ -185,118 +209,119 @@ class RestEndpointTest(unittest.TestCase):
 
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json=js))
+            resp_json=js,
+            etag='2'))
         resp_json = rest_endpoint.get_json(timeout=2)
         self.assertEqual(resp_json, js)
         req = self.requests.pop(0)
         self.assertEqual(req.request_timeout, 1)
 
     def testCreateBadResponse(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_endpoint, tx = self.create_endpoint(static_base_url=self.static_base_url)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = 'bad json'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+            body = 'bad json',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateTimeoutPost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_start=1)
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            resp_json={'mail_response': {}},
-            location='/transactions/124'))
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=1)
+        # POST /transactions times out
+        self.responses.append(Response(timeout=True))
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateTimeoutGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_start=1)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=1)
+        # POST /transactions -> 201
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={},
+            location = '/transactions/123',
+            etag='1'))
+        # GET /transactions/123 times out
+        self.responses.append(Response(timeout=True))
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 450)
 
     def testCreateNoSpin(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={ 'mail_from': {} },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json={ 'mail_from': {} }))
+            resp_json={ 'mail_from': {} },
+            etag='1'))
         # GET
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 234 }
-            }))
+            },
+            etag='2'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 10)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         logging.debug(tx)
         self.assertEqual(tx.mail_response.code, 234)
 
-    # maybe drop this test, unclear what it's doing?
-    def testUpdate(self):
-        rest_endpoint = RestEndpoint(
-            transaction_url=self.static_base_url + '/transactions/124')
-
-        self.responses.append(Response(
-            http_resp = '201 created',
-            resp_json={'mail_response': {}},
-            location = '/transactions/124'))
-
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
-        rest_resp = rest_endpoint._update(tx, Deadline())
-        self.assertEqual(rest_resp.status_code, 201)
-        req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions/124')
-        self.assertEqual(
-            req.body,
-            json.dumps({'mail_from': {'m': 'alice'}}).encode('utf-8'))
-        self.assertEqual(req.content_type, 'application/json')
-        self.assertEqual(rest_resp.json(),
-                         {'mail_response': {}})
 
     def testUpdateBadResponsePost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_endpoint, tx = self.create_endpoint(static_base_url=self.static_base_url)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200}},
-            location = '/transactions/124'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+            location = '/transactions/124',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 200)
 
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = 'bad json'))
+            body = 'bad json',
+            etag='2'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        tx.merge_from(tx_delta)
+        rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
-    def testUpdateBadResponseGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+    def _test_update_bad_response_get(self, resp_json):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
             content_type = 'application/json',
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200}},
-            location = '/transactions/124'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+            location = '/transactions/124',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 200)
 
         self.responses.append(Response(
@@ -304,47 +329,111 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200},
-                'rcpt_to': [{}]}))
+                'rcpt_to': [{}]},
+            etag='2'))
         self.responses.append(Response(
             http_resp = '200 ok',
             content_type = 'application/json',
-            body = 'bad json'))
+            body = resp_json,
+            etag='3'))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        tx.merge_from(tx_delta)
+        rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
+    def test_update_bad_response_get_json_syntax(self):
+        self._test_update_bad_response_get('invalid json')
+    def test_update_bad_response_get_json_contents(self):
+        self._test_update_bad_response_get(
+            json.dumps({'some_weird_stuff': 3.14159}))
+
+    def test_update_get_unchanged_success(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        self.responses.append(Response(
+            http_resp = '304 unchanged',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            content_type = 'application/json',
+            resp_json={'mail_from': {},
+                       'mail_response': {'code': 201}},
+            location = '/transactions/124',
+            etag = '2'))
+
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+
+    def test_update_get_unchanged_timeout(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=3)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        self.responses.append(Response(
+            http_resp = '201 created',
+            content_type = 'application/json',
+            resp_json={'mail_from': {}},
+            location = '/transactions/124',
+            etag = '1'))
+        for i in range(0,3):
+            self.responses.append(Response(
+                http_resp = '304 unchanged',
+                content_type = 'application/json',
+                resp_json={'mail_from': {}},
+                location = '/transactions/124',
+                etag = '1'))
+
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(450, tx.mail_response.code)
+
     def testUpdateTimeoutPost(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_start=1)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=1)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={'mail_response': {'code': 200}},
-            location = '/transactions/124'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+            location = '/transactions/124',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 200)
 
+        self.responses.append(Response(timeout=True))
         tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
-        assert tx.merge_from(tx_delta) is not None
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        tx.merge_from(tx_delta)
+        rest_endpoint.on_update(tx_delta, None)
         self.assertEqual([r.code for r in tx.rcpt_response], [450])
 
     def testUpdateTimeoutGet(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_start=1)
-        tx = TransactionMetadata(mail_from=Mailbox('alice'))
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_start=1)
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={'mail_response': {}},
-            location = '/transactions/124'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+            location = '/transactions/124',
+            etag='1'))
+        self.responses.append(Response(timeout=True))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 450)
 
 
     def testPutBlob(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     chunk_size=8)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, chunk_size=8)
 
         # POST /transactions
         self.responses.append(Response(
@@ -355,16 +444,18 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
-            }))
+            },
+            etag='1'))
 
         # PUT /transactions/123/body
-        # range 0-8/*
+        # range 0-7/*
         self.responses.append(Response(
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 0, 8, None)))
 
-        # suppose something like a previous request was applied but
-        # the response timed out to get into this state
+        # suppose something like a previous request timed out during
+        # data transfer and was partially applied to get into this
+        # state
         # PUT /transactions/123/body
         # range 8-12/13 -> 416 0-10/*
         self.responses.append(Response(
@@ -377,9 +468,12 @@ class RestEndpointTest(unittest.TestCase):
             http_resp = '200 ok',
             content_range=ContentRange('bytes', 10, 13, 13)))
 
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
                                  rcpt_to=[Mailbox('bob')])
-        rest_endpoint.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+
+        logging.debug('finalized blob')
 
         blob = InlineBlob(b'hello, world!', last=True)
         rest_endpoint._put_blob(blob)
@@ -415,7 +509,8 @@ class RestEndpointTest(unittest.TestCase):
 
 
     def testPutBlobSingle(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url)
 
         # POST /transactions
         self.responses.append(Response(
@@ -426,17 +521,18 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
-            }))
+            },
+            etag='1'))
 
         # POST /transactions/123/body
-        self.responses.append(Response(
-            http_resp = '201 created'))
+        self.responses.append(Response(http_resp = '201 created'))
 
         b = b'hello, world!'
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')],
-                                 body=InlineBlob(b, last=True))
-        rest_endpoint.on_update(tx, tx.copy())
+        delta = TransactionMetadata(mail_from=Mailbox('alice'),
+                                    rcpt_to=[Mailbox('bob')],
+                                    body=InlineBlob(b, last=True))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
 
         # POST /transactions
         req = self.requests.pop(0)
@@ -448,65 +544,10 @@ class RestEndpointTest(unittest.TestCase):
         self.assertIsNone(req.content_range)
         self.assertEqual(req.body, b)
 
-
-    # TODO maybe drop this test, entering _put_blob_chunk() in the middle
-    # is kind of weird, doesn't seem to have any additional coverage
-    # beyond testPutBlob (above)
-    def testPutBlobChunk(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url)
-
-        tx = TransactionMetadata(mail_from=Mailbox('alice'),
-                                 rcpt_to=[Mailbox('bob')])
-        # POST /transactions
-        self.responses.append(Response(
-            http_resp = '201 created',
-            location='/transactions/123',
-            resp_json={
-                'mail_from': {},
-                'mail_response': {'code': 201},
-                'rcpt_to': [{}],
-                'rcpt_response': [{'code': 202}],
-            }))
-
-        rest_endpoint.on_update(tx, tx.copy())
-
-        # POST /transactions
-        req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions')
-
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            content_range=ContentRange('bytes', 0, 133, None)))
-        resp, len = rest_endpoint._put_blob_chunk(128, b'hello', True)
-        req = self.requests.pop(0)
-        self.assertTrue(resp.ok())
-        self.assertEqual(len, 133)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(req.path, '/transactions/123/body')
-        self.assertEqual(req.content_range.start, 128)
-        self.assertEqual(req.content_range.stop, 133)
-        self.assertEqual(req.content_range.length, 133)
-
-        self.responses.append(Response(
-            http_resp = '416 invalid range',
-            content_range=ContentRange('bytes', 0, 120, None)))
-        resp, len = rest_endpoint._put_blob_chunk(128, b'hello', True)
-
-        req = self.requests.pop(0)
-        self.assertTrue(resp.ok())
-        self.assertEqual(len, 120)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(req.path, '/transactions/123/body')
-        self.assertEqual(req.content_range.start, 128)
-        self.assertEqual(req.content_range.stop, 133)
-        self.assertEqual(req.content_range.length, 133)
-
-
     def testPutBlobBadResponse(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_data=1,
-                                     chunk_size=4)
-        tx = TransactionMetadata(
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_data=1, chunk_size=4)
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
@@ -522,7 +563,8 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}] },
-            location = '/transactions/124'))
+            location = '/transactions/124',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
@@ -537,19 +579,20 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={},
             content_range = 'bad range'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         blob_bytes = b'hello'
         tx_delta = TransactionMetadata(
             body=InlineBlob(blob_bytes, last=True))
-        assert tx.merge_from(tx_delta) is not None
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta, 5)
+        tx.merge_from(tx_delta)
+        rest_endpoint.on_update(tx_delta, None)
         self.assertEqual(tx.data_response.code, 450)
 
     def testPutBlobTimeout(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     timeout_data=1, chunk_size=4)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, timeout_data=1, chunk_size=4)
 
         self.responses.append(Response(
             http_resp = '201 created',
@@ -558,30 +601,33 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
-        tx = TransactionMetadata(
+            location = '/transactions/123',
+            etag='1'))
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
         tx_delta = TransactionMetadata(
-            body=InlineBlob(b'hello', last=True))
-        assert tx.merge_from(tx_delta) is not None
+           body=InlineBlob(b'hello', last=True))
+        tx.merge_from(tx_delta)
         self.responses.append(Response(
-            http_resp = '201 created',
+            http_resp = '200 ok',
             resp_json={'body': '/blob/123'},
             location = '/transactions/124'))
-
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        self.responses.append(Response(timeout=True))
+        rest_endpoint.on_update(tx_delta, None)
+        logging.debug(tx)
         self.assertEqual(tx.data_response.code, 450)
 
-
-    def testFilterApi(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1,
-                                     chunk_size=8)
+    def test_smoke(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url,
+            min_poll=0.1,
+            chunk_size=8)
 
         # POST
         self.responses.append(Response(
@@ -595,29 +641,40 @@ class RestEndpointTest(unittest.TestCase):
             etag = '1'))
 
         logging.debug('testFilterApi envelope')
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'POST')
         self.assertEqual(req.path, '/transactions')
 
-        for t in [upstream_delta, tx]:
-            self.assertEqual(t.mail_response.code, 201)
-            self.assertEqual([r.code for r in t.rcpt_response], [202])
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
         logging.debug('testFilterApi !last append')
-        # incomplete -> noop
+        # PUT /transactions/123/body
+        # range: 0-7/*
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={},
+            content_range=ContentRange(
+                'bytes', 0, 7, None)))
+
         tx_delta = TransactionMetadata()
         tx.body = tx_delta.body = CompositeBlob()
         b = InlineBlob(b'hello, ', last=True)
         tx.body.append(b, 0, b.len())
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta, 5)
-        self.assertIsNone(upstream_delta.mail_response)
-        self.assertFalse(upstream_delta.rcpt_response)
-        self.assertIsNone(upstream_delta.data_response)
+        rest_endpoint.on_update(tx_delta)
+        self.assertIsNone(tx.data_response)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertEqual(req.content_range.stop, 7)
+        self.assertEqual(req.content_range.length, None)
 
         logging.debug('testFilterApi last append')
 
@@ -625,15 +682,7 @@ class RestEndpointTest(unittest.TestCase):
         tx.body.append(b, 0, b.len(), True)
 
         # PUT /transactions/123/body
-        # range: 0-8/*
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, 8, None)))
-
-        # PUT /transactions/123/body
-        # range: 9-12/12
+        # range: 7-12/12
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={},
@@ -642,13 +691,8 @@ class RestEndpointTest(unittest.TestCase):
 
         # GET
         self.responses.append(Response(
-            http_resp = '304 not modified',
-            etag = '1'))
-
-        # GET
-        self.responses.append(Response(
             http_resp = '200 ok',
-            etag = '2',
+            etag = '3',
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
@@ -658,15 +702,9 @@ class RestEndpointTest(unittest.TestCase):
                 'data_response': {'code': 203, 'message': 'ok'}}))
 
         # same tx/delta
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta, timeout=5)
+        rest_endpoint.on_update(tx_delta)
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
-
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(req.path, '/transactions/123/body')
-        self.assertEqual(req.content_range.stop, 8)
-        self.assertEqual(req.content_range.length, None)
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'PUT')
@@ -679,14 +717,9 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual(req.path, '/transactions/123')
         self.assertEqual(req.etag, '1')
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'GET')
-        self.assertEqual(req.path, '/transactions/123')
-        self.assertEqual(req.etag, '1')
-
     def testFilterApiOneshot(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
 
         body = b'hello, world!'
 
@@ -698,7 +731,8 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
@@ -716,49 +750,23 @@ class RestEndpointTest(unittest.TestCase):
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'} }))
+                'data_response': {'code': 203, 'message': 'ok'} },
+            etag='2'))
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         logging.debug('tx after update %s', tx)
-        logging.debug('upstream_delta %s', upstream_delta)
-        for t in [tx, upstream_delta]:
-            self.assertEqual(t.mail_response.code, 201)
-            self.assertEqual([r.code for r in t.rcpt_response], [202])
-            self.assertEqual(t.data_response.code, 203)
-
-    def test_filter_api_internal_delta(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1)
-
-        # POST /transactions
-        self.responses.append(Response(
-            http_resp = '201 created',
-            resp_json={
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123'))
-
-        tx = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-
-        # update with internal-only fields -> empty delta -> should
-        # not send an http request upstream
-        delta = TransactionMetadata()
-        delta.options = {}  # internal-only field
-        upstream_delta = rest_endpoint.on_update(tx, delta, 5)
-        self.assertTrue(upstream_delta.empty(WhichJson.ALL))
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        self.assertEqual(tx.data_response.code, 203)
 
     def testFilterApiMultiRcpt(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
 
         # POST /transactions
         mail_resp = MailResponse(201)
@@ -771,12 +779,14 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json()]},
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [rcpt0_resp.code])
 
@@ -787,7 +797,8 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]}))
+                'rcpt_response': [rcpt0_resp.to_json()]},
+            etag='2'))
         # GET /transactions/123
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -796,30 +807,98 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(),
                 'rcpt_response': [rcpt0_resp.to_json(),
-                                  rcpt1_resp.to_json()]}))
+                                  rcpt1_resp.to_json()]},
+            etag='3'))
 
-        updated_tx = tx.copy()
-        updated_tx.rcpt_to.append(Mailbox('bob2'))
-        tx_delta = tx.delta(updated_tx)
-        tx = updated_tx
-        upstream_delta = rest_endpoint.on_update(tx, tx_delta)
+        prev = tx.copy()
+        tx.rcpt_to.append(Mailbox('bob2'))
+        rest_endpoint.on_update(prev.delta(tx), None)
         logging.debug('RestEndpointTest.testFilterApiMultiRcpt '
                       'after patch 2nd rcpt %s', tx)
-        self.assertEqual(upstream_delta.mail_response, None)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response],
-                         [rcpt1_resp.code])
+        self.assertEqual([202, 203], [r.code for r in tx.rcpt_response])
 
-        self.assertEqual([r.code for r in tx.rcpt_response], [202, 203])
+    def testFilterApiEmptyLastChunk(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
+
+        body = b'hello, world!'
+
+        # POST /transactions
+        self.responses.append(Response(
+            http_resp = '201 created',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
+            location = '/transactions/123',
+            etag='1'))
+
+        # PUT /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={},
+            content_range=ContentRange(
+                'bytes', 0, len(body))))
+
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body=InlineBlob(body))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        logging.debug('tx after update %s', tx)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'POST')
+        self.assertEqual(req.path, '/transactions')
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertEqual(req.content_range.start, 0)
+        self.assertEqual(req.content_range.stop, 13)
+        self.assertEqual(req.content_range.length, None)
 
 
+        # PUT /transactions/123/body
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={},
+            content_range=ContentRange(
+                'bytes', 0, len(body), len(body))))
+
+        # GET /transactions/123
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'body': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'data_response': {'code': 203, 'message': 'ok'} },
+            etag='2'))
+
+        tx.body.append(b'', last=True)
+        rest_endpoint.on_update(
+            TransactionMetadata(body=tx.body), None)
+        logging.debug('tx after update %s', tx)
+        self.assertEqual(203, tx.data_response.code)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.method, 'PUT')
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertIsNone(req.content_range)
+        self.assertEqual(13, req.finalize_length)
 
     def test_discovery(self):
         resolution = Resolution([
             HostPort('first', 25),
             HostPort('second', 25)])
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
         # POST
         self.responses.append(Response(
             http_resp = '500 timeout',
@@ -831,7 +910,8 @@ class RestEndpointTest(unittest.TestCase):
                 'remote_host': ['second', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET
         self.responses.append(Response(
@@ -842,60 +922,60 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             remote_host = HostPort('example.com', 25),
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')],
             resolution=resolution)
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
     def test_discovery_fail(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
-        resolution = Resolution([
-            HostPort('first', 25)])
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
+        resolution = Resolution([HostPort('first', 25)])
         self.responses.append(Response(
             http_resp = '500 timeout',
             location = '/transactions/123'))
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             remote_host = HostPort('example.com', 25),
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')],
             resolution=resolution)
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, 450)
 
-    def test_bad_post_resp(self):
-        rest_endpoint = RestEndpoint(static_base_url=self.static_base_url,
-                                     min_poll=0.1,
-                                     chunk_size=8)
+    def test_bad_upstream_delta(self):
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1, chunk_size=8)
 
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
-            resp_json={
-                'mail_from': {'m': 'alice'}},
-            location = '/transactions/123'))
+            resp_json={'mail_from': {'m': 'alice'}},
+            location = '/transactions/123',
+            etag='1'))
 
         logging.debug('test_bad_delta envelope')
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
 
         req = self.requests.pop(0)  # POST /transactions
         self.assertEqual(tx.mail_response.code, 450)
 
     def test_parsed(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
-        tx = TransactionMetadata(
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
@@ -906,7 +986,8 @@ class RestEndpointTest(unittest.TestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -917,11 +998,13 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'
@@ -959,17 +1042,17 @@ class RestEndpointTest(unittest.TestCase):
                 'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}}))
+                'data_response': {'code': 203, 'message': 'ok'}},
+            etag='3'))
 
-        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
-        self.assertEqual(upstream_delta.data_response.code, 203)
+        rest_endpoint.on_update(parsed_delta, None)
+        self.assertEqual(tx.data_response.code, 203)
 
 
     def test_parsed_json_err(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
-        tx = TransactionMetadata(
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
@@ -980,7 +1063,8 @@ class RestEndpointTest(unittest.TestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -991,11 +1075,13 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'
@@ -1016,14 +1102,14 @@ class RestEndpointTest(unittest.TestCase):
         self.responses.append(Response(
             http_resp = '500 err'))
 
-        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
-        self.assertEqual(upstream_delta.data_response.code, 400)
+        rest_endpoint.on_update(parsed_delta, None)
+        self.assertEqual(tx.data_response.code, 400)
 
     def test_parsed_blob_err(self):
-        rest_endpoint = RestEndpoint(
+        rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url,
             min_poll=0.1)
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
@@ -1034,7 +1120,8 @@ class RestEndpointTest(unittest.TestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -1045,11 +1132,13 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='2'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
 
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'
@@ -1072,15 +1161,14 @@ class RestEndpointTest(unittest.TestCase):
         # POST /transactions/123/blob/blob_id
         self.responses.append(Response(http_resp = '500 err'))
 
-        upstream_delta = rest_endpoint.on_update(tx, parsed_delta)
-        self.assertEqual(upstream_delta.data_response.code, 450)
+        rest_endpoint.on_update(parsed_delta, None)
+        self.assertEqual(tx.data_response.code, 450)
 
     def test_all_rcpts_fail(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
         body = b'hello, world'
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
@@ -1094,18 +1182,19 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 502, 'message': 'err'}] },
-            location = '/transactions/123'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [502])
-        self.assertEqual(upstream_delta.data_response.code, 400)
+            location = '/transactions/123',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([502], [r.code for r in tx.rcpt_response])
+        self.assertEqual(503, tx.data_response.code)
 
     def test_data_resp_wait(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
         body = b'hello, world'
-        tx = TransactionMetadata(
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
@@ -1119,12 +1208,12 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'err'}] },
-            location = '/transactions/123'))
+            location = '/transactions/123',
+            etag='1'))
 
         # POST /transactions/123/body
         self.responses.append(Response(
-            http_resp = '200 created',
-            etag='1'))
+            http_resp = '200 created'))
 
         # GET /transactions/123
         self.responses.append(Response(
@@ -1151,17 +1240,17 @@ class RestEndpointTest(unittest.TestCase):
                 'data_response': {'code': 203, 'message': 'ok'}},
             etag='3'))
 
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
-        self.assertEqual(upstream_delta.mail_response.code, 201)
-        self.assertEqual([r.code for r in upstream_delta.rcpt_response], [202])
-        self.assertEqual(upstream_delta.data_response.code, 203)
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        self.assertEqual(203, tx.data_response.code)
 
 
     def test_cancel(self):
-        rest_endpoint = RestEndpoint(
-            static_base_url=self.static_base_url,
-            min_poll=0.1)
-        tx = TransactionMetadata(
+        rest_endpoint, tx = self.create_endpoint(
+            static_base_url=self.static_base_url, min_poll=0.1)
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
@@ -1174,16 +1263,19 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123'))
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy(), 5)
+            location = '/transactions/123',
+            etag='1'))
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
 
         # POST /transactions/123/cancel
         self.responses.append(Response(
             http_resp = '200 ok',
             resp_json={}))
 
-        tx = TransactionMetadata(cancelled = True)
-        upstream_delta = rest_endpoint.on_update(tx, tx.copy())
+        delta = TransactionMetadata(cancelled = True)
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
 
 
 if __name__ == '__main__':

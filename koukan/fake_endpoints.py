@@ -10,8 +10,8 @@ from koukan.response import Response, Esmtp
 from koukan.filter import (
     AsyncFilter,
     Mailbox,
-    SyncFilter,
     TransactionMetadata )
+from koukan.filter_chain import FilterResult, Filter
 
 from koukan.storage_schema import VersionConflictException
 
@@ -86,7 +86,7 @@ class MockAsyncFilter(AsyncFilter):
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],
                        Optional[TransactionMetadata]]
-class FakeSyncFilter(SyncFilter):
+class FakeFilter(Filter):
     expectation : List[Expectation]
 
     def __init__(self):
@@ -95,15 +95,10 @@ class FakeSyncFilter(SyncFilter):
     def add_expectation(self, exp : Expectation):
         self.expectation.append(exp)
 
-    # SyncFilter
-    def on_update(self,
-                  tx : TransactionMetadata,
-                  tx_delta : TransactionMetadata
-                  ) -> Optional[TransactionMetadata]:
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if not self.expectation:
             raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
-        upstream_delta = exp(tx, tx_delta)
-        assert upstream_delta is not None
-        return upstream_delta
+        exp(self.downstream_tx, tx_delta)
+        return FilterResult()
