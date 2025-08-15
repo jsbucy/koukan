@@ -499,7 +499,6 @@ class TransactionMetadata:
         if len(self.rcpt_to) > len(tx.rcpt_response):
             return True
         for i in range(0,len(self.rcpt_to)):
-            # XXX rcpt_response should never be None now?
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
 
@@ -515,6 +514,7 @@ class TransactionMetadata:
             return False
         if tx.data_response is None:
             return True
+        return False
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs

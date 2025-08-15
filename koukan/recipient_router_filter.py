@@ -56,6 +56,11 @@ class RecipientRouterFilter(Filter):
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
 
+        # TODO Sending responses upstream the way this does
+        # immediately trips an assertion in FilterChain. This should
+        # be ProxyFilter: clear the bad rcpt from the upstream tx and
+        # set the error in the downstream path and let FilterChain
+        # decide what to do with the remainder of the delta.
         # TODO if we ever have multi-rcpt in the output chain, this
         # should validate that other mailboxes route to the same place
         if resp and resp.err():

@@ -137,7 +137,11 @@ class FilterChain:
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-            if not f.downstream_tx.check_preconditions():
+            f.downstream_tx.check_preconditions()
+            # TODO this is a stopgap fix for incorrect early error
+            # logic in some filters (recipient router) and prevents
+            # deltas not containing a req field from going upstream.
+            if not noop and not f.downstream_tx.req_inflight():
                 break
 
         for f, co, fut, prev_result in reversed(completion):
