@@ -75,6 +75,10 @@ class Recipient:
         # case create_storage_writer wouldn't error out on the
         # executor overflow and AsyncFilterWrapper probably also wants
         # a hint to set the upstream response -> s&f timeout to 0.
+        # TODO router_service.Service.create_storage_writer() has a
+        # hard-coded timeout of 0 to schedule the OutputHandler on the
+        # Executor. This should probably wait some fraction of the
+        # rcpt_timeout.
         if self._check_busy_err():
             return
         self.filter.update(self.tx, self.tx.copy())
