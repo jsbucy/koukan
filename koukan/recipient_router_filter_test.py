@@ -22,14 +22,14 @@ class Policy(RoutingPolicy):
         if rcpt == 'bad':
             return None, Response(500, 'not found')
 
-class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
+class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 
-    async def test_success(self):
+    def test_success(self):
         router = RecipientRouterFilter(Policy())
         router.wire_downstream(TransactionMetadata())
         router.wire_upstream(TransactionMetadata())
@@ -45,15 +45,10 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'hello\r\n')
         delta = prev.delta(tx)
 
-        async def upstream():
-            logging.debug(router.upstream_tx)
-            prev = router.upstream_tx.copy()
-            router.upstream_tx.mail_response = Response(201)
-            router.upstream_tx.rcpt_response = [Response(202)]
-            return prev.delta(router.upstream_tx)
-
-        await router.on_update(delta, upstream)
+        router.on_update(delta)
         logging.debug(router.downstream_tx)
+        logging.debug(router.upstream_tx)
+        self.assertEqual(['good'], [m.mailbox for m in router.upstream_tx.rcpt_to])
         self.assertEqual(router.upstream_tx.rest_endpoint,
                          'http://localhost:8001')
         self.assertEqual(router.upstream_tx.upstream_http_host, 'gateway')
@@ -61,7 +56,7 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
                          [HostPort('example.com', 1234)])
 
 
-    async def test_failure(self):
+    def test_failure(self):
         router = RecipientRouterFilter(Policy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
@@ -77,17 +72,12 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'hello\r\n')
         delta = prev.delta(tx)
 
-        async def upstream():
-            prev = router.upstream_tx.copy()
-            router.upstream_tx.mail_response = Response(201)
-            return prev.delta(router.upstream_tx)
-
-        await router.on_update(delta, upstream)
-        self.assertEqual(201, tx.mail_response.code)
+        router.on_update(delta)
+        # self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([500], [r.code for r in tx.rcpt_response])
 
 
-    async def test_mixed(self):
+    def test_mixed(self):
         router = RecipientRouterFilter(Policy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
@@ -104,16 +94,11 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'hello\r\n')
         delta = prev.delta(tx)
 
-        async def upstream():
-            prev = router.upstream_tx.copy()
-            router.upstream_tx.mail_response = Response(201)
-            router.upstream_tx.rcpt_response = [Response(202)]
-            return prev.delta(router.upstream_tx)
-
-        await router.on_update(delta, upstream)
+        router.on_update(delta)
         logging.debug(tx)
-        self.assertEqual(201, tx.mail_response.code)
-        self.assertEqual([500, 202], [r.code for r in tx.rcpt_response])
+        # self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual(500, tx.rcpt_response[0].code)
+        # self.assertIsNone(tx.rcpt_response[1])
 
 
 

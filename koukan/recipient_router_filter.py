@@ -17,7 +17,7 @@ from koukan.filter import (
     Mailbox,
     Resolution,
     TransactionMetadata )
-from koukan.filter_chain import CoroutineProxyFilter, FilterResult
+from koukan.filter_chain import ProxyFilter, FilterResult
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -50,10 +50,8 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(CoroutineProxyFilter):
+class RecipientRouterFilter(ProxyFilter):
     policy : RoutingPolicy
-    # upstream_tx.rcpt_to[i] == downstream_tx[upstream_rcpt[i]]
-    upstream_rcpt : List[int]
 
     def __init__(self, policy : RoutingPolicy):
         self.policy = policy
@@ -87,33 +85,28 @@ class RecipientRouterFilter(CoroutineProxyFilter):
         self.upstream_tx.options = dest.options
         return None
 
-    async def on_update(
-            self, tx_delta : TransactionMetadata,
-            upstream : Callable[[], Awaitable[TransactionMetadata]]):
-        rcpt_to = tx_delta.rcpt_to
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
+        self.upstream_tx.merge_from(tx_delta)
 
         # xxx drop body if no good rcpt?
 
-        for i,rcpt in enumerate(rcpt_to):
-            off = i + tx_delta.rcpt_to_list_offset
+        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            if i < len(self.downstream_tx.rcpt_response) and self.downstream_tx.rcpt_response[i] is not None:
+                continue
             # this may be chained multiple times; noop if a previous
             # instance already routed
             resp = None
             if (self.downstream_tx.rest_endpoint is None and
                 self.downstream_tx.options is None):
                 resp = self._route(rcpt)
+            logging.debug(resp)
             assert resp is None or resp.err()
-            self.downstream_tx.rcpt_response.append(resp)
-            if resp is None:
-                tx_delta.rcpt_to.append(rcpt)
-                self.upstream_rcpt.append(i)
+            if resp is not None:
+                self.downstream_tx.rcpt_response.extend(
+                    [None] * (i - len(self.downstream_tx.rcpt_response) - 1))
+                self.downstream_tx.rcpt_response.append(resp)
+            else:
+                self.upstream_tx.rcpt_to.append(rcpt)
 
-        self.upstream_tx.merge_from(tx_delta)
-        upstream_delta = await upstream()
-        upstream_rcpt_response = upstream_delta.rcpt_response
-        upstream_delta.rcpt_response = None
-        self.downstream_tx.merge_from(upstream_delta)
-        logging.debug(self.upstream_tx)
-        for i,resp in enumerate(upstream_rcpt_response):
-            self.downstream_tx.rcpt_response[self.upstream_rcpt[i]] = resp
+        return FilterResult()

@@ -548,7 +548,7 @@ class TransactionMetadata:
             live = False
         if self.data_response is None and (self.body is not None) and (
                 len(self.rcpt_to) == len(self.rcpt_response) and
-                not any([r.ok() for r in self.rcpt_response])):
+                not any([r is not None and r.ok() for r in self.rcpt_response])):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             self.data_response = err
             live = False

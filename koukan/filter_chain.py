@@ -8,6 +8,7 @@ from koukan.filter import TransactionMetadata
 class FilterResult:
     # delta to be merged after upstream returns
     downstream_delta : Optional[TransactionMetadata] = None
+    rcpt_offset : Optional[List[int]] = None
     def __init__(self, delta : Optional[TransactionMetadata] = None):
         self.downstream_delta = delta
 
@@ -134,14 +135,25 @@ class FilterChain:
 
             f._prev_upstream_tx = f.upstream_tx.copy()
 
+            logging.debug(f.downstream_tx)
+            logging.debug(f.upstream_tx)
+            if filter_result is not None and f.upstream_tx is not f.downstream_tx and len(f.upstream_tx.rcpt_to) < len(f.downstream_tx.rcpt_to):
+                # upstream_tx.rcpt_to[i] == downstream_tx[rcpt_offset[i]]
+                filter_result.rcpt_offset = []
+                # filter populates responses for some rcpts in
+                # downstream_tx copies the remaining rcpts to
+                # upstream_tx
+                for i,rcpt in enumerate(f.downstream_tx.rcpt_to):
+                    if f.downstream_tx.rcpt_response[i] is None:
+                        filter_result.rcpt_offset.append(i)
+                logging.debug(filter_result.rcpt_offset)
+                logging.debug(f.upstream_tx.rcpt_to)
+                assert len(filter_result.rcpt_offset) == len(f.upstream_tx.rcpt_to)
+
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-            f.downstream_tx.check_preconditions()
-            # TODO this is a stopgap fix for incorrect early error
-            # logic in some filters (recipient router) and prevents
-            # deltas not containing a req field from going upstream.
-            if not noop and not f.downstream_tx.req_inflight():
+            if not f.downstream_tx.check_preconditions():
                 break
 
         for f, co, fut, prev_result in reversed(completion):
@@ -166,7 +178,14 @@ class FilterChain:
                     pass
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
+                logging.debug(f.downstream_tx)
+                logging.debug(f.upstream_tx)
+                logging.debug(delta)
                 if f.upstream_tx is not f.downstream_tx:
+                    if prev_result.rcpt_offset:
+                        delta.rcpt_response = delta.rcpt_response_list_offset = None
+                        for i, resp in enumerate(f.upstream_tx.rcpt_response):
+                            f.downstream_tx.rcpt_response[prev_result.rcpt_offset[i]] = resp
                     f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)

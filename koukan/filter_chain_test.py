@@ -85,31 +85,22 @@ class RewriteBody(ProxyFilter):
 # because it removes from rcpt_to and must be CoroutineFilter because it
 # maps upstream to downstream rcpt_response in a way that cannot
 # (currently) be represented by FilterResult.
-class RejectFirstRcpt(CoroutineProxyFilter):
-    async def on_update(self, delta, upstream):
+class RejectFirstRcpt(ProxyFilter):
+    def on_update(self, delta):
         logging.debug(self.downstream_tx)
         rcpt_to = delta.rcpt_to
         delta.rcpt_to = []
-        rcpt0 = False
-        if rcpt_to and not delta.rcpt_to_list_offset:
-            rcpt_to = rcpt_to[1:]
-            rcpt0 = True
-        else:
-            delta.rcpt_to_list_offset -= 1
-        delta.rcpt_to = rcpt_to
+        self.downstream_tx.rcpt_response.extend(
+            [None] * (len(self.downstream_tx.rcpt_to) - len(self.downstream_tx.rcpt_response)))
+        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            if i == 0:
+                if self.downstream_tx.rcpt_response[0] is None:
+                    self.downstream_tx.rcpt_response[0] = Response(550)
+            else:
+                self.upstream_tx.rcpt_to.append(rcpt)
+
         self.upstream_tx.merge_from(delta)
-        upstream_delta = await upstream()
-        rcpt_resp = upstream_delta.rcpt_response
-        upstream_delta.rcpt_response = None
-        self.downstream_tx.merge_from(upstream_delta)
-        if rcpt0:
-            # In practice, something like this would be chained
-            # downstream of exploder which would provide mail_response.
-            # if not self.downstream_tx.mail_response:
-            #     self.downstream_tx.mail_response = Response(250)
-            self.downstream_tx.rcpt_response = [Response(550)]
-        self.downstream_tx.rcpt_response.extend(self.upstream_tx.rcpt_response)
-        logging.debug(self.downstream_tx)
+        return FilterResult()
 
 class RejectMail(Filter):
     def on_update(self, delta):
