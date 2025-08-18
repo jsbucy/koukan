@@ -201,9 +201,12 @@ class End2EndTest(unittest.TestCase):
     # mx smtp -> smtp
     def test_smoke(self):
         self._configure_and_run()
-        send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
-                  'alice@example.com', ['bob@example.com'],
-                  'hello, world!')
+        rcpt_resp, final_resp = send_smtp(
+            'localhost', self.gateway_mx_port, 'end2end_test',
+            'alice@example.com', ['bob@nowhere.com', 'bob@example.com'],
+            'hello, world!')
+        self.assertEqual(550, rcpt_resp[0][0])
+        self.assertEqual(250, rcpt_resp[1][0])
 
         for handler in self.fake_smtpd.handlers:
             # smtpd machinery constructs extra handlers during startup?

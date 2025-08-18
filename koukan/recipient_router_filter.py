@@ -102,11 +102,6 @@ class RecipientRouterFilter(ProxyFilter):
                 resp = self._route(rcpt)
             logging.debug(resp)
             assert resp is None or resp.err()
-            if resp is not None:
-                self.downstream_tx.rcpt_response.extend(
-                    [None] * (i - len(self.downstream_tx.rcpt_response) - 1))
-                self.downstream_tx.rcpt_response.append(resp)
-            else:
-                self.upstream_tx.rcpt_to.append(rcpt)
+            self.downstream_tx.rcpt_response.append(resp)
 
         return FilterResult()

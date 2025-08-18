@@ -8,7 +8,6 @@ from koukan.filter import TransactionMetadata
 class FilterResult:
     # delta to be merged after upstream returns
     downstream_delta : Optional[TransactionMetadata] = None
-    rcpt_offset : Optional[List[int]] = None
     def __init__(self, delta : Optional[TransactionMetadata] = None):
         self.downstream_delta = delta
 
@@ -17,6 +16,10 @@ class BaseFilter:
     downstream_tx : Optional[TransactionMetadata] = None
     _prev_upstream_tx : Optional[TransactionMetadata] = None
     upstream_tx : Optional[TransactionMetadata] = None
+
+    # upstream_tx.rcpt_to[i] == downstream_tx[rcpt_offset[i]]
+    _rcpt_offset : Optional[List[int]] = None
+
 
     def __init__(self):
         pass
@@ -133,22 +136,27 @@ class FilterChain:
             else:
                 raise NotImplementedError()
 
-            f._prev_upstream_tx = f.upstream_tx.copy()
-
-            logging.debug(f.downstream_tx)
-            logging.debug(f.upstream_tx)
-            if filter_result is not None and f.upstream_tx is not f.downstream_tx and len(f.upstream_tx.rcpt_to) < len(f.downstream_tx.rcpt_to):
-                # upstream_tx.rcpt_to[i] == downstream_tx[rcpt_offset[i]]
-                filter_result.rcpt_offset = []
+            if filter_result is not None:
                 # filter populates responses for some rcpts in
                 # downstream_tx copies the remaining rcpts to
                 # upstream_tx
-                for i,rcpt in enumerate(f.downstream_tx.rcpt_to):
-                    if f.downstream_tx.rcpt_response[i] is None:
-                        filter_result.rcpt_offset.append(i)
-                logging.debug(filter_result.rcpt_offset)
-                logging.debug(f.upstream_tx.rcpt_to)
-                assert len(filter_result.rcpt_offset) == len(f.upstream_tx.rcpt_to)
+                down_rcpt = len(f.downstream_tx.rcpt_to)
+                up_rcpt = len(f.upstream_tx.rcpt_to)
+
+                if f.downstream_tx is not f.upstream_tx and down_rcpt != up_rcpt:
+                    if f._rcpt_offset is None:
+                        f._rcpt_offset = []
+                    for i,rcpt in enumerate(f.downstream_tx.rcpt_to):
+                        no_resp = (i >= len(f.downstream_tx.rcpt_response)) or (
+                            f.downstream_tx.rcpt_response[i] is None)
+                        if (i >= len(f.upstream_tx.rcpt_to)) and no_resp:
+                            f.upstream_tx.rcpt_to.append(f.downstream_tx.rcpt_to[i])
+                        if no_resp:
+                            f._rcpt_offset.append(i)
+
+                    assert len(f._rcpt_offset) == len(f.upstream_tx.rcpt_to)
+
+            f._prev_upstream_tx = f.upstream_tx.copy()
 
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
@@ -178,14 +186,17 @@ class FilterChain:
                     pass
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
-                logging.debug(f.downstream_tx)
-                logging.debug(f.upstream_tx)
-                logging.debug(delta)
                 if f.upstream_tx is not f.downstream_tx:
-                    if prev_result.rcpt_offset:
+                    if f._rcpt_offset is not None:
                         delta.rcpt_response = delta.rcpt_response_list_offset = None
                         for i, resp in enumerate(f.upstream_tx.rcpt_response):
-                            f.downstream_tx.rcpt_response[prev_result.rcpt_offset[i]] = resp
+                            off = f._rcpt_offset[i]
+                            if off < len(f.downstream_tx.rcpt_response) and f.downstream_tx.rcpt_response[off] is not None:
+                                continue
+                            if off >= len(f.downstream_tx.rcpt_response):
+                                f.downstream_tx.rcpt_response.append(None)
+                            assert f.downstream_tx.rcpt_response[off] is None
+                            f.downstream_tx.rcpt_response[off] = resp
                     f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)
@@ -197,6 +208,4 @@ class FilterChain:
             entries.append(f.__class__.__name__)
         logging.debug(', '.join(entries))
 
-
         return prev.delta(self.filters[0].downstream_tx)
-

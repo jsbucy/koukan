@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 import koukan_cpython_smtplib.smtplib as smtplib
 import sys
 import secrets
@@ -19,8 +19,12 @@ def _resp_err(resp : Tuple[int, bytes]):
     code, msg = resp
     return int(code / 100) > 2
 
+Response = Tuple[int, str]
+
+# -> per-rcpt responses, final (mail/data) response
 def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
-         raw : Optional[bytes] = None):
+         raw : Optional[bytes] = None
+         ) -> Tuple[Optional[List[Response]], Optional[Response]]:
     with smtplib.SMTP(host=host, port=int(port), local_hostname=ehlo) as s:
         s.ehlo(ehlo)
         logging.info('remote server esmtp %s', s.esmtp_features)
@@ -41,16 +45,20 @@ def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
             resp = s.mail(mail_from, ['size=%d' % len(raw)])
             logging.info('mail resp %s', resp)
             if _resp_err(resp):
-                return resp
-            resp = s.rcpt(rcpt_to)
-            logging.info('rcpt resp %s', resp)
-            if _resp_err(resp):
-                return resp
+                return None, resp
+            rcpt_resp = []
+            for rcpt in rcpt_to:
+                resp = s.rcpt(rcpt)
+                logging.info('rcpt %s resp %s', rcpt, resp)
+                rcpt_resp.append(resp)
+            if not any([not _resp_err(r) for r in rcpt_resp]):
+                return rcpt_resp, None
             resp = s.data(raw)
             logging.info('data resp %s', resp)
-            return resp
+            return rcpt_resp, resp
         except:
             logging.exception('sendmail exception')
+        return None, None
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,

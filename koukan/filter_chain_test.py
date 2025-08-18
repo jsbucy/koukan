@@ -88,18 +88,13 @@ class RewriteBody(ProxyFilter):
 class RejectFirstRcpt(ProxyFilter):
     def on_update(self, delta):
         logging.debug(self.downstream_tx)
-        rcpt_to = delta.rcpt_to
         delta.rcpt_to = []
-        self.downstream_tx.rcpt_response.extend(
-            [None] * (len(self.downstream_tx.rcpt_to) - len(self.downstream_tx.rcpt_response)))
-        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
-            if i == 0:
-                if self.downstream_tx.rcpt_response[0] is None:
-                    self.downstream_tx.rcpt_response[0] = Response(550)
-            else:
-                self.upstream_tx.rcpt_to.append(rcpt)
-
         self.upstream_tx.merge_from(delta)
+
+        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            if i == 0 and (len(self.downstream_tx.rcpt_response) == 0):
+                self.downstream_tx.rcpt_response.append(Response(550))
+
         return FilterResult()
 
 class RejectMail(Filter):
@@ -110,14 +105,14 @@ class RejectMail(Filter):
             self.downstream_tx.mail_response = Response(550, 'bad')
         return FilterResult()
 
-class RejectRcpt(Filter):
+class RejectRcpt(ProxyFilter):
     def on_update(self, delta):
         logging.debug('RejectMail.on_update')
-        if delta.mail_from:
-            assert self.downstream_tx.mail_response is None
-            self.downstream_tx.mail_response = Response(250)
-        if delta.rcpt_to:
-            self.downstream_tx.rcpt_response = [Response(550)]
+        # if delta.mail_from:
+        #     assert self.downstream_tx.mail_response is None
+        #     self.downstream_tx.mail_response = Response(250)
+        for i in range(len(self.downstream_tx.rcpt_response), len(self.downstream_tx.rcpt_to)):
+            self.downstream_tx.rcpt_response.append(Response(550))
         return FilterResult()
 
 class FilterChainTest(unittest.TestCase):
@@ -207,7 +202,7 @@ class FilterChainTest(unittest.TestCase):
             rcpt_to = [Mailbox('bob')])
         tx.merge_from(delta)
         chain.update()
-        self.assertEqual(250, tx.mail_response.code)
+        # self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([550], [r.code for r in tx.rcpt_response])
         tx.cancelled = True
         chain.update()
