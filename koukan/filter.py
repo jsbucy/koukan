@@ -94,6 +94,8 @@ def get_esmtp_param(params : List[EsmtpParam], param : str
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
     esmtp : List[EsmtpParam]
+    routed = False
+
     def __init__(self, mailbox : str, esmtp : List[EsmtpParam] = []):
         self.mailbox = mailbox
         self.esmtp = esmtp

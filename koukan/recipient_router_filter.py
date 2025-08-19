@@ -1,7 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import (
-    Awaitable,
     Any,
     Callable,
     Dict,
@@ -52,27 +51,30 @@ class RoutingPolicy(ABC):
 
 class RecipientRouterFilter(ProxyFilter):
     policy : RoutingPolicy
+    dry_run : bool
 
-    def __init__(self, policy : RoutingPolicy):
+    def __init__(self, policy : RoutingPolicy, dry_run = False):
         self.policy = policy
         self.upstream_rcpt = []
+        self.dry_run = dry_run
 
-    def _route(self, mailbox) -> Optional[Response]:
+    def _route(self, mailbox) -> Tuple[Optional[Response], bool]:
         tx = self.downstream_tx
         logging.debug('RecipientRouterFilter._route() %s', tx)
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
-        logging.debug(dest)
-        logging.debug(resp)
 
         if resp and resp.err():
             # xxx this can potentially keep going?
             # if tx.mail_from and tx.mail_response is None:
             #     tx.mail_response = Response(
             #         250, 'MAIL ok (RecipientRouterFilter)')
-            return resp
+            return resp, True
         elif dest is None:
-            return None
+            return None, False
+
+        if self.dry_run:
+            return None, True
 
         # XXX err if any of this doesn't match previous.  Eventually
         # this becomes per-rcpt and the terminal/sink filter can sort
@@ -83,7 +85,7 @@ class RecipientRouterFilter(ProxyFilter):
         if dest.http_host is not None:
             self.upstream_tx.upstream_http_host = dest.http_host
         self.upstream_tx.options = dest.options
-        return None
+        return None, True
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
@@ -97,10 +99,8 @@ class RecipientRouterFilter(ProxyFilter):
             # this may be chained multiple times; noop if a previous
             # instance already routed
             resp = None
-            if (self.downstream_tx.rest_endpoint is None and
-                self.downstream_tx.options is None):
-                resp = self._route(rcpt)
-            logging.debug(resp)
+            if not rcpt.routed:
+                resp, rcpt.routed = self._route(rcpt)
             assert resp is None or resp.err()
             self.downstream_tx.rcpt_response.append(resp)
 
