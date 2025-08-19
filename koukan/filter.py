@@ -15,6 +15,19 @@ from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
 
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
+class WhichJson(IntEnum):
+    ALL = 0
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
+    DB = 4
+    DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
+
 class HostPort:
     host : str
     port : int
@@ -128,24 +141,18 @@ class Mailbox:
             params = [EsmtpParam.from_json(j) for j in esmtp]
         return Mailbox(json['m'], params)
 
+    def copy(self, valid : WhichJson):
+        out = Mailbox(self.mailbox, self.esmtp)
+        if valid == WhichJson.ALL:
+            out.routed = self.routed
+        return out
+
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
-# TODO I'm starting to think maybe we should invert this and have a
-# field mask thing instead, many of these could live in their own module
-class WhichJson(IntEnum):
-    ALL = 0
-    REST_READ = 1
-    REST_CREATE = 2
-    REST_UPDATE = 3
-    DB = 4
-    DB_ATTEMPT = 5
-    EXPLODER_CREATE = 6
-    EXPLODER_UPDATE = 7
-    ADD_ROUTE = 8
-
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
+Copy = Callable[[object, WhichJson], object]
 class TxField:
     json_field : str
 
@@ -155,6 +162,7 @@ class TxField:
     from_json : Optional[FromJson] = None
     to_json : Optional[ToJson] = None
     is_list : bool = False
+    copy : Optional[Copy] = None
 
     def __init__(self,
                  json_field : str,
@@ -162,7 +170,8 @@ class TxField:
                  from_json : Optional[FromJson] = None,
                  to_json : Optional[ToJson] = None,
                  rest_placeholder : bool = False,
-                 is_list : bool = False):
+                 is_list : bool = False,
+                 copy : Optional[Copy] = None):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -172,6 +181,7 @@ class TxField:
         self.to_json = to_json
         self.rest_placeholder = rest_placeholder
         self.is_list = is_list
+        self.copy = copy
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -761,6 +771,8 @@ class TransactionMetadata:
                         hasattr(self, field.list_offset())):
                     setattr(out, field.list_offset(),
                             getattr(self, field.list_offset()))
+            if field.copy is not None:
+                v = field.copy(v, valid)
             setattr(out, name, v)
         return out
 
@@ -777,6 +789,8 @@ class TransactionMetadata:
                         hasattr(src, field.list_offset())):
                     setattr(self, field.list_offset(),
                             getattr(src, field.list_offset()))
+            if field.copy is not None:
+                v = field.copy(v, valid)
             setattr(self, name, v)
 
     def body_blob(self) -> Blob:
