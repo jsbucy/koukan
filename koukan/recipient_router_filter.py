@@ -65,10 +65,6 @@ class RecipientRouterFilter(ProxyFilter):
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
 
         if resp and resp.err():
-            # xxx this can potentially keep going?
-            # if tx.mail_from and tx.mail_response is None:
-            #     tx.mail_response = Response(
-            #         250, 'MAIL ok (RecipientRouterFilter)')
             return resp, True
         elif dest is None:
             return None, False
@@ -76,25 +72,37 @@ class RecipientRouterFilter(ProxyFilter):
         if self.dry_run:
             return None, True
 
-        # XXX err if any of this doesn't match previous.  Eventually
-        # this becomes per-rcpt and the terminal/sink filter can sort
-        # that out.
+        # in practice, in the output chain, there will never be more
+        # that one rcpt but multiple should work as long as they all
+        # have the same routing results
+        e = self.upstream_tx.rest_endpoint
+        assert e is None or e == dest.rest_endpoint
         self.upstream_tx.rest_endpoint = dest.rest_endpoint
+
+        res = None
         if dest.remote_host is not None:
-            self.upstream_tx.resolution = Resolution(dest.remote_host)
-        if dest.http_host is not None:
-            self.upstream_tx.upstream_http_host = dest.http_host
+            res = Resolution(dest.remote_host)
+        up_res = self.upstream_tx.resolution
+        assert up_res is None or up_res == res
+        self.upstream_tx.resolution = res
+
+        hh = self.upstream_tx.upstream_http_host
+        assert hh is None or hh == dest.http_host
+        self.upstream_tx.upstream_http_host = dest.http_host
+
+        opt = self.upstream_tx.options
+        assert opt is None or opt == dest.options
         self.upstream_tx.options = dest.options
+
         return None, True
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
         self.upstream_tx.merge_from(tx_delta)
 
-        # xxx drop body if no good rcpt?
-
         for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
-            if i < len(self.downstream_tx.rcpt_response) and self.downstream_tx.rcpt_response[i] is not None:
+            if (i < len(self.downstream_tx.rcpt_response) and
+                self.downstream_tx.rcpt_response[i] is not None):
                 continue
             # this may be chained multiple times; noop if a previous
             # instance already routed

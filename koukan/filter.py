@@ -60,6 +60,14 @@ class Resolution:
     def __repr__(self):
         return str(self.hosts)
 
+    def __eq__(self, rhs):
+        if not isinstance(rhs, Resolution) or len(self.hosts) != len(rhs.hosts):
+            return False
+        for i in range(0,len(self.hosts)):
+            if self.hosts[i] != rhs.hosts[i]:
+                return False
+        return True
+
 # NOTE the SMTP syntax for the capability list returned from EHLO
 # isn't the same as that requested in MAIL/RCPT. This is for the latter.
 class EsmtpParam:
