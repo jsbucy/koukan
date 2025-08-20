@@ -243,6 +243,12 @@ class End2EndTest(unittest.TestCase):
         else:
             self.fail('didn\'t receive message')
 
+        with open(tx.tx_json_path, 'rb') as tx_json_file:
+            tx_json = json.load(tx_json_file)
+            logging.debug(tx_json)
+        self.assertEqual('bob@rest-application.example.com',
+                         tx_json['rcpt_to'][0]['m'])
+
         logging.debug(json.dumps(tx.tx_json, indent=2))
         logging.debug(json.dumps(tx.message_json, indent=2))
         blob_content = {}

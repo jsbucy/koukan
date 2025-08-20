@@ -169,6 +169,7 @@ class Transaction:
         if tx_body:
             self.body_path = filename
             self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+            self.log()
 
     # wsgi/flask-only
     def put_blob(self, req_headers, stream : IOBase,
@@ -212,7 +213,7 @@ class Transaction:
                       self.message_json if self.message_json else None)
         logging.debug('received body %d bytes', self._file_size(self.body_path))
 
-        logging.debug('received blobs %s', self.declared_blob_ids.keys())
+        logging.debug('received blobs %s', self.blob_paths.keys())
         for blob_id, blob_path in self.blob_paths.items():
             logging.debug('received blob %s %d bytes',
                           blob_id, self._file_size(blob_path))
@@ -229,6 +230,7 @@ class Transaction:
             assert isinstance(f, TextIOBase)
             json.dump(output_json, f)
             self.tx_json_path = f.name
+            logging.debug(self.tx_json_path)
 
     def cancel(self):
         if self.cancelled:
