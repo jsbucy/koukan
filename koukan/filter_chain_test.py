@@ -108,10 +108,8 @@ class RejectMail(Filter):
 class RejectRcpt(ProxyFilter):
     def on_update(self, delta):
         logging.debug('RejectMail.on_update')
-        # if delta.mail_from:
-        #     assert self.downstream_tx.mail_response is None
-        #     self.downstream_tx.mail_response = Response(250)
-        for i in range(len(self.downstream_tx.rcpt_response), len(self.downstream_tx.rcpt_to)):
+        for i in range(len(self.downstream_tx.rcpt_response),
+                       len(self.downstream_tx.rcpt_to)):
             self.downstream_tx.rcpt_response.append(Response(550))
         return FilterResult()
 
@@ -202,7 +200,6 @@ class FilterChainTest(unittest.TestCase):
             rcpt_to = [Mailbox('bob')])
         tx.merge_from(delta)
         chain.update()
-        # self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([550], [r.code for r in tx.rcpt_response])
         tx.cancelled = True
         chain.update()
