@@ -95,8 +95,50 @@ class FilterChain:
                 tx = TransactionMetadata()
                 f.wire_upstream(tx)
 
+    def _filter_rcpts(self, f : Filter):
+        # A ProxyFilter may fail individual rcpts by setting the
+        # corresponding rcpt_response. This copies the remaining rcpts
+        # from downstream_tx to upstream_tx and populates _rcpt_offset
+        # for _copy_rcpt_responses() on the way back down.
+        down_rcpt = len(f.downstream_tx.rcpt_to)
+        up_rcpt = len(f.upstream_tx.rcpt_to)
+
+        if f.downstream_tx is f.upstream_tx or down_rcpt == up_rcpt:
+            return
+        if f._rcpt_offset is None:
+            f._rcpt_offset = []
+        for i,rcpt in enumerate(f.downstream_tx.rcpt_to):
+            no_resp = (i >= len(f.downstream_tx.rcpt_response)) or (
+                f.downstream_tx.rcpt_response[i] is None)
+            if (i >= len(f.upstream_tx.rcpt_to)) and no_resp:
+                f.upstream_tx.rcpt_to.append(f.downstream_tx.rcpt_to[i])
+            if no_resp:
+                f._rcpt_offset.append(i)
+
+        assert len(f._rcpt_offset) == len(f.upstream_tx.rcpt_to)
+
+    def _copy_rcpt_responses(self, f : Filter, delta : TransactionMetadata):
+        # If _filter_rcpts() previously copied rcpts from downstream
+        # to upstream and populated _rcpt_offset, propagate
+        # rcpt_response from upstream_tx to downstream_tx per
+        # _rcpt_offset mapping.
+        if f._rcpt_offset is None:
+            return
+
+        delta.rcpt_response = delta.rcpt_response_list_offset = None
+        for i, resp in enumerate(f.upstream_tx.rcpt_response):
+            off = f._rcpt_offset[i]
+            if (off < len(f.downstream_tx.rcpt_response) and
+                f.downstream_tx.rcpt_response[off] is not None):
+                continue
+            if off >= len(f.downstream_tx.rcpt_response):
+                f.downstream_tx.rcpt_response.append(None)
+            assert f.downstream_tx.rcpt_response[off] is None
+            f.downstream_tx.rcpt_response[off] = resp
+
     def update(self):
-        completion : List[Tuple[BaseFilter, Coroutine, asyncio.Future, FilterResult]] = []
+        completion : List[
+            Tuple[BaseFilter, Coroutine, asyncio.Future, FilterResult]] = []
 
         # TODO maybe move noop/heartbeat/keepalive to a separate entry
         # point which most impls don't need to implement
@@ -137,24 +179,7 @@ class FilterChain:
                 raise NotImplementedError()
 
             if filter_result is not None:
-                # filter populates responses for some rcpts in
-                # downstream_tx copies the remaining rcpts to
-                # upstream_tx
-                down_rcpt = len(f.downstream_tx.rcpt_to)
-                up_rcpt = len(f.upstream_tx.rcpt_to)
-
-                if f.downstream_tx is not f.upstream_tx and down_rcpt != up_rcpt:
-                    if f._rcpt_offset is None:
-                        f._rcpt_offset = []
-                    for i,rcpt in enumerate(f.downstream_tx.rcpt_to):
-                        no_resp = (i >= len(f.downstream_tx.rcpt_response)) or (
-                            f.downstream_tx.rcpt_response[i] is None)
-                        if (i >= len(f.upstream_tx.rcpt_to)) and no_resp:
-                            f.upstream_tx.rcpt_to.append(f.downstream_tx.rcpt_to[i])
-                        if no_resp:
-                            f._rcpt_offset.append(i)
-
-                    assert len(f._rcpt_offset) == len(f.upstream_tx.rcpt_to)
+                self._filter_rcpts(f)
 
             f._prev_upstream_tx = f.upstream_tx.copy()
 
@@ -187,16 +212,7 @@ class FilterChain:
                 # unexpected for it *not* to raise?
             elif prev_result is not None:
                 if f.upstream_tx is not f.downstream_tx:
-                    if f._rcpt_offset is not None:
-                        delta.rcpt_response = delta.rcpt_response_list_offset = None
-                        for i, resp in enumerate(f.upstream_tx.rcpt_response):
-                            off = f._rcpt_offset[i]
-                            if off < len(f.downstream_tx.rcpt_response) and f.downstream_tx.rcpt_response[off] is not None:
-                                continue
-                            if off >= len(f.downstream_tx.rcpt_response):
-                                f.downstream_tx.rcpt_response.append(None)
-                            assert f.downstream_tx.rcpt_response[off] is None
-                            f.downstream_tx.rcpt_response[off] = resp
+                    self._copy_rcpt_responses(f, delta)
                     f.downstream_tx.merge_from(delta)
                 if prev_result.downstream_delta is not None:
                     f.downstream_tx.merge_from(prev_result.downstream_delta)
