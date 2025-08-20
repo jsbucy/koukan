@@ -50,13 +50,14 @@ class End2EndTest(unittest.TestCase):
         if (dest := policy.get('destination', None)) is None:
             return
         logging.debug(dest)
-        if dest['endpoint'] == 'http://localhost:8001':
+        endpoint = dest.get('endpoint', None)
+        if endpoint == 'http://localhost:8001':
             dest['endpoint'] = self.gateway_base_url
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif dest['endpoint'] == 'http://localhost:8000':
+        elif endpoint == 'http://localhost:8000':
             dest['endpoint'] = self.router_base_url
-        elif dest['endpoint'] == 'http://localhost:8002':
+        elif endpoint == 'http://localhost:8002':
             dest['endpoint'] = self.receiver_base_url
             dest['options']['receive_parsing'] = {
                 'max_inline': 8 }

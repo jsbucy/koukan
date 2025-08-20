@@ -120,6 +120,7 @@ class Mailbox:
             return False
         return self.mailbox == x.mailbox
 
+    # XXX
     def __str__(self):
         return self.mailbox
     def __repr__(self):
@@ -278,7 +279,8 @@ _tx_fields = [
                           WhichJson.DB,
                           WhichJson.ADD_ROUTE]),
             to_json=Mailbox.to_json,
-            from_json=Mailbox.from_json),
+            from_json=Mailbox.from_json,
+            copy=Mailbox.copy),
     TxField('rcpt_response',
             is_list=True,
             validity=set([WhichJson.DB_ATTEMPT,
@@ -756,24 +758,9 @@ class TransactionMetadata:
         out.rcpt_response = list(self.rcpt_response)
         return out
 
-    # XXX refactor with copy_valid_from()
     def copy_valid(self, valid : WhichJson):
         out = TransactionMetadata()
-        for name,field in tx_json_fields.items():
-            if not field.valid(valid):
-                continue
-            v = getattr(self, name, None)
-            if v is None:
-                continue
-            if field.is_list:
-                v = list(v)
-                if _valid_list_offset(valid) and (
-                        hasattr(self, field.list_offset())):
-                    setattr(out, field.list_offset(),
-                            getattr(self, field.list_offset()))
-            if field.copy is not None:
-                v = field.copy(v, valid)
-            setattr(out, name, v)
+        out.copy_valid_from(valid, self)
         return out
 
     def copy_valid_from(self, valid : WhichJson, src : 'TransactionMetadata'):
@@ -784,12 +771,15 @@ class TransactionMetadata:
             if v is None:
                 continue
             if field.is_list:
-                v = list(v)
+                if field.copy is not None:
+                    v = [field.copy(vv, valid) for vv in v]
+                else:
+                    v = list(v)
                 if _valid_list_offset(valid) and (
                         hasattr(src, field.list_offset())):
                     setattr(self, field.list_offset(),
                             getattr(src, field.list_offset()))
-            if field.copy is not None:
+            elif field.copy is not None:
                 v = field.copy(v, valid)
             setattr(self, name, v)
 

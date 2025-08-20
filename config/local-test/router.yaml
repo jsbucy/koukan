@@ -284,10 +284,20 @@ endpoint:
 
 - name: sink
   chain:
+  - filter: router
+    policy:
+      name: address_list
+      prefixes: []
+      destination:
+        endpoint: http://localhost:8002
+        options:
+          receive_parsing:
+            max_inline: 0
+  - filter: message_parser
   - filter: rest_output
     rcpt_timeout: 300
     data_timeout: 300
-    static_endpoint: http://localhost:8002
+    # static_endpoint: http://localhost:8002
     chunk_size: 1048576
 
 
