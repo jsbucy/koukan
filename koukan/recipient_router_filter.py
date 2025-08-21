@@ -69,12 +69,16 @@ class RecipientRouterFilter(ProxyFilter):
         elif dest is None:
             return None, False
 
+        # for the exploder downstream chain, this is configured with
+        # dry_run=True to skip setting routing results into the tx; we
+        # just want it to reject invalid rcpts
         if self.dry_run:
             return None, True
 
-        # in practice, in the output chain, there will never be more
-        # that one rcpt but multiple should work as long as they all
-        # have the same routing results
+        # in practice, in any output chain other than exploder
+        # downstream, there will never be more that one rcpt but
+        # multiple should work as long as they all have the same
+        # routing results
         e = self.upstream_tx.rest_endpoint
         assert e is None or e == dest.rest_endpoint
         self.upstream_tx.rest_endpoint = dest.rest_endpoint
