@@ -1,0 +1,5 @@
+# register mypy_aspect with Bazel
+build --aspects //:py.bzl%mypy_aspect
+
+# optionally, default enable the mypy checks
+build --output_groups=+mypy
