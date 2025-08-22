@@ -74,7 +74,6 @@ class SmtpHandler:
         self.timeout_data = timeout_data
 
         self.cx_id = 'cx%d' % next_cx()
-        self.prev_chunk = []
         self.refresh_interval = refresh_interval
         self.chunk_size = chunk_size
 
@@ -134,8 +133,6 @@ class SmtpHandler:
         return '250 {}'.format(server.hostname)
 
     def _cancel(self):
-        self.prev_chunk = []
-        self.prev_chunk_len = 0
         if self.chain is None:
             return
         if self.chain is not None:
@@ -173,7 +170,7 @@ class SmtpHandler:
                           mail_esmtp : List[str]) -> str:
         self.chain = self.chain_factory()
         self.chain.init(TransactionMetadata())
-
+        assert self.chain.tx is not None
         self.chain.tx.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
@@ -218,6 +215,9 @@ class SmtpHandler:
                           envelope : Envelope,
                           rcpt_to : str,
                           rcpt_esmtp : List[str]) -> str:
+        assert self.chain is not None
+        assert self.chain.tx is not None
+
         logging.info('SmtpHandler.handle_RCPT %s %s %s',
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
@@ -244,12 +244,13 @@ class SmtpHandler:
         if rcpt_resp.ok():
             # aiosmtpd expects this
             envelope.rcpt_tos.append(rcpt_to)
-            envelope.rcpt_options.append(rcpt_esmtp)
+            envelope.rcpt_options.extend(rcpt_esmtp)
         return rcpt_resp.to_smtp_resp()
 
     async def handle_DATA(self, server : SMTP,
                           session : Session,
                           envelope : Envelope) -> str:
+        assert isinstance(envelope.content, bytes)
         resp = await self.handle_DATA_CHUNK(
             server, session, envelope,
             envelope.content, decoded_data=None, last=True)
@@ -262,6 +263,8 @@ class SmtpHandler:
                                 data : bytes,
                                 decoded_data : Optional[str],
                                 last : bool) -> Optional[str]:
+        assert self.chain is not None
+        assert self.chain.tx is not None
         now = time.monotonic()
         if self.chain.tx.body is None:
             self.chain.tx.body = InlineBlob(b'')
@@ -269,7 +272,7 @@ class SmtpHandler:
         body = self.chain.tx.body
         assert isinstance(body, InlineBlob)
         assert body.content_length() is None
-
+        assert isinstance(self.chain.tx.body, InlineBlob)
         if last or (self.chain.tx.body.available() + len(data) <= self.chunk_size):
             body.append(data, last)
             data = b''

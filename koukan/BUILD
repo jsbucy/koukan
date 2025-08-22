@@ -511,9 +511,9 @@ py_library(name='smtp_service',
                  ':smtp_auth',
                  ':response',
                  ':filter',
+                 ':filter_chain',
                  ':executor',
-                 '@pypi//aiosmtpd'],
-           tags=['no-mypy'])
+                 '@pypi//aiosmtpd'])
 
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
