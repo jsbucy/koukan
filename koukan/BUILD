@@ -425,8 +425,7 @@ py_library(name='filter_chain_wiring',
                  ':recipient_router_factory',
                  ':relay_auth_filter',
                  ':remote_host_filter',
-                 ':rest_endpoint'],
-           tags=['no-mypy'])
+                 ':rest_endpoint'])
 
 py_library(name='executor',
            srcs=['executor.py'])

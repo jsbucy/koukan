@@ -78,6 +78,7 @@ class FilterChainWiring:
                           block_upstream : bool,
                           notify : bool,
                           retry : bool):
+        assert self.exploder_output_factory is not None
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
             http_host, block_upstream)
         if upstream is None:
