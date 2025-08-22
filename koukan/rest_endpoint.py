@@ -175,8 +175,8 @@ class RestEndpoint(Filter):
                     json=json,
                     headers=req_headers,
                     timeout=deadline_left)
-            except RequestError:
-                logging.exception('RestEndpoint._create')
+            except RequestError as e:
+                logging.debug('RestEndpoint._create http error %s', e)
                 continue
             logging.info('RestEndpoint._create req_headers %s resp %s %s',
                          req_headers, rest_resp, rest_resp.text)
@@ -258,7 +258,7 @@ class RestEndpoint(Filter):
         try:
             rest_resp = self.client.post(self.transaction_url + '/cancel')
         except RequestError as e:
-            logging.exception('RestEndpoint._cancel POST exception')
+            logging.debug('RestEndpoint._cancel POST exception %s', e)
         else:
             logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
                           rest_resp)

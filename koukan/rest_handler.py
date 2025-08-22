@@ -631,7 +631,6 @@ class RestHandlerFactory(HandlerFactory):
 
     def get_tx(self, tx_rest_id) -> RestHandler:
         filter = self.endpoint_factory.get(tx_rest_id)
-        assert filter is not None
         kwargs : Dict[str, Any] = {}
         if self.chunk_size:
             kwargs['chunk_size'] = self.chunk_size
