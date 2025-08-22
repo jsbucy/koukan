@@ -24,7 +24,6 @@ class FilterChainFactory:
     loop : asyncio.AbstractEventLoop
 
     def __init__(self, root_yaml : dict):
-        self.router_policies = {}
         self.filters = {}
         self._inject_yaml(root_yaml)
         self.loop = asyncio.new_event_loop()
@@ -81,12 +80,14 @@ class FilterChainFactory:
         spec = self.filters[filter_name]
         filter = spec.builder(filter_yaml)
         logging.debug(filter)
-        assert isinstance(filter, Optional[BaseFilter])
+        if filter is not None:
+            assert isinstance(filter, BaseFilter)
         return filter
 
     def build_filter_chain(self, host, endpoint_yaml : Optional[dict] = None
                            ) -> Optional[Tuple[FilterChain, dict]]:
         if endpoint_yaml is None:
+            assert self.endpoint_yaml is not None
             endpoint_yaml = self.endpoint_yaml.get(host, None)
             if endpoint_yaml is None:
                 return None

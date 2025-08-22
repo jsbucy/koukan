@@ -74,10 +74,13 @@ class MessageBuilderSpec:
             raise ValueError('bad MessageBuilder entity content')
         # cf MessageBuilder._add_part(), reusing 'create_id' for both
         # create and reuse, maybe should be separate tag '_internal_blob_id'
+        blob_id = None
         if blob_spec.create_id:
             blob_id = blob_spec.create_id
-        else:
+        elif blob_spec.reuse_uri is not None:
             blob_id = blob_spec.reuse_uri.blob
+        if blob_id is None:
+            raise ValueError()
         part['content'] = {'create_id': blob_id}
         self.blob_specs.append(blob_spec)
 

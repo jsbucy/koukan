@@ -106,7 +106,8 @@ py_library(name='storage',
                  ':blob',
                  ':response',
                  ':filter',
-                 '@pypi//sqlalchemy'])
+                 '@pypi//sqlalchemy'],
+           tags=['no-mypy'])
 
 py_test(name='storage_test_sqlite',
         args=['StorageTestSqlite'],
@@ -117,7 +118,8 @@ py_test(name='storage_test_sqlite',
               ':version_cache',
               ':postgres_test_utils',
               ':sqlite_test_utils',
-              '@pypi//sqlalchemy'])
+              '@pypi//sqlalchemy'],
+        tags=['no-mypy'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
@@ -127,7 +129,8 @@ py_test(name='storage_test_postgres',
               ':rest_schema',
               ':version_cache',
               ':postgres_test_utils',
-              ':sqlite_test_utils'])
+              ':sqlite_test_utils'],
+        tags=['no-mypy'])
 
 py_library(name='fake_endpoints',
            srcs=['fake_endpoints.py'],
@@ -156,7 +159,8 @@ py_library(name='output_handler',
                  ':storage_schema',
                  ':message_builder',
                  ':dsn',
-                 ':rest_schema'])
+                 ':rest_schema'],
+           tags=['no-mypy'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
@@ -267,13 +271,14 @@ py_library(name='dest_domain_policy',
 
 py_library(name='dkim_endpoint',
            srcs=['dkim_endpoint.py'],
-           deps=['@pypi//dkimpy'])
+           deps=[':filter_chain',
+                 ':response',
+                 '@pypi//dkimpy'])
 
 py_test(name='dkim_endpoint_test',
         srcs=['dkim_endpoint_test.py'],
         deps=[':dkim_endpoint',
-              ':dest_domain_policy',
-              '@pypi//dkimpy'])
+             '@pypi//dkimpy'])
 
 py_library(name='dns_wrapper',
            srcs=['dns_wrapper.py'],
@@ -290,7 +295,8 @@ py_library(name='mx_resolution',
                  ':filter_chain',
                  ':dns_wrapper',
                  ':response',
-                 '@pypi//dnspython'])
+                 '@pypi//dnspython'],
+           tags=['no-mypy'])
 
 py_test(name='mx_resolution_test',
         srcs=['mx_resolution_test.py'],
@@ -298,7 +304,8 @@ py_test(name='mx_resolution_test',
               ':filter',
               ':fake_endpoints',
               ':fake_dns_wrapper',
-              '@pypi//dnspython'])
+              '@pypi//dnspython'],
+        tags=['no-mypy'])
 
 py_library(name='storage_writer_filter',
            srcs=['storage_writer_filter.py'],
@@ -343,7 +350,8 @@ py_test(name='exploder_test',
               ':postgres_test_utils',
               ':response',
               ':storage_writer_filter',
-              ':storage'])
+              ':storage'],
+        tags=['no-mypy'])
 
 py_library(name='add_route_filter',
            srcs=['add_route_filter.py'],
@@ -362,13 +370,15 @@ py_library(name='remote_host_filter',
            srcs=['remote_host_filter.py'],
            deps=[':filter',
                  ':filter_chain',
-                 ':dns_wrapper'])
+                 ':dns_wrapper'],
+           tags=['no-mypy'])
 
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter',
               ':fake_dns_wrapper',
-              '@pypi//dnspython'])
+              '@pypi//dnspython'],
+        tags=['no-mypy'])
 
 py_library(name='received_header_filter',
            srcs=['received_header_filter.py'],
@@ -401,7 +411,8 @@ py_library(name='recipient_router_factory',
                  ':filter_chain',
                  ':address_list_policy',
                  ':dest_domain_policy',
-                 ':recipient_router_filter'])
+                 ':recipient_router_filter'],
+           tags=['no-mypy'])
 
 py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
@@ -418,7 +429,8 @@ py_library(name='filter_chain_wiring',
                  ':recipient_router_factory',
                  ':relay_auth_filter',
                  ':remote_host_filter',
-                 ':rest_endpoint'])
+                 ':rest_endpoint'],
+           tags=['no-mypy'])
 
 py_library(name='executor',
            srcs=['executor.py'])
@@ -455,7 +467,8 @@ py_library(name='router_service',
                  ':rest_handler',
                  ':storage_writer_filter',
                  ':storage',
-                 '@pypi//pyyaml'])
+                 '@pypi//pyyaml'],
+           tags=['no-mypy'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
@@ -470,7 +483,8 @@ py_test(name='router_service_test_fastapi',
               ':filter',
               ':postgres_test_utils',
               ':sqlite_test_utils',
-              ':hello_filter'],
+              ':hello_filter',
+              '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 
 py_test(name='router_service_test_sqlite',
@@ -486,7 +500,8 @@ py_test(name='router_service_test_sqlite',
               ':filter',
               ':postgres_test_utils',
               ':sqlite_test_utils',
-              ':hello_filter'],
+              ':hello_filter',
+              '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 
 py_library(name='smtp_auth',
@@ -500,7 +515,8 @@ py_library(name='smtp_service',
                  ':response',
                  ':filter',
                  ':executor',
-                 '@pypi//aiosmtpd'])
+                 '@pypi//aiosmtpd'],
+           tags=['no-mypy'])
 
 py_test(name='smtp_service_test',
         srcs=['smtp_service_test.py'],
@@ -509,7 +525,9 @@ py_test(name='smtp_service_test',
               ':filter',
               ':response',
               ':fake_endpoints',
-              '//koukan_cpython_smtplib:smtplib'])
+              '//koukan_cpython_smtplib:smtplib',
+              '@pypi//aiosmtpd'],
+        tags=['no-mypy'])
 
 py_library(name='rest_handler',
            srcs=['rest_handler.py'],
@@ -523,7 +541,8 @@ py_library(name='rest_handler',
                  ':version_cache',
                  '@pypi//fastapi',
                  '@pypi//flask',
-                 '@pypi//werkzeug'])
+                 '@pypi//werkzeug'],
+           tags=['no-mypy'])
 
 py_test(name='rest_handler_test',
         srcs=['rest_handler_test.py'],
@@ -549,7 +568,8 @@ py_library(name='sync_filter_adapter',
                  ':version_cache',
                  '@pypi//fastapi',
                  '@pypi//flask',
-                 '@pypi//werkzeug'])
+                 '@pypi//werkzeug'],
+           tags=['no-mypy'])
 
 py_test(name='sync_filter_adapter_test',
         srcs=['sync_filter_adapter_test.py'],
@@ -565,7 +585,8 @@ py_test(name='sync_filter_adapter_test',
 
 py_library(name='smtp_endpoint',
            srcs=['smtp_endpoint.py'],
-           deps=['//koukan_cpython_smtplib:smtplib'])
+           deps=['//koukan_cpython_smtplib:smtplib'],
+           tags=['no-mypy'])
 
 py_library(name='gateway_lib',
            srcs=['gateway.py'],
@@ -576,7 +597,8 @@ py_library(name='gateway_lib',
                  ':smtp_service',
                  ':sync_filter_adapter',
                  ':rest_handler',
-                 '@pypi//pyyaml'])
+                 '@pypi//pyyaml'],
+           tags=['no-mypy'])
 
 py_library(name='hello_policy',
            srcs=['hello_policy.py'],
@@ -584,14 +606,17 @@ py_library(name='hello_policy',
 
 py_library(name='hello_filter',
            srcs=['hello_filter.py'],
-           deps=[':filter'])
+           deps=[':filter',
+                 ':filter_chain'])
 
 py_library(name='fake_smtpd',
-           srcs=['fake_smtpd.py'])
+           srcs=['fake_smtpd.py'],
+           tags=['no-mypy'])
 
 py_library(name='ssmtp',
            srcs=['ssmtp.py'],
-           deps=['//koukan_cpython_smtplib:smtplib'])
+           deps=['//koukan_cpython_smtplib:smtplib'],
+           tags=['no-mypy'])
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],
@@ -600,7 +625,8 @@ py_test(name='gateway_test',
               ':fake_smtpd',
               ':blob',
               '@pypi//parameterized',
-              '@pypi//requests'])
+              '@pypi//requests'],
+        tags=['no-mypy'])
 
 py_library(name='postgres_test_utils',
            srcs=['postgres_test_utils.py'],

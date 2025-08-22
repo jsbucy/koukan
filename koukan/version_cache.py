@@ -18,7 +18,7 @@ class IdVersion:
     lock : Lock
     cv : Condition
 
-    async_waiters : List[Tuple[object,asyncio.Future,int]]
+    async_waiters : List[Tuple[asyncio.AbstractEventLoop,asyncio.Future,int]]
 
     version : int
 

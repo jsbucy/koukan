@@ -17,6 +17,7 @@ class RelayAuthFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream_tx
+        assert tx is not None
         if tx_delta.mail_from is not None:
             assert tx.mail_response is None
             if (not self.smtp_auth or

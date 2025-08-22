@@ -16,4 +16,5 @@ class Deadline:
 
     # is deadline_left() >= x (or None)
     def remaining(self, x : float = 0.0) -> bool:
-        return self.deadline is None or (self.deadline_left() >= x)
+        dl = self.deadline_left()
+        return dl is None or (dl >= x)

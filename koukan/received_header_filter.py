@@ -38,6 +38,7 @@ class ReceivedHeaderFilter(ProxyFilter):
 
     def _format_received(self) -> str:
         tx = self.downstream_tx
+        assert tx is not None
         received_host = None
         received_host_literal = None
         if tx.remote_host and tx.remote_host.host:
@@ -54,6 +55,7 @@ class ReceivedHeaderFilter(ProxyFilter):
         with_protocol = None
         if tx.smtp_meta is not None:
             ehlo = tx.smtp_meta.get('ehlo_host', None)
+            assert tx.mail_from is not None
             if tx.mail_from.esmtp and get_esmtp_param(
                     tx.mail_from.esmtp, 'smtputf8') is not None:
                 with_protocol = 'UTF8SMTP'
@@ -100,9 +102,9 @@ class ReceivedHeaderFilter(ProxyFilter):
         return received
 
     def _check_max_received_headers(self, body : Blob):
-        body = body.pread(0, 65536)
+        b = body.pread(0, 65536)
         parser = BytesHeaderParser(policy=policy.SMTP)
-        parsed = parser.parsebytes(body)
+        parsed = parser.parsebytes(b)
         received_count = 0
         for (k,v) in parsed.items():
             if k.lower() == 'received':
@@ -113,6 +115,9 @@ class ReceivedHeaderFilter(ProxyFilter):
         return None
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
+
         body = tx_delta.maybe_body_blob()
         tx_delta.body = None
         if body is not None and not body.finalized():

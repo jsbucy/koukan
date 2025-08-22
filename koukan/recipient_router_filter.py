@@ -55,11 +55,13 @@ class RecipientRouterFilter(ProxyFilter):
 
     def __init__(self, policy : RoutingPolicy, dry_run = False):
         self.policy = policy
-        self.upstream_rcpt = []
         self.dry_run = dry_run
 
     def _route(self, mailbox) -> Tuple[Optional[Response], bool]:
         tx = self.downstream_tx
+        assert tx is not None
+        assert self.upstream_tx is not None
+
         logging.debug('RecipientRouterFilter._route() %s', tx)
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
@@ -102,9 +104,12 @@ class RecipientRouterFilter(ProxyFilter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
         self.upstream_tx.merge_from(tx_delta)
 
         for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            assert rcpt is not None
             if (i < len(self.downstream_tx.rcpt_response) and
                 self.downstream_tx.rcpt_response[i] is not None):
                 continue

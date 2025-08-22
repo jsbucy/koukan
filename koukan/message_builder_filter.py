@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional
+from typing import Dict, Optional
 from tempfile import TemporaryFile
 import logging
 from io import IOBase
@@ -22,6 +22,9 @@ class MessageBuilderFilter(ProxyFilter):
         pass
 
     def on_update(self, tx_delta : TransactionMetadata):
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
+
         body = tx_delta.body
         if isinstance(body, MessageBuilderSpec):
             tx_delta.body = None
@@ -39,12 +42,17 @@ class MessageBuilderFilter(ProxyFilter):
         assert self.validation is not False
         assert self.upstream_tx.body is None
 
+        def blob_rest_id(b) -> str:
+            bid = b.rest_id()
+            assert bid is not None
+            return bid
+
         if body.finalized():
-            blobs = { blob.rest_id(): blob for blob in body.blobs }
+            blobs = { blob_rest_id(blob): blob for blob in body.blobs }
         elif self.validation is None:
             # do a dry run with placeholder blobs so we can fastfail
             # on invalid json before we possibly hang on the upstream
-            blobs = { blob.rest_id(): InlineBlob(b'xyz', last=True)
+            blobs = { blob_rest_id(blob): InlineBlob(b'xyz', last=True)
                       for blob in body.blobs }
         builder = MessageBuilder(body.json, blobs)
 

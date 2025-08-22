@@ -40,7 +40,7 @@ class Executor:
         if timeout is None:
             timeout = self.watchdog_timeout
         if timeout is None:
-            return
+            return True
         now = time.monotonic()
         for (thread, start) in self.inflight.items():
             runtime = now - start
@@ -67,7 +67,7 @@ class Executor:
                     timeout=(None if timeout == 0 else timeout)):
                 return None
 
-            fut = Future()
+            fut : Future = Future()
             t = Thread(target = partial(self._run, fut, fn),
                        daemon=True)
             self.inflight[t] = int(start)
@@ -78,7 +78,7 @@ class Executor:
                 self.debug_futures.append(fut)
         return fut
 
-    def _run(self, fut, fn):
+    def _run(self, fut : Future, fn):
         this_thread = current_thread()
         assert this_thread in self.inflight
         try:

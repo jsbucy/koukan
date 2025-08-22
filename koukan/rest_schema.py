@@ -36,7 +36,7 @@ class BlobUri:
         if self.blob:
             out += ' blob=' + self.blob
         return out
-    def __eq__(self, rhs : 'BlobUri'):
+    def __eq__(self, rhs):
         if not isinstance(rhs, BlobUri):
             return False
         return self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and self.blob == rhs.blob
