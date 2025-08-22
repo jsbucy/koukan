@@ -367,8 +367,8 @@ py_library(name='remote_host_filter',
            srcs=['remote_host_filter.py'],
            deps=[':filter',
                  ':filter_chain',
-                 ':dns_wrapper'],
-           tags=['no-mypy'])
+                 ':dns_wrapper',
+                 '@pypi//dnspython'])
 
 py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],

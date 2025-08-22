@@ -15,6 +15,7 @@ class RemoteHostFilter(Filter):
         self.resolver = resolver if resolver else Resolver()
 
     def on_update(self, tx_delta : TransactionMetadata):
+        assert self.downstream_tx is not None
         if tx_delta.mail_from is not None:
             assert self.downstream_tx.mail_response is None
             self.downstream_tx.mail_response = self._resolve()
@@ -22,6 +23,7 @@ class RemoteHostFilter(Filter):
 
     def _resolve(self) -> Optional[Response]:
         tx = self.downstream_tx
+        assert tx is not None
         if (tx.remote_host is None or
             not tx.remote_host.host):
             return None
@@ -71,3 +73,4 @@ class RemoteHostFilter(Filter):
                       'remote_hostname=%s fcrdns=%s',
                       tx.remote_hostname, tx.fcrdns)
 
+        return None
