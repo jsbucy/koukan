@@ -106,8 +106,7 @@ py_library(name='storage',
                  ':blob',
                  ':response',
                  ':filter',
-                 '@pypi//sqlalchemy'],
-           tags=['no-mypy'])
+                 '@pypi//sqlalchemy'])
 
 py_test(name='storage_test_sqlite',
         args=['StorageTestSqlite'],

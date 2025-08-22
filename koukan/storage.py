@@ -13,10 +13,10 @@ from contextlib import nullcontext
 import copy
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import CursorResult, Engine, Transaction
+from sqlalchemy.engine import Connection, CursorResult, Engine, Transaction
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql.functions import count, current_time
-from sqlalchemy.sql.expression import Select, exists
+from sqlalchemy.sql.expression import CTE, Select, exists
 from sqlalchemy import event
 
 from sqlalchemy import (
@@ -134,8 +134,9 @@ class TransactionCursor:
         self._update_version_cache()
         self.created = True
 
-    def _reuse_blob(self, db_tx : Transaction, blob_uris : List[BlobUri]
+    def _reuse_blob(self, db_tx : Connection, blob_uris : List[BlobUri]
                     ) -> List['BlobCursor']:
+        assert self.rest_id is not None
         if not blob_uris:
             return []
 
@@ -150,6 +151,7 @@ class TransactionCursor:
         # FROM blob JOIN anon_1 ON blob.rest_id = anon_1.rest_id]
         # which sqlite throws a syntax error on
 
+        val : CTE
         if str(self.parent.engine.url).find('sqlite') == -1:
             val = select(
                 values(column('rest_id', String),
@@ -162,7 +164,7 @@ class TransactionCursor:
             literals = [ select(literal(uri.blob).label('rest_id'),
                                 literal(uri.tx_id).label('tx_rest_id'))
                          for uri in blob_uris ]
-            val = literals[0].union_all(*literals[1:])
+            val = literals[0].union_all(*literals[1:]).cte()
 
         j = join(self.parent.blob_table,
                  self.parent.tx_blobref_table,
@@ -219,8 +221,9 @@ class TransactionCursor:
                         ping_tx=ping_tx)
         self._update_version_cache()
 
-    def _maybe_write_blob(self, db_tx : Transaction, tx : TransactionMetadata
+    def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata
                           ) -> bool:  # blobs done
+        assert self.rest_id is not None
         blob_specs : List[BlobSpec]
         body = tx.body
         if isinstance(body, BlobSpec):
@@ -243,6 +246,7 @@ class TransactionCursor:
         for i,blob_spec in enumerate(blob_specs):
             blob = blob_spec.blob
             if isinstance(blob, BlobCursor):
+                assert blob.blob_uri is not None
                 reuse_uris.append(blob.blob_uri)
                 continue
 
@@ -272,6 +276,7 @@ class TransactionCursor:
         blobrefs = []
         blobs_done = True
         for blob_cursor in blobs:
+            assert blob_cursor.blob_uri is not None
             if not blob_cursor.finalized():
                 blobs_done = False
             blobrefs.append({ "transaction_id": self.id,
@@ -292,11 +297,12 @@ class TransactionCursor:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
+        assert blobs[0].blob_uri is not None
         assert len(blobs) == 1 and blobs[0].blob_uri.blob == TX_BODY
         return True
 
     def _write(self,
-               db_tx : Transaction,
+               db_tx : Connection,
                tx_delta : TransactionMetadata,
                final_attempt_reason : Optional[str] = None,
                finalize_attempt : Optional[bool] = None,
@@ -305,6 +311,7 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False):
+        assert self.version is not None
         dd = tx_delta.copy_valid(WhichJson.DB)
         logging.debug(dd)
         dd.copy_valid_from(WhichJson.DB_ATTEMPT, tx_delta)
@@ -455,6 +462,7 @@ class TransactionCursor:
                     # will leave an open attempt?
                     raise
                 backoff(i)
+        assert False, 'unreachable'
 
     def _load(self, db_id : Optional[int] = None,
               rest_id : Optional[str] = None,
@@ -475,18 +483,21 @@ class TransactionCursor:
         return rv
 
     def _load_and_start_attempt_db(
-            self, db_tx : Transaction,
+            self, db_tx : Connection,
             db_id : Optional[int] = None,
             rest_id : Optional[str] = None,
             start_attempt : bool = False) -> Optional[TransactionMetadata]:
         tx = self._load_db(db_tx, db_id, rest_id, start_attempt)
+        if self.id is None:
+            return None
+        assert self.version is not None
         if tx is None:
             return None
         if start_attempt:
             self._start_attempt_db(db_tx, self.id, self.version)
         return tx
 
-    def _load_db(self, db_tx : Transaction,
+    def _load_db(self, db_tx : Connection,
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None,
                  start_attempt : bool = False
@@ -586,6 +597,7 @@ class TransactionCursor:
                 self.parent.session_table.c.id == session_id)
             res = db_tx.execute(sel)
             row = res.fetchone()
+            assert row is not None
             self.session_uri = row[0]
             self.tx.session_uri = self.session_uri
 
@@ -626,7 +638,7 @@ class TransactionCursor:
             raise ValueError()
 
     def _start_attempt_db(self,
-                          db_tx : Transaction, db_id : int, version : int):
+                          db_tx : Connection, db_id : int, version : int):
         logging.debug('TxCursor._start_attempt_db %d', db_id)
         assert self.parent.session_id is not None
         assert self.tx is not None
@@ -687,14 +699,18 @@ class TransactionCursor:
         self.in_attempt = True
 
     def wait(self, timeout : Optional[float] = None) -> bool:
+        assert self.id_version is not None
+        assert self.version is not None
         return self.id_version.wait(self.version, timeout)
 
     async def wait_async(self, timeout : float) -> bool:
+        assert self.id_version is not None
+        assert self.version is not None
         return await self.id_version.wait_async(self.version, timeout)
 
 
     # returns True if all blobs ref'd from this tx are finalized
-    def check_input_done(self, db_tx : Transaction) -> bool:
+    def check_input_done(self, db_tx : Connection) -> bool:
         j = join(self.parent.blob_table, self.parent.tx_blobref_table,
              self.parent.blob_table.c.id == self.parent.tx_blobref_table.c.blob_id,
              isouter=False)
@@ -715,7 +731,7 @@ class TransactionCursor:
         for b in self.blobs:
             if b.blob_uri == blob_uri:
                 return b
-
+        return None
 
 class BlobCursor(Blob, WritableBlob):
     id = None
@@ -725,13 +741,13 @@ class BlobCursor(Blob, WritableBlob):
     update_tx : Optional[str] = None
     blob_uri : Optional[BlobUri] = None
     _session_uri : Optional[str] = None
-    db_tx : Optional[Transaction] = None
+    db_tx : Optional[Connection] = None
     last_update : Optional[int] = None
 
     def __init__(self, storage,
                  update_tx : Optional[str] = None,
                  finalize_tx : Optional[bool] = False,
-                 db_tx : Optional[Transaction] = None):
+                 db_tx : Optional[Connection] = None):
         self.parent = storage
         self.update_tx = update_tx
         self.db_tx = db_tx
@@ -781,7 +797,7 @@ class BlobCursor(Blob, WritableBlob):
     def session_uri(self) -> Optional[str]:
         return self._session_uri
 
-    def _create(self, db_tx : Transaction):
+    def _create(self, db_tx : Connection):
         ins = insert(self.parent.blob_table).values(
             creation=self.parent._current_timestamp_epoch(),
             last_update=self.parent._current_timestamp_epoch(),
@@ -790,7 +806,7 @@ class BlobCursor(Blob, WritableBlob):
 
         res = db_tx.execute(ins)
         row = res.fetchone()
-
+        assert row is not None
         self.id = row[0]
         return self.id
 
@@ -823,6 +839,7 @@ class BlobCursor(Blob, WritableBlob):
                     self.parent.blob_table.c.id == self.id)
             res = db_tx.execute(stmt)
             row = res.fetchone()
+            assert row is not None
             db_length, db_content_length, last_update, db_now = row
             if offset != db_length:
                 return False, db_length, db_content_length
@@ -967,7 +984,8 @@ class Storage():
     def __del__(self):
         self._del_session()
 
-    def begin_transaction(self) -> Transaction:
+    def begin_transaction(self):
+        assert self.engine is not None
         return self.engine.begin()
 
     def _del_session(self):
@@ -1017,7 +1035,8 @@ class Storage():
 
         atexit.register(self._del_session)
 
-    def _current_timestamp_epoch(self) -> Select:
+    def _current_timestamp_epoch(self):
+        assert self.engine is not None
         if str(self.engine.url).find('sqlite') != -1:
             return select(func.unixepoch(func.current_timestamp())
                           ).scalar_subquery()
@@ -1045,6 +1064,7 @@ class Storage():
             return True
 
     def testonly_get_session(self, session_id) -> dict:
+        assert self.session_table is not None
         with self.begin_transaction() as db_tx:
             sel = select('*').where(self.session_table.c.id == session_id)
             res = db_tx.execute(sel)
@@ -1053,6 +1073,7 @@ class Storage():
 
 
     def _gc_session(self, ttl : timedelta) -> Optional[int]:
+        assert self.session_table is not None
         with self.begin_transaction() as db_tx:
             upd = (update(self.session_table).values(
                 live = False,
@@ -1094,6 +1115,7 @@ class Storage():
             return None
 
     def _load_one(self) -> Optional[TransactionCursor]:
+        assert self.tx_table is not None
         with self.begin_transaction() as db_tx:
             # TODO this is currently a scan, index on/ORDER BY
             # next_attempt_time?
@@ -1149,7 +1171,11 @@ class Storage():
         cursor._update_version_cache()
         return cursor
 
-    def _gc(self, db_tx : Transaction, ttl : timedelta) -> Tuple[int, int]:
+    def _gc(self, db_tx : Connection, ttl : timedelta) -> Tuple[int, int]:
+        assert self.tx_table is not None
+        assert self.tx_blobref_table is not None
+        assert self.blob_table is not None
+
         # It would be fairly easy to support a staged policy like ttl
         # blobs after 1d but tx after 7d. Then there would be a
         # separate delete from TransactionBlobRefs with the shorter
