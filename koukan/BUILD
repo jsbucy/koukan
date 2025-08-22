@@ -408,8 +408,7 @@ py_library(name='recipient_router_factory',
                  ':filter_chain',
                  ':address_list_policy',
                  ':dest_domain_policy',
-                 ':recipient_router_filter'],
-           tags=['no-mypy'])
+                 ':recipient_router_filter'])
 
 py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
