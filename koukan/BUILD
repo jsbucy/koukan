@@ -596,8 +596,7 @@ py_library(name='gateway_lib',
                  ':smtp_service',
                  ':sync_filter_adapter',
                  ':rest_handler',
-                 '@pypi//pyyaml'],
-           tags=['no-mypy'])
+                 '@pypi//pyyaml'])
 
 py_library(name='hello_policy',
            srcs=['hello_policy.py'],
