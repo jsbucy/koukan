@@ -616,8 +616,7 @@ py_test(name='gateway_test',
               ':fake_smtpd',
               ':blob',
               '@pypi//parameterized',
-              '@pypi//requests'],
-        tags=['no-mypy'])
+              '@pypi//requests'])
 
 py_library(name='postgres_test_utils',
            srcs=['postgres_test_utils.py'],
