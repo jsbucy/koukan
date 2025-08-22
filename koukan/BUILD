@@ -558,14 +558,14 @@ py_library(name='sync_filter_adapter',
                  ':deadline',
                  ':executor',
                  ':filter',
+                 ':filter_chain',
                  ':response',
                  ':rest_schema',
                  ':rest_service_handler',
                  ':version_cache',
                  '@pypi//fastapi',
                  '@pypi//flask',
-                 '@pypi//werkzeug'],
-           tags=['no-mypy'])
+                 '@pypi//werkzeug'])
 
 py_test(name='sync_filter_adapter_test',
         srcs=['sync_filter_adapter_test.py'],
