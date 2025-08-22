@@ -345,8 +345,7 @@ py_test(name='exploder_test',
               ':postgres_test_utils',
               ':response',
               ':storage_writer_filter',
-              ':storage'],
-        tags=['no-mypy'])
+              ':storage'])
 
 py_library(name='add_route_filter',
            srcs=['add_route_filter.py'],
