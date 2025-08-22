@@ -117,8 +117,7 @@ py_test(name='storage_test_sqlite',
               ':version_cache',
               ':postgres_test_utils',
               ':sqlite_test_utils',
-              '@pypi//sqlalchemy'],
-        tags=['no-mypy'])
+              '@pypi//sqlalchemy'])
 
 py_test(name='storage_test_postgres',
         args=['StorageTestPostgres'],
@@ -128,8 +127,7 @@ py_test(name='storage_test_postgres',
               ':rest_schema',
               ':version_cache',
               ':postgres_test_utils',
-              ':sqlite_test_utils'],
-        tags=['no-mypy'])
+              ':sqlite_test_utils'])
 
 py_library(name='fake_endpoints',
            srcs=['fake_endpoints.py'],
