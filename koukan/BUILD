@@ -293,8 +293,7 @@ py_library(name='mx_resolution',
                  ':filter_chain',
                  ':dns_wrapper',
                  ':response',
-                 '@pypi//dnspython'],
-           tags=['no-mypy'])
+                 '@pypi//dnspython'])
 
 py_test(name='mx_resolution_test',
         srcs=['mx_resolution_test.py'],
