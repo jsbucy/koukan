@@ -71,7 +71,7 @@ class IdVersion:
 
     async def wait_async(self,
                          version : int,
-                         timeout : float) -> bool:
+                         timeout : Optional[float]) -> bool:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 

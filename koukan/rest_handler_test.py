@@ -308,7 +308,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_blob_chunking(self):
         endpoint = MockAsyncFilter(incremental=True)
 
-        endpoint.body = InlineBlob(b'')
+        endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -375,7 +375,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_chunked_blob(self):
         endpoint = MockAsyncFilter(incremental=True)
 
-        endpoint.body = InlineBlob(b'')
+        blob = endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -413,12 +413,12 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         resp = await handler.put_blob_async(req, 'blob-rest-id')
         self.assertEqual(resp.status_code, 200)
 
-        self.assertEqual(b+b2, endpoint.body.d)
+        self.assertEqual(b+b2, blob.d)
 
     async def test_range_mismatch(self):
         endpoint = MockAsyncFilter(incremental=True)
 
-        endpoint.body = InlineBlob(b'')
+        endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',
@@ -495,7 +495,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         # content-length: 0
         # x-finalize-blob-length: 13
         body = b'hello, world!'
-        endpoint.body = InlineBlob(body)
+        endpoint.blob['blob-rest-id'] = InlineBlob(body)
         handler = RestHandler(
             async_filter=endpoint,
             http_host='msa',

@@ -65,7 +65,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             # xxx but then does version need to change?
         return rv
 
-    async def wait_async(self, version : int, timeout : float) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]
+                         ) -> bool:
         raise NotImplementedError()
 
     def version(self) -> Optional[int]:

@@ -539,8 +539,7 @@ py_library(name='rest_handler',
                  ':version_cache',
                  '@pypi//fastapi',
                  '@pypi//flask',
-                 '@pypi//werkzeug'],
-           tags=['no-mypy'])
+                 '@pypi//werkzeug'])
 
 py_test(name='rest_handler_test',
         srcs=['rest_handler_test.py'],

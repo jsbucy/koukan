@@ -869,7 +869,8 @@ class AsyncFilter(ABC):
         pass
 
     @abstractmethod
-    async def wait_async(self, version : int, timeout : float) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]
+                         ) -> bool:
         pass
 
 

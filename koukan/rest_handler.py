@@ -60,7 +60,7 @@ MAX_TIMEOUT=30
 
 class RestHandler(Handler):
     chunk_size : int
-    executor : Optional[Executor] = None
+    executor : Executor
     async_filter : Optional[AsyncFilter]
     _tx_rest_id : Optional[str]
 
@@ -74,14 +74,14 @@ class RestHandler(Handler):
     bytes_read : Optional[int] = None
     final_blob_length : Optional[int] = None
 
-    endpoint_yaml : Optional[dict] = None
+    endpoint_yaml : dict
     session_uri : Optional[str] = None
     service_uri : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
 
     def __init__(self,
-                 executor : Optional[Executor] = None,
+                 executor : Executor,
                  async_filter : Optional[AsyncFilter] = None,
                  tx_rest_id : Optional[str] = None,
                  blob_rest_id : Optional[str] = None,
@@ -173,7 +173,7 @@ class RestHandler(Handler):
         return resp
 
     def _get_timeout(self, req : HttpRequest
-                     ) -> Tuple[Optional[int], HttpResponse]:
+                     ) -> Tuple[Optional[int], Optional[HttpResponse]]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
         if not (timeout_header := req.headers.get('request-timeout', None)):
             return MAX_TIMEOUT, None
@@ -196,8 +196,7 @@ class RestHandler(Handler):
                 'accept retry/notification')
         return None
 
-    def create_tx(self, request : HttpRequest, req_json : dict
-                  ) -> Optional[HttpResponse]:
+    def create_tx(self, request : HttpRequest, req_json : dict) -> HttpResponse:
         # TODO if request doesn't have remote_addr or is not from a
         # well-known/trusted peer (i.e. smtp gateway), set remote_addr to wsgi
         # environ REMOTE_ADDR or HTTP_X_FORWARDED_FOR
@@ -254,6 +253,7 @@ class RestHandler(Handler):
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         logging.debug('_get_tx')
+        assert self.async_filter is not None
         tx = self.async_filter.get()
         if tx is None:
             return None
@@ -308,9 +308,10 @@ class RestHandler(Handler):
 
         etag = request.headers.get('if-none-match', None)
         err, tx = await self._get_tx_async(request)
-
         if err is not None:
             return err
+        assert tx is not None
+        assert tx.version is not None
         if (timeout is None or etag is None or
             not self._check_etag(etag, tx.version)):
             return self._get_tx_resp(request, tx)
@@ -374,6 +375,7 @@ class RestHandler(Handler):
                 code=400, msg='RestHandler.patch_tx merge failed')
 
         # TODO should these 412s set the etag?
+        assert tx.version is not None
         if req_etag != self._etag(tx.version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
                           req_etag, self._etag(tx.version))
@@ -391,6 +393,7 @@ class RestHandler(Handler):
             return err
 
         tx.body = body
+        assert upstream_delta.version is not None
         return self.response(
             etag=self._etag(upstream_delta.version),
             resp_json=tx.to_json(WhichJson.REST_READ))
@@ -398,14 +401,14 @@ class RestHandler(Handler):
 
     def _get_range(self, request : HttpRequest
                    ) -> Tuple[Optional[HttpResponse], Optional[ContentRange]]:
-        if ('content-length' not in request.headers or
+        if ((cl := request.headers.get('content-length', None)) is None or
             'content-range' not in request.headers):
             return None, None
-        content_length = int(request.headers.get('content-length'))
+        content_length = int(cl)
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
-        if not range or range.units != 'bytes':
+        if not range or range.units != 'bytes' or range.stop is None or range.start is None:
             return self.response(400, 'bad range'), None
         # no idea if underlying stack enforces this
         assert(range.stop - range.start == content_length)
@@ -429,6 +432,7 @@ class RestHandler(Handler):
 
         # this just returns the blob writer now if it already exists,
         # append will fail precondition/offset check downstream -> 416
+        assert self.async_filter is not None
         blob = self.async_filter.get_blob_writer(
             create = create, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
@@ -441,8 +445,8 @@ class RestHandler(Handler):
 
     async def put_blob_async(
             self, request : FastApiRequest,
-            tx_body : bool = False,
-            blob_rest_id : Optional[str] = None) -> FastApiResponse:
+            blob_rest_id : Optional[str] = None,
+            tx_body : bool = False) -> FastApiResponse:
         if self.async_filter is None:
             return self.response(code=404, msg='transaction not found')
 
@@ -489,9 +493,10 @@ class RestHandler(Handler):
 
         # send any leftover
         resp = await self._put_blob_chunk_async(request, b, last=True)
+        assert resp is not None
         if resp.status_code != 200:
             return resp
-
+        assert self.blob is not None
         if (err := self._maybe_schedule_ping(
                 request, self.blob.session_uri(), self._tx_rest_id)):
             return err
@@ -511,12 +516,14 @@ class RestHandler(Handler):
 
     def _put_blob_chunk(self, request : HttpRequest, b : bytes,
                         last=False) -> HttpResponse:
+        assert self.bytes_read is not None
         logging.debug('RestHandler._put_blob_chunk %s content-range: %s %d',
                       self._blob_rest_id, self.range, len(b))
 
         content_length = result_len = None
 
         start = 0
+        length : Optional[int]
         if self.final_blob_length is not None:
             start = self.final_blob_length
             length = self.final_blob_length
@@ -525,6 +532,7 @@ class RestHandler(Handler):
                     code=400,
                     msg=FINALIZE_BLOB_HEADER + ' with non-empty PUT',)
         elif self.range is not None:
+            assert self.range.start is not None
             start = self.range.start
             length = self.range.length
         elif last:
@@ -532,13 +540,14 @@ class RestHandler(Handler):
         else:
             length = None
 
+        assert self.blob is not None
         appended, result_len, content_length = self.blob.append_data(
             start + self.bytes_read, b, length)
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
 
-        headers = []
+        headers : List[Tuple[str, Any]] = []
         headers.append(
             ('content-range',
              ContentRange('bytes', 0, result_len, content_length)))
@@ -558,7 +567,7 @@ class RestHandler(Handler):
         logging.debug('RestHandler.cancel_tx %s', self._tx_rest_id)
         tx = self.async_filter.get()
         if tx is None:
-            return self.response(request)
+            return self.response()
         delta = TransactionMetadata(cancelled=True)
         tx.merge_from(delta)
         assert tx.cancelled
@@ -601,8 +610,12 @@ class RestHandlerFactory(HandlerFactory):
         self.client = Client(follow_redirects=True)
 
     def create_tx(self, http_host) -> RestHandler:
-        endpoint, yaml = self.endpoint_factory.create(http_host)
-        kwargs = {}
+        res = self.endpoint_factory.create(http_host)
+        # TODO possibly HandlerFactory should be able to return an
+        # error response directly here?
+        assert res is not None
+        endpoint, yaml = res
+        kwargs : Dict[str, Any] = {}
         if self.chunk_size:
             kwargs['chunk_size'] = self.chunk_size
         return RestHandler(
@@ -618,7 +631,8 @@ class RestHandlerFactory(HandlerFactory):
 
     def get_tx(self, tx_rest_id) -> RestHandler:
         filter = self.endpoint_factory.get(tx_rest_id)
-        kwargs = {}
+        assert filter is not None
+        kwargs : Dict[str, Any] = {}
         if self.chunk_size:
             kwargs['chunk_size'] = self.chunk_size
         return RestHandler(

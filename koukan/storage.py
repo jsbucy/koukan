@@ -703,7 +703,7 @@ class TransactionCursor:
         assert self.version is not None
         return self.id_version.wait(self.version, timeout)
 
-    async def wait_async(self, timeout : float) -> bool:
+    async def wait_async(self, timeout : Optional[float]) -> bool:
         assert self.id_version is not None
         assert self.version is not None
         return await self.id_version.wait_async(self.version, timeout)
