@@ -517,8 +517,7 @@ py_test(name='smtp_service_test',
               ':response',
               ':fake_endpoints',
               '//koukan_cpython_smtplib:smtplib',
-              '@pypi//aiosmtpd'],
-        tags=['no-mypy'])
+              '@pypi//aiosmtpd'])
 
 py_library(name='rest_handler',
            srcs=['rest_handler.py'],
