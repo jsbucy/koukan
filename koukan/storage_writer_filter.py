@@ -34,14 +34,14 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
     http_host : Optional[str] = None
-    endpoint_yaml : Optional[Callable[[str], dict]] = None
+    endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
                  http_host : Optional[str] = None,
-                 endpoint_yaml : Optional[Callable[[str], dict]] = None):
+                 endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -52,7 +52,9 @@ class StorageWriterFilter(AsyncFilter):
         self.endpoint_yaml = endpoint_yaml
 
     def incremental(self):
+        assert self.endpoint_yaml is not None
         yaml = self.endpoint_yaml(self.http_host)
+        assert yaml is not None
         return yaml['chain'][-1]['filter'] == 'exploder'
 
     # AsyncFilter

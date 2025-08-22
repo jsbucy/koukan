@@ -465,8 +465,7 @@ py_library(name='router_service',
                  ':rest_handler',
                  ':storage_writer_filter',
                  ':storage',
-                 '@pypi//pyyaml'],
-           tags=['no-mypy'])
+                 '@pypi//pyyaml'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test.py'],
