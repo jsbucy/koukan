@@ -158,8 +158,7 @@ py_library(name='output_handler',
                  ':storage_schema',
                  ':message_builder',
                  ':dsn',
-                 ':rest_schema'],
-           tags=['no-mypy'])
+                 ':rest_schema'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
