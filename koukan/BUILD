@@ -299,8 +299,7 @@ py_test(name='mx_resolution_test',
               ':filter',
               ':fake_endpoints',
               ':fake_dns_wrapper',
-              '@pypi//dnspython'],
-        tags=['no-mypy'])
+              '@pypi//dnspython'])
 
 py_library(name='storage_writer_filter',
            srcs=['storage_writer_filter.py'],
