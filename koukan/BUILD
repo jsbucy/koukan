@@ -600,7 +600,7 @@ py_library(name='hello_filter',
 
 py_library(name='fake_smtpd',
            srcs=['fake_smtpd.py'],
-           tags=['no-mypy'])
+           deps=['@pypi//aiosmtpd'])
 
 py_library(name='ssmtp',
            srcs=['ssmtp.py'],
