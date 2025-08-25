@@ -370,8 +370,7 @@ py_test(name='remote_host_filter_test',
         srcs=['remote_host_filter_test.py'],
         deps=[':remote_host_filter',
               ':fake_dns_wrapper',
-              '@pypi//dnspython'],
-        tags=['no-mypy'])
+              '@pypi//dnspython'])
 
 py_library(name='received_header_filter',
            srcs=['received_header_filter.py'],
