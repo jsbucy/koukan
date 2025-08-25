@@ -1,6 +1,5 @@
 py_library(name='receiver',
            srcs=['receiver.py'],
-           tags=['no-mypy'],
            visibility=['//visibility:public'])
 
 py_library(name='fastapi_receiver',
