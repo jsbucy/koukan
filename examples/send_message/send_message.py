@@ -113,10 +113,11 @@ class Sender:
     def send(self, rcpt_to : str, max_wait=30):
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
 
-        tx_json={
+        tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
         }
+        assert tx_json is not None
         if self.body_path is not None:
             tx_json['body'] = {'reuse_uri': self.body_path}
         elif self.body_filename is not None:
@@ -303,7 +304,7 @@ if __name__ == '__main__':
 
     threads = []
     start = time.monotonic()
-    for t in range(0, int(args.threads)):
+    for i in range(0, int(args.threads)):
         t = threading.Thread(target = send)
         t.start()
         threads.append(t)
