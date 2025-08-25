@@ -604,8 +604,7 @@ py_library(name='fake_smtpd',
 
 py_library(name='ssmtp',
            srcs=['ssmtp.py'],
-           deps=['//koukan_cpython_smtplib:smtplib'],
-           tags=['no-mypy'])
+           deps=['//koukan_cpython_smtplib:smtplib'])
 
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],
