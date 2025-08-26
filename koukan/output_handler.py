@@ -238,11 +238,6 @@ class OutputHandler:
                     # notifications were enabled after the tx already
                     # failed (Exploder)
                     env_kwargs = {'finalize_attempt': True}
-                    # if self.cursor.tx.notification is not None:
-                        # logging.error(
-                        #     'invalid tx state: no_final_notification without '
-                        #     'notification')
-                        # raise ValueError()
                     self._maybe_send_notification(
                         self.cursor.final_attempt_reason, self.cursor.tx)
                     env_kwargs['notification_done'] = True
