@@ -139,5 +139,5 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         self.assertTrue(result.downstream_delta.data_response.message.startswith('5.4.6'))
 
 if __name__ == '__main__':
-    unittest.util._MAX_LENGTH = 1024
+    # unittest.util._MAX_LENGTH = 1024
     unittest.main()

@@ -92,7 +92,7 @@ if __name__ == '__main__':
     msg = sys.stdin.read()
     threads = []
     start = time.monotonic()
-    for t in range(0, int(args.threads)):
+    for i in range(0, int(args.threads)):
         t = threading.Thread(target = send)
         t.start()
         threads.append(t)

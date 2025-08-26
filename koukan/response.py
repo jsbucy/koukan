@@ -58,7 +58,9 @@ class Response:
     def to_json(self) -> Dict[object, object]:
         return {'code': self.code, 'message': self.message}
 
-    def __eq__(self, r : 'Response'):
+    def __eq__(self, r):
+        if not isinstance(r, Response):
+            return False
         return self.code == r.code and self.message == r.message
 
     @staticmethod

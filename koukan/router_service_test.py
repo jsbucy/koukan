@@ -502,9 +502,13 @@ class RouterServiceTest(unittest.TestCase):
             # depending on timing, we may get the tx before or after the
             # OH completion that sets final_attempt_reason but we should
             # get all the responses
+            done = True
             for f in ['mail_response', 'rcpt_response', 'data_response']:
                 if f not in tx_json:
-                    continue
+                    done = False
+                    break
+            if not done:
+                continue
             self.assertEqual(
                 tx_json['mail_response'], {'code': 201, 'message': 'ok'})
             self.assertEqual(

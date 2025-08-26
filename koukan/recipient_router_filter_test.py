@@ -13,14 +13,15 @@ from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
 
 class Policy(RoutingPolicy):
-    def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[Destination], Optional[Response]]:
+    def endpoint_for_rcpt(
+            self, rcpt
+    ) -> Tuple[Optional[Destination], Optional[Response]]:
         if rcpt == 'good':
             return Destination(
                 'http://localhost:8001', 'gateway',
                 [HostPort('example.com', 1234)]), None
-        if rcpt == 'bad':
-            return None, Response(500, 'not found')
+
+        return None, Response(500, 'not found')
 
 class RecipientRouterFilterTest(unittest.TestCase):
     def setUp(self):

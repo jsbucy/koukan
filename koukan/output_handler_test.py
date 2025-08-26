@@ -6,8 +6,6 @@ from koukan.executor import Executor
 import time
 from functools import partial
 
-from werkzeug.datastructures import ContentRange
-
 from koukan.storage import Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response

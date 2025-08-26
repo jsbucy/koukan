@@ -65,11 +65,11 @@ class DnsResolutionFilter(ProxyFilter):
         except ValueError:
             return False
 
-    def _needs_resolution_host(self, host : HostPort):
-        return not self._valid_ip(host.host) and self._match(host.host)
+    def _needs_resolution_host(self, host : Optional[HostPort]):
+        return host is not None and not self._valid_ip(host.host) and self._match(host.host)
 
     def _needs_resolution(self, res : Optional[Resolution]) -> bool:
-        if res is None:
+        if res is None or not res.hosts:
             return False
         return any([self._needs_resolution_host(h) for h in res.hosts])
 
@@ -82,12 +82,15 @@ class DnsResolutionFilter(ProxyFilter):
 
 
     def _resolve(self, res : Resolution) -> List[HostPort]:
-        hosts_out = []
+        hosts_out : List[HostPort] = []
+        if not res.hosts:
+            return hosts_out
         for h in res.hosts:
             if not self._needs_resolution_host(h):
                 hosts_out.append(h)
                 continue
             if self.static_resolution is not None:
+                assert self.static_resolution.hosts is not None
                 hp_out = self.static_resolution.hosts
             else:
                 dns_hosts = resolve(self.resolver, h)
@@ -105,6 +108,9 @@ class DnsResolutionFilter(ProxyFilter):
         return hosts_out
 
     def on_update(self, tx_delta : TransactionMetadata):
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
+
         downstream_resolution = tx_delta.resolution
         if (downstream_resolution is not None and
             self._needs_resolution(downstream_resolution)):

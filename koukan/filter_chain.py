@@ -100,6 +100,9 @@ class FilterChain:
         # corresponding rcpt_response. This copies the remaining rcpts
         # from downstream_tx to upstream_tx and populates _rcpt_offset
         # for _copy_rcpt_responses() on the way back down.
+        assert f.downstream_tx is not None
+        assert f.upstream_tx is not None
+
         down_rcpt = len(f.downstream_tx.rcpt_to)
         up_rcpt = len(f.upstream_tx.rcpt_to)
 
@@ -118,6 +121,8 @@ class FilterChain:
         assert len(f._rcpt_offset) == len(f.upstream_tx.rcpt_to)
 
     def _copy_rcpt_responses(self, f : Filter, delta : TransactionMetadata):
+        assert f.downstream_tx is not None
+        assert f.upstream_tx is not None
         # If _filter_rcpts() previously copied rcpts from downstream
         # to upstream and populated _rcpt_offset, propagate
         # rcpt_response from upstream_tx to downstream_tx per
@@ -125,7 +130,8 @@ class FilterChain:
         if f._rcpt_offset is None:
             return
 
-        delta.rcpt_response = delta.rcpt_response_list_offset = None
+        delta.rcpt_response = []
+        delta.rcpt_response_list_offset = None
         for i, resp in enumerate(f.upstream_tx.rcpt_response):
             off = f._rcpt_offset[i]
             if (off < len(f.downstream_tx.rcpt_response) and
@@ -151,6 +157,8 @@ class FilterChain:
         prev = self.filters[0].downstream_tx.copy()
 
         for f in self.filters:
+            assert f.downstream_tx is not None
+            assert f._prev_downstream_tx is not None
             delta = f._prev_downstream_tx.delta(f.downstream_tx)
             if not noop and not delta:
                 break

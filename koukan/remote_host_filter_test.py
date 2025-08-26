@@ -33,12 +33,17 @@ flags QR AA RD
 ;ADDITIONAL
 """
 
+# this pattern of constructing Answer is cribbed from
+# dnspython/tests/test_resolution.py
+# but doesn't type check:
+# error: Argument 4 to "Answer" has incompatible type "Message"; expected "QueryMessage"  [arg-type]
+
 ptr_message = dns.message.from_text(ptr_message_text)
 ptr_answer = Answer(
     dns.name.from_text('4.3.2.1.in-addr.arpa.'),
     RdataType.PTR,
     RdataClass.IN,
-    ptr_message)
+    ptr_message)  # type: ignore[arg-type]
 
 a_message_text = """id 1234
 opcode QUERY
@@ -57,7 +62,7 @@ a_answer = Answer(
     dns.name.from_text('sandbox.gloop.org.'),
     RdataType.A,
     RdataClass.IN,
-    a_message)
+    a_message)  # type: ignore[arg-type]
 
 
 ptr6_message_text = """id 1234
@@ -77,7 +82,7 @@ ptr6_answer = Answer(
     dns.name.from_text('f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.ip6.arpa.'),
     RdataType.PTR,
     RdataClass.IN,
-    ptr6_message)
+    ptr6_message)  # type: ignore[arg-type]
 
 aaaa_message_text = """id 1234
 opcode QUERY
@@ -96,7 +101,7 @@ aaaa_answer = Answer(
     dns.name.from_text('sandbox.gloop.org.'),
     RdataType.AAAA,
     RdataClass.IN,
-    aaaa_message)
+    aaaa_message)  # type: ignore[arg-type]
 
 class RemoteHostFilterTest(unittest.TestCase):
     def setUp(self):
@@ -122,6 +127,7 @@ class RemoteHostFilterTest(unittest.TestCase):
         filter.on_update(delta)
         logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
         if exp_err:
+            assert tx.mail_response is not None
             self.assertEqual(450, tx.mail_response.code)
         else:
             self.assertIsNone(tx.mail_response)

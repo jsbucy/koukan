@@ -21,7 +21,7 @@ from koukan.executor import Executor
 from koukan.filter_chain import FilterChain
 
 def find_unused_port() -> int:
-    with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
+    with socketserver.TCPServer(("localhost", 0), lambda x,y,z: socketserver.BaseRequestHandler(x,y,z)) as s:
         return s.server_address[1]
 
 class SmtpServiceTest(unittest.TestCase):

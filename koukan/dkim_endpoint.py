@@ -23,6 +23,8 @@ class DkimEndpoint(ProxyFilter):
             self.privkey = f.read()
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
         body = tx_delta.maybe_body_blob()
         if body is not None:
             tx_delta.body = None

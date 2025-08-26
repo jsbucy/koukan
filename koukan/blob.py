@@ -60,7 +60,8 @@ class WritableBlob(ABC):
                     set_content_length = True,
                     chunk_size : int = 2**16) -> int:
         if length == 0:
-            length = src.content_length()
+            cl =  src.content_length()
+            length = cl if cl is not None else src.len()
         off = start
         dstart = doff = self.len()
         while off < (length + start):
@@ -71,6 +72,7 @@ class WritableBlob(ABC):
             else:
                 left = chunk_size
             d = src.pread(off, left)
+            assert d is not None
             content_length = None
             if set_content_length and last:
                 content_length = off + len(d)

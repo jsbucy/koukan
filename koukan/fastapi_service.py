@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Union
 import logging
+from functools import partial
 
 from fastapi import (
     FastAPI,
@@ -22,7 +23,7 @@ def create_app(handler_factory : HandlerFactory):
         req_json = await request.json()
         handler = handler_factory.create_tx(request.headers['host'])
         return await handler.handle_async(
-            request, lambda: handler.create_tx(request, req_json=req_json))
+            request, partial(handler.create_tx, request, req_json=req_json))
 
 
     @app.patch('/transactions/{tx_rest_id}')
@@ -37,7 +38,7 @@ def create_app(handler_factory : HandlerFactory):
             req_json = None
         handler = handler_factory.get_tx(tx_rest_id)
         return await handler.handle_async(
-            request, lambda: handler.patch_tx(request, req_json=req_json))
+            request, partial(handler.patch_tx, request, req_json=req_json))
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
@@ -60,7 +61,7 @@ def create_app(handler_factory : HandlerFactory):
         logging.debug('rest_service.cancel_tx %s', request)
         handler = handler_factory.get_tx(tx_rest_id)
         return await handler.handle_async(
-            request, lambda: handler.cancel_tx(request))
+            request, partial(handler.cancel_tx, request))
 
     # body stream
     @app.put('/transactions/{tx_rest_id}/blob/{blob_rest_id}')

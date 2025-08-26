@@ -1,7 +1,17 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    Union )
 from abc import ABC, abstractmethod
 import logging
 import copy
@@ -49,8 +59,10 @@ class HostPort:
         return '%s:%d' % (self.host, self.port)
     def __repr__(self):
         return '%s:%d' % (self.host, self.port)
-    def __eq__(self, h : 'HostPort'):
-        return self.host == h.host and self.port == h.port
+    def __eq__(self, rhs):
+        if not isinstance(rhs, HostPort):
+            return False
+        return self.host == rhs.host and self.port == rhs.port
 
 class Resolution:
     hosts : Optional[List[HostPort]] = None
@@ -150,7 +162,7 @@ class Mailbox:
             params = [EsmtpParam.from_json(j) for j in esmtp]
         return Mailbox(json['m'], params)
 
-    def copy(self, valid : WhichJson):
+    def copy(self, valid : WhichJson) -> 'Mailbox':
         out = Mailbox(self.mailbox, self.esmtp)
         if valid == WhichJson.ALL:
             out.routed = self.routed
@@ -161,11 +173,11 @@ def list_from_js(js, builder):
 
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
-Copy = Callable[[object, WhichJson], object]
+Copy = Callable[[Any, WhichJson], Any]
 class TxField:
     json_field : str
 
-    validity = set[WhichJson]
+    validity : Set[WhichJson]
 
     rest_placeholder : bool
     from_json : Optional[FromJson] = None
@@ -365,7 +377,9 @@ class TransactionMetadata:
     # TODO more type-safe treatment of placeholder values, this should
     # only contain None in a delta
     rcpt_to : List[Optional[Mailbox]]
-    rcpt_response : List[Response]
+    rcpt_to_list_offset : Optional[int] = None
+    rcpt_response : List[Optional[Response]]
+    rcpt_response_list_offset : Optional[int] = None
     data_response : Optional[Response] = None
 
     attempt_count : Optional[int] = None
@@ -399,8 +413,8 @@ class TransactionMetadata:
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  mail_response : Optional[Response] = None,
-                 rcpt_to : Optional[List[Mailbox]] = None,
-                 rcpt_response : Optional[List[Response]] = None,
+                 rcpt_to : Optional[Sequence[Mailbox]] = None,
+                 rcpt_response : Optional[Sequence[Response]] = None,
                  host : Optional[str] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
@@ -415,8 +429,8 @@ class TransactionMetadata:
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.mail_response = mail_response
-        self.rcpt_to = rcpt_to if rcpt_to else []
-        self.rcpt_response = rcpt_response if rcpt_response else []
+        self.rcpt_to = list(rcpt_to) if rcpt_to else []
+        self.rcpt_response = list(rcpt_response) if rcpt_response else []
         self.host = host
         self.body = body
         self.data_response = data_response
@@ -436,7 +450,7 @@ class TransactionMetadata:
                 if (field.is_list and v == []) or v is None:
                     continue
                 out += '%s: %s\n' % (name, v)
-                if field.is_list and hasattr(self, field.list_offset()):
+                if field.is_list and getattr(self, field.list_offset(), None) is not None:
                     out += '%s %d\n' % (field.list_offset(), getattr(self, field.list_offset()))
         return out
 
@@ -476,13 +490,16 @@ class TransactionMetadata:
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
+            v : Any
             if field.is_list:
                 if not isinstance(js_v, list):
                     return None
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
-                else:
+                elif field.from_json is not None:
                     v = [field.from_json(v) for v in js_v]
+                else:
+                    raise ValueError()
                 if field.list_offset() in tx_json and (
                         which_js == WhichJson.REST_UPDATE):
                     offset = tx_json.get(field.list_offset())
@@ -532,7 +549,7 @@ class TransactionMetadata:
         # if we have the body, then we aren't getting any more
         # rcpts. If they all failed, then we can't make forward
         # progress.
-        if not any([r.ok() for r in tx.rcpt_response]):
+        if not any([r is not None and r.ok() for r in tx.rcpt_response]):
             return False
         if tx.data_response is None:
             return True
@@ -552,7 +569,7 @@ class TransactionMetadata:
         dest.rcpt_response.extend(
             [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
         if self.data_response is None and (self.body is not None) and (
-                not any([r.ok() for r in self.rcpt_response])):
+                not any([r is not None and r.ok() for r in self.rcpt_response])):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             dest.data_response = err
         elif self._body_last() and self.data_response is None:
@@ -581,7 +598,7 @@ class TransactionMetadata:
         if not field.valid(which_js):
             return
 
-        v_js = None
+        v_js : Any = None
         if not hasattr(self, name):
             return
         if (v := getattr(self, name)) is None:
@@ -654,6 +671,8 @@ class TransactionMetadata:
                 setattr(out, f, old_v)
                 continue
             offset = getattr(delta, field.list_offset(), 0)
+            if offset is None:
+                offset = 0
             if offset != len(old_v):
                 logging.debug(
                     'list offset mismatch %s old len %d new offset %s',
@@ -721,7 +740,8 @@ class TransactionMetadata:
                     return None  # invalid
                 setattr(out, f, None)
                 continue
-
+            assert isinstance(old_v, list)
+            assert isinstance(new_v, list)
             if json_field.emit_rest_placeholder(which_json):
                 if any([x != None for x in new_v]):
                     logging.debug('non-None placeholder')
@@ -845,11 +865,12 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : float) -> bool:
+    def wait(self, version : int, timeout : Optional[float]) -> bool:
         pass
 
     @abstractmethod
-    async def wait_async(self, version : int, timeout : float) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]
+                         ) -> bool:
         pass
 
 

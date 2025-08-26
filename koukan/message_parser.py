@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import logging
 
 from email.message import EmailMessage, MIMEPart
@@ -10,6 +10,7 @@ from email.headerregistry import (
     AddressHeader,
     BaseHeader,
     ContentDispositionHeader,
+    ContentTransferEncodingHeader,
     ContentTypeHeader,
     DateHeader,
     MessageIDHeader,
@@ -100,13 +101,14 @@ class MessageParser:
         elif isinstance(header, ContentTransferEncodingHeader):
             return [header.cte, params]
         else:
-            return _parse_generic_header(header)
+            return self._parse_generic_header(header)
 
-    def _parse_generic_header(self, header : BaseHeader):
+    def _parse_generic_header(self, header : BaseHeader) -> str:
         return str(header)
 
     def parse_headers(self, message : MIMEPart, out):
-        headers_out = []
+        headers_out : List[Any] = []
+        # should be Tuple[str,Union[str,dict]]?
         out['headers'] = headers_out
         for name,value in message.items():
             name = name.lower()
@@ -143,6 +145,7 @@ class MessageParser:
 
         blob.append_data(0, content, len(content))
         out['content'] = { 'create_id': blob.rest_id() }
+        assert isinstance(blob, Blob)
         self.out.blobs.append(blob)
 
     def _parse_mime_tree(self, part : MIMEPart,
@@ -157,7 +160,7 @@ class MessageParser:
         is_text_headers = (part.get_content_type() == 'text/rfc822-headers')
 
         if is_text_headers:
-            out_i = {}
+            out_i : Dict[str, List[dict]] = {}
             out['parts'] = [out_i]
             self._parse_text_headers(part, out_i)
             return
@@ -241,7 +244,7 @@ class MessageParser:
         parser = BytesParser(policy=email.policy.SMTP)
         parsed = parser.parse(raw_file)
 
-        parts = {}
+        parts : Dict[str, Any] = {}
         self.out.json['parts'] = parts
         assert isinstance(parsed, MIMEPart)
         self._parse_mime_tree(parsed, 0, True, parts)

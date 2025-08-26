@@ -50,7 +50,6 @@ class SmtpEndpoint(Filter):
                  chunk_size = 2**16):
         # TODO this should come from the rest transaction -> start()
         self.ehlo_hostname = ehlo_hostname
-        self.rcpt_resp = []
         if timeout is not None:
             self.timeout = timeout
         assert protocol in ['smtp', 'lmtp']
@@ -137,15 +136,18 @@ class SmtpEndpoint(Filter):
         if tx_delta.cancelled:
             self._shutdown()
         else:
+            assert self.downstream_tx is not None
             self._update(self.downstream_tx, tx_delta)
         return FilterResult()
 
     def _check_esmtp(self, params : List[EsmtpParam]) -> Optional[Response]:
+        assert self.smtp is not None
         for i,e in enumerate(params):
             if e.keyword.lower() == 'body':
                 if not self.smtp.has_extn(e.value):
                     return Response(504, 'body=%s and not advertised' % e.value)
             elif e.keyword.lower() == 'size':
+                assert e.value is not None
                 req_size = int(e.value)
                 if not self.smtp.has_extn('size'):
                     if req_size > SmtpEndpoint.MAX_WITHOUT_SIZE:
@@ -185,8 +187,10 @@ class SmtpEndpoint(Filter):
             if tx.mail_response.err():
                 self._shutdown()
                 return
+        assert self.smtp is not None
 
         for rcpt in tx_delta.rcpt_to:
+            assert rcpt is not None
             # smtplib.LMTP doesn't support multi-rcpt transactions
             # https://github.com/python/cpython/issues/76984
             # as of this writing (2024/10) there is a PR in review to fix
@@ -223,7 +227,7 @@ class SmtpEndpoint(Filter):
                 return
 
             if self.body_reader is None:
-                self.body_reader = BlobReader(tx.body)
+                self.body_reader = BlobReader(body)
 
             if not hasattr(self.smtp, 'data_chunk'):
                 # low-performance/backward-compatibility path:
@@ -233,7 +237,7 @@ class SmtpEndpoint(Filter):
                 if self.body is None:
                     self.body = b''
                 self.body += self.body_reader.read()
-                if not tx.body.finalized():
+                if not body.finalized():
                     return
                 tx.data_response = Response.from_smtp(self.smtp.data(self.body))
                 self.body = None
@@ -245,9 +249,9 @@ class SmtpEndpoint(Filter):
             data_resp = None
             while not chunk_last and (data_resp is None or data_resp.ok()):
                 chunk = self.body_reader.read(self.chunk_size)
-                if tx.body.content_length() is not None:
-                    chunk_last = (self.body_reader.tell() ==
-                                  tx.body.content_length())
+                cl = body.content_length()
+                if cl is not None:
+                    chunk_last = self.body_reader.tell() == cl
                 if not chunk_last and not chunk:
                     break
                 resp = self.smtp.data_chunk(chunk, chunk_last)

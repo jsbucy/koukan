@@ -17,7 +17,7 @@ from koukan.filter import (
 from koukan.filter_chain import ProxyFilter
 
 class RecipientRouterFactory:
-    router_policies : Dict[str, RoutingPolicy]
+    router_policies : Dict[str, Callable[[dict], RoutingPolicy]]
 
     def __init__(self):
         self.router_policies = {}

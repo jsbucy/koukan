@@ -505,11 +505,15 @@ class StorageTestBase(unittest.TestCase):
 
     def reader(self, reader : TransactionCursor, dd : List[bytes]):
         d = bytes()
-        while (reader.tx.body.content_length() is None or
-               reader.tx.body.len() < reader.tx.body.content_length()):
+        assert reader.tx is not None
+        assert isinstance(reader.tx.body, Blob)
+        while (((cl := reader.tx.body.content_length()) is None) or
+               len(d) < cl):
             logging.info('reader %d', len(d))
             reader.load()
-            d += reader.tx.body.pread(len(d))
+            ddd = reader.tx.body.pread(len(d))
+            assert ddd is not None
+            d += ddd
         dd[0] = d
 
     def test_blob_waiting_poll(self):

@@ -1,6 +1,15 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union )
 from threading import Lock, Condition
 import logging
 import time
@@ -92,7 +101,7 @@ class RestEndpoint(Filter):
     static_http_host : Optional[str] = None
     http_host : Optional[str] = None
 
-    blob_readers = Dict[Blob, BlobReader]
+    blob_readers : Dict[Blob, BlobReader]
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
@@ -131,12 +140,15 @@ class RestEndpoint(Filter):
         return urljoin(self.base_url, url), url
 
     def _create(self,
-                resolution : Resolution,
+                resolution : Optional[Resolution],
                 tx : TransactionMetadata,
                 deadline : Deadline) -> Optional[HttpResponse]:
+        assert self.base_url is not None
         logging.debug('RestEndpoint._create %s %s', resolution, tx)
 
-        hosts = resolution.hosts if resolution is not None else [None]
+        hosts : Sequence[Optional[HostPort]] = [None]
+        if resolution is not None and resolution.hosts is not None:
+            hosts = resolution.hosts
         # TODO probably tx.rest_endpoint should also be repeated.  But
         # we probably don't want the cross product of endpoints and
         # remote hosts?  Iterate endpoint on http err, remote host on
@@ -163,8 +175,8 @@ class RestEndpoint(Filter):
                     json=json,
                     headers=req_headers,
                     timeout=deadline_left)
-            except RequestError:
-                logging.exception('RestEndpoint._create')
+            except RequestError as e:
+                logging.debug('RestEndpoint._create http error %s', e)
                 continue
             logging.info('RestEndpoint._create req_headers %s resp %s %s',
                          req_headers, rest_resp, rest_resp.text)
@@ -207,7 +219,7 @@ class RestEndpoint(Filter):
         assert self.etag
         req_headers['if-match'] = self.etag
         try:
-            kwargs = {}
+            kwargs : Dict[Any, Any] = {}
             if body_json:
                 req_headers['content-type'] = 'application/json'
                 kwargs['json'] = body_json
@@ -230,6 +242,7 @@ class RestEndpoint(Filter):
     def _update_message_builder(self, delta : TransactionMetadata,
                                 deadline : Deadline
                                 ) -> Optional[Response]:
+        assert self.transaction_url is not None
         assert isinstance(delta.body, MessageBuilderSpec)
         rest_resp = self._post_tx(
             self.transaction_url + '/message_builder',
@@ -245,7 +258,7 @@ class RestEndpoint(Filter):
         try:
             rest_resp = self.client.post(self.transaction_url + '/cancel')
         except RequestError as e:
-            logging.exception('RestEndpoint._cancel POST exception')
+            logging.debug('RestEndpoint._cancel POST exception %s', e)
         else:
             logging.debug('RestEndpoint._cancel %s %s', self.transaction_url,
                           rest_resp)
@@ -253,6 +266,7 @@ class RestEndpoint(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata,
                         timeout : Optional[float] = None) -> FilterResult:
+        assert self.downstream_tx is not None
         if tx_delta.cancelled:
             self._cancel()
             upstream_delta = TransactionMetadata()
@@ -319,7 +333,8 @@ class RestEndpoint(Filter):
         tx_update = False
         created = False
         if not self.transaction_url:
-            rest_resp = self._create(self.downstream_tx.resolution, self.rest_upstream_tx, deadline)
+            rest_resp = self._create(self.downstream_tx.resolution,
+                                     self.rest_upstream_tx, deadline)
             if rest_resp is not None and rest_resp.status_code != 201:
                 rest_resp = None
             tx_update = True
@@ -397,17 +412,17 @@ class RestEndpoint(Filter):
         # submission could send an inline body in which case you'll
         # get it all in the initial on_update() so don't send it again
         # here.
-        message_builder = isinstance(tx_delta.body, MessageBuilderSpec)
-        if not created and message_builder:
-            err = self._update_message_builder(tx_delta, deadline)
-            if err is not None:
-                self.downstream_tx.data_response = err
+        if not created and isinstance(tx_delta.body, MessageBuilderSpec):
+            data_err = self._update_message_builder(tx_delta, deadline)
+            if data_err is not None:
+                self.downstream_tx.data_response = data_err
                 return FilterResult()
 
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
         # upstream_tx, not tx here
-        if not any([r.ok() for r in self.rest_upstream_tx.rcpt_response]):
+        if not any([isinstance(r, Response) and r.ok()
+                    for r in self.rest_upstream_tx.rcpt_response]):
             # TODO this should be implemented centrally in FilterChain?
             self.downstream_tx.data_response = Response(
                     503, "5.1.1 data failed precondition: all rcpts failed"
@@ -417,7 +432,7 @@ class RestEndpoint(Filter):
         blobs : List[Tuple[Blob, bool]]  # bool: non_body_blob
         if isinstance(tx_delta.body, Blob):
             blobs = [ (tx_delta.body, False) ]
-        elif message_builder:
+        elif isinstance(tx_delta.body, MessageBuilderSpec):
             blobs = [(b, True) for b in tx_delta.body.blobs]
             if tx_delta.body.body_blob is not None:
                 blobs.append((tx_delta.body.body_blob, False))
@@ -474,6 +489,7 @@ class RestEndpoint(Filter):
                          body : bool,
                          blob_rest_id : Optional[str] = None
                          ) -> Response:
+        assert self.transaction_path is not None
         assert blob.finalized()
         assert not(body and blob_rest_id)
         assert body or blob_rest_id
@@ -555,6 +571,8 @@ class RestEndpoint(Filter):
                         non_body_blob=False,
                         blob_rest_id : Optional[str] = None
                         ) -> Tuple[Optional[Response], Optional[int]]:
+        assert self.transaction_path is not None
+
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
         headers = {}
@@ -597,7 +615,7 @@ class RestEndpoint(Filter):
         # IOW blob upload is not the place to reject the content, etc.
 
         # cf RestTransactionHandler.build_resp() re content-range
-        dlen = len(d)
+        dlen : Optional[int] = len(d)
         if 'content-range' in rest_resp.headers:
             range = werkzeug.http.parse_content_range_header(
                 rest_resp.headers.get('content-range'))
@@ -616,6 +634,7 @@ class RestEndpoint(Filter):
     def _get_json(self, timeout : Optional[float] = None,
                   testonly_point_read = False
                   ) -> Union[None, dict, _Unchanged]:
+        assert self.transaction_url is not None
         try:
             req_headers = {}
             if self.http_host:
@@ -650,7 +669,8 @@ class RestEndpoint(Filter):
     def get_json(self, timeout : Optional[float] = None
                  ) -> Optional[dict]:
         json = self._get_json(timeout, testonly_point_read=True)
-        assert isinstance(json, Union[None, dict])
+        if json is not None:
+            assert isinstance(json, dict)
         return json
 
     # does GET /tx at least once, polls as long as tx contains
@@ -679,6 +699,7 @@ class RestEndpoint(Filter):
                 logging.debug('RestEndpoint._get() %s done tx_out %s',
                               self.transaction_url, tx_out)
 
+                assert self.rest_upstream_tx is not None
                 if (not self.rest_upstream_tx.req_inflight(tx_out) and not
                     (self.sent_data_last and tx_out.data_response is None)):
                     return tx_out

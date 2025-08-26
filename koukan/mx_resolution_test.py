@@ -14,7 +14,6 @@ from dns.rrset import RRset
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 import dns.rrset
-from dns.message import QueryMessage
 import dns.flags
 from dns.rdtypes.ANY.PTR import PTR
 import dns.name
@@ -31,13 +30,17 @@ example.com. IN MX 10 mx.example.com.
 ;ADDITIONAL
 """
 
+# this pattern of constructing Answer is cribbed from
+# dnspython/tests/test_resolution.py
+# but doesn't type check:
+# error: Argument 4 to "Answer" has incompatible type "Message"; expected "QueryMessage"  [arg-type]
+
 mx_message = dns.message.from_text(mx_message_text)
 mx_answer = Answer(
     dns.name.from_text('example.com.'),
     RdataType.MX,
     RdataClass.IN,
-    mx_message)
-
+    mx_message)  # type: ignore[arg-type]
 
 a_message_text = """id 1234
 opcode QUERY
@@ -56,7 +59,7 @@ a_answer = Answer(
     dns.name.from_text('mx.example.com.'),
     RdataType.A,
     RdataClass.IN,
-    a_message)
+    a_message)  # type: ignore[arg-type]
 
 
 aaaa_message_text = """id 1234
@@ -76,7 +79,7 @@ aaaa_answer = Answer(
     dns.name.from_text('mx.example.com.'),
     RdataType.AAAA,
     RdataClass.IN,
-    aaaa_message)
+    aaaa_message)  # type: ignore[arg-type]
 
 
 class DnsResolutionFilterTest(unittest.TestCase):

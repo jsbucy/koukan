@@ -48,11 +48,13 @@ class AddRouteFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata):
         # post-exploder output chain/single-rcpt only for now
+        assert self.downstream_tx is not None
         assert len(self.downstream_tx.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route.tx is None:
             self.add_route.init(TransactionMetadata())
             add_route_delta.host = self.host
+        assert self.add_route.tx is not None
         self.add_route.tx.merge_from(add_route_delta)
         self.add_route.update()
         self._resp_err()
