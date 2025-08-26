@@ -93,7 +93,6 @@ class OutputHandler:
     # - completion/next attempt/notification logic
     # -> delta, kwargs for write_envelope(), upstream refresh
     def _handle_once(self) -> Tuple[TransactionMetadata, dict, bool]:
-        assert not self.cursor.no_final_notification
         # very first call or there's a small chance we the previous
         # write_envelope() may have picked up a delta from downstream
         downstream_timeout = False
@@ -210,7 +209,10 @@ class OutputHandler:
 
     def handle(self):
         self.filter_chain.init(self.tx)
-
+        # Only read this at the start; downstream rest handler
+        # cancellation could populate this concurrently with handle()
+        # and we don't want to enter that flow mid-stream.
+        notification_pseudo_attempt = self.cursor.no_final_notification
         done = False
         logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
         while not done:
@@ -232,15 +234,20 @@ class OutputHandler:
                 env_kwargs = {
                     'finalize_attempt': True,
                     'next_attempt_time': time.time() + self._bug_retry }
-                if self.cursor.no_final_notification:
+                if notification_pseudo_attempt:
                     # tx.notification was None when
                     # final_attempt_reason was written iow
                     # notifications were enabled after the tx already
                     # failed (Exploder)
+                    if self.cursor.tx.notification is None:
+                        logging.error(
+                            'invalid tx state: no_final_notification without '
+                            'notification')
+                        raise ValueError()
                     env_kwargs = {'finalize_attempt': True}
-                    self._maybe_send_notification(
-                        self.cursor.final_attempt_reason, self.cursor.tx)
-                    env_kwargs['notification_done'] = True
+                    if self._maybe_send_notification(
+                            self.cursor.final_attempt_reason, self.cursor.tx):
+                        env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
                     if not delta and not env_kwargs and not refresh:
