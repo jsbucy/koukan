@@ -68,7 +68,7 @@ class RestEndpointClientProvider:
             logging.debug('RestEndpointClientProvider.__del__() client')
             # close keepalive connections, setting Client(limits=)
             # doesn't seem to work? keepalive connections cause
-            # hypercorn to take a long time to shut down which is a
+            # the http server to take a long time to shut down which is a
             # problem in tests
             self.client.close()
             self.client = None

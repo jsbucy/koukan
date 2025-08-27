@@ -11,7 +11,7 @@ import yaml
 import secrets
 
 import koukan.fastapi_service as fastapi_service
-import koukan.hypercorn_main as hypercorn_main
+import koukan.uvicorn_main as uvicorn_main
 
 from koukan.storage import Storage, TransactionCursor
 from koukan.rest_handler import (
@@ -57,7 +57,7 @@ class Service:
     # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
-    hypercorn_shutdown : Optional[asyncio.Event] = None
+    http_server : Optional[uvicorn_main.Server] = None
     _rest_id_entropy : int = 16
     root_yaml : Optional[dict] = None
 
@@ -93,10 +93,10 @@ class Service:
             self._shutdown = True
             self.cv.notify_all()
 
-        if self.hypercorn_shutdown:
-            logging.debug('router service hypercorn shutdown')
+        if self.http_server:
+            logging.debug('router service http server shutdown')
             try:
-                self.hypercorn_shutdown.set()
+                self.http_server.shutdown()
             except:
                 pass
 
@@ -191,19 +191,18 @@ class Service:
             self.cv.notify_all()
 
         app = fastapi_service.create_app(self.rest_handler_factory)
-        self.hypercorn_shutdown = asyncio.Event()
         try:
-            hypercorn_main.run(
-                [listener_yaml['addr']],
+            self.http_server = uvicorn_main.Server(
+                app,
+                listener_yaml['addr'],
                 listener_yaml.get('cert', None),
                 listener_yaml.get('key', None),
-                app,
-                self.hypercorn_shutdown,
                 alive=alive if alive else self.heartbeat)
+            self.http_server.run()
         except:
-            logging.exception('router service main: hypercorn_main exception')
+            logging.exception('router service main: http server exception')
             pass
-        logging.debug('router_service.Service.main() hypercorn_main done')
+        logging.debug('router_service.Service.main() http server done')
         self.shutdown()
         logging.debug('router_service.Service.main() done')
 
@@ -212,10 +211,11 @@ class Service:
             partial(self.main, alive=self.daemon_executor.ping_watchdog))
 
     def heartbeat(self):
-        for ex in [self.rest_executor, self.output_executor,
-                   self.daemon_executor]:
-            if not self.daemon_executor.check_watchdog():
-                self.hypercorn_shutdown.set()
+        for e in [e for e in [self.rest_executor,
+                              self.output_executor,
+                              self.daemon_executor] if e is not None]:
+            if not e.check_watchdog():
+                self.server.shutdown()
                 return False
         return True
 

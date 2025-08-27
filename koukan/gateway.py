@@ -24,7 +24,7 @@ from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.rest_handler import (
     EndpointFactory,
     RestHandlerFactory )
-import koukan.hypercorn_main as hypercorn_main
+import koukan.uvicorn_main as uvicorn_main
 import yaml
 from koukan.executor import Executor
 
@@ -38,7 +38,7 @@ class SmtpGateway(EndpointFactory):
     lock : Lock
     cv: Condition
     rest_id_factory : Optional[Callable[[], str]]
-    hypercorn_shutdown : Optional[asyncio.Event] = None
+    http_server : Optional[uvicorn_main.Server] = None
     smtp_services : List[ControllerTls]
     smtp_factory : Dict[str, SmtpFactory]
 
@@ -65,10 +65,10 @@ class SmtpGateway(EndpointFactory):
         for service in self.smtp_services:
             service.stop()
 
-        if self.hypercorn_shutdown:
-            logging.debug('SmtpGateway hypercorn shutdown')
+        if self.http_server:
+            logging.debug('SmtpGateway https erver shutdown')
             try:
-                self.hypercorn_shutdown.set()
+                self.http_server.shutdown()
             except:
                 pass
 
@@ -271,18 +271,18 @@ class SmtpGateway(EndpointFactory):
         cert = rest_listener_yaml.get('cert', None)
         key = rest_listener_yaml.get('key', None)
 
-        self.hypercorn_shutdown = asyncio.Event()
-        hypercorn_main.run(
-            [rest_listener_yaml['addr']],
+        self.http_server = uvicorn_main.Server(
+            app,
+            rest_listener_yaml['addr'],
             cert=cert, key=key,
-            app=app,
-            shutdown=self.hypercorn_shutdown,
             alive=alive if alive else self.heartbeat)
+        self.http_server.run()
         logging.debug('SmtpGateway.main() done')
 
     def heartbeat(self):
         if self.executor.check_watchdog():
             return True
-        self.hypercorn_shutdown.set()
+        if self.http_server is not None:
+            self.http_server.shutdown()
         return False
 

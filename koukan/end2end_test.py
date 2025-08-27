@@ -17,7 +17,7 @@ from koukan.router_service import Service
 from koukan.fake_smtpd import FakeSmtpd
 from koukan.ssmtp import main as send_smtp
 from koukan.executor import Executor
-from koukan.hypercorn_main import run
+import koukan.uvicorn_main as uvicorn_main
 import koukan.postgres_test_utils as postgres_test_utils
 
 from examples.send_message.send_message import Sender
@@ -40,6 +40,7 @@ def _get_router_endpoint_yaml(router_yaml : dict, name : str
 class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
+    http_server : Optional[uvicorn_main.Server] = None
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -164,16 +165,15 @@ class End2EndTest(unittest.TestCase):
         self.router_main_fut = self.executor.submit(
             partial(self.router.main, alive=self.executor.ping_watchdog))
         self.fake_smtpd.start()
-        self.hypercorn_shutdown = asyncio.Event()
         self.receiver_tempdir = tempfile.TemporaryDirectory()
         self.receiver = Receiver(
             self.receiver_tempdir.name,
             gc_interval=0)  # gc on every access
-        self.executor.submit(
-            partial(run, [('localhost', self.receiver_rest_port)], None, None,
-                    create_app(self.receiver),
-                    self.hypercorn_shutdown,
-                    self.executor.ping_watchdog))
+        self.http_server = uvicorn_main.Server(
+            create_app(self.receiver),
+            ('localhost', self.receiver_rest_port),
+            self.executor.ping_watchdog)
+        self.executor.submit(self.http_server.run)
 
     def setUp(self):
         self.executor = Executor(
@@ -191,7 +191,8 @@ class End2EndTest(unittest.TestCase):
         self.assertTrue(self.router.shutdown())
         self.assertTrue(self.gateway.shutdown())
         self.fake_smtpd.stop()
-        self.hypercorn_shutdown.set()
+        if self.http_server is not None:
+            self.http_server.shutdown()
         self.assertTrue(self.executor.shutdown(timeout=60))
         for d in [d for d in [self.dkim_tempdir, self.receiver_tempdir]
                   if d is not None]:
