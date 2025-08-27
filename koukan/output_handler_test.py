@@ -369,6 +369,53 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor.load()
         self.assertEqual('downstream timeout', tx_cursor.final_attempt_reason)
 
+    def test_downstream_cancel(self):
+        tx_cursor = self.storage.get_transaction_cursor()
+        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'))
+        tx_cursor.write_envelope(tx)
+
+        endpoint = FakeFilter()
+        chain = FilterChain([endpoint])
+
+        started = False
+        def exp_rcpt(tx, tx_delta):
+            nonlocal started
+            started = True
+            logging.debug(tx)
+            time.sleep(1)
+            self.assertEqual(tx.mail_from.mailbox, 'alice')
+            prev = tx.copy()
+            if tx.mail_response is None:
+                tx.mail_response = Response(201)
+            return prev.delta(tx)
+        for i in range(0,3):
+            endpoint.add_expectation(exp_rcpt)
+
+        fut = self.executor.submit(lambda: self.output('rest_tx_id', chain))
+
+        while not started:
+            logging.debug(started)
+            time.sleep(0.1)
+
+        for i in range(0,2):
+            try:
+                tx_cursor.write_envelope(
+                    TransactionMetadata(cancelled=True),
+                    final_attempt_reason='downstream cancelled')
+                break
+            except VersionConflictException:
+                tx_cursor.load()
+
+        fut.result()  # wait/propagate exceptions
+
+        tx_cursor.load()
+        self.assertTrue(tx_cursor.no_final_notification)
+        self.assertIsNone(tx_cursor.tx.notification)
+        self.assertEqual('downstream cancelled', tx_cursor.final_attempt_reason)
+        self.assertIsNone(self.storage.load_one())
+
     def test_next_attempt_time(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(
