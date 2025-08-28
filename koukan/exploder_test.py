@@ -106,19 +106,6 @@ class Rcpt:
     def set_endpoint(self, endpoint):
         self.endpoint = endpoint
 
-    # discussion:
-    # AsyncFilter.update() is supposed to return immediately so you
-    # should not expect to get upstream responses from it; only after
-    # wait() and get(). Moreover Exploder.on_update() will not
-    # wait/get if !body.finalized() since !tx.req_inflight(). So
-    # the "early data error" tests here aren't a perfect analogue of what
-    # would happen in practice: you would get the previous error in
-    # response to the next update. Though this is probably all moot anyway
-    # since something downstream probably buffers the whole blob and
-    # you will only see one update with the finalized blob.
-    def set_data_response(self, parent, i : int, last : bool):
-        logging.debug('Rcpt.set_data_response %d %d', i, len(self.data_resp))
-
     def check_store_and_forward(self):
         sf = self.store_and_forward
         tx = self.cursor.load()
@@ -190,9 +177,11 @@ class ExploderTest(unittest.TestCase):
         delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()
         downstream_cursor.create('downstream_rest_id', delta)
+        assert exploder.downstream_tx is not None
         exploder.downstream_tx.merge_from(delta)
         exploder.on_update(delta)
         logging.debug(tx)
+        assert tx.mail_response is not None
         self.assertEqual(tx.mail_response.code, test.expected_mail_resp.code)
         for i,r in enumerate(test.rcpt):
             prev = tx.copy()
@@ -205,8 +194,11 @@ class ExploderTest(unittest.TestCase):
                 [test.expected_rcpt_resp[i].code],
                 [rr.code for rr in upstream_delta.rcpt_response])
 
+        def code(r):
+            assert r is not None
+            return r.code
         self.assertEqual([rr.code for rr in test.expected_rcpt_resp],
-                         [rr.code for rr in tx.rcpt_response])
+                         [code(rr) for rr in tx.rcpt_response])
 
         if test.data is not None:
             delta =TransactionMetadata(body=BlobSpec(create_tx_body=True))
@@ -218,6 +210,7 @@ class ExploderTest(unittest.TestCase):
             tx.merge_from(tx_delta)
             exploder.on_update(tx_delta)
         if test.expected_data_resp is not None:
+            assert tx.data_response is not None
             self.assertEqual(test.expected_data_resp.code,
                              tx.data_response.code)
         else:

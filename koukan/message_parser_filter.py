@@ -7,6 +7,7 @@ from io import IOBase
 import logging
 
 from koukan.blob import (
+    Blob,
     FileLikeBlob,
     InlineBlob )
 from koukan.filter import TransactionMetadata
@@ -33,6 +34,7 @@ class MessageParserFilter(ProxyFilter):
 
     def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream_tx
+        assert tx is not None
         logging.debug('MessageParserFilter options %s', tx.options)
 
         body = tx_delta.maybe_body_blob()
@@ -41,6 +43,8 @@ class MessageParserFilter(ProxyFilter):
             tx_delta.body = None
         if not enabled or (body is not None and not body.finalized()):
             body = None
+
+        assert self.upstream_tx is not None
         self.upstream_tx.merge_from(tx_delta)
 
         if body is None:
@@ -48,10 +52,15 @@ class MessageParserFilter(ProxyFilter):
 
         assert self.upstream_tx.body is None
 
-        parse_options = tx.options.get('receive_parsing', {})
-        parse_options = parse_options if parse_options else {}  # may be None
+        parse_options = None
+        if tx.options is not None:
+            parse_options = tx.options.get('receive_parsing', {})
+        if parse_options is None:
+            parse_options = {}
         file = TemporaryFile('w+b')
-        file.write(body.pread(0))
+        b = body.pread(0)
+        assert b is not None
+        file.write(b)
         file.flush()
         file.seek(0)
         parser = MessageParser(
@@ -64,6 +73,7 @@ class MessageParserFilter(ProxyFilter):
             spec = MessageBuilderSpec(
                 parsed_message.json, parsed_message.blobs)
             spec.check_ids()
+            assert isinstance(tx.body, Blob)
             spec.body_blob = tx.body
             self.upstream_tx.body = spec
         else:

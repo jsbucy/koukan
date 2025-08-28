@@ -484,25 +484,37 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug(get_resp.json())
 
         # GET again with previous etag, should wait for change
-        logging.debug('get tx 2')
-        get_resp2 = rest_endpoint.client.get(
-            tx_url,
-            headers={'if-none-match': get_resp.headers['etag'],
-                     'request-timeout': '5'})
-        logging.debug(get_resp2)
-        logging.debug(get_resp2.json())
-        self.assertEqual(200, get_resp.status_code)
-        self.assertNotEqual(get_resp2.headers['etag'], get_resp.headers['etag'])
-        tx_json = get_resp2.json()
-        # depending on timing, we may get the tx before or after the
-        # OH completion that sets final_attempt_reason but we should
-        # get all the responses
-        self.assertEqual(
-            tx_json['mail_response'], {'code': 201, 'message': 'ok'})
-        self.assertEqual(
-            tx_json['rcpt_response'], [{'code': 202, 'message': 'ok'}])
-        self.assertEqual(
-            tx_json['data_response'], {'code': 203, 'message': 'ok'})
+        # this may see one more version update when the output handler
+        # starts but should wait after that
+        for i in range(0,2):
+            logging.debug('get tx 2.%d', i)
+
+            get_resp2 = rest_endpoint.client.get(
+                tx_url,
+                headers={'if-none-match': get_resp.headers['etag'],
+                         'request-timeout': '5'})
+            logging.debug(get_resp2)
+            logging.debug(get_resp2.json())
+            self.assertEqual(200, get_resp.status_code)
+            self.assertNotEqual(get_resp2.headers['etag'],
+                                get_resp.headers['etag'])
+            tx_json = get_resp2.json()
+            # depending on timing, we may get the tx before or after the
+            # OH completion that sets final_attempt_reason but we should
+            # get all the responses
+            done = True
+            for f in ['mail_response', 'rcpt_response', 'data_response']:
+                if f not in tx_json:
+                    done = False
+                    break
+            if not done:
+                continue
+            self.assertEqual(
+                tx_json['mail_response'], {'code': 201, 'message': 'ok'})
+            self.assertEqual(
+                tx_json['rcpt_response'], [{'code': 202, 'message': 'ok'}])
+            self.assertEqual(
+                tx_json['data_response'], {'code': 203, 'message': 'ok'})
 
 
     def test_rest_body(self):

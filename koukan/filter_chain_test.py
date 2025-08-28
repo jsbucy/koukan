@@ -80,12 +80,37 @@ class RewriteBody(ProxyFilter):
                 'new body' + body.pread(0), last=True)
         return FilterResult()
 
+# Example of rejecting individual rcpts of a multi-rcpt transaction,
+# e.g. rate-limit downstream of exploder. This must be ProxyFilter
+# because it removes from rcpt_to and must be CoroutineFilter because it
+# maps upstream to downstream rcpt_response in a way that cannot
+# (currently) be represented by FilterResult.
+class RejectFirstRcpt(ProxyFilter):
+    def on_update(self, delta):
+        logging.debug(self.downstream_tx)
+        delta.rcpt_to = []
+        self.upstream_tx.merge_from(delta)
+
+        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            if i == 0 and (len(self.downstream_tx.rcpt_response) == 0):
+                self.downstream_tx.rcpt_response.append(Response(550))
+
+        return FilterResult()
+
 class RejectMail(Filter):
     def on_update(self, delta):
         logging.debug('RejectMail.on_update')
         if delta.mail_from:
             assert self.downstream_tx.mail_response is None
             self.downstream_tx.mail_response = Response(550, 'bad')
+        return FilterResult()
+
+class RejectRcpt(ProxyFilter):
+    def on_update(self, delta):
+        logging.debug('RejectMail.on_update')
+        for i in range(len(self.downstream_tx.rcpt_response),
+                       len(self.downstream_tx.rcpt_to)):
+            self.downstream_tx.rcpt_response.append(Response(550))
         return FilterResult()
 
 class FilterChainTest(unittest.TestCase):
@@ -164,6 +189,53 @@ class FilterChainTest(unittest.TestCase):
         self.assertEqual([503,503], [r.code for r in tx.rcpt_response])
         tx.cancelled = True
         chain.update()
+
+    def test_fail_rcpt(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([RejectRcpt(), sink])
+        chain.init(tx)
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob')])
+        tx.merge_from(delta)
+        chain.update()
+        self.assertEqual([550], [r.code for r in tx.rcpt_response])
+        tx.cancelled = True
+        chain.update()
+
+    def test_fail_first_rcpt_sequential(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([RejectFirstRcpt(), sink])
+        chain.init(tx)
+        tx.mail_from = Mailbox('alice')
+        chain.update()
+        self.assertEqual(201, tx.mail_response.code)
+
+        tx.rcpt_to = [Mailbox('bob1')]
+        chain.update()
+        self.assertEqual([550], [r.code for r in tx.rcpt_response])
+
+        tx.rcpt_to.append(Mailbox('bob2'))
+        chain.update()
+        self.assertEqual([550, 202], [r.code for r in tx.rcpt_response])
+
+
+    def test_fail_first_rcpt_pipelined(self):
+        tx = TransactionMetadata()
+        sink = Sink()
+        chain = FilterChain([RejectFirstRcpt(), sink])
+        chain.init(tx)
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            rcpt_to = [Mailbox('bob1'), Mailbox('bob2')])
+        tx.merge_from(delta)
+        chain.update()
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([550, 202], [r.code for r in tx.rcpt_response])
+        # tx.cancelled = True
+        # chain.update()
 
     def test_proxy(self):
         tx = TransactionMetadata()

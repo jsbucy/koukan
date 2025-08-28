@@ -242,5 +242,14 @@ class FilterTest(unittest.TestCase):
         self.assertIsNone(merged.merge(delta))
 
 
+    def test_copy_valid(self):
+        rcpt = Mailbox('bob1')
+        rcpt.routed = True
+        tx = TransactionMetadata(mail_from=Mailbox('alice'), rcpt_to=[rcpt])
+        all = tx.copy_valid(WhichJson.ALL)
+        self.assertTrue(all.rcpt_to[0].routed)
+        db = tx.copy_valid(WhichJson.DB)
+        self.assertFalse(db.rcpt_to[0].routed)
+
 if __name__ == '__main__':
     unittest.main()

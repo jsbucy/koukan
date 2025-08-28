@@ -4,7 +4,7 @@
 from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
 import logging
 import json
-from io import IOBase, TextIOBase
+from io import IOBase, TextIOWrapper
 import os
 import time
 from contextlib import nullcontext
@@ -24,7 +24,7 @@ class Transaction:
     # create_id (or auto-generated for inline) -> fs path
     # lifecycle: update_message_builder() inserts placeholder None
     # put_blob() writes and replaces with actual filename
-    blob_paths = Dict[str, Optional[str]]
+    blob_paths : Dict[str, Optional[str]]
     cancelled = False
     dir : str
 
@@ -131,10 +131,11 @@ class Transaction:
                         return 400, 'bad blob in message builder json'
 
         with self._create_file('msg.json', 't') as f:
-            assert isinstance(f, TextIOBase)
+            assert isinstance(f, TextIOWrapper)
             json.dump(message_json, f)
             self.message_json_path = f.name
         self.version += 1
+        return None
 
     def _validate_put_req(self, req_headers,
                           tx_body : Optional[bool] = None,
@@ -159,7 +160,9 @@ class Transaction:
         logging.debug('%s %s %s', filename, tx_body, blob_id)
         if blob_id:
             self.blob_paths[blob_id] = filename
-            self._finalize_blobrefs(self.message_json['parts'], blob_id, filename)
+            assert self.message_json is not None
+            self._finalize_blobrefs(
+                self.message_json['parts'], blob_id, filename)
             for p in ["text_body", "related_attachments", "file_attachments"]:
                 if parts := self.message_json.get(p, None):
                     for part in parts:
@@ -169,6 +172,7 @@ class Transaction:
         if tx_body:
             self.body_path = filename
             self.tx_json['data_response'] = {'code': 250, 'message': 'ok'}
+            self.log()
 
     # wsgi/flask-only
     def put_blob(self, req_headers, stream : IOBase,
@@ -178,7 +182,9 @@ class Transaction:
         if err := self._validate_put_req(req_headers, tx_body, blob_id):
             return err
         logging.debug('put_blob %s', blob_id)
-        with self._create_file('msg' if tx_body else blob_id) as file:
+        dname = 'msg' if tx_body else blob_id
+        assert dname is not None
+        with self._create_file(dname) as file:
             while b := stream.read(self.CHUNK_SIZE):
                 file.write(b)
             self._finalize_blob(file.name, tx_body, blob_id)
@@ -195,7 +201,9 @@ class Transaction:
         if err := self._validate_put_req(req_headers, tx_body, blob_id):
             return err
         logging.debug('put_blob %s', blob_id)
-        with self._create_file('msg' if tx_body else blob_id) as file:
+        dname = 'msg' if tx_body else blob_id
+        assert dname is not None
+        with self._create_file(dname) as file:
             async for b in stream:
                 file.write(b)
             self._finalize_blob(file.name, tx_body, blob_id)
@@ -212,7 +220,7 @@ class Transaction:
                       self.message_json if self.message_json else None)
         logging.debug('received body %d bytes', self._file_size(self.body_path))
 
-        logging.debug('received blobs %s', self.declared_blob_ids.keys())
+        logging.debug('received blobs %s', self.blob_paths.keys())
         for blob_id, blob_path in self.blob_paths.items():
             logging.debug('received blob %s %d bytes',
                           blob_id, self._file_size(blob_path))
@@ -226,9 +234,10 @@ class Transaction:
             output_json['body_path'] = self.body_path
 
         with self._create_file('tx.json', 't') as f:
-            assert isinstance(f, TextIOBase)
+            assert isinstance(f, TextIOWrapper)
             json.dump(output_json, f)
             self.tx_json_path = f.name
+            logging.debug(self.tx_json_path)
 
     def cancel(self):
         if self.cancelled:
@@ -274,7 +283,7 @@ class Receiver:
             del self.transactions[tx_id]
         logging.debug('_gc %d live', len(self.transactions) - len(del_tx_id))
 
-    def create_tx(self, tx_json) -> Tuple[str,dict]:
+    def create_tx(self, tx_json) -> Tuple[str,dict,str]:
         tx_id = secrets.token_urlsafe()
         tx = Transaction(tx_id, tx_json, self.dir)
         self.transactions[tx_id] = tx

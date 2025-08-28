@@ -1,6 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple )
 from abc import ABC, abstractmethod
 import logging
 
@@ -10,7 +16,7 @@ from koukan.filter import (
     Mailbox,
     Resolution,
     TransactionMetadata )
-from koukan.filter_chain import FilterResult, Filter
+from koukan.filter_chain import ProxyFilter, FilterResult
 
 class Destination:
     rest_endpoint : Optional[str] = None
@@ -43,43 +49,76 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(Filter):
+class RecipientRouterFilter(ProxyFilter):
     policy : RoutingPolicy
+    dry_run : bool
 
-    def __init__(self, policy : RoutingPolicy):
+    def __init__(self, policy : RoutingPolicy, dry_run = False):
         self.policy = policy
+        self.dry_run = dry_run
 
-    def _route(self):
+    def _route(self, mailbox) -> Tuple[Optional[Response], bool]:
         tx = self.downstream_tx
+        assert tx is not None
+        assert self.upstream_tx is not None
+
         logging.debug('RecipientRouterFilter._route() %s', tx)
-        mailbox = tx.rcpt_to[0]
         assert mailbox is not None
         dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
 
-        # TODO if we ever have multi-rcpt in the output chain, this
-        # should validate that other mailboxes route to the same place
         if resp and resp.err():
-            if tx.mail_from and tx.mail_response is None:
-                tx.mail_response = Response(
-                    250, 'MAIL ok (RecipientRouterFilter)')
-            tx.rcpt_response = [resp]
-            return
+            return resp, True
         elif dest is None:
-            return
+            return None, False
 
-        tx.rest_endpoint = dest.rest_endpoint
+        # for the exploder downstream chain, this is configured with
+        # dry_run=True to skip setting routing results into the tx; we
+        # just want it to reject invalid rcpts
+        if self.dry_run:
+            return None, True
+
+        # in practice, in any output chain other than exploder
+        # downstream, there will never be more that one rcpt but
+        # multiple should work as long as they all have the same
+        # routing results
+        e = self.upstream_tx.rest_endpoint
+        assert e is None or e == dest.rest_endpoint
+        self.upstream_tx.rest_endpoint = dest.rest_endpoint
+
+        res = None
         if dest.remote_host is not None:
-            tx.resolution = Resolution(dest.remote_host)
-        if dest.http_host is not None:
-            tx.upstream_http_host = dest.http_host
-        tx.options = dest.options
+            res = Resolution(dest.remote_host)
+        up_res = self.upstream_tx.resolution
+        assert up_res is None or up_res == res
+        self.upstream_tx.resolution = res
+
+        hh = self.upstream_tx.upstream_http_host
+        assert hh is None or hh == dest.http_host
+        self.upstream_tx.upstream_http_host = dest.http_host
+
+        opt = self.upstream_tx.options
+        assert opt is None or opt == dest.options
+        self.upstream_tx.options = dest.options
+
+        return None, True
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
-        if (tx_delta.rcpt_to and
+        tx_delta.rcpt_to = []
+        assert self.downstream_tx is not None
+        assert self.upstream_tx is not None
+        self.upstream_tx.merge_from(tx_delta)
+
+        for i,rcpt in enumerate(self.downstream_tx.rcpt_to):
+            assert rcpt is not None
+            if (i < len(self.downstream_tx.rcpt_response) and
+                self.downstream_tx.rcpt_response[i] is not None):
+                continue
             # this may be chained multiple times; noop if a previous
             # instance already routed
-            self.downstream_tx.rest_endpoint is None and
-            self.downstream_tx.options is None):
-            self._route()
+            resp = None
+            if not rcpt.routed:
+                resp, rcpt.routed = self._route(rcpt)
+            assert resp is None or resp.err()
+            self.downstream_tx.rcpt_response.append(resp)
 
         return FilterResult()

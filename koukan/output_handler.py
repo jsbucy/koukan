@@ -56,6 +56,7 @@ class OutputHandler:
                  heartbeat : Optional[Callable[[], None]] = None):
         self.cursor = cursor
         self.filter_chain = filter_chain
+        assert self.cursor.rest_id is not None
         self.rest_id = self.cursor.rest_id
         self.downstream_timeout = downstream_timeout
         self.upstream_refresh = upstream_refresh
@@ -73,6 +74,8 @@ class OutputHandler:
         self.heartbeat = heartbeat
 
     def _fixup_downstream_tx(self) -> TransactionMetadata:
+        assert self.cursor.tx is not None
+
         delta = self.prev_downstream.delta(self.cursor.tx)
         assert delta is not None
         # drop some fields from the tx that's going upstream
@@ -93,7 +96,6 @@ class OutputHandler:
     # - completion/next attempt/notification logic
     # -> delta, kwargs for write_envelope(), upstream refresh
     def _handle_once(self) -> Tuple[TransactionMetadata, dict, bool]:
-        assert not self.cursor.no_final_notification
         # very first call or there's a small chance we the previous
         # write_envelope() may have picked up a delta from downstream
         downstream_timeout = False
@@ -107,6 +109,7 @@ class OutputHandler:
             tx = self.cursor.load()
             assert tx is not None
             now = time.monotonic()
+            assert self.cursor.version is not None
             if self.cursor.version != self._last_downstream_version:
                 self._last_downstream_version = self.cursor.version
                 self._last_downstream_update = now
@@ -114,11 +117,15 @@ class OutputHandler:
             if (now - self._last_downstream_update) > self.downstream_timeout:
                 logging.debug('%s downstream timeout', self.rest_id)
                 downstream_timeout = True
+        assert self.cursor.tx is not None
+        assert self.tx is not None
         delta_minus_body = delta.copy()
         delta_minus_body.body = None
         refresh_dt = now - self._last_upstream_refresh
         recent_refresh = (refresh_dt < self.upstream_refresh)
-        if ((not delta_minus_body) and ((delta.body is None) or (not delta.body.finalized()))) and recent_refresh:
+        body = delta.body
+        assert body is None or isinstance(body, Blob) or isinstance(body, MessageBuilderSpec)
+        if ((not delta_minus_body) and ((body is None) or (not body.finalized()))) and recent_refresh:
             logging.debug('cooldown')
             return TransactionMetadata(), {}, False
         self._last_upstream_refresh = now
@@ -165,10 +172,12 @@ class OutputHandler:
         # 3: client may pipeline data with rcpts, then some invocation of
         # fill_inflight_responses should populate data_response with
         # ~failed precondition
-        elif (not any([r.ok() for r in self.tx.rcpt_response]) and
+        elif (not any([r is not None and r.ok()
+                       for r in self.tx.rcpt_response]) and
               self.tx.body is not None):
             done = True
             if len(self.tx.rcpt_to) == 1:
+                assert self.tx.rcpt_response[0] is not None
                 if self.tx.rcpt_response[0].perm():
                     final_attempt_reason = 'upstream rcpt_response permfail'
             else:
@@ -185,7 +194,7 @@ class OutputHandler:
         if not done:
             return upstream_delta, {}, True
 
-        kwargs = {'finalize_attempt': True}
+        kwargs : Dict[str, Any] = {'finalize_attempt': True}
 
         if final_attempt_reason is None:
             final_attempt_reason, kwargs['next_attempt_time'] = (
@@ -210,7 +219,10 @@ class OutputHandler:
 
     def handle(self):
         self.filter_chain.init(self.tx)
-
+        # Only read this at the start; downstream rest handler
+        # cancellation could populate this concurrently with handle()
+        # and we don't want to enter that flow mid-stream.
+        notification_pseudo_attempt = self.cursor.no_final_notification
         done = False
         logging.debug('OutputHandler.handle %s', self.cursor.rest_id)
         while not done:
@@ -232,7 +244,7 @@ class OutputHandler:
                 env_kwargs = {
                     'finalize_attempt': True,
                     'next_attempt_time': time.time() + self._bug_retry }
-                if self.cursor.no_final_notification:
+                if notification_pseudo_attempt:
                     # tx.notification was None when
                     # final_attempt_reason was written iow
                     # notifications were enabled after the tx already
@@ -244,7 +256,7 @@ class OutputHandler:
                         raise ValueError()
                     env_kwargs = {'finalize_attempt': True}
                     if self._maybe_send_notification(
-                        self.cursor.final_attempt_reason, self.cursor.tx):
+                            self.cursor.final_attempt_reason, self.cursor.tx):
                         env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
@@ -276,6 +288,7 @@ class OutputHandler:
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
+        assert self.cursor.tx is not None
         # leave the existing value for final_attempt_reason
         if self.retry_params is None:
             return None, None
@@ -298,6 +311,7 @@ class OutputHandler:
         logging.debug('OutputHandler._next_attempt_time %s %d %d',
                       self.rest_id, int(dt), next)
         deadline = self.retry_params.get('deadline', 86400)
+        assert self.cursor.creation is not None
         if deadline is not None and ((next - self.cursor.creation) > deadline):
             return 'retry policy deadline', None
         return None, next
@@ -306,6 +320,7 @@ class OutputHandler:
     # not enabled for this tx, True otherwise
     def _maybe_send_notification(self, final_attempt_reason : Optional[str],
                                  tx : TransactionMetadata) -> bool:
+        assert self.cursor.tx is not None
         logging.debug('%s %s', self.notification_params, tx)
         if self.notification_params is None:
             return False
@@ -340,7 +355,7 @@ class OutputHandler:
             resp = tx.mail_response
         elif not tx.rcpt_response:
             pass
-        elif len(tx.rcpt_response) == 1 and tx.rcpt_response[0].err():
+        elif len(tx.rcpt_response) == 1 and tx.rcpt_response[0] is not None and tx.rcpt_response[0].err():
             resp = tx.rcpt_response[0]
         elif len(tx.rcpt_response) > 1:
             logging.warning('OutputHandler._maybe_send_notification %s '
@@ -366,6 +381,7 @@ class OutputHandler:
             return True
 
         mail_from = self.cursor.tx.mail_from
+        assert mail_from is not None
         if mail_from.mailbox == '':
             return True
 
@@ -390,6 +406,7 @@ class OutputHandler:
         assert bool(self.cursor.tx.rcpt_to)
         rcpt_to = self.cursor.tx.rcpt_to[0]
         assert rcpt_to is not None
+        assert self.cursor.creation is not None
         dsn = generate_dsn(self.mailer_daemon_mailbox,
                            mail_from.mailbox,
                            rcpt_to.mailbox, orig_headers,

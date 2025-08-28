@@ -68,6 +68,7 @@ class MockAsyncFilter(AsyncFilter):
         if tx_body:
             return self.body
         #assert blob_rest_id and blob_rest_id in self.blob
+        assert blob_rest_id is not None
         return self.blob[blob_rest_id]
 
     def version(self) -> Optional[int]:
@@ -100,5 +101,6 @@ class FakeFilter(Filter):
             raise IndexError()
         exp = self.expectation[0]
         self.expectation.pop(0)
+        assert self.downstream_tx is not None
         exp(self.downstream_tx, tx_delta)
         return FilterResult()

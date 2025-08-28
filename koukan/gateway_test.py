@@ -97,7 +97,7 @@ class GatewayTest(unittest.TestCase):
         self.fake_smtpd.stop()
 
     def find_unused_port(self) -> int:
-        with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
+        with socketserver.TCPServer(("localhost", 0), lambda x,y,z: socketserver.BaseRequestHandler(x,y,z)) as s:
             return s.server_address[1]
 
     def create_endpoint(self, **kwargs):

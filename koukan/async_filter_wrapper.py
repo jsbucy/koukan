@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 import logging
 
+from koukan.blob import Blob
 from koukan.filter import (
     AsyncFilter,
     TransactionMetadata )
@@ -52,7 +53,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             tx_body : Optional[bool] = None):
         raise NotImplementedError()
 
-    def wait(self, version : int, timeout : float) -> bool:
+    def wait(self, version : int, timeout : Optional[float]) -> bool:
         if not self.timeout_resp:
             rv = self.filter.wait(version, timeout)
         else:
@@ -64,7 +65,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             # xxx but then does version need to change?
         return rv
 
-    async def wait_async(self, version : int, timeout : float) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]
+                         ) -> bool:
         raise NotImplementedError()
 
     def version(self) -> Optional[int]:
@@ -98,8 +100,10 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         tx_delta = downstream_delta.copy()
         # OutputHandler may send but Storage currently does not accept
         # reusing !finalized blob so we must buffer incomplete body here.
-        if tx.body is not None and not tx.body.finalized():
-            tx.body = tx_delta.body = None
+        if tx.body is not None:
+            assert isinstance(tx.body, Blob)
+            if not tx.body.finalized():
+                tx.body = tx_delta.body = None
         tx_orig = tx.copy()
         upstream_tx, upstream_delta = self._update(tx, tx_delta)
         self.tx = upstream_tx.copy()
@@ -207,13 +211,21 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
 
     def on_update(self, tx_delta : TransactionMetadata):
         logging.debug(tx_delta)
+        assert self.downstream_tx is not None
+
         tx_orig = self.downstream_tx.copy()
         upstream_delta = self.update(self.downstream_tx, tx_delta)
         deadline = Deadline(self.timeout)
         upstream_tx = self.downstream_tx.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
-            self.wait(self.version(), deadline.deadline_left())
-            upstream_tx = self.get()
+            version = self.version()
+            assert version is not None
+            dl = deadline.deadline_left()
+            assert dl is not None
+            self.wait(version, dl)
+            u = self.get()
+            assert u is not None
+            upstream_tx = u
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         self.downstream_tx.merge_from(upstream_delta)

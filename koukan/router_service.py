@@ -11,7 +11,7 @@ import yaml
 import secrets
 
 import koukan.fastapi_service as fastapi_service
-import koukan.hypercorn_main as hypercorn_main
+import koukan.uvicorn_main as uvicorn_main
 
 from koukan.storage import Storage, TransactionCursor
 from koukan.rest_handler import (
@@ -57,7 +57,7 @@ class Service:
     # for long-running/housekeeping stuff
     daemon_executor : Optional[Executor] = None
 
-    hypercorn_shutdown : Optional[asyncio.Event] = None
+    http_server : Optional[uvicorn_main.Server] = None
     _rest_id_entropy : int = 16
     root_yaml : Optional[dict] = None
 
@@ -77,9 +77,10 @@ class Service:
         while deadline.remaining():
             executor.ping_watchdog()
             with self.lock:
-                self.cv.wait_for(lambda: self._shutdown,
-                                 # xxx align to watchdog timeout
-                                 min(deadline.deadline_left(), 5))
+                dl = deadline.deadline_left()
+                # xxx align to watchdog timeout
+                dl = min(dl, 5) if dl is not None else dl
+                self.cv.wait_for(lambda: self._shutdown, dl)
                 if self._shutdown:
                     return True
         return False
@@ -88,24 +89,25 @@ class Service:
         logging.info("router_service shutdown()")
         with self.lock:
             if self._shutdown:
-                return
+                return True
             self._shutdown = True
             self.cv.notify_all()
 
-        if self.hypercorn_shutdown:
-            logging.debug('router service hypercorn shutdown')
+        if self.http_server:
+            logging.debug('router service http server shutdown')
             try:
-                self.hypercorn_shutdown.set()
+                self.http_server.shutdown()
             except:
                 pass
 
         # tests schedule main() on daemon executor
         success = True
-        for executor in [self.daemon_executor, self.rest_executor,
-                         self.output_executor]:
+        for executor in [e for e in [self.daemon_executor, self.rest_executor,
+                                     self.output_executor] if e is not None]:
             if not executor.shutdown(timeout=10):
                 success = False
 
+        assert self.storage is not None
         self.storage._del_session()
         logging.info("router_service shutdown() done")
         return success
@@ -189,19 +191,18 @@ class Service:
             self.cv.notify_all()
 
         app = fastapi_service.create_app(self.rest_handler_factory)
-        self.hypercorn_shutdown = asyncio.Event()
         try:
-            hypercorn_main.run(
-                [listener_yaml['addr']],
+            self.http_server = uvicorn_main.Server(
+                app,
+                listener_yaml['addr'],
                 listener_yaml.get('cert', None),
                 listener_yaml.get('key', None),
-                app,
-                self.hypercorn_shutdown,
                 alive=alive if alive else self.heartbeat)
+            self.http_server.run()
         except:
-            logging.exception('router service main: hypercorn_main exception')
+            logging.exception('router service main: http server exception')
             pass
-        logging.debug('router_service.Service.main() hypercorn_main done')
+        logging.debug('router_service.Service.main() http server done')
         self.shutdown()
         logging.debug('router_service.Service.main() done')
 
@@ -210,10 +211,11 @@ class Service:
             partial(self.main, alive=self.daemon_executor.ping_watchdog))
 
     def heartbeat(self):
-        for ex in [self.rest_executor, self.output_executor,
-                   self.daemon_executor]:
-            if not self.daemon_executor.check_watchdog():
-                self.hypercorn_shutdown.set()
+        for e in [e for e in [self.rest_executor,
+                              self.output_executor,
+                              self.daemon_executor] if e is not None]:
+            if not e.check_watchdog():
+                self.server.shutdown()
                 return False
         return True
 
@@ -231,6 +233,7 @@ class Service:
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert http_host is not None
+        assert self.filter_chain_factory is not None
         if (endp := self.filter_chain_factory.build_filter_chain(http_host)
             ) is None:
             return None
@@ -242,6 +245,7 @@ class Service:
             create_leased=True,
             http_host = http_host,
             endpoint_yaml = self.get_endpoint_yaml)
+        assert self.output_executor is not None
         fut = self.output_executor.submit(
             partial(self._handle_new_tx, writer, chain, endpoint_yaml),
             0)
@@ -252,7 +256,9 @@ class Service:
 
     def get_endpoint_yaml(self, endpoint : str) -> Optional[dict]:
         try:
-            return next(e for e in self.root_yaml['endpoint'] if e['name'] == endpoint)
+            assert self.root_yaml is not None
+            return next(e for e in self.root_yaml['endpoint']
+                        if e['name'] == endpoint)
         except StopIteration:
             return None
 
@@ -284,7 +290,8 @@ class Service:
                   chain : FilterChain,
                   endpoint_yaml):
         output_yaml = endpoint_yaml.get('output_handler', {})
-
+        assert self.root_yaml is not None
+        assert self.output_executor is not None
         handler = OutputHandler(
             storage_tx, chain,
             downstream_timeout = output_yaml.get('downstream_timeout', 60),
@@ -305,6 +312,7 @@ class Service:
                     'BUG: OutputHandler.handle() returned with open attempt')
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
+        assert self.storage is not None
         storage_tx = self.storage.load_one()
         if deq is not None:
             with self.lock:
@@ -313,9 +321,11 @@ class Service:
 
         if storage_tx is None:
             return False
-
-        chain, endpoint_yaml = self.filter_chain_factory.build_filter_chain(
-            storage_tx.tx.host)
+        assert storage_tx.tx is not None
+        assert self.filter_chain_factory is not None
+        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.host)
+        assert res is not None
+        chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
                       storage_tx.id, storage_tx.rest_id)
 
@@ -358,13 +368,14 @@ class Service:
                 return
 
     def _refresh(self, ref : List[bool], session_ttl : timedelta):
+        assert self.storage is not None
         if self.storage._refresh_session():
             with self.lock:
                 ref[0] = True
                 self.cv.notify_all()
         self.storage._gc_session(session_ttl)
 
-    def refresh_storage_session(self, executor, interval : int,
+    def refresh_storage_session(self, executor : Executor, interval : int,
                                 session_ttl : timedelta):
         last_refresh = time.monotonic()
         # start _refresh() on daemon_executor every interval
@@ -381,7 +392,7 @@ class Service:
             executor.ping_watchdog()
             ref = [False]
 
-            if self.daemon_executor.submit(
+            if executor.submit(
                     partial(self._refresh, ref, session_ttl)) is None:
                 if self.wait_shutdown(1, executor):
                     return
@@ -396,6 +407,7 @@ class Service:
 
     def _gc(self, gc_ttl : timedelta):
         logging.info('router_service _gc %s', gc_ttl)
+        assert self.storage is not None
         count = self.storage.gc(gc_ttl)
         logging.info('router_service _gc deleted %d tx %d blobs',
                      count[0], count[1])

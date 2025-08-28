@@ -12,16 +12,15 @@ from koukan.recipient_router_filter import (
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
 
-class SuccessPolicy(RoutingPolicy):
-    def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[Destination], Optional[Response]]:
-        return Destination(
-            'http://localhost:8001', 'gateway',
-            [HostPort('example.com', 1234)]), None
+class Policy(RoutingPolicy):
+    def endpoint_for_rcpt(
+            self, rcpt
+    ) -> Tuple[Optional[Destination], Optional[Response]]:
+        if rcpt == 'good':
+            return Destination(
+                'http://localhost:8001', 'gateway',
+                [HostPort('example.com', 1234)]), None
 
-class FailurePolicy(RoutingPolicy):
-    def endpoint_for_rcpt(self, rcpt) -> Tuple[
-            Optional[Destination], Optional[Response]]:
         return None, Response(500, 'not found')
 
 class RecipientRouterFilterTest(unittest.TestCase):
@@ -32,47 +31,75 @@ class RecipientRouterFilterTest(unittest.TestCase):
             '%(message)s')
 
     def test_success(self):
-        router = RecipientRouterFilter(SuccessPolicy())
+        router = RecipientRouterFilter(Policy())
         router.wire_downstream(TransactionMetadata())
+        router.wire_upstream(TransactionMetadata())
         tx = router.downstream_tx
 
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')])
-
-        delta.body = InlineBlob(
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('good')]
+        tx.body = InlineBlob(
             b'From: <alice>\r\n'
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
-        tx.merge_from(delta)
+        delta = prev.delta(tx)
 
         router.on_update(delta)
-        self.assertEqual(router.upstream_tx.rest_endpoint, 'http://localhost:8001')
+        logging.debug(router.downstream_tx)
+        logging.debug(router.upstream_tx)
+        self.assertFalse(router.upstream_tx.rcpt_to)
+        self.assertEqual(router.upstream_tx.rest_endpoint,
+                         'http://localhost:8001')
         self.assertEqual(router.upstream_tx.upstream_http_host, 'gateway')
         self.assertEqual(router.upstream_tx.resolution.hosts,
                          [HostPort('example.com', 1234)])
 
 
-    # TODO: exercise "buffer mail"
-
     def test_failure(self):
-        router = RecipientRouterFilter(FailurePolicy())
+        router = RecipientRouterFilter(Policy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
+        router.wire_upstream(TransactionMetadata())
 
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob@domain')],
-            body = InlineBlob(
-                b'From: <alice>\r\n'
-                b'To: <bob>\r\n'
-                b'\r\n'
-                b'hello\r\n'))
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('bad')]
+        tx.body = InlineBlob(
+            b'From: <alice>\r\n'
+            b'To: <bob>\r\n'
+            b'\r\n'
+            b'hello\r\n')
+        delta = prev.delta(tx)
 
-        tx.merge_from(delta)
         router.on_update(delta)
-        self.assertEqual([r.code for r in tx.rcpt_response], [500])
+        self.assertEqual([500], [r.code for r in tx.rcpt_response])
+
+
+    def test_mixed(self):
+        router = RecipientRouterFilter(Policy())
+        tx = TransactionMetadata()
+        router.wire_downstream(tx)
+        router.wire_upstream(TransactionMetadata())
+
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice')
+        tx.rcpt_to=[Mailbox('bad'),
+                    Mailbox('good')]
+        tx.body = InlineBlob(
+            b'From: <alice>\r\n'
+            b'To: <bob>\r\n'
+            b'\r\n'
+            b'hello\r\n')
+        delta = prev.delta(tx)
+
+        router.on_update(delta)
+        logging.debug(tx)
+        self.assertEqual(500, tx.rcpt_response[0].code)
+        self.assertTrue(len(tx.rcpt_response) < 2 or
+                        tx.rcpt_response[1] is None)
+
 
 
 if __name__ == '__main__':

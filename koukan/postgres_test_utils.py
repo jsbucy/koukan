@@ -1,10 +1,12 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 import logging
 import psycopg
 import psycopg.errors
 import testing.postgresql
+
+pg_factory : Optional[Callable] = None
 
 def setUpModule():
     global pg_factory
@@ -24,6 +26,7 @@ def postgres_url(unix_socket_dir, port, db, engine='postgresql'):
 
 def setup_postgres() -> Tuple[object, str]:
     global pg_factory
+    assert pg_factory is not None
     pg = pg_factory()
     unix_socket_dir = pg.base_dir + '/tmp'
     port = pg.dsn()['port']

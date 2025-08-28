@@ -1,7 +1,17 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeAlias, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    Union )
 from abc import ABC, abstractmethod
 import logging
 import copy
@@ -14,6 +24,19 @@ from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
+
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
+class WhichJson(IntEnum):
+    ALL = 0
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
+    DB = 4
+    DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
 
 class HostPort:
     host : str
@@ -36,8 +59,10 @@ class HostPort:
         return '%s:%d' % (self.host, self.port)
     def __repr__(self):
         return '%s:%d' % (self.host, self.port)
-    def __eq__(self, h : 'HostPort'):
-        return self.host == h.host and self.port == h.port
+    def __eq__(self, rhs):
+        if not isinstance(rhs, HostPort):
+            return False
+        return self.host == rhs.host and self.port == rhs.port
 
 class Resolution:
     hosts : Optional[List[HostPort]] = None
@@ -46,6 +71,14 @@ class Resolution:
 
     def __repr__(self):
         return str(self.hosts)
+
+    def __eq__(self, rhs):
+        if not isinstance(rhs, Resolution) or len(self.hosts) != len(rhs.hosts):
+            return False
+        for i in range(0,len(self.hosts)):
+            if self.hosts[i] != rhs.hosts[i]:
+                return False
+        return True
 
 # NOTE the SMTP syntax for the capability list returned from EHLO
 # isn't the same as that requested in MAIL/RCPT. This is for the latter.
@@ -94,6 +127,8 @@ def get_esmtp_param(params : List[EsmtpParam], param : str
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
     esmtp : List[EsmtpParam]
+    routed = False
+
     def __init__(self, mailbox : str, esmtp : List[EsmtpParam] = []):
         self.mailbox = mailbox
         self.esmtp = esmtp
@@ -105,6 +140,7 @@ class Mailbox:
             return False
         return self.mailbox == x.mailbox
 
+    # XXX
     def __str__(self):
         return self.mailbox
     def __repr__(self):
@@ -126,33 +162,28 @@ class Mailbox:
             params = [EsmtpParam.from_json(j) for j in esmtp]
         return Mailbox(json['m'], params)
 
+    def copy(self, valid : WhichJson) -> 'Mailbox':
+        out = Mailbox(self.mailbox, self.esmtp)
+        if valid == WhichJson.ALL:
+            out.routed = self.routed
+        return out
+
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
-# TODO I'm starting to think maybe we should invert this and have a
-# field mask thing instead, many of these could live in their own module
-class WhichJson(IntEnum):
-    ALL = 0
-    REST_READ = 1
-    REST_CREATE = 2
-    REST_UPDATE = 3
-    DB = 4
-    DB_ATTEMPT = 5
-    EXPLODER_CREATE = 6
-    EXPLODER_UPDATE = 7
-    ADD_ROUTE = 8
-
 FromJson = Callable[[Dict[object, object]], object]
 ToJson = Callable[[Any], Dict[object, object]]
+Copy = Callable[[Any, WhichJson], Any]
 class TxField:
     json_field : str
 
-    validity = set[WhichJson]
+    validity : Set[WhichJson]
 
     rest_placeholder : bool
     from_json : Optional[FromJson] = None
     to_json : Optional[ToJson] = None
     is_list : bool = False
+    copy : Optional[Copy] = None
 
     def __init__(self,
                  json_field : str,
@@ -160,7 +191,8 @@ class TxField:
                  from_json : Optional[FromJson] = None,
                  to_json : Optional[ToJson] = None,
                  rest_placeholder : bool = False,
-                 is_list : bool = False):
+                 is_list : bool = False,
+                 copy : Optional[Copy] = None):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -170,6 +202,7 @@ class TxField:
         self.to_json = to_json
         self.rest_placeholder = rest_placeholder
         self.is_list = is_list
+        self.copy = copy
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -266,7 +299,8 @@ _tx_fields = [
                           WhichJson.DB,
                           WhichJson.ADD_ROUTE]),
             to_json=Mailbox.to_json,
-            from_json=Mailbox.from_json),
+            from_json=Mailbox.from_json,
+            copy=Mailbox.copy),
     TxField('rcpt_response',
             is_list=True,
             validity=set([WhichJson.DB_ATTEMPT,
@@ -343,7 +377,9 @@ class TransactionMetadata:
     # TODO more type-safe treatment of placeholder values, this should
     # only contain None in a delta
     rcpt_to : List[Optional[Mailbox]]
-    rcpt_response : List[Response]
+    rcpt_to_list_offset : Optional[int] = None
+    rcpt_response : List[Optional[Response]]
+    rcpt_response_list_offset : Optional[int] = None
     data_response : Optional[Response] = None
 
     attempt_count : Optional[int] = None
@@ -377,8 +413,8 @@ class TransactionMetadata:
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  mail_response : Optional[Response] = None,
-                 rcpt_to : Optional[List[Mailbox]] = None,
-                 rcpt_response : Optional[List[Response]] = None,
+                 rcpt_to : Optional[Sequence[Mailbox]] = None,
+                 rcpt_response : Optional[Sequence[Response]] = None,
                  host : Optional[str] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
@@ -393,8 +429,8 @@ class TransactionMetadata:
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.mail_response = mail_response
-        self.rcpt_to = rcpt_to if rcpt_to else []
-        self.rcpt_response = rcpt_response if rcpt_response else []
+        self.rcpt_to = list(rcpt_to) if rcpt_to else []
+        self.rcpt_response = list(rcpt_response) if rcpt_response else []
         self.host = host
         self.body = body
         self.data_response = data_response
@@ -414,7 +450,7 @@ class TransactionMetadata:
                 if (field.is_list and v == []) or v is None:
                     continue
                 out += '%s: %s\n' % (name, v)
-                if field.is_list and hasattr(self, field.list_offset()):
+                if field.is_list and getattr(self, field.list_offset(), None) is not None:
                     out += '%s %d\n' % (field.list_offset(), getattr(self, field.list_offset()))
         return out
 
@@ -454,13 +490,16 @@ class TransactionMetadata:
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
+            v : Any
             if field.is_list:
                 if not isinstance(js_v, list):
                     return None
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
-                else:
+                elif field.from_json is not None:
                     v = [field.from_json(v) for v in js_v]
+                else:
+                    raise ValueError()
                 if field.list_offset() in tx_json and (
                         which_js == WhichJson.REST_UPDATE):
                     offset = tx_json.get(field.list_offset())
@@ -499,7 +538,6 @@ class TransactionMetadata:
         if len(self.rcpt_to) > len(tx.rcpt_response):
             return True
         for i in range(0,len(self.rcpt_to)):
-            # XXX rcpt_response should never be None now?
             if self.rcpt_to[i] is not None and tx.rcpt_response[i] is None:
                 return True
 
@@ -511,10 +549,11 @@ class TransactionMetadata:
         # if we have the body, then we aren't getting any more
         # rcpts. If they all failed, then we can't make forward
         # progress.
-        if not any([r.ok() for r in tx.rcpt_response]):
+        if not any([r is not None and r.ok() for r in tx.rcpt_response]):
             return False
         if tx.data_response is None:
             return True
+        return False
 
     # for sync filter api, e.g. if a rest call failed, fill resps for
     # all inflight reqs
@@ -530,7 +569,7 @@ class TransactionMetadata:
         dest.rcpt_response.extend(
             [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
         if self.data_response is None and (self.body is not None) and (
-                not any([r.ok() for r in self.rcpt_response])):
+                not any([r is not None and r.ok() for r in self.rcpt_response])):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             dest.data_response = err
         elif self._body_last() and self.data_response is None:
@@ -548,7 +587,7 @@ class TransactionMetadata:
             live = False
         if self.data_response is None and (self.body is not None) and (
                 len(self.rcpt_to) == len(self.rcpt_response) and
-                not any([r.ok() for r in self.rcpt_response])):
+                not any([r is None or r.ok() for r in self.rcpt_response])):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             self.data_response = err
             live = False
@@ -559,7 +598,7 @@ class TransactionMetadata:
         if not field.valid(which_js):
             return
 
-        v_js = None
+        v_js : Any = None
         if not hasattr(self, name):
             return
         if (v := getattr(self, name)) is None:
@@ -632,6 +671,8 @@ class TransactionMetadata:
                 setattr(out, f, old_v)
                 continue
             offset = getattr(delta, field.list_offset(), 0)
+            if offset is None:
+                offset = 0
             if offset != len(old_v):
                 logging.debug(
                     'list offset mismatch %s old len %d new offset %s',
@@ -699,7 +740,8 @@ class TransactionMetadata:
                     return None  # invalid
                 setattr(out, f, None)
                 continue
-
+            assert isinstance(old_v, list)
+            assert isinstance(new_v, list)
             if json_field.emit_rest_placeholder(which_json):
                 if any([x != None for x in new_v]):
                     logging.debug('non-None placeholder')
@@ -744,22 +786,9 @@ class TransactionMetadata:
         out.rcpt_response = list(self.rcpt_response)
         return out
 
-    # XXX refactor with copy_valid_from()
     def copy_valid(self, valid : WhichJson):
         out = TransactionMetadata()
-        for name,field in tx_json_fields.items():
-            if not field.valid(valid):
-                continue
-            v = getattr(self, name, None)
-            if v is None:
-                continue
-            if field.is_list:
-                v = list(v)
-                if _valid_list_offset(valid) and (
-                        hasattr(self, field.list_offset())):
-                    setattr(out, field.list_offset(),
-                            getattr(self, field.list_offset()))
-            setattr(out, name, v)
+        out.copy_valid_from(valid, self)
         return out
 
     def copy_valid_from(self, valid : WhichJson, src : 'TransactionMetadata'):
@@ -770,11 +799,16 @@ class TransactionMetadata:
             if v is None:
                 continue
             if field.is_list:
-                v = list(v)
+                if field.copy is not None:
+                    v = [field.copy(vv, valid) for vv in v]
+                else:
+                    v = list(v)
                 if _valid_list_offset(valid) and (
                         hasattr(src, field.list_offset())):
                     setattr(self, field.list_offset(),
                             getattr(src, field.list_offset()))
+            elif field.copy is not None:
+                v = field.copy(v, valid)
             setattr(self, name, v)
 
     def body_blob(self) -> Blob:
@@ -831,11 +865,12 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : float) -> bool:
+    def wait(self, version : int, timeout : Optional[float]) -> bool:
         pass
 
     @abstractmethod
-    async def wait_async(self, version : int, timeout : float) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]
+                         ) -> bool:
         pass
 
 

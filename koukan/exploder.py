@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Sequence, Union
 import logging
 import time
 from functools import partial, reduce
@@ -33,7 +33,7 @@ from koukan.storage_schema import VersionConflictException
 # don't otherwise know that the destination accepts it.
 
 class Recipient:
-    filter : Optional[AsyncFilter]
+    filter : Optional[AsyncFilter] = None
     tx :  Optional[TransactionMetadata] = None
 
     def __init__(self, filter : Optional[AsyncFilter]):
@@ -42,6 +42,7 @@ class Recipient:
     # returns True if this Recipient failed due to not being able to
     # start the upstream tx
     def _check_busy_err(self) -> bool:
+        assert self.tx is not None
         if self.filter is not None:
             return False
         # 453-4.3.2 "system not accepting network messages" is also
@@ -75,19 +76,29 @@ class Recipient:
         # case create_storage_writer wouldn't error out on the
         # executor overflow and AsyncFilterWrapper probably also wants
         # a hint to set the upstream response -> s&f timeout to 0.
+        # TODO router_service.Service.create_storage_writer() has a
+        # hard-coded timeout of 0 to schedule the OutputHandler on the
+        # Executor. This should probably wait some fraction of the
+        # rcpt_timeout.
         if self._check_busy_err():
             return
+        assert self.filter is not None
         self.filter.update(self.tx, self.tx.copy())
 
     def update(self, delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
+        assert self.tx is not None
         self.tx.merge_from(delta)
         if not delta:
             return TransactionMetadata()
+        assert self.filter is not None
         return self.filter.update(self.tx, delta)
 
-    def wait(self, timeout : float):
+    def wait(self, timeout : Optional[float]):
+        assert self.tx is not None
+        assert self.tx.version is not None
+        assert self.filter is not None
         self.filter.wait(self.tx.version, timeout)
         t = self.filter.get()
         assert t is not None
@@ -108,7 +119,6 @@ class Exploder(Filter):
     data_timeout : Optional[float] = None
 
     rcpt_ok = False
-    mail_from : Mailbox = None
 
     recipients : List[Recipient]
 
@@ -125,10 +135,16 @@ class Exploder(Filter):
 
     @staticmethod
     def reduce_data_response(
-            lhs : Union[None, Recipient],
-            rhs : Recipient) -> Union[None, Recipient]:
+            lhs : Optional[Recipient],
+            rhs : Optional[Recipient]
+    ) -> Optional[Recipient]:
         if lhs is None:
             return None
+        assert lhs.tx is not None
+        assert lhs.tx.rcpt_response[0] is not None
+        assert rhs is not None
+        assert rhs.tx is not None
+        assert rhs.tx.rcpt_response[0] is not None
         if lhs.tx.rcpt_response[0].err():
             return rhs
         if rhs.tx.rcpt_response[0].err():
@@ -142,6 +158,7 @@ class Exploder(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream_tx
+        assert tx is not None
 
         # NOTE: OutputHandler may send but Storage currently does not
         # accept reusing !finalized blob. Exploder passes it through
@@ -166,7 +183,10 @@ class Exploder(Filter):
 
         assert len(self.recipients) == len(tx.rcpt_to)
 
-        rcpts = [ r for r in self.recipients if r.tx.req_inflight() ]
+        def inflight(r : Recipient):
+            assert r.tx is not None
+            return r.tx.req_inflight()
+        rcpts = [ r for r in self.recipients if inflight(r) ]
 
         body = tx.maybe_body_blob()
         deadline = Deadline(
@@ -175,26 +195,32 @@ class Exploder(Filter):
         while rcpts and deadline.remaining():
             rcpt_next = []
             for rcpt in rcpts:
-                rcpt.wait(deadline.deadline_left())
+                dl = deadline.deadline_left()
+                rcpt.wait(dl)
+                assert rcpt.tx is not None
                 if rcpt.tx.req_inflight():
                     rcpt_next.append(rcpt)
             rcpts = rcpt_next
 
         assert not rcpts
-        assert not any([r.tx.req_inflight() for r in self.recipients])
+        assert not any([inflight(r) for r in self.recipients])
 
         # The only fields we directly propagate from the upstream
         # per-rcpt tx to the downstream is rcpt_response and
         # data_response if single-rcpt.
         for i,rcpt in enumerate(self.recipients):
             if i >= len(tx.rcpt_response):
-                tx.rcpt_response.append(rcpt.tx.rcpt_response[0])
+                rtx = rcpt.tx
+                assert rtx is not None
+                tx.rcpt_response.append(rtx.rcpt_response[0])
         # common case: 1 rcpt, return the upstream data response directly
         if (body is not None and tx.data_response is None and
             len(self.recipients) == 1):
             rcpt = self.recipients[0]
-            if rcpt.tx.data_response is not None:
-                tx.data_response = rcpt.tx.data_response
+            rtx = rcpt.tx
+            assert rtx is not None
+            if rtx.data_response is not None:
+                tx.data_response = rtx.data_response
 
         if (body is None) or (tx.data_response is not None):
             return FilterResult()
@@ -210,17 +236,25 @@ class Exploder(Filter):
         # logs though the net result is the same. We could cat them
         # all together but that could be large and I don't think
         # aiosmtpd in the gateway will re-wrap responses automatically.
-        rcpt = reduce(Exploder.reduce_data_response, self.recipients)
-        if rcpt is not None and rcpt.tx.data_response is not None:
-            tx.data_response = Response(
-                rcpt.tx.data_response.code,
-                rcpt.tx.data_response.message + ' (Exploder same response)')
+        r : Sequence[Optional[Recipient]] = self.recipients
+        del rcpt
+        data_resp_rcpt : Optional[Recipient] = reduce(Exploder.reduce_data_response, r)
+        if data_resp_rcpt is not None:
+            rtx = data_resp_rcpt.tx
+            assert rtx is not None
+            if rtx.data_response is not None:
+                tx.data_response = Response(
+                    rtx.data_response.code,
+                    rtx.data_response.message + ' (Exploder same response)')
         elif body.finalized():
             retry_delta = TransactionMetadata(
                 retry = {},
                 # XXX this will blackhole if unset!
                 notification={})
             for rcpt in self.recipients:
+                assert rcpt.tx is not None
+                assert rcpt.tx.rcpt_response[0] is not None
+                assert rcpt.tx.data_response is not None
                 if (rcpt.tx.rcpt_response[0].ok() and
                     (not rcpt.tx.data_response.ok()) and
                     rcpt.tx.retry is None):

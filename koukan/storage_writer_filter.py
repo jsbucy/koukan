@@ -34,14 +34,14 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
     http_host : Optional[str] = None
-    endpoint_yaml : Optional[Callable[[str], dict]] = None
+    endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
                  http_host : Optional[str] = None,
-                 endpoint_yaml : Optional[Callable[[str], dict]] = None):
+                 endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -52,7 +52,9 @@ class StorageWriterFilter(AsyncFilter):
         self.endpoint_yaml = endpoint_yaml
 
     def incremental(self):
+        assert self.endpoint_yaml is not None
         yaml = self.endpoint_yaml(self.http_host)
+        assert yaml is not None
         return yaml['chain'][-1]['filter'] == 'exploder'
 
     # AsyncFilter
@@ -61,6 +63,7 @@ class StorageWriterFilter(AsyncFilter):
         # cutthrough/handoff workflow
         if self.tx_cursor is None:
             self._load()
+            assert self.tx_cursor is not None
         if self.tx_cursor.version != version:
             return True
         return self.tx_cursor.wait(timeout)
@@ -88,16 +91,19 @@ class StorageWriterFilter(AsyncFilter):
 
     def version(self) -> Optional[int]:
         self._load()
+        assert self.tx_cursor is not None
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata):
         assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
+        assert self.rest_id_factory is not None
         rest_id = self.rest_id_factory()
         storage_tx = tx.copy()
         for i in range(0,1):
             if self.endpoint_yaml is None:
                 break
+            assert self.http_host is not None
             if (endpoint_yaml := self.endpoint_yaml(self.http_host)) is None:
                 break
             if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
@@ -128,6 +134,7 @@ class StorageWriterFilter(AsyncFilter):
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
         self._load()
+        assert self.tx_cursor is not None
         if self.tx_cursor.tx is None:
             return None
         tx = self.tx_cursor.tx.copy()
@@ -142,6 +149,7 @@ class StorageWriterFilter(AsyncFilter):
         needs_create = self.rest_id is None and self.create_leased
         try:
             upstream_delta = self._update(tx, tx_delta)
+            assert upstream_delta is not None
             if self.tx_cursor is not None:
                 upstream_delta.version = tx.version = self.tx_cursor.version
             return upstream_delta
@@ -162,8 +170,8 @@ class StorageWriterFilter(AsyncFilter):
                       self.rest_id, tx_delta)
 
         if tx_delta.cancelled:
+            assert self.tx_cursor is not None
             for i in range(0,5):
-                assert self.tx_cursor is not None
                 try:
                     # storage has special-case logic to noop if
                     # tx has final_attempt_reason
@@ -181,7 +189,8 @@ class StorageWriterFilter(AsyncFilter):
             tx.merge_from(version)
             return version
 
-        if not tx_delta:
+        if not tx_delta:  # heartbeat
+            assert self.tx_cursor is not None
             self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
             version = TransactionMetadata(version=self.tx_cursor.version)
             tx.merge_from(version)
@@ -196,10 +205,12 @@ class StorageWriterFilter(AsyncFilter):
         if self.rest_id is None:
             created = True
             self._create(downstream_tx)
+            assert self.tx_cursor is not None
             tx.rest_id = self.rest_id
         else:
             if self.tx_cursor is None:
                 self._load()
+                assert self.tx_cursor is not None
             # caller handles VersionConflictException
             self.tx_cursor.write_envelope(downstream_delta)
 
@@ -223,9 +234,12 @@ class StorageWriterFilter(AsyncFilter):
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
-                        tx_body : bool = False
+                        tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
         self._load()
+        assert self.tx_cursor is not None
+        assert self.tx_cursor.tx is not None
+        assert self.rest_id is not None
         assert tx_body or blob_rest_id
 
         if create:
@@ -246,4 +260,5 @@ class StorageWriterFilter(AsyncFilter):
                     self.tx_cursor.load()
 
         return self.tx_cursor.get_blob_for_append(
-            BlobUri(tx_id=self.rest_id, blob=blob_rest_id, tx_body=tx_body))
+            BlobUri(tx_id=self.rest_id, blob=blob_rest_id,
+                    tx_body=tx_body if tx_body else False))

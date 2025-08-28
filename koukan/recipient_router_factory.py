@@ -14,10 +14,10 @@ from koukan.recipient_router_filter import (
 from koukan.filter import (
     HostPort,
     Resolution )
-from koukan.filter_chain import Filter
+from koukan.filter_chain import ProxyFilter
 
 class RecipientRouterFactory:
-    router_policies : Dict[str, RoutingPolicy]
+    router_policies : Dict[str, Callable[[dict], RoutingPolicy]]
 
     def __init__(self):
         self.router_policies = {}
@@ -83,8 +83,8 @@ class RecipientRouterFactory:
             policy_yaml.get('prefixes', []),
             self._route_destination(policy_yaml))
 
-    def build_router(self, yaml : dict) -> Filter:
+    def build_router(self, yaml : dict) -> ProxyFilter:
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)
-        return RecipientRouterFilter(policy)
+        return RecipientRouterFilter(policy, policy_yaml.get('dry_run', False))

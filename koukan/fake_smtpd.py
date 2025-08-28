@@ -127,6 +127,7 @@ class FakeSmtpdController(Controller):
 
 class FakeSmtpd:
     protocol : str
+    handlers : List[InMemoryHandler]
     def __init__(self, host : str, port : str,
                  protocol : str = 'smtp'):
         assert protocol in ['smtp', 'lmtp']

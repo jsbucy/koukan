@@ -175,6 +175,40 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
+  - filter: router
+    dry_run: true
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      #delimiter: '+'
+      #prefixes:
+      #- base: alice
+      destination:
+        endpoint: http://localhost:8001
+        http_host: outbound
+        host_list:
+          - host: 'fake_smtpd'
+            port: 3025
+  - filter: router
+    dry_run: true
+    policy:
+      name: address_list
+      domains:
+      - rest-application.example.com
+      delimiter: '+'
+      prefixes:
+      - bob
+      destination:
+        endpoint: http://localhost:8002
+        options:
+          receive_parsing:
+  - filter: router
+    dry_run: true
+    policy:
+      name: address_list
+      # no domains: match everything
+      # dest == None: reject
   - filter: exploder
     msa: false
     output_chain: mx-out
@@ -250,10 +284,20 @@ endpoint:
 
 - name: sink
   chain:
+  - filter: router
+    policy:
+      name: address_list
+      prefixes: []
+      destination:
+        endpoint: http://localhost:8002
+        options:
+          receive_parsing:
+            max_inline: 0
+  - filter: message_parser
   - filter: rest_output
     rcpt_timeout: 300
     data_timeout: 300
-    static_endpoint: http://localhost:8002
+    # static_endpoint: http://localhost:8002
     chunk_size: 1048576
 
 

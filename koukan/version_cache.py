@@ -18,7 +18,7 @@ class IdVersion:
     lock : Lock
     cv : Condition
 
-    async_waiters : List[Tuple[object,asyncio.Future,int]]
+    async_waiters : List[Tuple[asyncio.AbstractEventLoop,asyncio.Future,int]]
 
     version : int
 
@@ -71,7 +71,7 @@ class IdVersion:
 
     async def wait_async(self,
                          version : int,
-                         timeout : float) -> bool:
+                         timeout : Optional[float]) -> bool:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 
