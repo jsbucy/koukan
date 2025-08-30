@@ -1523,7 +1523,10 @@ class RouterServiceTest(unittest.TestCase):
 
         self.assertTrue(service2.shutdown())
 
-    def test_add_route_sync_success(self):
+    def _test_add_route_sync(
+            self,
+            mail_resp, rcpt_resp, data_resp,
+            mail_code, rcpt_code, data_code):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             static_http_host='submission-sync-sor',
@@ -1539,36 +1542,61 @@ class RouterServiceTest(unittest.TestCase):
         def exp_add_route(tx, tx_delta):
             logging.debug(tx)
             #self.assertEqual('submission-sor', tx.host)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(202),
-                rcpt_response=[Response(204)],
-                data_response=Response(206))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            if tx.mail_from and not tx.mail_response:
+                tx.mail_response = mail_resp
+            if tx.rcpt_to and not tx.rcpt_response:
+                tx.rcpt_response = [rcpt_resp]
+            if tx.body and tx.body.finalized() and not tx.data_response:
+                tx.data_response = data_resp
+            return prev.delta(tx)
         add_route_endpoint = FakeFilter()
+        add_route_endpoint.add_expectation(exp_add_route)
         add_route_endpoint.add_expectation(exp_add_route)
         self.add_endpoint(add_route_endpoint)
 
         def exp_upstream(tx, tx_delta):
             logging.debug(tx)
             #self.assertEqual('sor', tx.host)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(203)],
-                data_response=Response(205))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            if tx.mail_from and not tx.mail_response:
+                tx.mail_response = Response(201)
+            if tx.rcpt_to and not tx.rcpt_response:
+                tx.rcpt_response = [Response(203)]
+            if tx.body and tx.body.finalized() and not tx.data_response:
+                tx.data_response = Response(205)
+            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
+        upstream_endpoint.add_expectation(exp_upstream)
         upstream_endpoint.add_expectation(exp_upstream)
         self.add_endpoint(upstream_endpoint)
 
-
         rest_endpoint.downstream_tx.merge_from(delta)
         rest_endpoint.on_update(delta)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertRcptCodesEqual([203], tx.rcpt_response)
-        self.assertEqual(tx.data_response.code, 205)
+        self.assertEqual(tx.mail_response.code, mail_code)
+        self.assertRcptCodesEqual([rcpt_code], tx.rcpt_response)
+        self.assertEqual(tx.data_response.code, data_code)
 
+    def test_add_route_sync_success(self):
+        self._test_add_route_sync(
+            Response(202),
+            Response(204),
+            Response(206),
+            201, 203, 205)
+
+    def test_add_route_sync_err(self):
+        self._test_add_route_sync(
+            Response(402),
+            Response(404),
+            Response(406),
+            402, 404, 503)
+
+    def test_add_route_sync_data_err(self):
+        self._test_add_route_sync(
+            Response(202),
+            Response(204),
+            Response(406),
+            201, 203, 406)
 
     def test_add_route_sf_success(self):
         rest_endpoint = self.create_endpoint(
