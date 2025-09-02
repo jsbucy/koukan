@@ -251,5 +251,24 @@ class FilterTest(unittest.TestCase):
         db = tx.copy_valid(WhichJson.DB)
         self.assertFalse(db.rcpt_to[0].routed)
 
+    def test_check_preconditions(self):
+        tx = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            mail_response = Response(450),
+            rcpt_to = [Mailbox('bob')],
+            body = InlineBlob('hello, world!'))
+        self.assertFalse(tx.check_preconditions())
+        self.assertEqual([503], [r.code for r in tx.rcpt_response])
+        self.assertEqual(503, tx.data_response.code)
+
+        tx = TransactionMetadata(
+            mail_from = Mailbox('alice'),
+            mail_response = Response(201),
+            rcpt_to = [Mailbox('bob')],
+            rcpt_response = [Response(202)],
+            body = InlineBlob('hello, world!'),
+            data_response=Response(403))
+        self.assertFalse(tx.check_preconditions())
+
 if __name__ == '__main__':
     unittest.main()

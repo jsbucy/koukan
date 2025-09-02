@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 
 from koukan.filter import (
@@ -9,10 +9,10 @@ from koukan.filter import (
 from koukan.filter_chain import FilterChain, FilterResult, Filter
 from koukan.response import Response
 
-def _err(r : Optional[Response]) -> Optional[Response]:
+def _err(r : Optional[Response]) -> Tuple[bool, Response]:
     if r is None or r.ok():
-        return None
-    return Response(r.code, r.message + ' (AddRouteFilter upstream)')
+        return False, Response(250, 'ok (AddRouteFilter noop)')
+    return True, Response(r.code, r.message + ' (AddRouteFilter upstream)')
 
 # AddRouteFilter forks a message to another Filter in addition to the
 # primary/upstream. There are 2 likely configurations: chain with...
@@ -37,14 +37,25 @@ class AddRouteFilter(Filter):
         self.host = host
 
     def _resp_err(self):
-        if mail_err := _err(self.add_route.tx.mail_response):
-            self.downstream_tx.mail_response = mail_err
-        rcpt_err = None
-        if len(self.add_route.tx.rcpt_response) == 1:  # cf assert in on_update()
-            if rcpt_err := _err(self.add_route.tx.rcpt_response[0]):
-                self.downstream_tx.rcpt_response = [rcpt_err]
-        if data_err := _err(self.add_route.tx.data_response):
-            self.downstream_tx.data_response = data_err
+        atx = self.add_route.tx
+        logging.debug(atx)
+        mail_err, mail_resp = _err(atx.mail_response)
+
+        rcpt_resp = (
+            atx.rcpt_response[0]
+            if len(atx.rcpt_response) == 1  # cf assert in on_update()
+            else None)
+        rcpt_err, rcpt_resp = _err(rcpt_resp)
+        data_err, data_resp = _err(atx.data_response)
+        if mail_err or rcpt_err or data_err:
+            dtx = self.downstream_tx
+            if not dtx.mail_response:
+                dtx.mail_response = mail_resp
+            if not dtx.rcpt_response:
+                dtx.rcpt_response = [rcpt_resp]
+            if not dtx.data_response:
+                dtx.data_response = data_resp
+            logging.debug(dtx)
 
     def on_update(self, tx_delta : TransactionMetadata):
         # post-exploder output chain/single-rcpt only for now

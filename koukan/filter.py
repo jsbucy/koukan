@@ -591,6 +591,7 @@ class TransactionMetadata:
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             self.data_response = err
             live = False
+        live = live and self.data_response is None
         return live
 
     def _field_to_json(self, name : str, field : TxField,
