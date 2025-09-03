@@ -28,13 +28,41 @@ way to RestEndpoint. Filters can make arbitrary transformations of the
 transaction including modifying the message, routing on destination
 address, etc.
 
+Transaction Model
+-----------------
+
+The in-process representation of the RestMTP transaction resource is
+TransactionMetadata which is usually abbreviated tx in the code.
+
+Many operations are defined in terms of taking a difference or delta
+between a previous snapshot of the transaction and the current state
+or applying a delta to a transaction.
+
+Filter Chain
+------------
+
+Filters transform the transaction. In the simplest case, they
+conservatively extend the transaction by adding fields. In more
+complex cases, they may implement an arbitrary transformation by
+proxying between the upstream and downstream side (ProxyFilter).
+
+When the router starts an OutputHandler, it constructs a sequence of
+filter suubclasses per the yaml. FilterChain is the execution engine
+to propagate the transaction through the sequence of filters.
+
+The chain is always terminated by a filter that sends the transaction
+"somewhere else". This is typically either
+- RestEndpoint to send it over http
+- Exploder to write it to a new upstream transaction via StorageWriterFilter.
+
+
 Storage
 -------
 
-The Koukan router currently stores all durable data in a SQL database
-which it accesses via SQLAlchemy Core. Blob data is stored in a single
-field in Blob.content. This can be referenced from multiple
-transactions via TransactionBlobRefs.
+The Koukan router stores all durable data in a SQL database which it
+accesses via SQLAlchemy Core. Blob data is stored in a single field in
+Blob.content. This can be referenced from multiple transactions via
+TransactionBlobRefs.
 
 Koukan uses lightweight in-process synchronization to coordinate
 multiple readers/writers of a given transaction:

@@ -2,8 +2,85 @@
 Configuration
 =============
 
-Endpoints/Output Chains
-=======================
+Router
+======
+
+global: executor/thread limits
+
+rest_listener: host/port/certs
+
+endpoint: output chains, cf below
+
+modules: user plugins: output chain filters, recipient routing policies
+
+storage: sqlalchemy db url
+
+logging: ``logging.dictConfig`` 
+
+Gateway
+=======
+
+global: cf router
+
+rest_listener: cf router
+
+rest_output: http endpoint of router and host for output chain
+
+smtp_output: rest host endpoints for the router to send to
+
+smtp_listener: host/port/certs, specify which rest_output host to use
+
+logging: ``logging.dictConfig`` 
+
+
+
+Router Endpoints/Output Chains
+==============================
+
+name: client selects this in http host: header
+
+rest_lro: false if this ends with exploder
+
+msa: true if this is terminating smtp msa port 587 from clients
+injecting messages for the first time, enables store&forward in more
+circumstances, further details in internals/exploder
+
+output_handler:
+  retry_params:
+    mode: per_request if exploder
+  notification:
+    mode: per_request if exploder
+    host: endpoint to inject dsn/bounce messages into
+
+chain: list of filters
+
+Output Chain Filters
+--------------------
+
+remote_host: resolves tx.remote_host ip to name
+
+message_builder: renders/serializes tx.body message builder request to rfc822
+
+received_header: prepends Received: header to tx.body
+
+dkim: signing
+
+dns_resolution: replaces tx.resolution containing a hostname with one
+containing a list of IP addresses for the gateway to attempt in order
+
+router: RecipientRouterFilter populates tx.upstream_http_host controls
+where RestEndpoint sends it and if that is the gateway, tx.resolution
+controls where the gateway sends it
+
+relay_auth: fails the tx if it doesn't contain smtp auth info in
+smtp_meta or remote_host in allowlist
+
+exploder: Exploder
+
+rest_output: RestEndpoint
+
+
+
 You will typically have 1 endpoint for each smtp vip + port e.g. mx and msa.
 Any endpoint that terminates smtp will end with the exploder.
 There will be an accompanying "exploder upstream" endpoint/chain

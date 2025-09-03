@@ -8,7 +8,45 @@ Sending
 Koukan provides a rich http/json rest api to send and receive email.
 
 RestMTP has 1 type of resource: the transaction, a request to send one
-message to one recipient. In the simplest case of a message containing
+message to one recipient. The transaction object contains fields
+corresponding to smtp parameters.
+
+mail_from: Mailbox
+
+mail_response: Response
+
+rcpt_to: Array[Mailbox]
+
+rcpt_response: Array[Response]
+
+first-class rest api users will only use 1
+rcpt_to/rcpt_response. (only the smtp gateway uses multiple)
+
+body: MessageBuilder request
+
+data_response: Response
+
+remote_host: HostPort
+
+local_host: HostPort
+
+HostPort:
+host: string
+port: int
+
+Mailbox:
+m: rfc5321 mailbox without <>
+e: Array[EsmtpParam]
+
+EsmtpParam:
+keyword: string
+value: string (optional)
+
+Response:
+code: int
+message: string
+
+In the simplest case of a message containing
 only text, we can send a message with a single POST::
 
     POST /transactions
@@ -63,7 +101,7 @@ to that id::
      "body": {"message_builder: {
          "headers": [["subject", "hello"]],
          "text_body": [{
-           "content_type": "text/plain", "content": {"create_id": "my_body"}}]
+           "content_type": "text/html", "content": {"create_id": "my_body"}}]
     }}}
 
     201 created
@@ -89,8 +127,8 @@ A transaction can reuse an attachment from a previous transaction::
          }]
     }}}
 
-Finally, suppose you already have a serialized rfc822 payload you want
-to send. Simply PUT that to /transactions/xyz/body. Similarly, you
+If you already have a serialized rfc822 payload you want
+to send, simply PUT that to /transactions/xyz/body. Similarly, you
 can reuse an rfc822 body from a previous transaction::
 
     POST /transactions
@@ -100,6 +138,12 @@ can reuse an rfc822 body from a previous transaction::
      "body": {"reuse_uri": "/transactions/xyz/body"}
     }
 
+To abort an inflight transaction, simply::
+
+    POST /transactions/123/cancel
+
+with an empty entity. This will manifest as ``cancelled`` in the
+transaction json.
 
 Receiving
 =========
