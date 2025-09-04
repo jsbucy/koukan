@@ -50,6 +50,7 @@ output_handler:
     mode: per_request if exploder
   notification:
     mode: per_request if exploder
+
     host: endpoint to inject dsn/bounce messages into
 
 chain: list of filters
@@ -59,7 +60,9 @@ Output Chain Filters
 
 remote_host: resolves tx.remote_host ip to name
 
-message_builder: renders/serializes tx.body message builder request to rfc822
+message_builder: renders/serializes tx.body message builder request json to rfc822 (for sending)
+
+message_parser: parses rfc822 tx.body to message builder json (for receiving)
 
 received_header: prepends Received: header to tx.body
 

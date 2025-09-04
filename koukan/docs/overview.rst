@@ -28,3 +28,40 @@ router and gateway processes sharing the same underlying storage via a
 cluster scheduler such as Kubernetes (k8s). In particular the router
 stores all durable data in a database and does not assume a
 durable/strongly consistent posix filesystem.
+
+
+
+
+Message Flows
+-------------
+
+-> denotes http/json rest api "restmtp"
+
+=> denotes smtp
+
+Rest Application
+
+application -> router -> smtp gw => internet
+
+Rest Receiver
+
+internet => smtp gw -> router -> application
+
+SMTP Sender
+
+application => smtp gw -> router -> smtp gw => internet
+
+SMTP Receiver
+
+internet => smtp gw -> router -> smtp gw => application
+
+A key concept in Koukan is the endpoint which is passed in http host:
+headers and used to select between multiple configured processing
+flows. In general, REST requests from the smtp gw will use different
+endpoints vs those from first-class rest clients. Initial submission
+will usually use distinct endpoints from internet interchange. So each
+of the above examples would use distinct router endpoints.
+
+
+
+
