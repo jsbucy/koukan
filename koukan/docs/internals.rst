@@ -8,10 +8,15 @@ Overview
 Koukan has 2 main components:
 
 * SMTP gateway
+
   smtp <-> http/json rest protocol
+
   stateless protocol proxy, no business logic
+
 * router
+
   http/json rest protocol only
+
   stateful/store-and-forward
 
 Router

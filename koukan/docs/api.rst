@@ -31,19 +31,27 @@ remote_host: HostPort
 local_host: HostPort
 
 HostPort:
+
 host: string
+
 port: int
 
 Mailbox:
+
 m: rfc5321 mailbox without <>
+
 e: Array[EsmtpParam]
 
 EsmtpParam:
+
 keyword: string
+
 value: string (optional)
 
 Response:
+
 code: int
+
 message: string
 
 In the simplest case of a message containing
