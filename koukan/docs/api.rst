@@ -57,7 +57,7 @@ message: string
 In the simplest case of a message containing
 only text, we can send a message with a single POST::
 
-    POST /transactions
+    POST /transactions HTTP/1.1
     Content-type: application/json
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
@@ -70,6 +70,7 @@ only text, we can send a message with a single POST::
     201 created
     Location: /transactions/xyz
     Content-type: application/json
+
     {"mail_from": {}, "rcpt_to": {}, "body": {}}
 
 RestMTP transactions are write-once; the ``{}`` is a placeholder
@@ -77,12 +78,13 @@ indicating the field is populated. RestMTP transactions are
 long-running operations (lro) that track the status of the message
 delivery. With a request-timeout header, Koukan will do a hanging GET::
 
-    GET /transactions/xyz
+    GET /transactions/xyz  HTTP/1.1
     request-timeout: 10
 
     (some time elapses)
     200 ok
     Content-type: application/json
+
     {"mail_from": {}, "rcpt_to": {}, "body": {},
      "mail_response": {"code": 250 },
      "rcpt_response": {"code": 250 },
@@ -102,8 +104,9 @@ If you need to send a large or binary attachment, that is done by
 specifying an id within the message_builder spec and then PUTting the blob
 to that id::
 
-    POST /transactions
+    POST /transactions  HTTP/1.1
     Content-type: application/json
+
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
      "body": {"message_builder: {
@@ -115,7 +118,7 @@ to that id::
     201 created
     Location: /transactions/xyz
 
-    PUT /transactions/xyz/blob/my_body
+    PUT /transactions/xyz/blob/my_body  HTTP/1.1
     content-type: text/html
     content-length: 12345678
 
@@ -123,8 +126,9 @@ TODO: the api doesn't really expose whether all attachments have been received?
 
 A transaction can reuse an attachment from a previous transaction::
 
-    POST /transactions
+    POST /transactions HTTP/1.1
     Content-type: application/json
+
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
      "body": {"message_builder: {
@@ -139,8 +143,9 @@ If you already have a serialized rfc822 payload you want
 to send, simply PUT that to /transactions/xyz/body. Similarly, you
 can reuse an rfc822 body from a previous transaction::
 
-    POST /transactions
+    POST /transactions HTTP/1.1
     Content-type: application/json
+
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
      "body": {"reuse_uri": "/transactions/xyz/body"}
@@ -148,7 +153,7 @@ can reuse an rfc822 body from a previous transaction::
 
 To abort an inflight transaction, simply::
 
-    POST /transactions/123/cancel
+    POST /transactions/123/cancel HTTP/1.1
 
 with an empty entity. This will manifest as ``cancelled`` in the
 transaction json.
@@ -163,25 +168,25 @@ cf examples/receiver
 
 Your application must expose the following routes/endpoints::
 
-    POST /transactions
+    POST /transactions HTTP/1.1
 
     201 created
     Location: /transactions/123
 
 create a new transaction and return the path in location::
 
-    GET /transactions/<tx id>
+    GET /transactions/<tx id> HTTP/1.1
 
 
 upload the rfc822 message::
 
-    PUT /transactions/<tx id>/body
+    PUT /transactions/<tx id>/body HTTP/1.1
 
 
-additionally, if you enable receive parsing::
+additionally, if you enable message parsing in the output chain::
 
-    PUT /transactions/<tx id>/message_builder
-    PUT /transactions<tx id>/blob/<blob id>
+    PUT /transactions/<tx id>/message_builder HTTP/1.1
+    PUT /transactions<tx id>/blob/<blob id> HTTP/1.1
 
 for each blob in the message builder spec json
 

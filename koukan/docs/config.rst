@@ -120,13 +120,13 @@ rest clients that take full advantage of RestMTP LROs don't need notifications::
       - filter: rest_output
 
 
-Note that the output chain is linear. Koukan routes on recipient by
-setting fields in the transaction to influence the next hop that
-rest_output sends to and if that is the smtp gateway, what destination
-the gateway sends to after that. A typical ingress config would route
-known domains and reject everything else. Whereas an egress config
-might special-case internal domains and then send everything else to
-the RHS of the address.
+Note that the output chain is linear. ``recipient_router_filter``
+routes on recipient by setting fields in the transaction to influence
+the http endpoint that ``rest_output`` sends to and if that is the smtp
+gateway, what destination the gateway sends to after that. A typical
+ingress config would route known domains and reject everything
+else. Whereas an egress config might special-case internal domains and
+then send everything else to the RHS of the address.
 
 
 cluster/k8s
