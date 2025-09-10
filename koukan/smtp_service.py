@@ -316,6 +316,7 @@ SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
     smtp_handler_factory : SmtpHandlerFactory
     enable_bdat = False
+    smtps = False
 
     def __init__(self, host, port, ssl_context, auth,
                  smtp_handler_factory : SmtpHandlerFactory,
@@ -323,12 +324,13 @@ class ControllerTls(Controller):
                  enable_bdat=False,
                  chunk_size : Optional[int] = None,
                  smtps=False):
-        self.tls_controller_context = ssl_context
+        self.ssl_context = ssl_context
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
         self.smtp_handler_factory = smtp_handler_factory
         self.enable_bdat = enable_bdat
         self.chunk_size = chunk_size
+        self.smtps = smtps
 
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
@@ -353,7 +355,7 @@ class ControllerTls(Controller):
         smtp = SMTP(handler,
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
-                    tls_context=self.tls_controller_context,
+                    tls_context=self.ssl_context if not self.smtps else None,
                     authenticator=self.auth,
                     proxy_protocol_timeout=self.proxy_protocol_timeout,
                     **kwargs)
