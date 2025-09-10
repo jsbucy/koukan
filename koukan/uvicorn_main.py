@@ -68,3 +68,4 @@ class Server:
         if self.alive:
             task = self.loop.create_task(self._ping_alive())
         self.loop.run_forever()
+        logging.debug('done')

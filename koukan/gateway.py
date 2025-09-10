@@ -256,7 +256,9 @@ class SmtpGateway(EndpointFactory):
                   service_yaml.get('proxy_protocol_timeout', None),
                 smtp_handler_factory=handler_factory,
                 enable_bdat=service_yaml.get('enable_bdat', False),
-                chunk_size=service_yaml.get('chunk_size', None)))
+                chunk_size=service_yaml.get('chunk_size', None),
+                smtps=service_yaml.get('smtps', False)
+            ))
 
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,

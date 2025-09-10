@@ -321,7 +321,8 @@ class ControllerTls(Controller):
                  smtp_handler_factory : SmtpHandlerFactory,
                  proxy_protocol_timeout : Optional[int] = None,
                  enable_bdat=False,
-                 chunk_size : Optional[int] = None):
+                 chunk_size : Optional[int] = None,
+                 smtps=False):
         self.tls_controller_context = ssl_context
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
@@ -333,7 +334,8 @@ class ControllerTls(Controller):
         # like this handler= is only used by the default implementation of
         # factory() which is moot if you override it like this.
         super(Controller, self).__init__(
-            handler=None, hostname=host, port=port)
+            handler=None, hostname=host, port=port,
+            ssl_context=ssl_context if smtps else None)
 
     def factory(self):
         handler = self.smtp_handler_factory()
@@ -364,7 +366,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
             auth_secrets_path=None,
             proxy_protocol_timeout : Optional[int] = None,
             enable_bdat = False,
-            chunk_size : Optional[int] = None
+            chunk_size : Optional[int] = None,
+            smtps = False
             ) -> ControllerTls:
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -378,7 +381,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
         proxy_protocol_timeout = proxy_protocol_timeout,
         smtp_handler_factory = smtp_handler_factory,
         enable_bdat = enable_bdat,
-        chunk_size = chunk_size)
+        chunk_size = chunk_size,
+        smtps = smtps)
 
     controller.start()
     return controller
