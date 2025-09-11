@@ -314,17 +314,21 @@ class SmtpHandler:
 
 SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
+    # don't clash with aiosmtpd.Controller.ssl_context!
+    controller_tls_ssl_context : Optional[ssl.SSLContext] = None
     smtp_handler_factory : SmtpHandlerFactory
     enable_bdat = False
     smtps = False
 
-    def __init__(self, host, port, ssl_context, auth,
+    def __init__(self, host : str, port : int,
+                 ssl_context : Optional[ssl.SSLContext],
+                 auth,
                  smtp_handler_factory : SmtpHandlerFactory,
                  proxy_protocol_timeout : Optional[int] = None,
                  enable_bdat=False,
                  chunk_size : Optional[int] = None,
                  smtps=False):
-        self.ssl_context = ssl_context
+        self.controller_tls_ssl_context = ssl_context
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
         self.smtp_handler_factory = smtp_handler_factory
@@ -352,10 +356,12 @@ class ControllerTls(Controller):
         # TODO aiosmtpd supports LMTP so we could add that though it
         # is not completely trivial due to LMTP's per-recipient data
         # responses https://github.com/jsbucy/koukan/issues/2
+        ssl_context = (self.controller_tls_ssl_context if not self.smtps
+                       else None)
         smtp = SMTP(handler,
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
-                    tls_context=self.ssl_context if not self.smtps else None,
+                    tls_context=ssl_context,
                     authenticator=self.auth,
                     proxy_protocol_timeout=self.proxy_protocol_timeout,
                     **kwargs)
