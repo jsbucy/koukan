@@ -4,6 +4,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from types import ModuleType
 import sys
 import logging
+import logging.config
 import time
 import secrets
 from threading import Condition, Lock, Thread
@@ -183,9 +184,9 @@ class SmtpGateway(EndpointFactory):
     def smtp_handler_factory(self, **kwargs):
         return SmtpHandler(**kwargs)
 
-    def main(self, alive=None):
+    def main(self, argv : List[str] = [], alive=None):
         if self.config_yaml is None:
-            with open(sys.argv[1], 'r') as yaml_file:
+            with open(argv[1], 'r') as yaml_file:
                 self.config_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
 
         global_yaml = self.config_yaml.get('global', {})

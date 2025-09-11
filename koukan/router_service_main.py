@@ -5,7 +5,7 @@ import sys
 
 import logging
 
-if __name__ == '__main__':
+def main(argv):
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s [%(process)d] [%(thread)d] '
@@ -13,4 +13,10 @@ if __name__ == '__main__':
 
     service = Service()
 
-    service.main(sys.argv[1])
+    service.main(argv[1])
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv)
+    except SystemExit:
+        logging.exception('exit')
