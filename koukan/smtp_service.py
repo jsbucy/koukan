@@ -336,6 +336,9 @@ class ControllerTls(Controller):
         self.chunk_size = chunk_size
         self.smtps = smtps
 
+        if proxy_protocol_timeout is not None and smtps:
+            logging.warning('proxy_protocol is not compatible with smtps in aiosmtpd https://github.com/aio-libs/aiosmtpd/issues/559')
+
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
         # factory() which is moot if you override it like this.
