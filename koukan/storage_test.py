@@ -137,7 +137,7 @@ class StorageTestBase(unittest.TestCase):
 
         upstream = self.s.load_one()
         self.assertIsNotNone(upstream)
-        self.assertEqual(upstream.id, downstream.id)
+        self.assertEqual(upstream.db_id, downstream.db_id)
         self.assertIsNone(upstream.tx.mail_response)
         self.assertEqual(upstream.tx.rcpt_response, [])
         self.assertIsNone(upstream.tx.data_response)
@@ -352,7 +352,7 @@ class StorageTestBase(unittest.TestCase):
 
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(reader.id, old_tx.id)
+        self.assertEqual(reader.db_id, old_tx.db_id)
         self.assertEqual(reader.tx.mail_from.mailbox, 'alice')
 
     def test_non_durable(self):
@@ -375,7 +375,7 @@ class StorageTestBase(unittest.TestCase):
             finalize_attempt = True)
 
         reader = self.s.get_transaction_cursor()
-        self.assertTrue(reader.load(writer.id))
+        self.assertTrue(reader.load(writer.db_id))
 
         reader = self.s.load_one()
         self.assertIsNone(reader)
@@ -403,7 +403,7 @@ class StorageTestBase(unittest.TestCase):
 
         tx_reader = self.s.load_one()
         blob_reader = BlobCursor(self.s)
-        self.assertEqual(tx_reader.id, tx_writer.id)
+        self.assertEqual(tx_reader.db_id, tx_writer.db_id)
 
         # not expired, leased
         count = self.s.gc(ttl=timedelta(seconds=10))
@@ -440,7 +440,7 @@ class StorageTestBase(unittest.TestCase):
             remote_host=HostPort('remote_host', 2525),
             host='host'))
         reader = self.s.get_transaction_cursor()
-        self.assertIsNotNone(reader.load(writer.id))
+        self.assertIsNotNone(reader.load(writer.db_id))
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
         self.assertFalse(reader.wait(1))
@@ -467,7 +467,7 @@ class StorageTestBase(unittest.TestCase):
         # needs to be inflight to wait
         reader = self.s.load_one()
         self.assertIsNotNone(reader)
-        self.assertEqual(reader.id, tx_cursor.id)
+        self.assertEqual(reader.db_id, tx_cursor.db_id)
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
 

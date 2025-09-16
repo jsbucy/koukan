@@ -100,7 +100,7 @@ class OutputHandlerTest(unittest.TestCase):
             TransactionMetadata(host='outbound',
                                 mail_from=Mailbox('alice')),
             create_leased=True)
-        tx_id = tx_cursor.id
+        tx_id = tx_cursor.db_id
 
         endpoint = FakeFilter()
         chain = FilterChain([endpoint])
@@ -353,7 +353,7 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp)
 
         reader = self.storage.load_one()
-        self.assertEqual(tx_cursor.id, reader.id)
+        self.assertEqual(tx_cursor.db_id, reader.db_id)
         retry_params = {'backoff_factor': 0,
                         'min_attempt_time': 0}
         handler = OutputHandler(
@@ -631,7 +631,7 @@ class OutputHandlerTest(unittest.TestCase):
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
-        tx_id = tx_cursor.id
+        tx_id = tx_cursor.db_id
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True))
         d = (b'from: alice\r\n'

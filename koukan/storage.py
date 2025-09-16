@@ -48,7 +48,7 @@ def rowcount(res : CursorResult) -> int:
     return count
 
 class TransactionCursor:
-    id : Optional[int] = None
+    db_id : Optional[int] = None
     rest_id : Optional[str] = None
     attempt_id : Optional[int] = None
 
@@ -81,15 +81,15 @@ class TransactionCursor:
                  db_id : Optional[int] = None,
                  rest_id : Optional[str] = None):
         self.parent = storage
-        self.id = db_id
+        self.db_id = db_id
         self.rest_id = rest_id
-        if (self.id is not None) or (self.rest_id is not None):
-            self.id_version = self.parent.tx_versions.get(self.id, self.rest_id)
+        if (self.db_id is not None) or (self.rest_id is not None):
+            self.id_version = self.parent.tx_versions.get(self.db_id, self.rest_id)
             if self.id_version is not None:
                 self.version = self.id_version.version
 
     def clone(self) -> 'TransactionCursor':
-        return TransactionCursor(self.parent, self.id, self.rest_id).copy_from(self)
+        return TransactionCursor(self.parent, self.db_id, self.rest_id).copy_from(self)
 
     def copy_from(self, rhs : 'TransactionCursor'):
         self.attempt_id = rhs.attempt_id
@@ -106,9 +106,9 @@ class TransactionCursor:
         self.blobs = rhs.blobs
 
     def _update_version_cache(self):
-        assert (self.id is not None) and (self.rest_id is not None)
+        assert (self.db_id is not None) and (self.rest_id is not None)
         id_version = self.parent.tx_versions.insert_or_update(
-            self.id, self.rest_id, self.version)
+            self.db_id, self.rest_id, self.version)
         if self.id_version is not None:
             assert id_version == self.id_version
         self.id_version = id_version
@@ -140,7 +140,7 @@ class TransactionCursor:
 
             res = db_tx.execute(ins)
             row = res.fetchone()
-            self.id = row[0]
+            self.db_id = row[0]
             self.creation = row[1]
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
@@ -296,13 +296,13 @@ class TransactionCursor:
             assert blob_cursor.blob_uri is not None
             if not blob_cursor.finalized():
                 blobs_done = False
-            blobrefs.append({ "transaction_id": self.id,
+            blobrefs.append({ "transaction_id": self.db_id,
                               "tx_rest_id": self.rest_id,
-                              "blob_id": blob_cursor.id,
+                              "blob_id": blob_cursor.db_id,
                               "rest_id": blob_cursor.blob_uri.blob })
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
-                      self.id, blobrefs, blobs_done)
+                      self.db_id, blobrefs, blobs_done)
 
         if blobrefs:
             ins = insert(self.parent.tx_blobref_table).values(blobrefs)
@@ -364,7 +364,7 @@ class TransactionCursor:
             (not ping_tx)):
             logging.debug(
                 'TransactionCursor._write %d %s empty delta %s',
-                self.id, self.rest_id, tx_delta)
+                self.db_id, self.rest_id, tx_delta)
             return True
 
         tx_to_db = self.tx.merge(tx_delta)
@@ -382,11 +382,11 @@ class TransactionCursor:
         logging.debug(
             'TransactionCursor._write %d %s version=%d '
             'final_attempt_reason=%s %s %s',
-            self.id, self.rest_id, self.version, final_attempt_reason,
+            self.db_id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
         upd = (update(self.parent.tx_table)
-               .where(self.parent.tx_table.c.id == self.id,
+               .where(self.parent.tx_table.c.id == self.db_id,
                       self.parent.tx_table.c.version == self.version)
                .values(json = tx_to_db_json,
                        version = new_version,
@@ -397,7 +397,7 @@ class TransactionCursor:
             assert self.attempt_id is not None
             upd_att = (update(self.parent.attempt_table)
                        .where(self.parent.attempt_table.c.transaction_id ==
-                              self.id,
+                              self.db_id,
                               self.parent.attempt_table.c.attempt_id ==
                               self.attempt_id)
                        .values(responses = attempt_json,
@@ -447,7 +447,7 @@ class TransactionCursor:
         row = res.fetchone()
         if row is None or row[0] != new_version:
             logging.info('Storage._write version conflict id=%d '
-                         'expected %d db %s', self.id, new_version, row)
+                         'expected %d db %s', self.db_id, new_version, row)
             raise VersionConflictException()
         self.version = row[0]
 
@@ -460,7 +460,7 @@ class TransactionCursor:
             self.in_attempt = False
 
         logging.info('_write id=%d %s version=%d',
-                     self.id, self.rest_id, self.version)
+                     self.db_id, self.rest_id, self.version)
 
         return True
 
@@ -484,11 +484,11 @@ class TransactionCursor:
     def _load(self, db_id : Optional[int] = None,
               rest_id : Optional[str] = None,
               start_attempt : bool = False) -> Optional[TransactionMetadata]:
-        assert db_id is None or self.id is None or db_id == self.id
+        assert db_id is None or self.db_id is None or db_id == self.db_id
         assert rest_id is None or self.rest_id is None or rest_id == self.rest_id
         assert not (self.in_attempt and start_attempt)
-        if self.id is not None or self.rest_id is not None:
-            db_id = self.id
+        if self.db_id is not None or self.rest_id is not None:
+            db_id = self.db_id
             rest_id = self.rest_id
         else:
             assert db_id is not None or rest_id is not None
@@ -505,13 +505,13 @@ class TransactionCursor:
             rest_id : Optional[str] = None,
             start_attempt : bool = False) -> Optional[TransactionMetadata]:
         tx = self._load_db(db_tx, db_id, rest_id, start_attempt)
-        if self.id is None:
+        if self.db_id is None:
             return None
         assert self.version is not None
         if tx is None:
             return None
         if start_attempt:
-            self._start_attempt_db(db_tx, self.id, self.version)
+            self._start_attempt_db(db_tx, self.db_id, self.version)
         return tx
 
     def _load_db(self, db_tx : Connection,
@@ -550,12 +550,12 @@ class TransactionCursor:
         if not row:
             return None
 
-        if self.id is not None:
-            assert row[0] == self.id
+        if self.db_id is not None:
+            assert row[0] == self.db_id
         if self.rest_id is not None:
             assert row[1] == self.rest_id
 
-        (self.id,
+        (self.db_id,
          self.rest_id,
          self.creation,
          trans_json,
@@ -577,14 +577,14 @@ class TransactionCursor:
         # TODO save finalized body above, skip load and restore here
         self._load_blobs(db_tx)
 
-        self.tx.tx_db_id = self.id
+        self.tx.tx_db_id = self.db_id
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
         self.tx.rest_id = self.rest_id
 
         # XXX if in_attempt, query on attempt_id?? (cf assert below)
         sel = (select(self.parent.attempt_table.c.attempt_id,
                       self.parent.attempt_table.c.responses)
-               .where(self.parent.attempt_table.c.transaction_id == self.id)
+               .where(self.parent.attempt_table.c.transaction_id == self.db_id)
                .order_by(self.parent.attempt_table.c.attempt_id.desc())
                .limit(1))
         res = db_tx.execute(sel)
@@ -603,7 +603,7 @@ class TransactionCursor:
 
         logging.debug('TransactionCursor._load_db %d %s version=%d tx %s '
                       'attempt %s %s',
-                      self.id, self.rest_id, self.version,
+                      self.db_id, self.rest_id, self.version,
                       trans_json, attempt_id, resp_json)
 
         if self.in_attempt:
@@ -625,7 +625,7 @@ class TransactionCursor:
         sel_blobrefs = select(
             blobref_cols.blob_id,
             blobref_cols.rest_id).where(
-                blobref_cols.transaction_id == self.id).subquery()
+                blobref_cols.transaction_id == self.db_id).subquery()
         j = join(sel_blobrefs, self.parent.blob_table,
                  sel_blobrefs.c.blob_id == self.parent.blob_table.c.id)
         sel_blob = select(
@@ -734,7 +734,7 @@ class TransactionCursor:
              self.parent.blob_table.c.id == self.parent.tx_blobref_table.c.blob_id,
              isouter=False)
         sel = (select(self.parent.blob_table.c.id).select_from(j)
-               .where(self.parent.tx_blobref_table.c.transaction_id == self.id,
+               .where(self.parent.tx_blobref_table.c.transaction_id == self.db_id,
                       or_(self.parent.blob_table.c.length.is_(None),
                           func.length(self.parent.blob_table.c.content) !=
                           self.parent.blob_table.c.length))
@@ -753,7 +753,7 @@ class TransactionCursor:
         return None
 
 class BlobCursor(Blob, WritableBlob):
-    id = None
+    db_id = None  # Blob.id
     length : int = 0  # max offset+len from BlobContent, next offset to write
     _content_length : Optional[int] = None  # overall length from content-range
     last = False
@@ -772,12 +772,12 @@ class BlobCursor(Blob, WritableBlob):
         self.db_tx = db_tx
 
     def __hash__(self):
-        return hash(self.id)
+        return hash(self.db_id)
 
     def delta(self, rhs):
         if not isinstance(rhs, BlobCursor):
             return None
-        if self.id != rhs.id:
+        if self.db_id != rhs.db_id:
             return None
         if self.length > rhs.length:
             return None
@@ -787,7 +787,7 @@ class BlobCursor(Blob, WritableBlob):
 
     def init(self, tx_rest_id : str, blob_id : int, blob_rest_id : str,
              content_length : Optional[int], last_update : int, length : int):
-        self.id = blob_id
+        self.db_id = blob_id
         self._content_length = content_length
         self.length = length
         self.last_update = last_update
@@ -799,7 +799,7 @@ class BlobCursor(Blob, WritableBlob):
     def __eq__(self, x):
         if not isinstance(x, BlobCursor):
             return False
-        return self.id == x.id
+        return self.db_id == x.db_id
 
     def rest_id(self) -> Optional[str]:
         if self.blob_uri is None:
@@ -826,8 +826,8 @@ class BlobCursor(Blob, WritableBlob):
         res = db_tx.execute(ins)
         row = res.fetchone()
         assert row is not None
-        self.id = row[0]
-        return self.id
+        self.db_id = row[0]
+        return self.db_id
 
     # WritableBlob
     def append_data(self, offset: int, d : bytes,
@@ -837,7 +837,7 @@ class BlobCursor(Blob, WritableBlob):
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d %s %d length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.id, self.blob_uri, offset, self.length, len(d),
+                     self.db_id, self.blob_uri, offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:
@@ -855,7 +855,7 @@ class BlobCursor(Blob, WritableBlob):
                 self.parent.blob_table.c.length,
                 self.parent.blob_table.c.last_update,
                 self.parent._current_timestamp_epoch()).where(
-                    self.parent.blob_table.c.id == self.id)
+                    self.parent.blob_table.c.id == self.db_id)
             res = db_tx.execute(stmt)
             row = res.fetchone()
             assert row is not None
@@ -868,7 +868,7 @@ class BlobCursor(Blob, WritableBlob):
                 return False, db_length, db_content_length
 
             upd = (update(self.parent.blob_table)
-                   .where(self.parent.blob_table.c.id == self.id)
+                   .where(self.parent.blob_table.c.id == self.db_id)
                    .where(func.length(self.parent.blob_table.c.content) ==
                           self.length)
                    .where(or_(self.parent.blob_table.c.length == None,
@@ -938,7 +938,7 @@ class BlobCursor(Blob, WritableBlob):
         l = length if length else self.length - offset
         stmt = (
             select(func.substr(self.parent.blob_table.c.content, offset+1, l))
-            .where(self.parent.blob_table.c.id == self.id))
+            .where(self.parent.blob_table.c.id == self.db_id))
         with self.parent.begin_transaction() as db_tx:
             res = db_tx.execute(stmt)
             row = res.fetchone()
@@ -951,7 +951,7 @@ class BlobCursor(Blob, WritableBlob):
             return row[0]
 
     def __repr__(self):
-        return 'BlobCursor id=%d uri=%s length=%d content_length=%s' % (self.id, str(self.blob_uri), self.length, self._content_length)
+        return 'BlobCursor id=%d uri=%s length=%d content_length=%s' % (self.db_id, str(self.blob_uri), self.length, self._content_length)
 
 class Storage():
     session_id : Optional[int] = None

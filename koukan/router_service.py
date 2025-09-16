@@ -327,7 +327,7 @@ class Service:
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
-                      storage_tx.id, storage_tx.rest_id)
+                      storage_tx.db_id, storage_tx.rest_id)
 
         self.handle_tx(storage_tx, chain, endpoint_yaml)
 
