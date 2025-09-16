@@ -708,6 +708,8 @@ class TransactionCursor:
         assert self.version is not None
         return await self.id_version.wait_async(self.version, timeout)
 
+    # load_handoff()
+    # like wait() but if it returns True, has had the effect of a load()
 
     # returns True if all blobs ref'd from this tx are finalized
     def check_input_done(self, db_tx : Connection) -> bool:

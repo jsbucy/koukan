@@ -106,7 +106,7 @@ class OutputHandler:
             not self.tx.cancelled):
             self.cursor.wait(
                 self.upstream_refresh - (now - self._last_upstream_refresh))
-            tx = self.cursor.load()
+            tx = self.cursor.load()  # handoff here
             assert tx is not None
             now = time.monotonic()
             assert self.cursor.version is not None

@@ -329,6 +329,7 @@ class RestHandler(Handler):
         if not wait_result:
             return self.response(code=304, msg='unchanged',
                                  headers=[('etag', self._etag(tx.version))])
+        # handoff here
         err, tx = await self._get_tx_async(request)
         if err is not None:
             return err

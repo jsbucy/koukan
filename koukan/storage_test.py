@@ -36,7 +36,7 @@ class StorageTestBase(unittest.TestCase):
 
     def setUp(self):
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.WARNING,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 
@@ -561,30 +561,51 @@ class StorageTestBase(unittest.TestCase):
 
         def ping(cursor):
             # add rcpt
+            read = write = readc = 0
             delta = TransactionMetadata(
                 rcpt_to=[Mailbox('bob@example.com')])
             delta.rcpt_to_list_offset = len(cursor.tx.rcpt_to)
+            start = time.monotonic()
             cursor.write_envelope(delta)
+            write += time.monotonic() - start
 
             # read rcpt response
             while len(cursor.tx.rcpt_response) < len(cursor.tx.rcpt_to):
                 cursor.wait()
+                start = time.monotonic()
                 cursor.load()
+                read += time.monotonic() - start
+                readc += 1
+            return write, read, readc
 
         def pong(cursor):
+            read = write = readc = 0
             while len(cursor.tx.rcpt_response) == len(cursor.tx.rcpt_to):
                 cursor.wait()
+                start = time.monotonic()
                 cursor.load()
+                read += time.monotonic() - start
+                readc += 1
             delta = TransactionMetadata()
             delta.rcpt_response = []
             delta.rcpt_response_list_offset = len(cursor.tx.rcpt_response)
             for i in range(len(cursor.tx.rcpt_response), len(cursor.tx.rcpt_to)):
                 delta.rcpt_response.append(Response())
+            start = time.monotonic()
             cursor.write_envelope(delta)
+            write += time.monotonic() - start
+
+            return write, read, readc
 
         def runn(n, fn):
+            logging.warning(fn)
+            write = read = readc = 0
             for i in range(0, n):
-                fn()
+                w,r,rc = fn()
+                write += w
+                read += r
+                readc += rc
+            logging.warning('%f %f %d', write, read, readc)
 
         iters=1000
 
