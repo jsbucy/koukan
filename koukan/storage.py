@@ -88,6 +88,23 @@ class TransactionCursor:
             if self.id_version is not None:
                 self.version = self.id_version.version
 
+    def clone(self) -> 'TransactionCursor':
+        return TransactionCursor(self.parent, self.id, self.rest_id).copy_from(self)
+
+    def copy_from(self, rhs : 'TransactionCursor'):
+        self.attempt_id = rhs.attempt_id
+        self.version = rhs.version
+        self.creation = rhs.creation
+        self.input_done = rhs.input_done
+        self.final_attempt_reason = rhs.final_attempt_reason
+        self.message_builder = rhs.message_builder
+        self.no_final_notification = rhs.no_final_notification
+        self.id_version = rhs.id_version
+        # self.in_attempt
+        self.created = rhs.created
+        self.session_uri = rhs.session_uri
+        self.blobs = rhs.blobs
+
     def _update_version_cache(self):
         assert (self.id is not None) and (self.rest_id is not None)
         id_version = self.parent.tx_versions.insert_or_update(
