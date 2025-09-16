@@ -131,3 +131,20 @@ then send everything else to the RHS of the address.
 
 cluster/k8s
 ===========
+
+All replicas share the same underlying database.
+
+The router implementation currently buffers data through the local
+filesystem but this does not need to be durable across restarts;
+emptyDir is fine. This is local to each router process; the router and
+gateway do not share data through the filesystem.
+
+Koukan may return http redirects in response to requests to endpoints
+with rest_lro enabled; native rest clients must be prepared to follow
+these.
+
+For both router and gateway, configure rest_listener.session_uri to
+point to the dns alias or ip of the individual pod/replica. For
+router, configure rest_listener.service_uri to the router service dns
+alias. Set endpoint.rest_lro to false for endpoints that the gateway
+injects into and true to endpoints that native rest clients use.

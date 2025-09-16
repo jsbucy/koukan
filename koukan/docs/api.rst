@@ -61,7 +61,7 @@ only text, we can send a message with a single POST::
     Content-type: application/json
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
-     "body": {"message_builder: {
+     "body": {"message_builder": {
          "headers": [["subject", "hello"]],
          "text_body": [{
            "content_type": "text/plain", "content": {"inline": "hello, world!"}}],
@@ -109,10 +109,11 @@ to that id::
 
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
-     "body": {"message_builder: {
+     "body": {"message_builder": {
          "headers": [["subject", "hello"]],
          "text_body": [{
-           "content_type": "text/html", "content": {"create_id": "my_body"}}]
+           "content_type": "text/html",
+           "content": {"create_id": "my_body"}}]
     }}}
 
     201 created
@@ -131,7 +132,7 @@ A transaction can reuse an attachment from a previous transaction::
 
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
-     "body": {"message_builder: {
+     "body": {"message_builder": {
          "headers": [["subject", "hello"]],
          "text_body": [{
            "content_type": "text/plain",

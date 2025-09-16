@@ -14,7 +14,7 @@ Contents
    config
    api
    internals
-
+   plugins
 
 
 
