@@ -58,9 +58,7 @@ class GatewayTest(unittest.TestCase):
             "localhost", self.fake_smtpd_port, self.protocol)
         self.fake_smtpd.start()
 
-        self.service_thread = Thread(
-            daemon=True,
-            target=lambda: self.gw.main())
+        self.service_thread = Thread(daemon=True, target=self.gw.main)
         self.service_thread.start()
 
         self.gw_rest_url = 'http://localhost:%d' % rest_port

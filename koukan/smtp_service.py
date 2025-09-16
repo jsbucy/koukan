@@ -314,26 +314,37 @@ class SmtpHandler:
 
 SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
+    # don't clash with aiosmtpd.Controller.ssl_context!
+    controller_tls_ssl_context : Optional[ssl.SSLContext] = None
     smtp_handler_factory : SmtpHandlerFactory
     enable_bdat = False
+    smtps = False
 
-    def __init__(self, host, port, ssl_context, auth,
+    def __init__(self, host : str, port : int,
+                 ssl_context : Optional[ssl.SSLContext],
+                 auth,
                  smtp_handler_factory : SmtpHandlerFactory,
                  proxy_protocol_timeout : Optional[int] = None,
                  enable_bdat=False,
-                 chunk_size : Optional[int] = None):
-        self.tls_controller_context = ssl_context
+                 chunk_size : Optional[int] = None,
+                 smtps=False):
+        self.controller_tls_ssl_context = ssl_context
         self.proxy_protocol_timeout = proxy_protocol_timeout
         self.auth = auth
         self.smtp_handler_factory = smtp_handler_factory
         self.enable_bdat = enable_bdat
         self.chunk_size = chunk_size
+        self.smtps = smtps
+
+        if proxy_protocol_timeout is not None and smtps:
+            logging.warning('proxy_protocol is not compatible with smtps in aiosmtpd https://github.com/aio-libs/aiosmtpd/issues/559')
 
         # The aiosmtpd docs don't discuss this directly but it seems
         # like this handler= is only used by the default implementation of
         # factory() which is moot if you override it like this.
         super(Controller, self).__init__(
-            handler=None, hostname=host, port=port)
+            handler=None, hostname=host, port=port,
+            ssl_context=ssl_context if smtps else None)
 
     def factory(self):
         handler = self.smtp_handler_factory()
@@ -348,10 +359,12 @@ class ControllerTls(Controller):
         # TODO aiosmtpd supports LMTP so we could add that though it
         # is not completely trivial due to LMTP's per-recipient data
         # responses https://github.com/jsbucy/koukan/issues/2
+        ssl_context = (self.controller_tls_ssl_context if not self.smtps
+                       else None)
         smtp = SMTP(handler,
                     #require_starttls=True,
                     enable_SMTPUTF8 = True,  # xxx config
-                    tls_context=self.tls_controller_context,
+                    tls_context=ssl_context,
                     authenticator=self.auth,
                     proxy_protocol_timeout=self.proxy_protocol_timeout,
                     **kwargs)
@@ -364,7 +377,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
             auth_secrets_path=None,
             proxy_protocol_timeout : Optional[int] = None,
             enable_bdat = False,
-            chunk_size : Optional[int] = None
+            chunk_size : Optional[int] = None,
+            smtps = False
             ) -> ControllerTls:
     if cert and key:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -378,7 +392,8 @@ def service(smtp_handler_factory : SmtpHandlerFactory,
         proxy_protocol_timeout = proxy_protocol_timeout,
         smtp_handler_factory = smtp_handler_factory,
         enable_bdat = enable_bdat,
-        chunk_size = chunk_size)
+        chunk_size = chunk_size,
+        smtps = smtps)
 
     controller.start()
     return controller

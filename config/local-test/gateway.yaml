@@ -6,7 +6,7 @@ global:
 
 # rest -> smtp
 rest_listener:
-  addr: ["[::0]", 8001]
+  addr: ["::1", 8001]
   #cert: localhost.crt
   #key: localhost.key
 
@@ -36,6 +36,16 @@ smtp_listener:
       #chunk_size: 16384
       # auth_secrets: secrets.json
       # enable_bdat: true
+      #cert: localhost.crt
+      #key: localhost.key
+    - addr: [localhost, 1465]
+      endpoint: msa
+      smtps: true
+      #chunk_size: 16384
+      # auth_secrets: secrets.json
+      # enable_bdat: true
+      #cert: localhost.crt
+      #key: localhost.key
 
 rest_output:
   - name: mx
