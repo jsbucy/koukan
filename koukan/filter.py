@@ -866,12 +866,12 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : Optional[float]) -> bool:
+    def wait(self, version : int, timeout : Optional[float]) -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
     @abstractmethod
     async def wait_async(self, version : int, timeout : Optional[float]
-                         ) -> bool:
+                         )  -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
 

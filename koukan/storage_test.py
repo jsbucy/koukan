@@ -36,7 +36,7 @@ class StorageTestBase(unittest.TestCase):
 
     def setUp(self):
         logging.basicConfig(
-            level=logging.WARNING,
+            level=logging.DEBUG,
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
 

@@ -53,9 +53,11 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             tx_body : Optional[bool] = None):
         raise NotImplementedError()
 
-    def wait(self, version : int, timeout : Optional[float]) -> bool:
+    def wait(self, version : int, timeout : Optional[float]
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
+        tx = None
         if not self.timeout_resp:
-            rv = self.filter.wait(version, timeout)
+            rv, tx = self.filter.wait(version, timeout)
         else:
             rv = True
         if not rv:
@@ -63,10 +65,9 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 Response(450, 'upstream timeout (AsyncFilterWrapper)'),
                 self.timeout_resp)
             # xxx but then does version need to change?
-        return rv
+        return rv, tx
 
-    async def wait_async(self, version : int, timeout : Optional[float]
-                         ) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]):
         raise NotImplementedError()
 
     def version(self) -> Optional[int]:
@@ -222,8 +223,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             assert version is not None
             dl = deadline.deadline_left()
             assert dl is not None
-            self.wait(version, dl)
-            u = self.get()
+            rv, u = self.wait(version, dl)
+            #u = self.get()
             assert u is not None
             upstream_tx = u
         tx_orig.version = None

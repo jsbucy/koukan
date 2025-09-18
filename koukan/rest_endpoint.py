@@ -652,6 +652,7 @@ class RestEndpoint(Filter):
                           self.transaction_url)
             return None
         if rest_resp.status_code not in [200, 304]:
+            logging.debug(rest_resp.text)
             return None
         if 'etag' not in rest_resp.headers:
             return None
@@ -710,6 +711,7 @@ class RestEndpoint(Filter):
             if not deadline.remaining(1):
                 break
             if (self.etag is None or self.etag == prev_etag) and (delta < 1):
+                logging.debug('%s %s', prev_etag, self.etag)
                 nospin = 1 - delta
                 logging.debug('nospin %s %f', self.transaction_url, nospin)
                 time.sleep(nospin)

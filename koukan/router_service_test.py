@@ -57,12 +57,12 @@ root_yaml_template = {
         'executor': {
             'rest': {
                 'max_inflight': 100,
-                'watchdog_timeout': 10,
+                'watchdog_timeout': 3,
                 'testonly_debug_futures': True
             },
             'output': {
                 'max_inflight': 100,
-                'watchdog_timeout': 10,
+                'watchdog_timeout': 3,
                 'testonly_debug_futures': True
             }
         },
@@ -260,7 +260,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def setUp(self):
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.DEBUG,  # WARNING
             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
             '%(message)s')
         logging.config.dictConfig({'version': 1,
@@ -1012,12 +1012,14 @@ class RouterServiceTest(unittest.TestCase):
 
 
         body = b'hello, world!'
-        tx = TransactionMetadata(
+        tx = rest_endpoint.downstream_tx
+        delta = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
-
-        rest_endpoint.on_update(tx, tx.copy())
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        logging.debug(tx)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
@@ -1058,39 +1060,34 @@ class RouterServiceTest(unittest.TestCase):
             timeout_start=5, timeout_data=5)
 
         logging.info('_exploder_micro start tx')
-        tx = TransactionMetadata(
-            mail_from=Mailbox('alice@example.com'),
-            remote_host=HostPort('1.2.3.4', 12345))
-        rest_endpoint.on_update(tx, tx.copy())
+        prev = TransactionMetadata()
+        tx = rest_endpoint.upstream_tx
+        tx.mail_from = Mailbox('alice@example.com')
+        tx.remote_host = HostPort('1.2.3.4', 12345)
+        rest_endpoint.on_update(prev.delta(tx))
 
         # no rcpt -> buffered
         self.assertEqual(tx.mail_response.code, 250)
         self.assertIn('exploder noop', tx.mail_response.message)
 
         logging.info('_exploder_micro patch rcpt')
-        updated_tx = tx.copy()
-        updated_tx.rcpt_to.append(Mailbox('bob@example.com'))
-        tx_delta = tx.delta(updated_tx)
-        tx = updated_tx
-        rest_endpoint.on_update(tx, tx_delta)
+        prev = tx.copy()
+        tx.rcpt_to.append(Mailbox('bob@example.com'))
+        rest_endpoint.on_update(prev.delta(tx))
         self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
 
         logging.info('_exploder_micro patch body')
 
-        tx_delta = TransactionMetadata(
-            body=InlineBlob(b'Hello, World!', last=True))
-        self.assertIsNotNone(tx.merge_from(tx_delta))
-        rest_endpoint.on_update(tx, tx_delta)
+        prev = tx.copy()
+        tx.body=InlineBlob(b'Hello, World!', last=True)
+        rest_endpoint.on_update(prev.delta(tx))
         logging.debug('test_exploder_multi_rcpt %s', tx)
         self.assertEqual(205, tx.data_response.code)
         self.assertEqual('upstream data', tx.data_response.message)
 
 
-    def disabled_test_micro(self):
-        #self._exploder_micro()
-        micro = self._rest_smoke_micro
-
+    def _test_micro(self, micro):
         logging.debug('warmup')
         micro()
         logging.debug('real')
@@ -1104,19 +1101,27 @@ class RouterServiceTest(unittest.TestCase):
                 micro()
                 logging.debug('micro iter done %f', time.monotonic() - start)
 
+        done = None
         def pmicro():
             threads = []
-            for i in range(0,para):
+            for i in range(0,para - 1):
                 t = Thread(target=run_micro)
                 t.start()
                 threads.append(t)
+            run_micro()
             for t in threads:
                 t.join()
+            nonlocal done
+            done = time.monotonic()
         cProfile.runctx('fn()', None, {'fn': partial(pmicro)},
                         #sort=SortKey.CUMULATIVE
                         sort=SortKey.TIME)
-        total = time.monotonic() - start
-        logging.warning('done %f %f', total, iters/total)
+        total = done - start
+        logging.warning('done %s %f %f', micro, total, iters/total)
+
+    def disabled_test_micro(self):
+        self._test_micro(self._rest_smoke_micro)
+        self._test_micro(self._exploder_micro)
 
 
     def test_notification_retry_timeout(self):

@@ -104,7 +104,7 @@ class Service:
         success = True
         for executor in [e for e in [self.daemon_executor, self.rest_executor,
                                      self.output_executor] if e is not None]:
-            if not executor.shutdown(timeout=10):
+            if not executor.shutdown(timeout=4):
                 success = False
 
         assert self.storage is not None

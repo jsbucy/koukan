@@ -108,8 +108,8 @@ class Executor:
         watchdog_result = True
         if timeout:
             for i in range(0, int(timeout)):
-                logging.debug('Executor.shutdown waiting on %d',
-                              len(self.inflight))
+                logging.debug('Executor.shutdown waiting on %s',
+                              self.inflight)
                 with self.lock:
                     watchdog_result = self._check_watchdog_locked(timeout)
                     if not watchdog_result:

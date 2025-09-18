@@ -74,11 +74,15 @@ class MockAsyncFilter(AsyncFilter):
     def version(self) -> Optional[int]:
         return self._version
 
-    def wait(self, version, timeout) -> bool:
-        return bool(self.get_expectation)
+    def wait(self, version, timeout)  -> Tuple[bool, Optional[TransactionMetadata]]:
+        if not self.get_expectation:
+            return False, None
+        return True, self.get()
+        #return bool(self.get_expectation)
 
-    async def wait_async(self, version, timeout) -> bool:
-        return bool(self.get_expectation)
+    async def wait_async(self, version, timeout)  -> Tuple[bool, Optional[TransactionMetadata]]:
+        #return bool(self.get_expectation)
+        return self.wait(version, timeout)
 
     def incremental(self):
         if self._incremental is None:

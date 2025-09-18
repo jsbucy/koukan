@@ -79,39 +79,50 @@ class TransactionCursor:
 
     def __init__(self, storage,
                  db_id : Optional[int] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 no_id_version = False):
         self.parent = storage
         self.db_id = db_id
         self.rest_id = rest_id
-        if (self.db_id is not None) or (self.rest_id is not None):
+        if no_id_version:
+            pass
+        elif (self.db_id is not None) or (self.rest_id is not None):
             self.id_version = self.parent.tx_versions.get(self.db_id, self.rest_id)
             if self.id_version is not None:
                 self.version = self.id_version.version
 
     def clone(self) -> 'TransactionCursor':
-        return TransactionCursor(self.parent, self.db_id, self.rest_id).copy_from(self)
+        out = TransactionCursor(self.parent, self.db_id, self.rest_id, no_id_version=True)
+        out.copy_from(self)
+        return out
 
     def copy_from(self, rhs : 'TransactionCursor'):
-        self.attempt_id = rhs.attempt_id
+        #self.attempt_id = rhs.attempt_id
+        assert rhs.version is not None
         self.version = rhs.version
-        self.creation = rhs.creation
+        #self.creation = rhs.creation
         self.input_done = rhs.input_done
         self.final_attempt_reason = rhs.final_attempt_reason
+        self.tx = rhs.tx.copy()
         self.message_builder = rhs.message_builder
         self.no_final_notification = rhs.no_final_notification
-        self.id_version = rhs.id_version
-        # self.in_attempt
+        #self.id_version = rhs.id_version
+        # XXX self.in_attempt
         self.created = rhs.created
         self.session_uri = rhs.session_uri
-        self.blobs = rhs.blobs
+        self.blobs = [b.clone() for b in rhs.blobs] if rhs.blobs else None
 
     def _update_version_cache(self):
-        assert (self.db_id is not None) and (self.rest_id is not None)
-        id_version = self.parent.tx_versions.insert_or_update(
-            self.db_id, self.rest_id, self.version)
-        if self.id_version is not None:
-            assert id_version == self.id_version
-        self.id_version = id_version
+        assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
+        clone = self.clone()
+        if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri.tx_body:
+            clone.tx.body = clone.blobs[0]
+            logging.debug(clone.tx.body)
+
+        idv = self.parent.tx_versions.insert_or_update(
+            self.db_id, self.rest_id, self.version, clone)
+        assert self.id_version is None or self.id_version == idv
+        self.id_version = idv
 
     def create(self,
                rest_id : str,
@@ -385,6 +396,8 @@ class TransactionCursor:
             self.db_id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
+        # TODO if in_attempt, validate inflight_session_id and throw
+        # if mismatch, that should terminate the OH?
         upd = (update(self.parent.tx_table)
                .where(self.parent.tx_table.c.id == self.db_id,
                       self.parent.tx_table.c.version == self.version)
@@ -715,18 +728,18 @@ class TransactionCursor:
         self._load_db(db_tx, db_id=db_id)
         self.in_attempt = True
 
-    def wait(self, timeout : Optional[float] = None) -> bool:
+    def wait(self, timeout : Optional[float] = None, clone = False) -> bool:
         assert self.id_version is not None
         assert self.version is not None
-        return self.id_version.wait(self.version, timeout)
+        return self.id_version.wait(
+            self.version, timeout, self if clone else None)
 
-    async def wait_async(self, timeout : Optional[float]) -> bool:
+    async def wait_async(self, timeout : Optional[float], clone = False
+                         ) -> bool:
         assert self.id_version is not None
         assert self.version is not None
-        return await self.id_version.wait_async(self.version, timeout)
-
-    # load_handoff()
-    # like wait() but if it returns True, has had the effect of a load()
+        return await self.id_version.wait_async(
+            self.version, timeout, self if clone else None)
 
     # returns True if all blobs ref'd from this tx are finalized
     def check_input_done(self, db_tx : Connection) -> bool:
@@ -773,6 +786,9 @@ class BlobCursor(Blob, WritableBlob):
 
     def __hash__(self):
         return hash(self.db_id)
+
+    def clone(self):
+        return copy.copy(self)
 
     def delta(self, rhs):
         if not isinstance(rhs, BlobCursor):

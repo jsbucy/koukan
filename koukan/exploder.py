@@ -99,8 +99,8 @@ class Recipient:
         assert self.tx is not None
         assert self.tx.version is not None
         assert self.filter is not None
-        self.filter.wait(self.tx.version, timeout)
-        t = self.filter.get()
+        rv, t = self.filter.wait(self.tx.version, timeout)
+        #t = self.filter.get()
         assert t is not None
         orig = self.tx.copy()
         tt = t.copy()

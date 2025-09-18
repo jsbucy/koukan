@@ -58,27 +58,48 @@ class StorageWriterFilter(AsyncFilter):
         return yaml['chain'][-1]['filter'] == 'exploder'
 
     # AsyncFilter
-    def wait(self, version, timeout) -> bool:
+    def wait(self, version, timeout
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
         # cursor can be None after first update() to create with the
         # cutthrough/handoff workflow
         if self.tx_cursor is None:
             self._load()
             assert self.tx_cursor is not None
-        if self.tx_cursor.version != version:
-            return True
-        return self.tx_cursor.wait(timeout)
+        if self.tx_cursor.version == version:
+            rv = self.tx_cursor.wait(timeout, clone=True)
+        else:
+            rv = True
+        tx_out = None
+        if rv:
+            tx_out = self.tx_cursor.tx.copy()
+            # xxx hack for parity with get()
+            tx_out.version = self.tx_cursor.version
+        return rv, tx_out
 
     # AsyncFilter
-    async def wait_async(self, version, timeout):
-        if self.tx_cursor.version != version:
-            return True
-        return await self.tx_cursor.wait_async(timeout)
+    async def wait_async(self, version, timeout
+                         ) -> Tuple[bool, Optional[TransactionMetadata]]:
+        assert self.tx_cursor is not None
+        assert self.tx_cursor.version is not None
+        logging.debug('%s %s', version, self.tx_cursor.version)
+        if self.tx_cursor.version == version:
+            rv = await self.tx_cursor.wait_async(timeout, clone=True)
+        else:
+            rv = True
+
+        tx_out = None
+        if rv:
+            tx_out = self.tx_cursor.tx.copy()
+            # xxx hack for parity with get()
+            tx_out.version = self.tx_cursor.version
+
+        return rv, tx_out
 
     def release_transaction_cursor(self) -> Optional[TransactionCursor]:
         with self.mu:
             if not self.cv.wait_for(
                     lambda: self.upstream_cursor is not None or
-                    self.create_err, 30):
+                    self.create_err, 3):
                 logging.warning(
                     'StorageWriterFilter.get_transaction_cursor timeout %s', self.create_err)
                 return None
@@ -138,6 +159,7 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor.tx is None:
             return None
         tx = self.tx_cursor.tx.copy()
+        # xxx hack
         tx.version = self.tx_cursor.version
         return tx
 

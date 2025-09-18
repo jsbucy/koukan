@@ -118,6 +118,7 @@ class RestHandler(Handler):
                  headers : Optional[List[Tuple[str,str]]] = None,
                  etag : Optional[str] = None
                  ) -> HttpResponse:
+        # logging.debug('%d %s', code, msg)
         headers_dict={}
         if headers:
             headers_dict.update({k:str(v) for k,v in headers})
@@ -154,6 +155,13 @@ class RestHandler(Handler):
             return self.response(code=500, msg='schedule ping tx')
         return None
 
+    def _handle_async(self, request, fn):
+        try:
+            return fn()
+        except Exception:
+            logging.exception('_handle_async')
+            return None
+
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
         logging.debug('RestHandler.handle_async req %s', request)
@@ -161,7 +169,7 @@ class RestHandler(Handler):
         if err is not None:
             return err
         deadline = Deadline(timeout)
-        cfut = self.executor.submit(fn, 0)
+        cfut = self.executor.submit(partial(self._handle_async, request, fn), 0)
         if cfut is None:
             return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -252,13 +260,16 @@ class RestHandler(Handler):
         return resp
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
-        logging.debug('_get_tx')
-        assert self.async_filter is not None
-        tx = self.async_filter.get()
-        if tx is None:
-            return None
-        logging.debug('_get_tx %s', tx)
-        return tx
+        try:
+            logging.debug('_get_tx')
+            assert self.async_filter is not None
+            tx = self.async_filter.get()
+            if tx is None:
+                return None
+            logging.debug('_get_tx %s', tx)
+            return tx
+        except Exception:
+            logging.exception('_get_tx')
 
     def _get_tx_resp(self, request, tx):
         tx_out = tx.copy()
@@ -307,6 +318,7 @@ class RestHandler(Handler):
             return err
 
         etag = request.headers.get('if-none-match', None)
+        # can use cache here if leased/inflight?
         err, tx = await self._get_tx_async(request)
         if err is not None:
             return err
@@ -317,6 +329,7 @@ class RestHandler(Handler):
             return self._get_tx_resp(request, tx)
         elif (timeout is not None and etag is not None and
               tx.session_uri is not None):
+            # session_uri is not this instance?
             return self.response(
                 code=307, headers=[
                     ('location', urljoin(tx.session_uri,
@@ -324,16 +337,19 @@ class RestHandler(Handler):
 
         deadline = Deadline(timeout)
 
-        wait_result = await self.async_filter.wait_async(
+        # don't wait (or much shorter timeout) if not inflight?
+        wait_result, tx = await self.async_filter.wait_async(
             tx.version, deadline.deadline_left())
+        # logging.debug('%s %s', wait_result, tx)
         if not wait_result:
             return self.response(code=304, msg='unchanged',
                                  headers=[('etag', self._etag(tx.version))])
         # handoff here
-        err, tx = await self._get_tx_async(request)
-        if err is not None:
-            return err
+        #err, tx = await self._get_tx_async(request)
+        # if err is not None:
+        #     return err
         resp = self._get_tx_resp(request, tx)
+        assert resp.headers['etag'] != etag
         logging.debug('get_tx_async done')
         return resp
 
