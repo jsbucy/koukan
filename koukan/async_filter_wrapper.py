@@ -65,7 +65,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 Response(450, 'upstream timeout (AsyncFilterWrapper)'),
                 self.timeout_resp)
             # xxx but then does version need to change?
-        if tx:
+        if tx is not None:
             self._update_responses(tx)
             self.tx = tx.copy()
             return rv, tx
@@ -228,7 +228,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             dl = deadline.deadline_left()
             assert dl is not None
             rv, u = self.wait(version, dl)
-            #u = self.get()
+            if u is None:
+                u = self.get()
             assert u is not None
             upstream_tx = u
         tx_orig.version = None

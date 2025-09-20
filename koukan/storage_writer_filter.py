@@ -65,12 +65,13 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self._load()
             assert self.tx_cursor is not None
+        clone = False
         if self.tx_cursor.version == version:
-            rv = self.tx_cursor.wait(timeout, clone=True)
+            rv, clone = self.tx_cursor.wait(timeout, clone=True)
         else:
             rv = True
         tx_out = None
-        if rv:
+        if rv and clone:
             assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
             # xxx hack for parity with get()
@@ -84,12 +85,12 @@ class StorageWriterFilter(AsyncFilter):
         assert self.tx_cursor.version is not None
         logging.debug('%s %s', version, self.tx_cursor.version)
         if self.tx_cursor.version == version:
-            rv = await self.tx_cursor.wait_async(timeout, clone=True)
+            rv, clone = await self.tx_cursor.wait_async(timeout, clone=True)
         else:
             rv = True
 
         tx_out = None
-        if rv:
+        if rv and clone:
             assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
             # xxx hack for parity with get()
@@ -149,7 +150,7 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-            if self.tx_cursor.try_cache():
+            if self.tx_cursor.try_cache() and self.tx_cursor.tx is not None:
                 tx = self.tx_cursor.tx
                 # xxx hack
                 tx.version = self.tx_cursor.version

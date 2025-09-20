@@ -100,7 +100,10 @@ class Recipient:
         assert self.tx.version is not None
         assert self.filter is not None
         rv, t = self.filter.wait(self.tx.version, timeout)
-        #t = self.filter.get()
+        logging.debug('%s', (rv, t))
+        if t is None:
+            t = self.filter.get()
+            logging.debug(t)
         assert t is not None
         logging.debug(t)
         orig = self.tx.copy()

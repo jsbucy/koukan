@@ -110,10 +110,12 @@ class OutputHandler:
             empty_delta and  # no new downstream
             not self.tx.cancelled):
             # logging.debug('wait %d', self.cursor.version)
-            wait_result = self.cursor.wait(
+            wait_result, cloned = self.cursor.wait(
                 self.upstream_refresh - (now - self._last_upstream_refresh),
                 clone=True)
             # logging.debug('wait_result %s %d', wait_result, self.cursor.version)
+            if not cloned:
+                self.cursor.load()
             tx = self.cursor.tx
             assert tx is not None
             now = time.monotonic()

@@ -21,29 +21,29 @@ class VersionCacheTest(unittest.IsolatedAsyncioTestCase):
         version_cache = IdVersionMap()
         id_version = version_cache.insert_or_update(1, "rest_id", 1)
         self.assertTrue(id_version.wait(0, 0))
-        self.assertTrue(await id_version.wait_async(
+        self.assertEqual((True, False), await id_version.wait_async(
             version=0, timeout=0))
-        self.assertTrue(await id_version.wait_async(
+        self.assertEqual((True, False), await id_version.wait_async(
             version=0, timeout=0))
 
         def update(new_version):
             time.sleep(1)
             id_version.update(new_version)
         self.executor.submit(partial(update, 2))
-        self.assertFalse(await id_version.wait_async(
+        self.assertEqual((False, False), await id_version.wait_async(
             version=1, timeout=0.1))
 
-        self.assertTrue(await id_version.wait_async(
+        self.assertEqual((True, False), await id_version.wait_async(
             version=1, timeout=2))
 
         # no spurious wakeups
         self.executor.submit(partial(update, 2))
-        self.assertFalse(await id_version.wait_async(
+        self.assertEqual((False, False), await id_version.wait_async(
             version=2, timeout=2))
 
-        self.assertFalse(id_version.wait(2, 0))
+        self.assertEqual((False, False), id_version.wait(2, 0))
         id_version = version_cache.insert_or_update(1, "rest_id", 3)
-        self.assertTrue(id_version.wait(2, 0))
+        self.assertEqual((True, False), id_version.wait(2, 0))
 
 if __name__ == '__main__':
     unittest.main()

@@ -443,7 +443,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNotNone(reader.load(writer.db_id))
         self.assertIsNone(reader.tx.mail_from)
         self.assertFalse(bool(reader.tx.rcpt_to))
-        self.assertFalse(reader.wait(1))
+        self.assertEqual((False, False), reader.wait(1))
 
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),

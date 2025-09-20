@@ -137,7 +137,7 @@ class TransactionCursor:
         if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri.tx_body:
             clone.tx.body = clone.blobs[0]
             logging.debug(clone.tx.body)
-
+        logging.debug(clone.tx)
         idv = self.parent.tx_versions.insert_or_update(
             self.db_id, self.rest_id, self.version, clone)
         if self.id_version is None:
@@ -639,13 +639,13 @@ class TransactionCursor:
         attempt_id = None
         if row is not None:
             attempt_id = row[0]
+            assert self.tx is not None  # set above
+            self.tx.attempt_count = attempt_id
             resp_json = row[1]
             if resp_json is not None:
                 responses = TransactionMetadata.from_json(
                     resp_json, WhichJson.DB_ATTEMPT)
-                assert self.tx is not None  # set above
                 assert self.tx.merge_from(responses)
-                self.tx.attempt_count = row[0]
 
         logging.debug('TransactionCursor._load_db %d %s version=%d tx %s '
                       'attempt %s %s',
@@ -768,14 +768,15 @@ class TransactionCursor:
             return None
         return self.id_version.wait(0, 0, self)
 
-    def wait(self, timeout : Optional[float] = None, clone = False) -> bool:
+    def wait(self, timeout : Optional[float] = None, clone = False
+             ) -> Tuple[bool, bool]:
         assert self.id_version is not None
         assert self.version is not None
         return self.id_version.wait(
             self.version, timeout, self if clone else None)
 
     async def wait_async(self, timeout : Optional[float], clone = False
-                         ) -> bool:
+                         ) -> Tuple[bool, bool]:
         assert self.id_version is not None
         assert self.version is not None
         return await self.id_version.wait_async(
@@ -991,7 +992,7 @@ class BlobCursor(Blob, WritableBlob):
             else:
                 cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
                 logging.debug(self)
-                if cursor.try_cache():
+                if cursor.try_cache() and cursor.blobs:
                     for i,blob in enumerate(cursor.blobs):
                         if blob.db_id != self.db_id:
                             continue

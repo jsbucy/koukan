@@ -21,7 +21,7 @@ class IdVersion:
     async_waiters : List[Tuple[asyncio.AbstractEventLoop,asyncio.Future,int]]
 
     version : int
-    cursor : Optional[Any] = None
+    cursor : List[Any]
 
     def __init__(self, db_id : int, rest_id : str, version : int,
                  cursor : Optional[Any] = None):
@@ -31,9 +31,7 @@ class IdVersion:
         self.cv = Condition(self.lock)
 
         self.version = version
-        if cursor is not None:
-            assert cursor.version is not None
-            self.cursor = cursor.clone()
+        self.cursor = []
 
         self.async_waiters = []
 
@@ -41,17 +39,21 @@ class IdVersion:
         with self.lock:
             return self.version
 
-    def wait(self, version, timeout, tx_out : Optional[Any] = None):
+    def wait(self, version, timeout, tx_out : Optional[Any] = None
+             ) -> Tuple[bool, bool]:
         with self.lock:
+            cursor = self.cursor
             logging.debug('IdVersion.wait %d %d %d %d',
                           id(self), self.id, self.version, version)
             rv = self.cv.wait_for(lambda: self.version > version, timeout)
             logging.debug('IdVersion.wait done %d %d %d %s',
                           self.id, self.version, version, rv)
-            if self.cursor is not None and tx_out is not None:
-                assert self.cursor.version is not None
-                tx_out.copy_from(self.cursor)
-            return rv
+            clone = False
+            if cursor and tx_out is not None:
+                assert cursor[0].version is not None
+                tx_out.copy_from(cursor[0])
+                clone = True
+            return rv, clone
 
     def update(self, version, cursor : Optional[Any] = None):
         with self.lock:
@@ -62,8 +64,11 @@ class IdVersion:
             if version == self.version:
                 return
             self.version = version
+            cursor_clone = None
             if cursor is not None:
-                self.cursor = cursor.clone()
+                cursor_clone = cursor.clone()
+                self.cursor.append(cursor)
+                self.cursor = []
             self.cv.notify_all()
 
             def done(afut, version, cursor):
@@ -76,23 +81,23 @@ class IdVersion:
                 assert version > waiter_version
                 logging.debug('sched async wakeup done %s', self.cursor)
                 loop.call_soon_threadsafe(
-                    partial(done, future, version, self.cursor))
+                    partial(done, future, version, cursor_clone))
             self.async_waiters = []
 
 
     async def wait_async(self,
                          version : int,
                          timeout : Optional[float],
-                         cursor_out : Optional[Any] = None) -> bool:
+                         cursor_out : Optional[Any] = None
+                         ) -> Tuple[bool, bool]:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 
         with self.lock:
             if self.version > version:
-                logging.debug('cache version %d version %d', self.version, version)
-                if cursor_out and self.cursor:
-                    cursor_out.copy_from(self.cursor)
-                return True
+                logging.debug('cache version %d version %d',
+                              self.version, version)
+                return True, False
             self.async_waiters.append((loop, afut, version))
 
         try:
@@ -100,17 +105,19 @@ class IdVersion:
             logging.debug('new_version %d version %d', new_version, version)
             assert new_version > version
             logging.debug('%s %s', cursor, cursor_out)
+            clone = False
             if cursor is not None and cursor_out is not None:
                 assert cursor.version == new_version
                 cursor_out.copy_from(cursor)
-            return True
+                clone = True
+            return True, clone
         except TimeoutError:
             with self.lock:
                 for i,(loop,fut,version) in enumerate(self.async_waiters):
                     if fut == afut:
                         del self.async_waiters[i]
                         break
-            return False
+            return False, False
 
 
 class IdVersionMap:
