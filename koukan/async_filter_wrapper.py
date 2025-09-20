@@ -65,7 +65,11 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 Response(450, 'upstream timeout (AsyncFilterWrapper)'),
                 self.timeout_resp)
             # xxx but then does version need to change?
-        return rv, tx
+        if tx:
+            self._update_responses(tx)
+            self.tx = tx.copy()
+            return rv, tx
+        return rv, None
 
     async def wait_async(self, version : int, timeout : Optional[float]):
         raise NotImplementedError()

@@ -270,6 +270,7 @@ class RestHandler(Handler):
             return tx
         except Exception:
             logging.exception('_get_tx')
+            return None
 
     def _get_tx_resp(self, request, tx):
         tx_out = tx.copy()
@@ -338,16 +339,18 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
 
         # don't wait (or much shorter timeout) if not inflight?
+        version = tx.version
         wait_result, tx = await self.async_filter.wait_async(
-            tx.version, deadline.deadline_left())
+            version, deadline.deadline_left())
         # logging.debug('%s %s', wait_result, tx)
         if not wait_result:
             return self.response(code=304, msg='unchanged',
-                                 headers=[('etag', self._etag(tx.version))])
-        # handoff here
-        #err, tx = await self._get_tx_async(request)
-        # if err is not None:
-        #     return err
+                                 headers=[('etag', self._etag(version))])
+
+        if tx is None:
+            err, tx = await self._get_tx_async(request)
+            if err is not None:
+                return err
         resp = self._get_tx_resp(request, tx)
         assert resp.headers['etag'] != etag
         logging.debug('get_tx_async done')

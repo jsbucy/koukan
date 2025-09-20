@@ -71,6 +71,7 @@ class StorageWriterFilter(AsyncFilter):
             rv = True
         tx_out = None
         if rv:
+            assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
             # xxx hack for parity with get()
             tx_out.version = self.tx_cursor.version
@@ -89,6 +90,7 @@ class StorageWriterFilter(AsyncFilter):
 
         tx_out = None
         if rv:
+            assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
             # xxx hack for parity with get()
             tx_out.version = self.tx_cursor.version
@@ -143,10 +145,17 @@ class StorageWriterFilter(AsyncFilter):
             self.cv.notify_all()
 
     def _load(self):
+        tx = None
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-        tx = self.tx_cursor.load()
+            if self.tx_cursor.try_cache():
+                tx = self.tx_cursor.tx
+                # xxx hack
+                tx.version = self.tx_cursor.version
+                logging.debug(tx)
+        if tx is None:
+            tx = self.tx_cursor.load()
         if tx is None:  # 404 e.g. after GC
             return
         if self.http_host is None:
@@ -236,8 +245,10 @@ class StorageWriterFilter(AsyncFilter):
             # caller handles VersionConflictException
             self.tx_cursor.write_envelope(downstream_delta)
 
-        logging.debug('StorageWriterFilter.update %s result %s input tx %s',
-                      self.rest_id, self.tx_cursor.tx, tx)
+        logging.debug('StorageWriterFilter.update %s result %s',
+                      self.rest_id, self.tx_cursor.tx)
+
+        logging.debug('input tx %s', tx)
 
         version = TransactionMetadata(version=self.tx_cursor.version)
 

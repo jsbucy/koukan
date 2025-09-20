@@ -116,15 +116,20 @@ class StorageWriterFilterTest(unittest.TestCase):
             rcpt_to = [Mailbox('bob')])
         orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
         orig_tx_cursor.load(start_attempt=True)
+        prev = orig_tx_cursor.tx.copy()
+        tx = orig_tx_cursor.tx
+        tx.mail_response = Response(550)
         orig_tx_cursor.write_envelope(
-            TransactionMetadata(mail_response=Response(550)),
+            prev.delta(tx),
             finalize_attempt=True,
             final_attempt_reason='upstream permfail')
 
         filter = StorageWriterFilter(self.storage, rest_id='tx_rest_id')
-        filter.get()
-        cancel = TransactionMetadata(cancelled=True)
-        filter.update(cancel, cancel.copy())
+        tx = filter.get()
+        self.assertIsNotNone(tx.final_attempt_reason)
+        prev = tx.copy()
+        tx.cancelled = True
+        filter.update(tx, prev.delta(tx))
 
         orig_tx_cursor.load()
         self.assertIsNone(orig_tx_cursor.tx.cancelled)

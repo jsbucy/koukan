@@ -141,13 +141,13 @@ class SyncFilterAdapter(AsyncFilter):
     def version(self):
         return self.id_version.get()
 
-    def wait(self, version, timeout) -> bool:
+    def wait(self, version, timeout):
         return self.id_version.wait(
-            version=version, timeout=timeout)
+            version=version, timeout=timeout), None
 
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, version, timeout):
         return await self.id_version.wait_async(
-            version=version, timeout=timeout)
+            version=version, timeout=timeout), None
 
     def _update(self):
         with self.mu:

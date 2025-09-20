@@ -102,6 +102,7 @@ class Recipient:
         rv, t = self.filter.wait(self.tx.version, timeout)
         #t = self.filter.get()
         assert t is not None
+        logging.debug(t)
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:

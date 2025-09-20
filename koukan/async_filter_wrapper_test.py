@@ -47,13 +47,15 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         self.assertEqual(1, wrapper.version())
 
         for i in range(0,2):
-            self.assertTrue(wrapper.wait(1, 1))
+            rv, upstream_tx = wrapper.wait(1, 1)
+            self.assertTrue(rv)
             self.assertEqual(1, wrapper.version())
-            upstream_tx = wrapper.get()
+            #upstream_tx = wrapper.get()
             self.assertIsNone(upstream_tx.mail_response)
 
-        self.assertTrue(wrapper.wait(1, 1))
-        upstream_tx = wrapper.get()
+        rv, upstream_tx = wrapper.wait(1, 1)
+        self.assertTrue(rv)
+        #upstream_tx = wrapper.get()
         # xxx fidelity problem with mock, version updated by get, not wait
         self.assertEqual(2, wrapper.version())
         self.assertEqual(250, upstream_tx.mail_response.code)
@@ -92,7 +94,8 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         upstream_delta = wrapper.update(tx, tx.copy())
         self.assertEqual(1, tx.version)
 
-        self.assertFalse(wrapper.wait(1, 1))
+        rv, tx = wrapper.wait(1, 1)
+        self.assertFalse(rv)
         async_filter.expect_get(
             TransactionMetadata(mail_from=Mailbox('alice'), version=2))
 
@@ -124,7 +127,8 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         upstream_delta = wrapper.update(tx, tx.copy())
         self.assertEqual(1, tx.version)
 
-        self.assertFalse(wrapper.wait(1, 1))
+        rv, tx = wrapper.wait(1, 1)
+        self.assertFalse(rv)
         async_filter.expect_get(
             TransactionMetadata(mail_from=Mailbox('alice'), version=2))
 
@@ -188,8 +192,9 @@ class AsyncFilterWrapperTest(unittest.TestCase):
         async_filter.expect_update(exp_sf)
         wrapper.update(tx, tx.copy())
         logging.debug(tx)
-        self.assertTrue(wrapper.wait(wrapper.version(), 1))
-        tx = wrapper.get()
+        rv, tx = wrapper.wait(wrapper.version(), 1)
+        self.assertTrue(rv)
+        #tx = wrapper.get()
         logging.debug(tx)
 
     def test_sync_smoke(self):

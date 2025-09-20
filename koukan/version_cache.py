@@ -54,8 +54,6 @@ class IdVersion:
             return rv
 
     def update(self, version, cursor : Optional[Any] = None):
-        assert cursor is not None
-        assert cursor.version is not None
         with self.lock:
             logging.debug('IdVersion.update %d id=%d version=%d new %d %s',
                           id(self), self.id, self.version, version, cursor)

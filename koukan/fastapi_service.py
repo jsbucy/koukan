@@ -48,6 +48,7 @@ def create_app(handler_factory : HandlerFactory):
             return await handler.get_tx_async(request)
         except Exception:
             logging.exception('get_transaction')
+            return FastApiResponse(500)
 
     # body stream
     @app.put('/transactions/{tx_rest_id}/body')

@@ -714,7 +714,7 @@ class TransactionMetadata:
                 (old_v is not None and new_v is None)):
                 continue
             if (old_v is not None) and (new_v is None):
-               logging.debug('tx.delta invalid del %s', f)
+               logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
                #raise ValueError()
                return None  # invalid
             if (old_v is None) and (new_v is not None):
