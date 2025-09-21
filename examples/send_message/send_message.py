@@ -51,6 +51,9 @@ class Sender:
                  message_builder : Optional[dict] = None,
                  body_filename : Optional[str] = None):
         self.session = requests.Session()
+        # TODO this should install requests-cache to cache redirects
+        # in cluster setups
+        # or port to httpx and use hishel
         self.session.verify = 'localhost.crt'
         self.mail_from = mail_from
         self.message_builder = message_builder

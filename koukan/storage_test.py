@@ -620,6 +620,35 @@ class StorageTestBase(unittest.TestCase):
         logging.warning('done %f %f', total, iters/total)
 
 
+    def disabled_test_micro(self):
+        upstream = self.s.get_transaction_cursor()
+        upstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host',
+                mail_from = Mailbox('alice'),
+                rcpt_to = [Mailbox('bob')]),
+            create_leased=True)
+        self.assertIsNotNone(upstream.load(start_attempt=True))
+        upstream.write_envelope(TransactionMetadata(
+            mail_response=Response(201),
+            rcpt_response=[Response(202)]))
+
+        iters = 10
+
+        start = time.monotonic()
+        for i in range(0, iters):
+            downstream = self.s.get_transaction_cursor()
+            downstream.load(rest_id='tx_rest_id')
+        logging.debug('%f', time.monotonic() - start)
+
+        start = time.monotonic()
+        for i in range(0, iters):
+            downstream = self.s.get_transaction_cursor(rest_id='tx_rest_id'))
+            logging.debug(downstream.check()
+        duration = time.monotonic() - start
+        logging.debug('%f %f', duration, duration/iters)
+
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()

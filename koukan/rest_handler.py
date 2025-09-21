@@ -183,6 +183,10 @@ class RestHandler(Handler):
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], Optional[HttpResponse]]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
+        if 'if-none-match' not in req.headers:
+            #self.response(code=400, msg='need etag to wait')
+            return None, None
+
         if not (timeout_header := req.headers.get('request-timeout', None)):
             return MAX_TIMEOUT, None
         timeout = None
@@ -285,8 +289,37 @@ class RestHandler(Handler):
             self._tx_rest_id, etag, cached_version)
         return self._etag(cached_version) == etag
 
+    # -> version, leased here?, other session
+    def _check_tx(self) -> Optional[AsyncFilter.CheckTxResult]:
+        return self.async_filter.check()
+
+    async def _check_tx_async(
+            self
+    ) -> Tuple[Optional[FastApiResponse], Optional[AsyncFilter.CheckTxResult]]:
+        logging.debug('_check_tx_async')
+        cfut = self.executor.submit(self._check_tx)
+        if cfut is None:
+            return self.response(
+                code=500, msg='_check_tx_async schedule read'), None
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(
+                code=500, msg='get tx async read'), None
+        if not afut.done():
+            return self.response(
+                code=500, msg='get tx async read fut done'), None
+        if afut.result() is None:
+            return self.response(code=404, msg='unknown tx'), None
+        logging.debug('_get_tx_async done')
+        return None, afut.result()
+
     async def _get_tx_async(
-            self, request
+            self
     ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
         logging.debug('_get_tx_async')
         cfut = self.executor.submit(self._get_tx)
@@ -311,44 +344,60 @@ class RestHandler(Handler):
         return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
-        if self.async_filter is None:
-            return self.response(code=404, msg='transaction not found')
+        assert self.async_filter is not None
 
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
 
         etag = request.headers.get('if-none-match', None)
-        # can use cache here if leased/inflight?
-        err, tx = await self._get_tx_async(request)
-        if err is not None:
-            return err
-        assert tx is not None
-        assert tx.version is not None
-        if (timeout is None or etag is None or
-            not self._check_etag(etag, tx.version)):
-            return self._get_tx_resp(request, tx)
-        elif (timeout is not None and etag is not None and
-              tx.session_uri is not None):
-            # session_uri is not this instance?
+        check_result = self.async_filter.check_cache()
+        logging.debug(check_result)
+        if check_result is None:
+            err, check_result = await self._check_tx_async()
+            logging.debug(err)
+            logging.debug(check_result)
+            if err:
+                return err
+        version, tx, is_local, other = check_result
+        if other is not None:
+            # this should be 308 with the understanding that the
+            # client always starts from the uri they got back from the
+            # initial create but creates a new httpx.Client w/redirect caching
+            # for each session of waiting on the LRO?
             return self.response(
                 code=307, headers=[
-                    ('location', urljoin(tx.session_uri,
-                                         make_tx_uri(self._tx_rest_id)))])
+                    ('location',
+                     urljoin(other, make_tx_uri(self._tx_rest_id)))])
+
+        fresh_etag = etag is not None and self._check_etag(etag, version)
+        if timeout is None or not is_local or not fresh_etag:
+            if fresh_etag:
+                return self.response(code=304, msg='unchanged',
+                                     headers=[('etag', self._etag(version))])
+            # do a full read every time with no etag
+            if tx is None or etag is None:
+                err, tx = await self._get_tx_async()
+                if err is not None:
+                    return err
+            return self._get_tx_resp(request, tx)
+
+        assert is_local
+        assert timeout is not None
+        assert fresh_etag
 
         deadline = Deadline(timeout)
 
-        # don't wait (or much shorter timeout) if not inflight?
-        version = tx.version
+        #version = tx.version
         wait_result, tx = await self.async_filter.wait_async(
             version, deadline.deadline_left())
-        # logging.debug('%s %s', wait_result, tx)
+
         if not wait_result:
             return self.response(code=304, msg='unchanged',
-                                 headers=[('etag', self._etag(version))])
+                                 headers=[('etag', etag)])
 
         if tx is None:
-            err, tx = await self._get_tx_async(request)
+            err, tx = await self._get_tx_async()
             if err is not None:
                 return err
         resp = self._get_tx_resp(request, tx)

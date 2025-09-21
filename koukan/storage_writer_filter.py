@@ -296,3 +296,27 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.get_blob_for_append(
             BlobUri(tx_id=self.rest_id, blob=blob_rest_id,
                     tx_body=tx_body if tx_body else False))
+
+
+    def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
+        if self.tx_cursor is None:
+            self.tx_cursor = self.storage.get_transaction_cursor(
+                rest_id=self.rest_id)
+
+        if not self.tx_cursor.try_cache():
+            return None
+        assert self.tx_cursor.version is not None
+        return (self.tx_cursor.version, self.tx_cursor.tx, True, None)
+
+    def check(self) -> Optional[AsyncFilter.CheckTxResult]:
+        if self.tx_cursor is None:
+            self.tx_cursor = self.storage.get_transaction_cursor(
+                rest_id=self.rest_id)
+
+        res = self.tx_cursor.check()
+        logging.debug('%s %s', self.rest_id, res)
+        if res is None:
+            return None
+        leased, other_session = res
+        assert self.tx_cursor.version is not None
+        return (self.tx_cursor.version, None, leased, other_session)

@@ -822,7 +822,7 @@ class TransactionMetadata:
             return None
         return self.body_blob()
 
-# interface from rest handler to StorageWriterFilter
+# interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not
 # program execution.
 class AsyncFilter(ABC):
@@ -875,3 +875,12 @@ class AsyncFilter(ABC):
         pass
 
 
+    CheckTxResult = Tuple[int, Optional[TransactionMetadata], bool, Optional[str]]
+
+    @abstractmethod
+    def check_cache(self) -> Optional[CheckTxResult]:
+        pass
+
+    @abstractmethod
+    def check(self) -> Optional[CheckTxResult]:
+        pass

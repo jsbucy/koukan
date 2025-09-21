@@ -21,17 +21,18 @@ class IdVersion:
     async_waiters : List[Tuple[asyncio.AbstractEventLoop,asyncio.Future,int]]
 
     version : int
-    cursor : List[Any]
+    cursor : Optional[Any] = None
+    leased = False
 
     def __init__(self, db_id : int, rest_id : str, version : int,
-                 cursor : Optional[Any] = None):
+                 cursor : Optional[Any] = None,
+                 leased = False):
         self.id = db_id
         self.rest_id = rest_id
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
         self.version = version
-        self.cursor = []
 
         self.async_waiters = []
 
@@ -42,33 +43,34 @@ class IdVersion:
     def wait(self, version, timeout, tx_out : Optional[Any] = None
              ) -> Tuple[bool, bool]:
         with self.lock:
-            cursor = self.cursor
             logging.debug('IdVersion.wait %d %d %d %d',
                           id(self), self.id, self.version, version)
             rv = self.cv.wait_for(lambda: self.version > version, timeout)
             logging.debug('IdVersion.wait done %d %d %d %s',
                           self.id, self.version, version, rv)
             clone = False
-            if cursor and tx_out is not None:
-                assert cursor[0].version is not None
-                tx_out.copy_from(cursor[0])
+            if self.cursor and self.leased and tx_out is not None:
+                assert self.cursor.version is not None
+                tx_out.copy_from(self.cursor)
                 clone = True
             return rv, clone
 
-    def update(self, version, cursor : Optional[Any] = None):
+    def update(self, version, cursor : Optional[Any] = None,
+               leased : Optional[bool] = False):
         with self.lock:
-            logging.debug('IdVersion.update %d id=%d version=%d new %d %s',
-                          id(self), self.id, self.version, version, cursor)
+            logging.debug('IdVersion.update %d id=%d version=%d new %d %s '
+                          'self.leased=%s leased=%s',
+                          id(self), self.id, self.version, version, cursor,
+                          self.leased, leased)
             if version < self.version:
                 raise VersionConflictException()
             if version == self.version:
                 return
             self.version = version
-            cursor_clone = None
+            if leased is not None:
+                self.leased = leased
             if cursor is not None:
-                cursor_clone = cursor.clone()
-                self.cursor.append(cursor)
-                self.cursor = []
+                self.cursor = cursor
             self.cv.notify_all()
 
             def done(afut, version, cursor):
@@ -81,7 +83,8 @@ class IdVersion:
                 assert version > waiter_version
                 logging.debug('sched async wakeup done %s', self.cursor)
                 loop.call_soon_threadsafe(
-                    partial(done, future, version, cursor_clone))
+                    partial(done, future, version,
+                            self.cursor if self.leased else None))
             self.async_waiters = []
 
 
@@ -122,6 +125,15 @@ class IdVersion:
 
 class IdVersionMap:
     lock : Lock
+    # TODO I think this wants to become a more conventional ttl/lru
+    # cache now since we want to be able to read the final tx result
+    # from the cache after the OutputHandler has finished and it will
+    # probably become unreferenced in the meantime. The minimum
+    # interval between a tx being leased in different replicas is at
+    # least the minimum of - min retry time ~60s
+    # retry_params.min_attempt_time - session_ttl 10x
+    # session_refresh_interval ~30s
+
     # db_id -> IdVersion
     id_version_map : WeakValueDictionary[int, IdVersion]
     # rest_id -> IdVersion
@@ -133,18 +145,19 @@ class IdVersionMap:
         self.lock = Lock()
 
     def insert_or_update(self, db_id : int, rest_id : str, version : int,
-                         cursor : Optional[Any] = None
+                         cursor : Optional[Any] = None,
+                         leased : Optional[bool] = None
                          ) -> IdVersion:
         logging.debug('IdVersionMap.insert_or_update %d %s %d',
                       db_id, rest_id, version)
         with self.lock:
             id_version = self.id_version_map.get(db_id, None)
             if id_version is None:
-                id_version = IdVersion(db_id, rest_id, version, cursor)
+                id_version = IdVersion(db_id, rest_id, version, cursor, leased)
                 self.id_version_map[db_id] = id_version
                 self.rest_id_map[rest_id] = id_version
             else:
-                id_version.update(version, cursor)
+                id_version.update(version, cursor, leased)
             return id_version
 
     def get(self, db_id : Optional[int] = None, rest_id : Optional[str] = None

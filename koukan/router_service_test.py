@@ -1097,7 +1097,7 @@ class RouterServiceTest(unittest.TestCase):
         micro()
         logging.debug('real')
         start = time.monotonic()
-        iters=100
+        iters=10
         para=1
         def run_micro():
             for i in range(0,int(iters/para)):
@@ -1126,7 +1126,7 @@ class RouterServiceTest(unittest.TestCase):
 
     def disabled_test_micro(self):
         self._test_micro(self._rest_smoke_micro)
-        self._test_micro(self._exploder_micro)
+        #self._test_micro(self._exploder_micro)
 
 
     def test_notification_retry_timeout(self):

@@ -129,17 +129,18 @@ class TransactionCursor:
         self.session_uri = rhs.session_uri
         self.blobs = [b.clone() for b in rhs.blobs] if rhs.blobs else None
 
-    def _update_version_cache(self):
+    def _update_version_cache(self, leased : Optional[bool]):
         assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
         clone = self.clone()
-        clone.tx.version = None  # XXX
+        if clone.tx is not None:
+            clone.tx.version = None  # XXX
 
-        if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri.tx_body:
-            clone.tx.body = clone.blobs[0]
-            logging.debug(clone.tx.body)
-        logging.debug(clone.tx)
+            if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri is not None and clone.blobs[0].blob_uri.tx_body:
+                clone.tx.body = clone.blobs[0]
+                logging.debug(clone.tx.body)
+            logging.debug(clone.tx)
         idv = self.parent.tx_versions.insert_or_update(
-            self.db_id, self.rest_id, self.version, clone)
+            self.db_id, self.rest_id, self.version, clone, leased)
         if self.id_version is None:
             self.id_version = idv
         else:
@@ -180,7 +181,7 @@ class TransactionCursor:
             self._write(db_tx, tx)
             self.tx.rest_id = rest_id
 
-        self._update_version_cache()
+        self._update_version_cache(True if create_leased else None)
         self.created = True
 
     def _reuse_blob(self, db_tx : Connection, blob_uris : List[BlobUri]
@@ -269,7 +270,7 @@ class TransactionCursor:
                         notification_done=notification_done,
                         ping_tx=ping_tx)
         logging.debug(self.tx)
-        self._update_version_cache()
+        self._update_version_cache(leased = True if finalize_attempt else None)
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata
                           ) -> bool:  # blobs done
@@ -506,6 +507,29 @@ class TransactionCursor:
 
         return True
 
+    # loads version, session only
+    def check(self):
+        assert self.rest_id is not None
+        with self.parent.begin_transaction() as db_tx:
+            sel = select(self.parent.tx_table.c.id,
+                         self.parent.tx_table.c.version,
+                         self.parent.tx_table.c.inflight_session_id,
+                         self.parent.session_table.c.uri
+                         ).select_from(
+                             join(self.parent.tx_table,
+                                  self.parent.session_table,
+                                  isouter = True)
+                         ).where(self.parent.tx_table.c.rest_id == self.rest_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            if row is None:
+                return None
+            self.db_id = row[0]
+            self.version = row[1]
+            session = row[3]
+            leased = session == self.parent.session_uri
+            return leased, None if leased else session
+
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None,
              start_attempt : bool = False) -> Optional[TransactionMetadata]:
@@ -538,7 +562,7 @@ class TransactionCursor:
             rv = self._load_and_start_attempt_db(
                 db_tx, db_id, rest_id, start_attempt)
         if rv:
-            self._update_version_cache()
+            self._update_version_cache(leased = True if start_attempt else None)
         return rv
 
     def _load_and_start_attempt_db(
@@ -625,7 +649,7 @@ class TransactionCursor:
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
         self.tx.rest_id = self.rest_id
 
-        # TODO cross-join this with the tx read to get it all in one round-trip?
+        # TODO join this with the tx read to get it all in one round-trip?
 
         # XXX if in_attempt, query on attempt_id?? (cf assert below)
         sel = (select(self.parent.attempt_table.c.attempt_id,
@@ -658,6 +682,7 @@ class TransactionCursor:
             assert attempt_id == self.attempt_id
 
         if session_live and session_id != self.parent.session_id:
+            # TODO join onto previous query
             sel = select(self.parent.session_table.c.uri).where(
                 self.parent.session_table.c.id == session_id)
             res = db_tx.execute(sel)
@@ -1004,7 +1029,7 @@ class BlobCursor(Blob, WritableBlob):
 
 
         if cursor is not None:
-            cursor._update_version_cache()
+            cursor._update_version_cache(leased=None)
             self._session_uri = cursor.session_uri
         return True, self.length, self._content_length
 
@@ -1264,7 +1289,7 @@ class Storage():
             # finalized, this transaction may be crashing the system
             # -> quarantine
 
-        cursor._update_version_cache()
+        cursor._update_version_cache(leased=True)
         return cursor
 
     def _gc(self, db_tx : Connection, ttl : timedelta) -> Tuple[int, int]:

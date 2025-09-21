@@ -18,9 +18,13 @@ from koukan.storage_schema import VersionConflictException
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
                              Optional[TransactionMetadata]]
 GetExpectation = Callable[[],Optional[TransactionMetadata]]
+CheckExpectation = Callable[[], Optional[AsyncFilter.CheckTxResult]]
+
 class MockAsyncFilter(AsyncFilter):
     update_expectation : List[UpdateExpectation]
     get_expectation : List[GetExpectation]
+    check_expectation : List[CheckExpectation]
+    check_cache_expectation : List[CheckExpectation]
     body : Optional[WritableBlob] = None
     blob : Dict[str, WritableBlob]
     _version : Optional[int] = None
@@ -29,6 +33,8 @@ class MockAsyncFilter(AsyncFilter):
     def __init__(self, incremental=None):
         self.update_expectation = []
         self.get_expectation = []
+        self.check_expectation = []
+        self.check_cache_expectation = []
         self.blob = {}
         self._incremental = incremental
 
@@ -88,6 +94,18 @@ class MockAsyncFilter(AsyncFilter):
         if self._incremental is None:
             raise NotImplementedError()
         return self._incremental
+
+    def _check(self, exp):
+        if not exp:
+            return None
+        cb = exp.pop(0)
+        return cb()
+
+    def check_cache(self):
+        return self._check(self.check_cache_expectation)
+
+    def check(self):
+        return self._check(self.check_expectation)
 
 Expectation = Callable[[TransactionMetadata,TransactionMetadata],
                        Optional[TransactionMetadata]]

@@ -27,6 +27,8 @@ from koukan.executor import Executor
 from koukan.storage_schema import VersionConflictException
 
 class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
+    uri = None
+
     def setUp(self):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=5)
 
@@ -50,8 +52,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.create_tx(req, req_json={}))
+        # resp = await handler.handle_async(
+        #     req, lambda: handler.create_tx(req, req_json={}))
+        resp = handler.create_tx(req, req_json={})
+        logging.debug(resp.body)
+        logging.debug(resp.headers)
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.body, b'{}')
         self.assertEqual(resp.headers['location'], '/transactions/rest_id')
@@ -77,31 +82,47 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('if-match', resp.headers['etag']),
                      ('request-timeout', '1')])}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.patch_tx(
-                req, req_json={"mail_from": {"m": "alice"}}))
+        #resp = await handler.handle_async(
+        #    req, lambda:
+        resp = handler.patch_tx(
+            req, req_json={"mail_from": {"m": "alice"}})
         logging.debug('test_create_tx patch tx resp %s', resp.body)
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
 
 
-        endpoint.expect_get(TransactionMetadata(
+        # endpoint.expect_get(TransactionMetadata(
+        #     host='msa',
+        #     mail_from=Mailbox('alice'),
+        #     version=2))
+        # endpoint.expect_get(TransactionMetadata(
+        #     host='msa',
+        #     mail_from=Mailbox('alice'),
+        #     mail_response=Response(201),
+        #     version=3))
+
+        tx2 = TransactionMetadata(
             host='msa',
             mail_from=Mailbox('alice'),
-            version=2))
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            version=3))
+            version=2)
+        tx3 = tx2.copy()
+        tx3.mail_response = Response(201)
+        tx3.version += 1
+
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
                               executor=self.executor)
 
         scope = {'type': 'http',
                  'headers': self._headers(
-                     [('if-none-match', '2'),
+                     [('if-none-match', resp.headers['etag']),
                       ('request-timeout', '1')])}
         req = FastApiRequest(scope)
+
+        # check_cache
+        endpoint.check_cache_expectation.append(
+            lambda: (tx2.version, tx2, True, None))
+        endpoint.expect_get(tx3)
 
         resp = await handler.get_tx_async(req)
         self.assertEqual(resp.status_code, 200)
@@ -110,12 +131,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'mail_response': {'code': 201, 'message': 'ok'}
         })
 
-
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            version=3))
+        endpoint.expect_get(tx3)
         def exp_rcpt(tx, tx_delta):
             self.assertEqual(1, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
@@ -132,9 +148,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                  'headers': self._headers([
                      ('if-match', resp.headers['etag'])])}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.patch_tx(
-                req, req_json={"rcpt_to": [{"m": "bob"}]}))
+        #resp = await handler.handle_async(
+        #  req, lambda:
+        resp = handler.patch_tx(
+                req, req_json={"rcpt_to": [{"m": "bob"}]})
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
         logging.debug('test_create_tx patch tx resp %s', resp.body)
         self.assertEqual(json.loads(resp.body), {
@@ -143,18 +161,19 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_to': [{}]
         })
 
+        tx4 = tx3.copy()
+        tx4.rcpt_to = [Mailbox('bob')]
+        tx4.rcpt_response = [Response(202)]
+        tx4.version = 4
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob')],
-            rcpt_response=[Response(202)],
-            version=4))
+        # no timeout/etag: point read
+        endpoint.check_cache_expectation.append(lambda: (4, None, True, None))
+        endpoint.expect_get(tx4)
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
         resp = await handler.get_tx_async(req)
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
@@ -163,14 +182,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}]
         })
 
-
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob')],
-            rcpt_response=[Response(202)],
-            version=4))
+        endpoint.expect_get(tx4)
         def exp_rcpt2(tx, tx_delta):
             self.assertEqual(2, len(tx.rcpt_to))
             upstream_delta = TransactionMetadata(
@@ -199,14 +211,14 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}]
         })
 
+        tx6 = tx4.copy()
+        tx6.rcpt_to=[Mailbox('bob'), Mailbox('bob2')]
+        tx6.rcpt_response=[Response(202), Response(203)]
+        tx6.version=6
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            version=6))
+        endpoint.check_cache_expectation.append(
+            lambda: (5, None, True, None))
+        endpoint.expect_get(tx6)
 
         scope = {'type': 'http',
                  'headers': []}
@@ -252,14 +264,12 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(body), range.stop)
         self.assertEqual(len(body), range.length)
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            body=InlineBlob(body, last=True),
-            version=7))
+        tx7 = tx6.copy()
+        tx7.body=InlineBlob(body, last=True)
+        tx7.version=7
+        endpoint.check_cache_expectation.append(
+            lambda: (6, None, True, None))
+        endpoint.expect_get(tx7)
 
         scope = {'type': 'http',
                  'headers': []}
@@ -274,15 +284,12 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                               {'code': 203, 'message': 'ok'}],
         })
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            body=InlineBlob(body, last=True),
-            data_response=Response(204),
-            version=8))
+        tx8 = tx7.copy()
+        tx8.data_response=Response(204)
+        tx8.version=8
+        endpoint.check_cache_expectation.append(
+            lambda: (7, None, True, None))
+        endpoint.expect_get(tx8)
 
         scope = {'type': 'http',
                  'headers': []}
