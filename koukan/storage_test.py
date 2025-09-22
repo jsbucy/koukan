@@ -644,8 +644,8 @@ class StorageTestBase(unittest.TestCase):
 
         start = time.monotonic()
         for i in range(0, iters):
-            downstream = self.s.get_transaction_cursor(rest_id='tx_rest_id'))
-            logging.debug(downstream.check()
+            downstream = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+            logging.debug(downstream.check())
         duration = time.monotonic() - start
         logging.debug('%f %f', duration, duration/iters)
 

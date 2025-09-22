@@ -302,11 +302,18 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-
-        if not self.tx_cursor.try_cache():
+        r = self.tx_cursor.try_cache()
+        if r is None:
             return None
+        rr, cloned = r
+        if not rr or not cloned:
+            return None
+        assert self.tx_cursor.tx is not None
         assert self.tx_cursor.version is not None
-        return (self.tx_cursor.version, self.tx_cursor.tx, True, None)
+        tx = self.tx_cursor.tx.copy()
+        # xxx parity with get()
+        tx.version = self.tx_cursor.version
+        return (self.tx_cursor.version, tx, True, None)
 
     def check(self) -> Optional[AsyncFilter.CheckTxResult]:
         if self.tx_cursor is None:

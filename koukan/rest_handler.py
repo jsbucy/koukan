@@ -291,6 +291,7 @@ class RestHandler(Handler):
 
     # -> version, leased here?, other session
     def _check_tx(self) -> Optional[AsyncFilter.CheckTxResult]:
+        assert self.async_filter is not None
         return self.async_filter.check()
 
     async def _check_tx_async(
@@ -359,6 +360,8 @@ class RestHandler(Handler):
             logging.debug(check_result)
             if err:
                 return err
+            if check_result is None:
+                return self.response(code=500, msg='check tx failed')
         version, tx, is_local, other = check_result
         if other is not None:
             # this should be 308 with the understanding that the
@@ -384,6 +387,7 @@ class RestHandler(Handler):
 
         assert is_local
         assert timeout is not None
+        assert etag is not None
         assert fresh_etag
 
         deadline = Deadline(timeout)

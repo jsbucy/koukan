@@ -644,10 +644,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                                            ('request-timeout', '5')])}
         req = FastApiRequest(scope)
 
-        tx = TransactionMetadata(rest_id='rest_id',
-                                 version=1)
-        tx.session_uri = session_uri
-        endpoint.expect_get(tx)
+        endpoint.check_cache_expectation.append(
+            lambda: None)
+        endpoint.check_expectation.append(
+            lambda: (1, None, False, session_uri))
 
         return await handler.get_tx_async(req)
 

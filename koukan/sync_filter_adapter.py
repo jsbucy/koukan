@@ -295,3 +295,14 @@ class SyncFilterAdapter(AsyncFilter):
         # BlobWriter.q to self.body
         tx_delta = TransactionMetadata()
         self.update(tx, tx_delta)
+
+    def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
+        tx = self.get()
+        if tx is None:
+            return None
+        assert tx.version is not None
+        return tx.version, tx, True, None
+
+
+    def check(self) -> Optional[AsyncFilter.CheckTxResult]:
+        raise NotImplementedError()

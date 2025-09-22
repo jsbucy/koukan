@@ -113,7 +113,7 @@ class OutputHandler:
             wait_result, cloned = self.cursor.wait(
                 self.upstream_refresh - (now - self._last_upstream_refresh),
                 clone=True)
-            # logging.debug('wait_result %s %d', wait_result, self.cursor.version)
+            logging.debug('wait_result %s cloned %s version %d', wait_result, cloned, self.cursor.version)
             if not cloned:
                 self.cursor.load()
             tx = self.cursor.tx

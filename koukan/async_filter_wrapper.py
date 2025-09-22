@@ -236,3 +236,10 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         upstream_delta = tx_orig.delta(upstream_tx)
         self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()
+
+
+    def check_cache(self):
+        raise NotImplementedError()
+
+    def check(self):
+        raise NotImplementedError()

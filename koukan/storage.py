@@ -785,6 +785,7 @@ class TransactionCursor:
             res = db_tx.execute(ins)
             assert (row := res.fetchone())
             self.attempt_id = row[0]
+        # this is to ensure the cursor/tx is consistent with the db??
         self._load_db(db_tx, db_id=db_id)
         self.in_attempt = True
 
