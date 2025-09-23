@@ -276,9 +276,7 @@ class Service:
             logging.info('RouterService._handle_new_tx writer %s, '
                          'rest_id is None, downstream error?', writer)
             return
-        # TODO the load should ~always be cached and start_attempt
-        # should be via write_envelope()?
-        tx_cursor.load(start_attempt=True)
+        tx_cursor.start_attempt()
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         self.handle_tx(tx_cursor, chain, endpoint_yaml)
 

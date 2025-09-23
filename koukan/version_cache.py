@@ -35,6 +35,11 @@ class IdVersion:
         self.version = version
 
         self.async_waiters = []
+        self.leased = leased
+        assert self.leased is True or cursor is None
+        if cursor is not None:
+            assert cursor.version == version
+            self.cursor = cursor
 
     def get(self):
         with self.lock:
@@ -46,11 +51,15 @@ class IdVersion:
             logging.debug('IdVersion.wait %d %d %d %d',
                           id(self), self.id, self.version, version)
             rv = self.cv.wait_for(lambda: self.version > version, timeout)
-            logging.debug('IdVersion.wait done %d %d %d %s',
-                          self.id, self.version, version, rv)
+            logging.debug('IdVersion.wait done id=%d new=%d arg=%d rv=%s leased=%s cursor=%s',
+                          self.id, self.version, version, rv, self.leased, self.cursor)
             clone = False
+            # the update that sets leased to false should still be
+            # able to reuse the tx?
             if self.cursor and self.leased and tx_out is not None:
                 assert self.cursor.version is not None
+                assert self.cursor.version == self.version
+                assert self.cursor.tx is None or self.cursor.tx.version is None
                 tx_out.copy_from(self.cursor)
                 clone = True
             return rv, clone
@@ -70,7 +79,11 @@ class IdVersion:
             if leased is not None:
                 self.leased = leased
             if cursor is not None:
+                assert cursor.version == version
+                assert cursor.tx is None or cursor.tx.version is None
                 self.cursor = cursor
+            else:
+                self.cursor = None
             self.cv.notify_all()
 
             def done(afut, version, cursor):

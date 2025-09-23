@@ -59,10 +59,11 @@ class StorageTestBase(unittest.TestCase):
         del downstream
 
         buggy = self.s.get_transaction_cursor()
-        self.assertIsNone(
-            buggy.load(rest_id='tx_rest_id', start_attempt=True))
+        buggy.load(rest_id='tx_rest_id')
+        with self.assertRaises(Exception):
+            buggy.start_attempt()
 
-        self.assertIsNotNone(upstream.load(start_attempt=True))
+        self.assertTrue(upstream.start_attempt())
         upstream.write_envelope(TransactionMetadata(
             mail_response=Response(450)))
 

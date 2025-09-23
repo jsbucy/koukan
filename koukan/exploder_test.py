@@ -62,7 +62,7 @@ class Rcpt:
     def output(self, endpoint):
         logging.debug('output start')
         self.cursor = cursor = endpoint.release_transaction_cursor()
-        cursor.load(start_attempt=True)
+        cursor.start_attempt()
         logging.debug(cursor.attempt_id)
         tx = cursor.tx
         while True:
@@ -95,10 +95,11 @@ class Rcpt:
                 if err or data_resp:
                     break
 
-            cursor.wait(0.5)
+            rv, cloned = cursor.wait(0.5)
             # test can finish as soon as we write the last response
             try:
-                tx = cursor.load()
+                if not rv or not cloned:
+                    tx = cursor.load()
             except Exception:
                 break
         logging.debug('output done')

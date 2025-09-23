@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Sequence, Tuple
 
 import logging
 import datetime
@@ -19,7 +19,7 @@ from koukan.storage_schema import BlobSpec
 class MessageBuilderSpec:
     json : dict
     blob_specs : List[BlobSpec]
-    blobs : List[Blob]
+    blobs : Sequence[Blob]
     body_blob : Optional[Blob] = None
     # part['content']['create_id']  XXX rename
     ids : Optional[Set[str]] = None

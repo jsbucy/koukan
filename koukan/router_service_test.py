@@ -1125,7 +1125,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.warning('done %s %f %f', micro, total, iters/total)
 
     def disabled_test_micro(self):
-        #self._test_micro(self._rest_smoke_micro)
+        self._test_micro(self._rest_smoke_micro)
         self._test_micro(self._exploder_micro)
 
 

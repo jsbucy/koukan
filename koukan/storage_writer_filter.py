@@ -145,6 +145,7 @@ class StorageWriterFilter(AsyncFilter):
             self.rest_id = rest_id
             self.cv.notify_all()
 
+    # xxx _maybe_load()?
     def _load(self):
         tx = None
         if self.tx_cursor is None:

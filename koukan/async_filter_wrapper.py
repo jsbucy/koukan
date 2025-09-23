@@ -114,9 +114,12 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         self.tx = upstream_tx.copy()
         self._update_responses(upstream_tx)
         logging.debug(upstream_tx)
+        # XXX
         tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         downstream_tx.merge_from(upstream_delta)
+        # XXX
+        downstream_tx.version = upstream_tx.version
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:

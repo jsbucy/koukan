@@ -316,7 +316,7 @@ class RestHandler(Handler):
                 code=500, msg='get tx async read fut done'), None
         if afut.result() is None:
             return self.response(code=404, msg='unknown tx'), None
-        logging.debug('_get_tx_async done')
+        logging.debug('_check_tx_async done')
         return None, afut.result()
 
     async def _get_tx_async(

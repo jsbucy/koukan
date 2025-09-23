@@ -115,7 +115,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
         orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
-        orig_tx_cursor.load(start_attempt=True)
+        orig_tx_cursor.start_attempt()
         prev = orig_tx_cursor.tx.copy()
         tx = orig_tx_cursor.tx
         tx.mail_response = Response(550)
@@ -160,7 +160,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter.update(tx, tx.copy())
 
         upstream_cursor = filter.release_transaction_cursor()
-        upstream_cursor.load(start_attempt=True)
+        upstream_cursor.start_attempt()
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = self.start_update(filter, tx, tx.copy())

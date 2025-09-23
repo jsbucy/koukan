@@ -99,19 +99,21 @@ class Recipient:
         assert self.tx is not None
         assert self.tx.version is not None
         assert self.filter is not None
+        old_version = self.tx.version
         rv, t = self.filter.wait(self.tx.version, timeout)
         logging.debug('%s', (rv, t))
+        assert not rv or not t or t.version != old_version
         if t is None:
             t = self.filter.get()
             logging.debug(t)
         assert t is not None
-        logging.debug(t)
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:
             ti.version = ti.body = None
         assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
+
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 
