@@ -378,7 +378,7 @@ class RestHandler(Handler):
             if fresh_etag:
                 return self.response(code=304, msg='unchanged',
                                      headers=[('etag', self._etag(version))])
-            # do a full read every time with no etag
+            # do a full read every time with no etag e.g. ping/wakeup
             if tx is None or etag is None:
                 err, tx = await self._get_tx_async()
                 if err is not None:
