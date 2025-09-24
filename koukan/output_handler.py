@@ -110,13 +110,17 @@ class OutputHandler:
             empty_delta and  # no new downstream
             not self.tx.cancelled):
             # logging.debug('wait %d', self.cursor.version)
+            old_version = self.cursor.version
             wait_result, cloned = self.cursor.wait(
                 self.upstream_refresh - (now - self._last_upstream_refresh),
                 clone=True)
+            # logging.debug('%s %d %d', wait_result, old_version, self.cursor.version)
+            assert not wait_result or old_version != self.cursor.version
             logging.debug('wait_result %s cloned %s version %d', wait_result, cloned, self.cursor.version)
             if not cloned:
                 self.cursor.load()
             tx = self.cursor.tx
+            # logging.debug(tx)
             assert tx is not None
             now = time.monotonic()
             assert self.cursor.version is not None
@@ -286,6 +290,7 @@ class OutputHandler:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
                 done = env_kwargs.get('finalize_attempt', False)
+                assert not self.cursor.input_done or done
                 err_resp = Response(
                     450, 'internal error: OutputHandler failed to populate '
                     'response')

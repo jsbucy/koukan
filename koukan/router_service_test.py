@@ -1097,7 +1097,7 @@ class RouterServiceTest(unittest.TestCase):
         micro()
         logging.debug('real')
         start = time.monotonic()
-        iters=1
+        iters=100
         para=1
         def run_micro():
             for i in range(0,int(iters/para)):

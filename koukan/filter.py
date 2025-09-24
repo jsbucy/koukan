@@ -785,6 +785,8 @@ class TransactionMetadata:
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)
+        if isinstance(self.body, MessageBuilderSpec):
+            out.body = self.body.clone()
         return out
 
     def copy_valid(self, valid : WhichJson):

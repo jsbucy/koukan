@@ -67,7 +67,9 @@ class TransactionCursor:
 
     id_version : Optional[IdVersion] = None
 
+    # this cursor called start_attempt()
     in_attempt : bool = False
+    inflight_session_id : Optional[int] = None
 
     # this TransactionCursor object created this tx db row
     created : bool = False
@@ -121,18 +123,20 @@ class TransactionCursor:
         else:
             self.tx = None
 
-        self.message_builder = rhs.message_builder
         self.no_final_notification = rhs.no_final_notification
         #self.id_version = rhs.id_version
         # XXX self.in_attempt
+        self.inflight_session_id = rhs.inflight_session_id
         self.created = rhs.created
         self.session_uri = rhs.session_uri
         self.blobs = [b.clone() for b in rhs.blobs] if rhs.blobs else None
+        if self.tx and isinstance(self.tx.body, MessageBuilderSpec):
+            self.tx.body.blobs = self.blobs
 
     def _update_version_cache(self, leased : Optional[bool]):
         assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
         clone = None
-        if leased:
+        if self.inflight_session_id is not None and self.inflight_session_id == self.parent.session_id:
             clone = self.clone()
         if clone is not None and clone.tx is not None:
             clone.tx.version = None  # XXX
@@ -153,6 +157,7 @@ class TransactionCursor:
                tx : TransactionMetadata,
                create_leased : bool = False):
         parent = self.parent
+        inflight_session_id = None
         with self.parent.begin_transaction() as db_tx:
             self.version = 0
 
@@ -169,8 +174,9 @@ class TransactionCursor:
                         self.parent.tx_table.c.creation)
 
             if create_leased:
+                inflight_session_id = self.parent.session_id
                 ins = ins.values(
-                    inflight_session_id = self.parent.session_id,
+                    inflight_session_id = inflight_session_id,
                     inflight_session_live = True)
 
             res = db_tx.execute(ins)
@@ -190,6 +196,9 @@ class TransactionCursor:
                 if self.blobs:
                     tx.body.blobs = self.blobs
                 tx.body.check_ids()
+
+        if inflight_session_id is not None:
+            self.inflight_session_id = inflight_session_id
 
         self._update_version_cache(True if create_leased else None)
         self.created = True
@@ -543,7 +552,6 @@ class TransactionCursor:
 
     def load(self, db_id : Optional[int] = None,
              rest_id : Optional[str] = None
-             #start_attempt : bool = False
              ) -> Optional[TransactionMetadata]:
         if db_id is not None:
             assert self.db_id is None or self.db_id == db_id
@@ -615,7 +623,7 @@ class TransactionCursor:
          self.final_attempt_reason,
          self.message_builder,
          self.no_final_notification,
-         session_id,
+         self.inflight_session_id,
          session_live) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
@@ -666,10 +674,10 @@ class TransactionCursor:
                 # storage_schema.InvalidSessionException
                 assert attempt_id == self.attempt_id
 
-        if session_live and session_id != self.parent.session_id:
+        if session_live and self.inflight_session_id != self.parent.session_id:
             # TODO join onto previous query
             sel = select(self.parent.session_table.c.uri).where(
-                self.parent.session_table.c.id == session_id)
+                self.parent.session_table.c.id == self.inflight_session_id)
             res = db_tx.execute(sel)
             row = res.fetchone()
             assert row is not None
@@ -835,6 +843,20 @@ class TransactionCursor:
                 return b
         return None
 
+    def _blob_done(self, blob):
+        all_done = True
+        for i,b in enumerate(self.blobs):
+            if b.db_id == blob.db_id:
+                self.blobs[i] = blob.clone()
+            else:
+                all_done = all_done and b.finalized()
+
+        if isinstance(self.tx.body, MessageBuilderSpec):
+            self.tx.body.blobs = self.blobs
+
+        return all_done
+
+
 class BlobCursor(Blob, WritableBlob):
     db_id = None  # Blob.id
     length : int = 0  # max offset+len from BlobContent, next offset to write
@@ -995,18 +1017,19 @@ class BlobCursor(Blob, WritableBlob):
             if stale or blob_done:
                 cursor = self.parent.get_transaction_cursor(
                     rest_id=self.update_tx)
-                # xxx try_cache()
                 for i in range(0,5):
                     try:
                         # TODO should this be in the same db_tx as the
                         # blob write? as it is, possible for a reader to
                         # see finalized body but input_done == False
                         with self.parent.begin_transaction() as db_tx:
-                            cursor._load_db(db_tx)
+                            rv, cloned = cursor.try_cache()
+                            if not rv or not cloned:
+                                cursor._load_db(db_tx)
                             kwargs = {}
                             input_done = False
                             if self.last:
-                                input_done = cursor.check_input_done(db_tx)
+                                input_done = cursor._blob_done(self)
                             if input_done:
                                 kwargs['input_done'] = True
                             else:

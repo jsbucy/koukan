@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Optional, Set, Sequence, Tuple
 import logging
 import datetime
 import io
+import copy
 
 from email.message import EmailMessage, MIMEPart
 from email.generator import BytesGenerator
@@ -30,6 +31,11 @@ class MessageBuilderSpec:
         self.blobs = blobs if blobs else []
 
         self.blob_specs = blob_specs if blob_specs else []
+
+    def clone(self):
+        out = copy.copy(self)
+        out.blobs = copy.copy(self.blobs)
+        return out
 
     def check_ids(self):
         self.ids = set()

@@ -36,8 +36,8 @@ class IdVersion:
 
         self.async_waiters = []
         self.leased = leased
-        assert self.leased is True or cursor is None
-        if cursor is not None:
+        #assert self.leased is True or cursor is None
+        if self.leased and cursor is not None:
             assert cursor.version == version
             self.cursor = cursor
 
@@ -67,7 +67,7 @@ class IdVersion:
     def update(self, version, cursor : Optional[Any] = None,
                leased : Optional[bool] = False):
         with self.lock:
-            logging.debug('IdVersion.update %d id=%d version=%d new %d %s '
+            logging.debug('IdVersion.update %d id=%d self.version=%d new version %d cursor=%s '
                           'self.leased=%s leased=%s',
                           id(self), self.id, self.version, version, cursor,
                           self.leased, leased)
