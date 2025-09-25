@@ -798,11 +798,11 @@ class TransactionCursor:
         self.in_attempt = True
         return True
 
-    # xxx this should just return rv and cloned
     def try_cache(self):
         if self.id_version is None:
-            return False, False
-        return self.id_version.wait(0, 0, self)
+            return False
+        rv, cloned = self.id_version.wait(0, 0, self)
+        return rv and cloned
 
     def wait(self, timeout : Optional[float] = None, clone = False
              ) -> Tuple[bool, bool]:
@@ -1023,8 +1023,8 @@ class BlobCursor(Blob, WritableBlob):
                         # blob write? as it is, possible for a reader to
                         # see finalized body but input_done == False
                         with self.parent.begin_transaction() as db_tx:
-                            rv, cloned = cursor.try_cache()
-                            if not rv or not cloned:
+                            cached = cursor.try_cache()
+                            if not cached:
                                 cursor._load_db(db_tx)
                             kwargs = {}
                             input_done = False
