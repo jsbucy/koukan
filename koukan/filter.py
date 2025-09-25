@@ -342,7 +342,6 @@ _tx_fields = [
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
-    TxField('tx_db_id', validity=None),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB,
                                        WhichJson.EXPLODER_CREATE,
@@ -396,7 +395,6 @@ class TransactionMetadata:
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
-    tx_db_id : Optional[int] = None
     cancelled : Optional[bool] = None
 
     rest_endpoint : Optional[str] = None

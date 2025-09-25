@@ -131,7 +131,7 @@ class TransactionCursor:
         self.session_uri = rhs.session_uri
         self.blobs = [b.clone() for b in rhs.blobs] if rhs.blobs else None
         if self.tx and isinstance(self.tx.body, MessageBuilderSpec):
-            self.tx.body.blobs = self.blobs
+            self.tx.body.blobs = list(self.blobs) if self.blobs else []
 
     def _update_version_cache(self, leased : Optional[bool]):
         assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
@@ -637,7 +637,6 @@ class TransactionCursor:
         # XXX this doesn't change after tx creation?
         self._load_blobs(db_tx)
 
-        self.tx.tx_db_id = self.db_id
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
         self.tx.rest_id = self.rest_id
 
@@ -799,9 +798,10 @@ class TransactionCursor:
         self.in_attempt = True
         return True
 
+    # xxx this should just return rv and cloned
     def try_cache(self):
         if self.id_version is None:
-            return None
+            return False, False
         return self.id_version.wait(0, 0, self)
 
     def wait(self, timeout : Optional[float] = None, clone = False
@@ -1100,11 +1100,12 @@ class Storage():
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
                  engine : Optional[Engine] = None,
                  session_uri : Optional[str] = None,
-                 blob_tx_refresh_interval : int = 10):
+                 blob_tx_refresh_interval : int = 10,
+                 cache_ttl : Optional[int] = 5):
         if version_cache is not None:
             self.tx_versions = version_cache
         else:
-            self.tx_versions = IdVersionMap()
+            self.tx_versions = IdVersionMap(cache_ttl)
         self.engine = engine
         self.session_uri = session_uri
         self.blob_tx_refresh_interval = blob_tx_refresh_interval
@@ -1121,13 +1122,15 @@ class Storage():
         dbapi_conn.execute("PRAGMA auto_vacuum=2")
 
     @staticmethod
-    def connect(url, session_uri, blob_tx_refresh_interval : int = 10):
+    def connect(url, session_uri, blob_tx_refresh_interval : int = 10,
+                cache_ttl=5):
         engine = create_engine(url)
         if 'sqlite' in url:
             event.listen(engine, 'connect', Storage._sqlite_pragma)
 
         s = Storage(engine=engine, session_uri=session_uri,
-                    blob_tx_refresh_interval=blob_tx_refresh_interval)
+                    blob_tx_refresh_interval=blob_tx_refresh_interval,
+                    cache_ttl = cache_ttl)
         s._init_session()
         return s
 
@@ -1354,6 +1357,7 @@ class Storage():
 
     def gc(self, ttl : timedelta) -> Tuple[int, int]:
         with self.begin_transaction() as db_tx:
+            self.tx_versions.gc()
             deleted = self._gc(db_tx, ttl)
             return deleted
 

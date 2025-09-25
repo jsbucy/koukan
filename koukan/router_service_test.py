@@ -241,6 +241,7 @@ class RouterServiceTest(unittest.TestCase):
     def _setup_router(self):
         self.root_yaml = root_yaml = copy.deepcopy(root_yaml_template)
         root_yaml['storage']['url'] = self.storage_url
+        root_yaml['storage']['cache_ttl'] = 1
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:

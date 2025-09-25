@@ -153,7 +153,8 @@ class Service:
             self.storage=Storage.connect(
                 storage_yaml['url'], listener_yaml['session_uri'],
                 blob_tx_refresh_interval=
-                  storage_yaml.get('blob_tx_refresh_interval', 10))
+                  storage_yaml.get('blob_tx_refresh_interval', 10),
+                cache_ttl = storage_yaml.get('cache_ttl', 5))
 
         session_refresh_interval = storage_yaml.get(
             'session_refresh_interval', 30)
