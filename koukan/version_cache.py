@@ -42,7 +42,6 @@ class IdVersion:
 
         self.async_waiters = []
         self.leased = leased
-        #assert self.leased is True or cursor is None
         if self.leased and cursor is not None:
             assert cursor.version == version
             self.cursor = cursor
@@ -52,7 +51,6 @@ class IdVersion:
         if self.ttl is None:
             return False
         age = time.monotonic() - self.last_update
-        logging.debug(age)
         return not self.leased and (age > self.ttl)
 
     def expired(self):
@@ -80,7 +78,7 @@ class IdVersion:
         with self.lock:
             logging.debug('IdVersion.wait %d %d %d %d',
                           id(self), self.id, self.version, version)
-            # don't wait/early return if unleased?
+            # XXX don't wait/early return if unleased?
             rv = self.cv.wait_for(lambda: self.version > version, timeout)
             logging.debug('IdVersion.wait done id=%d new=%d arg=%d rv=%s '
                           'leased=%s cursor=%s',

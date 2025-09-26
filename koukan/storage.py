@@ -69,6 +69,7 @@ class TransactionCursor:
 
     # this cursor called start_attempt()
     in_attempt : bool = False
+    # this tx is leased/in_attempt in some cursor in this process
     inflight_session_id : Optional[int] = None
 
     # this TransactionCursor object created this tx db row
@@ -287,7 +288,6 @@ class TransactionCursor:
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done,
                         ping_tx=ping_tx)
-        logging.debug(self.tx)
         self._update_version_cache(leased = False if finalize_attempt else None)
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata
@@ -583,6 +583,8 @@ class TransactionCursor:
         where = None
         where_id = None
 
+        self.parent.inc_tx_reads()
+
         sel = select(self.parent.tx_table.c.id,
                      self.parent.tx_table.c.rest_id,
                      self.parent.tx_table.c.creation,
@@ -633,7 +635,7 @@ class TransactionCursor:
             self.tx.final_attempt_reason = self.final_attempt_reason
 
         # TODO save finalized body above, skip load and restore here
-        # XXX this doesn't change after tx creation?
+        # TODO this doesn't change after tx creation?
         self._load_blobs(db_tx)
 
         assert self.tx.rest_id is None or (self.tx.rest_id == self.rest_id)
@@ -642,7 +644,7 @@ class TransactionCursor:
         # TODO join this with the tx read to get it all in one round-trip?
 
         if load_attempt or self.no_final_notification:
-            # XXX if in_attempt, query on attempt_id?? (cf assert below)
+            # TODO if in_attempt, query on attempt_id?? (cf assert below)
             sel = (select(self.parent.attempt_table.c.attempt_id,
                           self.parent.attempt_table.c.responses)
                    .where(self.parent.attempt_table.c.transaction_id == self.db_id)
@@ -719,7 +721,7 @@ class TransactionCursor:
             raise ValueError()
 
     def start_attempt(self):
-        logging.debug('TxCursor._start_attempt_db %d', self.db_id)
+        logging.debug('TxCursor.start_attempt %d', self.db_id)
         with self.parent.begin_transaction() as db_tx:
             rv = self._start_attempt(db_tx)
         if rv:
@@ -782,11 +784,8 @@ class TransactionCursor:
             res = db_tx.execute(ins)
             assert (row := res.fetchone())
         self.tx.attempt_count = self.attempt_id = row[0]
-        # this is to ensure the cursor/tx is consistent with the db??
-        # it looks like this is for _load_blobs() if nothing else
-        # self._load_db(db_tx, db_id=self.db_id)
 
-        # xxx RestHandler creation -> OH handoff tx needs to have the
+        # RestHandler creation -> OH handoff tx needs to have the
         # same effect as _load_blobs()
         # xxx this should happen at the end of create()? _write()?
         if self.blobs and len(self.blobs) == 1 and self.blobs[0].blob_uri is not None and self.blobs[0].blob_uri.tx_body:
@@ -968,7 +967,6 @@ class BlobCursor(Blob, WritableBlob):
             res = db_tx.execute(stmt)
             row = res.fetchone()
             assert row is not None
-            logging.debug(row)
             db_length, db_content_length, last_update, db_now = row
             self.length = db_length
             self._content_length = db_content_length
@@ -1096,6 +1094,10 @@ class Storage():
     session_uri : Optional[str] = None
     blob_tx_refresh_interval : int
 
+    mu : Lock
+
+    _tx_reads = 0
+
     def __init__(self, version_cache : Optional[IdVersionMap] = None,
                  engine : Optional[Engine] = None,
                  session_uri : Optional[str] = None,
@@ -1108,6 +1110,7 @@ class Storage():
         self.engine = engine
         self.session_uri = session_uri
         self.blob_tx_refresh_interval = blob_tx_refresh_interval
+        self.mu = Lock()
 
     @staticmethod
     def _sqlite_pragma(dbapi_conn, con_record):
@@ -1376,3 +1379,7 @@ class Storage():
                     out += str(row._mapping)
                     out += '\n'
         return out
+
+    def inc_tx_reads(self):
+        with self.mu:
+            self._tx_reads += 1

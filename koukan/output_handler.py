@@ -76,8 +76,6 @@ class OutputHandler:
     def _fixup_downstream_tx(self) -> TransactionMetadata:
         assert self.cursor.tx is not None
 
-        # logging.debug('%x %s', id(self.prev_downstream), self.prev_downstream)
-        # logging.debug('%x %s', id(self.cursor.tx), self.cursor.tx)
         delta = self.prev_downstream.delta(self.cursor.tx)
         assert delta is not None
         # drop some fields from the tx that's going upstream
@@ -88,7 +86,6 @@ class OutputHandler:
 
         self.tx.merge_from(delta)
         self.prev_downstream = self.cursor.tx.copy()
-        # logging.debug('%x', id(self.prev_downstream))
 
         logging.debug(str(delta) if delta else '(empty delta)')
         return delta
@@ -105,22 +102,18 @@ class OutputHandler:
         delta = self._fixup_downstream_tx()
         empty_delta = delta.empty(WhichJson.ALL)
         now = time.monotonic()
-        # logging.debug('%s %s %s', self.cursor.input_done, empty_delta, self.tx.cancelled)
         if (not self.cursor.input_done and
             empty_delta and  # no new downstream
             not self.tx.cancelled):
-            # logging.debug('wait %d', self.cursor.version)
             old_version = self.cursor.version
             wait_result, cloned = self.cursor.wait(
                 self.upstream_refresh - (now - self._last_upstream_refresh),
                 clone=True)
-            # logging.debug('%s %d %d', wait_result, old_version, self.cursor.version)
             assert not wait_result or old_version != self.cursor.version
             logging.debug('wait_result %s cloned %s version %d', wait_result, cloned, self.cursor.version)
             if not cloned:
                 self.cursor.load()
             tx = self.cursor.tx
-            # logging.debug(tx)
             assert tx is not None
             now = time.monotonic()
             assert self.cursor.version is not None
@@ -139,7 +132,6 @@ class OutputHandler:
         recent_refresh = (refresh_dt < self.upstream_refresh)
         body = delta.body
         assert body is None or isinstance(body, Blob) or isinstance(body, MessageBuilderSpec), body
-        # logging.debug(body)
         if ((not delta_minus_body) and ((body is None) or (not body.finalized()))) and recent_refresh:
             # TODO it seems like there may be a latent issue here
             # where we don't wait above because input_done but then we
@@ -278,9 +270,6 @@ class OutputHandler:
                         env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
-                    # logging.debug('%s %s', bool(delta), delta)
-                    # logging.debug('%s', env_kwargs)
-                    # logging.debug('%s', refresh)
                     if not delta and not env_kwargs and not refresh:
                         # xxx loop should be inside try, this will go
                         # to finally as it is?
@@ -297,10 +286,8 @@ class OutputHandler:
                 self.tx.fill_inflight_responses(err_resp, delta)
                 for i in range(0,5):
                     try:
-                        # logging.debug(self.cursor.tx)
                         prev = self.cursor.tx.copy()
                         self.cursor.write_envelope(delta, **env_kwargs)
-                        # logging.debug(self.cursor.tx)
                         self.prev_downstream.merge_from(
                             prev.delta(self.cursor.tx))
                         break

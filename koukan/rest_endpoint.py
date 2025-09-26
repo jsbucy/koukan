@@ -667,16 +667,18 @@ class RestEndpoint(Filter):
         return get_resp_json(rest_resp)
 
     # test only
-    def get_json(self, timeout : Optional[float] = None
+    def get_json(self, timeout : Optional[float] = None,
+                 point_read = True
                  ) -> Optional[dict]:
-        json = self._get_json(timeout, testonly_point_read=True)
+        json = self._get_json(timeout, testonly_point_read=point_read)
         if json is not None:
             assert isinstance(json, dict)
         return json
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns the last tx it successfully retrieved
-    def _get(self, deadline : Deadline) -> Optional[TransactionMetadata]:
+    def _get(self, deadline : Deadline, oneshot=False
+             ) -> Optional[TransactionMetadata]:
         tx_out = None
         while deadline.remaining():
             logging.debug('RestEndpoint._get() %s %s',
@@ -697,11 +699,12 @@ class RestEndpoint(Filter):
                 if tx_out is None:  # invalid json tx contents
                     return None
 
-                logging.debug('RestEndpoint._get() %s done tx_out %s',
-                              self.transaction_url, tx_out)
+                logging.debug('RestEndpoint._get() %s done %s tx_out %s',
+                              self.transaction_url, self.etag, tx_out)
 
                 assert self.rest_upstream_tx is not None
-                if (not self.rest_upstream_tx.req_inflight(tx_out) and not
+                if (not oneshot and
+                    not self.rest_upstream_tx.req_inflight(tx_out) and not
                     (self.sent_data_last and tx_out.data_response is None)):
                     return tx_out
 
@@ -711,8 +714,14 @@ class RestEndpoint(Filter):
             if not deadline.remaining(1):
                 break
             if (self.etag is None or self.etag == prev_etag) and (delta < 1):
-                logging.debug('%s %s', prev_etag, self.etag)
                 nospin = 1 - delta
                 logging.debug('nospin %s %f', self.transaction_url, nospin)
                 time.sleep(nospin)
+            if oneshot and self.etag != prev_etag:
+                break
         return tx_out
+
+    # ~AsyncFilter
+    # do hanging get, don't loop on req_inflight()
+    def get(self, deadline : Deadline):
+        return self._get(deadline, oneshot=True)

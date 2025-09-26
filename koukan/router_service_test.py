@@ -31,6 +31,7 @@ from koukan.filter import (
     TransactionMetadata,
     WhichJson )
 from koukan.executor import Executor
+from koukan.deadline import Deadline
 
 import koukan.sqlite_test_utils as sqlite_test_utils
 
@@ -52,7 +53,7 @@ root_yaml_template = {
         # should be enabled for the rest
         'dequeue': False,
         'mailer_daemon_mailbox': 'mailer-daemon@d',
-        'rest_id_entropy': 2,
+        'rest_id_entropy': 4,
 
         'executor': {
             'rest': {
@@ -376,6 +377,7 @@ class RouterServiceTest(unittest.TestCase):
 
     # simplest possible case: native rest/inline body -> upstream success
     def test_rest_smoke(self):
+        prev_reads = self.service.storage._tx_reads
         logging.debug('RouterServiceTest.test_rest_smoke')
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
@@ -408,27 +410,25 @@ class RouterServiceTest(unittest.TestCase):
 
         rest_endpoint.on_update(delta)
 
-        for i in range(0,5):
-            tx_json = rest_endpoint.get_json(timeout=2)
-            logging.debug('RouterServiceTest.test_rest_smoke create %s',
-                          tx_json)
-            if 'attempt_count' in tx_json:
-                del tx_json['attempt_count']
-            if tx_json == {
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'body': {},
-                'retry': {},
-                'notification': {},
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'},
-                'final_attempt_reason': 'upstream response success'}:
+        def done():
+            logging.debug(tx)
+            if tx.mail_response.code != 201:
+                return False
+            if [r.code for r in tx.rcpt_response] != [202]:
+                return False
+            if tx.data_response.code != 203:
+                return False
+            if tx.final_attempt_reason != 'upstream response success':
+                return False
+            return True
+        deadline = Deadline(5)
+        while deadline.remaining():
+            if done():
                 break
-            logging.debug(tx_json)
+            rest_endpoint.get(deadline)
         else:
-            logging.debug(self.service.storage.debug_dump())
-            self.fail('didn\'t get expected transaction %s' % tx_json)
+            self.fail('expected tx')
+        self.assertEqual(0, self.service.storage._tx_reads - prev_reads)
 
         self.root_yaml['storage']['gc_interval'] = 1
         self.service.daemon_executor.submit(
@@ -440,6 +440,7 @@ class RouterServiceTest(unittest.TestCase):
             time.sleep(1)
         else:
             self.fail('expected 404 after gc')
+
 
     # repro/regtest for spurious wakeup bug in VersionCache
     def test_rest_hanging_get(self):
@@ -638,9 +639,6 @@ class RouterServiceTest(unittest.TestCase):
 
         range = werkzeug.http.parse_content_range_header(
             resp.headers.get('content-range'))
-        logging.debug(range)
-        # self.assertEqual(0, range.start)
-        # self.assertEqual(chunk1, range.stop)
         range.start = range.stop
         range.stop = len(body)
         range.length = len(body)
@@ -920,6 +918,7 @@ class RouterServiceTest(unittest.TestCase):
     # TODO add exploder s&f test
 
     def test_exploder_multi_rcpt(self):
+        prev_reads = self.service.storage._tx_reads
         logging.info('RouterServiceTest.test_exploder_multi_rcpt')
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='smtp-msa',
@@ -990,6 +989,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(205, tx.data_response.code)
         self.assertEqual('upstream data 0 (Exploder same response)',
                          tx.data_response.message)
+        self.assertEqual(0, self.service.storage._tx_reads - prev_reads)
+
 
     def _rest_smoke_micro(self):
         logging.debug('_rest_smoke_micro')
@@ -1029,6 +1030,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
+
+        # match new hanging get in test_rest_smoke()?
 
     def _exploder_micro(self):
         upstream_endpoint = FakeFilter()

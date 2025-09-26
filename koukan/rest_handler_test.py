@@ -78,24 +78,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('if-match', resp.headers['etag']),
                      ('request-timeout', '1')])}
         req = FastApiRequest(scope)
-        #resp = await handler.handle_async(
-        #    req, lambda:
         resp = handler.patch_tx(
             req, req_json={"mail_from": {"m": "alice"}})
         logging.debug('test_create_tx patch tx resp %s', resp.body)
         logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
-
-
-        # endpoint.expect_get(TransactionMetadata(
-        #     host='msa',
-        #     mail_from=Mailbox('alice'),
-        #     version=2))
-        # endpoint.expect_get(TransactionMetadata(
-        #     host='msa',
-        #     mail_from=Mailbox('alice'),
-        #     mail_response=Response(201),
-        #     version=3))
 
         tx2 = TransactionMetadata(
             host='msa',
@@ -139,8 +126,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                  'headers': self._headers([
                      ('if-match', resp.headers['etag'])])}
         req = FastApiRequest(scope)
-        #resp = await handler.handle_async(
-        #  req, lambda:
         resp = handler.patch_tx(
                 req, req_json={"rcpt_to": [{"m": "bob"}]})
         logging.debug(resp.body)

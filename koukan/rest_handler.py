@@ -118,7 +118,6 @@ class RestHandler(Handler):
                  headers : Optional[List[Tuple[str,str]]] = None,
                  etag : Optional[str] = None
                  ) -> HttpResponse:
-        # logging.debug('%d %s', code, msg)
         headers_dict={}
         if headers:
             headers_dict.update({k:str(v) for k,v in headers})
@@ -184,7 +183,6 @@ class RestHandler(Handler):
                      ) -> Tuple[Optional[int], Optional[HttpResponse]]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
         if 'if-none-match' not in req.headers:
-            #self.response(code=400, msg='need etag to wait')
             return None, None
 
         if not (timeout_header := req.headers.get('request-timeout', None)):
@@ -354,11 +352,8 @@ class RestHandler(Handler):
 
         etag = request.headers.get('if-none-match', None)
         check_result = self.async_filter.check_cache()
-        logging.debug(check_result)
         if check_result is None:
             err, check_result = await self._check_tx_async()
-            logging.debug(err)
-            logging.debug(check_result)
             if err:
                 return err
             if check_result is None:

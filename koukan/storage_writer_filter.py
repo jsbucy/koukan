@@ -190,6 +190,10 @@ class StorageWriterFilter(AsyncFilter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> Optional[TransactionMetadata]:
+        # TODO this currently always returns an empty delta, probably
+        # it should snapshot the tx before write_envelope() and return
+        # the delta from the final cursor.tx, it's possible the
+        # version conflict retry paths could pick up upstream deltas?
         logging.debug('StorageWriterFilter._update tx %s %s',
                       self.rest_id, tx)
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
@@ -247,9 +251,6 @@ class StorageWriterFilter(AsyncFilter):
                 self.tx_cursor = self.tx_cursor.clone()
                 self.cv.notify_all()
 
-        # TODO even though this no longer does inflight waiting on the
-        # upstream, it's possible one of the version conflict paths
-        # yielded upstream responses?
         return TransactionMetadata()
 
     def get_blob_writer(self,
