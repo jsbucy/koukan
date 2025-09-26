@@ -191,14 +191,6 @@ class TransactionCursor:
             self._write(db_tx, tx)
             self.tx.rest_id = rest_id
 
-            # xxx needs to leave the tx in the same state as if it was
-            # load()ed
-            # xxx this goes at the end of _write()?
-            if tx.body is not None and isinstance(tx.body, MessageBuilderSpec):
-                if self.blobs:
-                    tx.body.blobs = self.blobs
-                tx.body.check_ids()
-
         if inflight_session_id is not None:
             self.inflight_session_id = inflight_session_id
 
@@ -519,6 +511,17 @@ class TransactionCursor:
         # xxx final_attempt_reason, other cols?
         # self.tx.final_attempt_reason = self.final_attempt_reason
 
+        # RestHandler creation -> OH handoff tx needs to have the
+        # same effect as _load_blobs()
+        if self.blobs and len(self.blobs) == 1 and self.blobs[0].blob_uri is not None and self.blobs[0].blob_uri.tx_body:
+            self.tx.body = self.blobs[0]
+
+        if self.tx.body is not None and isinstance(self.tx.body, MessageBuilderSpec):
+            if self.blobs:
+                self.tx.body.blobs = self.blobs
+            self.tx.body.check_ids()
+
+
         if finalize_attempt:
             self.in_attempt = False
 
@@ -786,12 +789,6 @@ class TransactionCursor:
             res = db_tx.execute(ins)
             assert (row := res.fetchone())
         self.tx.attempt_count = self.attempt_id = row[0]
-
-        # RestHandler creation -> OH handoff tx needs to have the
-        # same effect as _load_blobs()
-        # xxx this should happen at the end of create()? _write()?
-        if self.blobs and len(self.blobs) == 1 and self.blobs[0].blob_uri is not None and self.blobs[0].blob_uri.tx_body:
-            self.tx.body = self.blobs[0]
 
         self.version = new_version
         # xxx tx.version?
