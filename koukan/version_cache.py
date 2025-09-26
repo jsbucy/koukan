@@ -78,8 +78,8 @@ class IdVersion:
         with self.lock:
             logging.debug('IdVersion.wait %d %d %d %d',
                           id(self), self.id, self.version, version)
-            # XXX don't wait/early return if unleased?
-            rv = self.cv.wait_for(lambda: self.version > version, timeout)
+            rv = self.cv.wait_for(
+                lambda: not self.leased or self.version > version, timeout)
             logging.debug('IdVersion.wait done id=%d new=%d arg=%d rv=%s '
                           'leased=%s cursor=%s',
                           self.id, self.version, version, rv, self.leased,
@@ -92,6 +92,7 @@ class IdVersion:
                 assert self.cursor.version == self.version
                 tx_out.copy_from(self.cursor)
                 clone = True
+            rv = rv and self.version > version
             return rv, clone
 
     def update(self, version, cursor : Optional[Any] = None,

@@ -216,7 +216,7 @@ class SyncFilterAdapter(AsyncFilter):
         version = self.id_version.get()
         version += 1
         self.cv.notify_all()
-        self.id_version.update(version=version)
+        self.id_version.update(version=version, leased=True)
         self._last_update = time.monotonic()
         return True
 
@@ -246,7 +246,7 @@ class SyncFilterAdapter(AsyncFilter):
 
             version = self.id_version.get()
             version += 1
-            self.id_version.update(version)
+            self.id_version.update(version, leased=True)
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update(), 0)
