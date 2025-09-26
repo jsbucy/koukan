@@ -152,7 +152,6 @@ class IdVersion:
             new_version, cursor = await asyncio.wait_for(afut, timeout)
             logging.debug('new_version %d version %d', new_version, version)
             assert new_version > version
-            logging.debug('%s %s', cursor, cursor_out)
             clone = False
             if cursor is not None and cursor_out is not None:
                 assert cursor.version == new_version
@@ -170,14 +169,6 @@ class IdVersion:
 
 class IdVersionMap:
     lock : Lock
-    # TODO I think this wants to become a more conventional ttl/lru
-    # cache now since we want to be able to read the final tx result
-    # from the cache after the OutputHandler has finished and it will
-    # probably become unreferenced in the meantime. The minimum
-    # interval between a tx being leased in different replicas is at
-    # least the minimum of - min retry time ~60s
-    # retry_params.min_attempt_time - session_ttl 10x
-    # session_refresh_interval ~30s
 
     # db_id -> IdVersion
     id_version_map : WeakValueDictionary[int, IdVersion]

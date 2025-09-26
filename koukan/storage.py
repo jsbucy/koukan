@@ -531,7 +531,8 @@ class TransactionCursor:
         return True
 
     # loads version, session only
-    def check(self):
+    # returns True if leased in this process, uri of other session
+    def check(self) -> Tuple[bool, Optional[str]]:
         assert self.rest_id is not None
         with self.parent.begin_transaction() as db_tx:
             sel = select(self.parent.tx_table.c.id,
@@ -795,6 +796,8 @@ class TransactionCursor:
         self.in_attempt = True
         return True
 
+    # attempts to refresh this cursor/tx from the cache;
+    # returns True on success
     def try_cache(self):
         if self.id_version is None:
             return False
