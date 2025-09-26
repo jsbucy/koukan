@@ -243,7 +243,8 @@ class RestHandler(Handler):
         upstream = self.async_filter.update(tx, tx.copy())
         if upstream is None or tx.rest_id is None:
             return self.response(code=400, msg='bad request')
-        assert upstream.version is not None
+        version = self.async_filter.version
+        assert version is not None
         self._tx_rest_id = tx.rest_id
 
         tx.body = body
@@ -259,7 +260,7 @@ class RestHandler(Handler):
             code=201,
             resp_json=tx.to_json(WhichJson.REST_READ),
             headers=[('location', tx_uri)],
-            etag=self._etag(upstream.version))
+            etag=self._etag(version))
         logging.debug('RestHandler._create %s', resp)
         return resp
 
@@ -276,10 +277,10 @@ class RestHandler(Handler):
             logging.exception('_get_tx')
             return None
 
-    def _get_tx_resp(self, request, tx):
+    def _get_tx_resp(self, request, tx, version):
         tx_out = tx.copy()
         return self.response(
-            etag=self._etag(tx.version) if tx else None,
+            etag=self._etag(version) if tx else None,
             resp_json=tx_out.to_json(WhichJson.REST_READ))
 
     def _check_etag(self, etag, cached_version) -> bool:
@@ -383,7 +384,7 @@ class RestHandler(Handler):
                 err, tx = await self._get_tx_async()
                 if err is not None:
                     return err
-            return self._get_tx_resp(request, tx)
+            return self._get_tx_resp(request, tx, version)
 
         assert is_local
         assert timeout is not None
@@ -392,7 +393,6 @@ class RestHandler(Handler):
 
         deadline = Deadline(timeout)
 
-        #version = tx.version
         wait_result, tx = await self.async_filter.wait_async(
             version, deadline.deadline_left())
 
@@ -404,7 +404,7 @@ class RestHandler(Handler):
             err, tx = await self._get_tx_async()
             if err is not None:
                 return err
-        resp = self._get_tx_resp(request, tx)
+        resp = self._get_tx_resp(request, tx, self.async_filter.version)
         assert resp.headers['etag'] != etag
         logging.debug('get_tx_async done')
         return resp
@@ -448,10 +448,11 @@ class RestHandler(Handler):
                 code=400, msg='RestHandler.patch_tx merge failed')
 
         # TODO should these 412s set the etag?
-        assert tx.version is not None
-        if req_etag != self._etag(tx.version):
+        version = self.async_filter.version
+        assert version is not None
+        if req_etag != self._etag(version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
-                          req_etag, self._etag(tx.version))
+                          req_etag, self._etag(version))
             return self.response(code=412, msg='update conflict')
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
@@ -466,9 +467,10 @@ class RestHandler(Handler):
             return err
 
         tx.body = body
-        assert upstream_delta.version is not None
+        version = self.async_filter.version
+        assert version is not None
         return self.response(
-            etag=self._etag(upstream_delta.version),
+            etag=self._etag(version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 

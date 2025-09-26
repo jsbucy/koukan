@@ -81,21 +81,20 @@ class TransactionCursor:
 
     def __init__(self, storage,
                  db_id : Optional[int] = None,
-                 rest_id : Optional[str] = None,
-                 no_id_version = False):
+                 rest_id : Optional[str] = None):
         self.parent = storage
         self.db_id = db_id
         self.rest_id = rest_id
-        if no_id_version:
-            pass
-        elif (self.db_id is not None) or (self.rest_id is not None):
+        if (self.db_id is not None) or (self.rest_id is not None):
             self.id_version = self.parent.tx_versions.get(self.db_id, self.rest_id)
             if self.id_version is not None:
                 self.version = self.id_version.version
 
-    def clone(self) -> 'TransactionCursor':
-        out = TransactionCursor(self.parent, self.db_id, self.rest_id, no_id_version=True)
+    def clone(self, for_cache=False) -> 'TransactionCursor':
+        out = TransactionCursor(self.parent, self.db_id, self.rest_id)  #, no_id_version=True)
         out.copy_from(self)
+        if for_cache:
+            out.id_version = None
         return out
 
     def copy_from(self, rhs : 'TransactionCursor'):
@@ -124,7 +123,9 @@ class TransactionCursor:
             self.tx = None
 
         self.no_final_notification = rhs.no_final_notification
-        #self.id_version = rhs.id_version
+        assert not self.id_version or not rhs.id_version or self.id_version == rhs.id_version
+        if not self.id_version and rhs.id_version:
+            self.id_version = rhs.id_version
         # XXX self.in_attempt
         self.inflight_session_id = rhs.inflight_session_id
         self.created = rhs.created
@@ -137,10 +138,8 @@ class TransactionCursor:
         assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
         clone = None
         if self.inflight_session_id is not None and self.inflight_session_id == self.parent.session_id:
-            clone = self.clone()
+            clone = self.clone(for_cache=True)
         if clone is not None and clone.tx is not None:
-            clone.tx.version = None  # XXX
-
             if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri is not None and clone.blobs[0].blob_uri.tx_body:
                 clone.tx.body = clone.blobs[0]
                 logging.debug(clone.tx.body)

@@ -15,9 +15,12 @@ from koukan.filter_chain import FilterResult, Filter
 
 from koukan.storage_schema import VersionConflictException
 
+# tx, version
+State = Tuple[Optional[TransactionMetadata], int]
+
 UpdateExpectation = Callable[[TransactionMetadata,TransactionMetadata],
-                             Optional[TransactionMetadata]]
-GetExpectation = Callable[[],Optional[TransactionMetadata]]
+                             State]
+GetExpectation = Callable[[], State]
 CheckExpectation = Callable[[], Optional[AsyncFilter.CheckTxResult]]
 
 class MockAsyncFilter(AsyncFilter):
@@ -40,8 +43,8 @@ class MockAsyncFilter(AsyncFilter):
 
     def expect_update(self, exp : UpdateExpectation):
         self.update_expectation.append(exp)
-    def expect_get(self, tx : TransactionMetadata):
-        self.get_expectation.append(lambda: tx)
+    def expect_get(self, state : State):
+        self.get_expectation.append(lambda: state)
     def expect_get_cb(self, exp : GetExpectation):
         self.get_expectation.append(exp)
 
@@ -52,17 +55,19 @@ class MockAsyncFilter(AsyncFilter):
         logging.debug('MockAsyncFilter.update %s', tx)
         exp = self.update_expectation[0]
         self.update_expectation.pop(0)
-        upstream_delta = exp(tx, tx_delta)
+        upstream_delta, version = exp(tx, tx_delta)
         assert upstream_delta is not None
-        self._version = tx.version
+        self._version = version
+        logging.debug(upstream_delta)
         return upstream_delta
 
     def get(self) -> TransactionMetadata:
         cb = self.get_expectation[0]
         self.get_expectation.pop(0)
-        tx = cb()
+        tx, version = cb()
         assert tx is not None
-        self._version = tx.version
+        self._version = version
+        logging.debug(tx)
         return tx
 
     def get_blob_writer(
@@ -77,10 +82,12 @@ class MockAsyncFilter(AsyncFilter):
         assert blob_rest_id is not None
         return self.blob[blob_rest_id]
 
+    @property
     def version(self) -> Optional[int]:
         return self._version
 
-    def wait(self, version, timeout)  -> Tuple[bool, Optional[TransactionMetadata]]:
+    def wait(self, version, timeout
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
         if not self.get_expectation:
             return False, None
         return True, self.get()

@@ -352,7 +352,6 @@ _tx_fields = [
     TxField('options', validity=None),
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
-    TxField('version', validity=None),
     TxField('session_uri', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
@@ -403,7 +402,6 @@ class TransactionMetadata:
 
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
-    version : Optional[int] = None
     session_uri : Optional[str] = None
 
     def __init__(self, 
@@ -421,8 +419,7 @@ class TransactionMetadata:
                  smtp_meta : Optional[dict] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
-                 rest_id : Optional[str] = None,
-                 version : Optional[int] = None):
+                 rest_id : Optional[str] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -438,7 +435,6 @@ class TransactionMetadata:
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
-        self.version = version
 
     def __repr__(self):
         out = ''
@@ -843,6 +839,11 @@ class AsyncFilter(ABC):
     def get(self) -> Optional[TransactionMetadata]:
         pass
 
+    @property
+    @abstractmethod
+    def version(self):
+        pass
+
     # TODO this should encapsulate WritableBlob?
     # def create_blob(self, BlobUri)
     # def append_to_blob(self, BlobUri, offset, d : bytes, content_length)
@@ -855,12 +856,6 @@ class AsyncFilter(ABC):
             blob_rest_id : Optional[str] = None,
             tx_body : Optional[bool] = None
     ) -> Optional[WritableBlob]:
-        pass
-
-    # returns the current version for comparing to an etag;
-    # if this doesn't match the etag, it's definitely stale
-    @abstractmethod
-    def version(self) -> Optional[int]:
         pass
 
     # postcondition: true -> version() != version

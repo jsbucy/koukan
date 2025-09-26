@@ -47,7 +47,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         sync_filter_adapter.update(tx, tx.copy())
-        sync_filter_adapter.wait(tx.version, 1)
+        sync_filter_adapter.wait(sync_filter_adapter.version, 1)
         upstream_tx = sync_filter_adapter.get()
         self.assertEqual(upstream_tx.mail_response.code, 201)
 
@@ -60,10 +60,10 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         delta = TransactionMetadata(rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
-        tx.version = sync_filter_adapter.version()
+        version = sync_filter_adapter.version
         sync_filter_adapter.update(tx, delta)
         for i in range(0,3):
-            sync_filter_adapter.wait(tx.version, 1)
+            sync_filter_adapter.wait(version, 1)
             tx = sync_filter_adapter.get()
             if [r.code for r in tx.rcpt_response] == [202]:
                 break
@@ -107,12 +107,12 @@ class SyncFilterAdapterTest(unittest.TestCase):
             logging.debug(tx)
             if tx is not None and tx.data_response is not None and tx.data_response.code == 203:
                 break
-            sync_filter_adapter.wait(tx.version, 1)
+            sync_filter_adapter.wait(sync_filter_adapter.version, 1)
         else:
             self.fail('expected data response')
 
         for i in range(0,3):
-            sync_filter_adapter.wait(tx.version, 1)
+            sync_filter_adapter.wait(sync_filter_adapter.version, 1)
             if sync_filter_adapter.done:
                 break
             tx = sync_filter_adapter.get()
@@ -131,7 +131,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
 
         tx = TransactionMetadata(mail_from=Mailbox('alice'))
         sync_filter_adapter.update(tx, tx.copy())
-        sync_filter_adapter.wait(tx.version, 1)
+        sync_filter_adapter.wait(sync_filter_adapter.version, 1)
         upstream_tx = sync_filter_adapter.get()
         self.assertEqual(450, upstream_tx.mail_response.code)
         self.assertIn('unexpected exception', upstream_tx.mail_response.message)

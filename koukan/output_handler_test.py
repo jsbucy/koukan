@@ -513,7 +513,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
         tx_cursor = self.storage.load_one()
@@ -597,7 +597,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
 
@@ -689,7 +689,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
         endpoint = FakeFilter()

@@ -538,32 +538,29 @@ class ExploderTest(unittest.TestCase):
 
         def exp_update(tx, delta):
             self.assertFalse(tx.body.finalized())
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            tx.mail_response=Response(201)
+            tx.rcpt_response=[Response(202)]
+            return prev.delta(tx), 2
 
         upstream.expect_update(exp_update)
 
         body = b'hello, world'
 
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body=InlineBlob(body))
-        tx.merge_from(delta)
-        exploder.on_update(delta)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        tx.body = InlineBlob(body)
+        exploder.on_update(prev.delta(tx))
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
 
         def exp_body(tx, delta):
             self.assertTrue(tx.body.finalized())
-            upstream_delta = TransactionMetadata(
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            tx.data_response=Response(203)
+            return prev.delta(tx), 3
         upstream.expect_update(exp_body)
 
         body += b'!'

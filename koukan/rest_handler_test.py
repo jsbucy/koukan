@@ -41,10 +41,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.host)
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            tx.merge_from(delta)
-            return delta
+            prev = tx.copy()
+            tx.rest_id='rest_id'
+            return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
         handler = RestHandler(async_filter=endpoint, http_host='msa',
@@ -64,14 +63,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(resp.headers.get('etag', None))
 
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            version=1))
+        endpoint.expect_get(
+            (TransactionMetadata(host='msa'), 1))
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
-            upstream_delta = TransactionMetadata(version=2)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 2
         endpoint.expect_update(exp_mail)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
@@ -103,11 +99,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         tx2 = TransactionMetadata(
             host='msa',
-            mail_from=Mailbox('alice'),
-            version=2)
+            mail_from=Mailbox('alice'))
         tx3 = tx2.copy()
         tx3.mail_response = Response(201)
-        tx3.version += 1
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
@@ -121,8 +115,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         # check_cache
         endpoint.check_cache_expectation.append(
-            lambda: (tx2.version, tx2, True, None))
-        endpoint.expect_get(tx3)
+            lambda: (2, tx2, True, None))
+        endpoint.expect_get((tx3, 3))
 
         resp = await handler.get_tx_async(req)
         self.assertEqual(resp.status_code, 200)
@@ -131,13 +125,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'mail_response': {'code': 201, 'message': 'ok'}
         })
 
-        endpoint.expect_get(tx3)
+        endpoint.expect_get((tx3, 3))
         def exp_rcpt(tx, tx_delta):
             self.assertEqual(1, len(tx.rcpt_to))
-            upstream_delta = TransactionMetadata(
-                version=4)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 4
         endpoint.expect_update(exp_rcpt)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
@@ -168,7 +159,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         # no timeout/etag: point read
         endpoint.check_cache_expectation.append(lambda: (4, None, True, None))
-        endpoint.expect_get(tx4)
+        endpoint.expect_get((tx4, 4))
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -182,13 +173,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}]
         })
 
-        endpoint.expect_get(tx4)
+        endpoint.expect_get((tx4, 4))
         def exp_rcpt2(tx, tx_delta):
             self.assertEqual(2, len(tx.rcpt_to))
-            upstream_delta = TransactionMetadata(
-                version=5)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 5
         endpoint.expect_update(exp_rcpt2)
 
         handler = RestHandler(
@@ -218,7 +206,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         endpoint.check_cache_expectation.append(
             lambda: (5, None, True, None))
-        endpoint.expect_get(tx6)
+        endpoint.expect_get((tx6, 6))
 
         scope = {'type': 'http',
                  'headers': []}
@@ -266,10 +254,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         tx7 = tx6.copy()
         tx7.body=InlineBlob(body, last=True)
-        tx7.version=7
         endpoint.check_cache_expectation.append(
             lambda: (6, None, True, None))
-        endpoint.expect_get(tx7)
+        endpoint.expect_get((tx7, 7))
 
         scope = {'type': 'http',
                  'headers': []}
@@ -286,10 +273,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         tx8 = tx7.copy()
         tx8.data_response=Response(204)
-        tx8.version=8
         endpoint.check_cache_expectation.append(
             lambda: (7, None, True, None))
-        endpoint.expect_get(tx8)
+        endpoint.expect_get((tx8, 8))
 
         scope = {'type': 'http',
                  'headers': []}
@@ -602,10 +588,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         req = FastApiRequest(scope)
 
         def exp(tx, tx_delta):
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            tx.merge_from(delta)
-            return delta
+            prev = tx.copy()
+            tx.rest_id='rest_id'
+            return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
         resp = await handler.handle_async(
@@ -688,17 +673,15 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                                            ('request-timeout', '5')])}
         req = FastApiRequest(scope)
 
-        tx = TransactionMetadata(rest_id='rest_id',
-                                 version=1)
+        tx = TransactionMetadata(rest_id='rest_id')
         tx.session_uri = 'http://127.0.0.1:12345'
-        endpoint.expect_get(tx)
+        endpoint.expect_get((tx, 1))
 
         def exp(tx, tx_delta):
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            delta.session_uri='http://127.0.0.1:12345'
-            tx.merge_from(delta)
-            return delta
+            prev = tx.copy()
+            tx.rest_id='rest_id'
+            tx.session_uri='http://127.0.0.1:12345'
+            return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
         resp = await handler.handle_async(

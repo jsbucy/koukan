@@ -138,6 +138,7 @@ class SyncFilterAdapter(AsyncFilter):
                 return False
             return timedout
 
+    @property
     def version(self):
         return self.id_version.get()
 
@@ -233,9 +234,6 @@ class SyncFilterAdapter(AsyncFilter):
 
         with self.mu:
             version = self.id_version.get()
-            # xxx bootstrap
-            if version > 1 and tx.version != version:
-                raise VersionConflictException
 
             # try this non-destructively to see if the delta is valid...
             if self.tx.merge(tx_delta) is None:
@@ -257,17 +255,13 @@ class SyncFilterAdapter(AsyncFilter):
                 assert fut is not None
                 self.inflight = True
             # no longer waits for inflight
-            delta = TransactionMetadata(rest_id=self.rest_id)
-            delta.version = version
-            tx.merge_from(delta)
-            assert delta.version is not None
-            return delta
+            prev = tx.copy()
+            tx.rest_id = self.rest_id
+            return prev.delta(tx)
 
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
-            tx = self.tx.copy()
-            tx.version = self.id_version.get()
-            return tx
+            return self.tx.copy()
 
     def get_blob_writer(self,
                         create : bool,
@@ -300,8 +294,7 @@ class SyncFilterAdapter(AsyncFilter):
         tx = self.get()
         if tx is None:
             return None
-        assert tx.version is not None
-        return tx.version, tx, True, None
+        return self.version, tx, True, None
 
 
     def check(self) -> Optional[AsyncFilter.CheckTxResult]:

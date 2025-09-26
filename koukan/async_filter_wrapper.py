@@ -74,8 +74,9 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
     async def wait_async(self, version : int, timeout : Optional[float]):
         raise NotImplementedError()
 
+    @property
     def version(self) -> Optional[int]:
-        return self.filter.version()
+        return self.filter.version
 
     def _update(self, tx : TransactionMetadata,
                 tx_delta : TransactionMetadata
@@ -114,12 +115,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         self.tx = upstream_tx.copy()
         self._update_responses(upstream_tx)
         logging.debug(upstream_tx)
-        # XXX
-        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         downstream_tx.merge_from(upstream_delta)
-        # XXX
-        downstream_tx.version = upstream_tx.version
         return upstream_delta
 
     def get(self) -> Optional[TransactionMetadata]:
@@ -226,7 +223,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         deadline = Deadline(self.timeout)
         upstream_tx = self.downstream_tx.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
-            version = self.version()
+            version = self.version
             assert version is not None
             dl = deadline.deadline_left()
             assert dl is not None
@@ -235,7 +232,6 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 u = self.get()
             assert u is not None
             upstream_tx = u
-        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()

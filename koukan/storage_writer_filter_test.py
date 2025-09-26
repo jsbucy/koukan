@@ -8,7 +8,7 @@ from threading import Thread
 import time
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.storage_schema import BlobSpec
+from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
@@ -38,9 +38,17 @@ class StorageWriterFilterTest(unittest.TestCase):
                 logging.debug('%s', l)
 
     def update(self, filter, tx, tx_delta):
-        upstream_delta = filter.update(tx, tx_delta)
-        self.assertTrue(len(upstream_delta.rcpt_response) <=
-                        len(tx.rcpt_to))
+        for i in range(0, 5):
+            try:
+                upstream_delta = filter.update(tx, tx_delta)
+                self.assertTrue(len(upstream_delta.rcpt_response) <=
+                                len(tx.rcpt_to))
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                filter.get()
+                time.sleep(0.3)
+                if i == 4:
+                    raise
 
     def start_update(self, filter, tx, tx_delta):
         logging.debug('start_update')
@@ -174,8 +182,16 @@ class StorageWriterFilterTest(unittest.TestCase):
             upstream_cursor.load()
         else:
             self.fail('no mail_from')
-        upstream_cursor.write_envelope(
-            TransactionMetadata(mail_response=Response(201)))
+        for i in range(0, 5):
+            try:
+                upstream_cursor.write_envelope(
+                    TransactionMetadata(mail_response=Response(201)))
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                time.sleep(0.3)
+                upstream_cursor.load()
 
         self.join(t)
         for i in range(0,5):

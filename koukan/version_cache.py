@@ -92,7 +92,6 @@ class IdVersion:
             if self.cursor and self._reusable() and tx_out is not None:
                 assert self.cursor.version is not None
                 assert self.cursor.version == self.version
-                assert self.cursor.tx is None or self.cursor.tx.version is None
                 tx_out.copy_from(self.cursor)
                 clone = True
             return rv, clone
@@ -114,7 +113,6 @@ class IdVersion:
                 self.leased = leased
             if cursor is not None:
                 assert cursor.version == version
-                assert cursor.tx is None or cursor.tx.version is None
                 self.cursor = cursor
             else:
                 self.cursor = None

@@ -74,8 +74,6 @@ class StorageWriterFilter(AsyncFilter):
         if rv and clone:
             assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
-            # xxx hack for parity with get()
-            tx_out.version = self.tx_cursor.version
         return rv, tx_out
 
     # AsyncFilter
@@ -93,8 +91,6 @@ class StorageWriterFilter(AsyncFilter):
         if rv and clone:
             assert self.tx_cursor.tx is not None
             tx_out = self.tx_cursor.tx.copy()
-            # xxx hack for parity with get()
-            tx_out.version = self.tx_cursor.version
 
         return rv, tx_out
 
@@ -113,9 +109,11 @@ class StorageWriterFilter(AsyncFilter):
             self.upstream_cursor = None
             return cursor
 
+    @property
     def version(self) -> Optional[int]:
-        self._load()
         assert self.tx_cursor is not None
+        if self.tx_cursor is None:
+            return None
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata):
@@ -153,8 +151,6 @@ class StorageWriterFilter(AsyncFilter):
                 rest_id=self.rest_id)
             if self.tx_cursor.try_cache() and self.tx_cursor.tx is not None:
                 tx = self.tx_cursor.tx
-                # xxx hack
-                tx.version = self.tx_cursor.version
                 logging.debug(tx)
         if tx is None:
             tx = self.tx_cursor.load()
@@ -169,10 +165,7 @@ class StorageWriterFilter(AsyncFilter):
         assert self.tx_cursor is not None
         if self.tx_cursor.tx is None:
             return None
-        tx = self.tx_cursor.tx.copy()
-        # xxx hack
-        tx.version = self.tx_cursor.version
-        return tx
+        return self.tx_cursor.tx.copy()
 
     # AsyncFilter
     def update(self,
@@ -184,7 +177,7 @@ class StorageWriterFilter(AsyncFilter):
             upstream_delta = self._update(tx, tx_delta)
             assert upstream_delta is not None
             if self.tx_cursor is not None:
-                upstream_delta.version = tx.version = self.tx_cursor.version
+                assert self.tx_cursor.version is not None
             return upstream_delta
         finally:
             if needs_create and self.upstream_cursor is None:
@@ -218,16 +211,12 @@ class StorageWriterFilter(AsyncFilter):
                     backoff(i)
                     self.tx_cursor.load()
             assert self.tx_cursor is not None
-            version = TransactionMetadata(version=self.tx_cursor.version)
-            tx.merge_from(version)
-            return version
+            return TransactionMetadata()
 
         if not tx_delta:  # heartbeat
             assert self.tx_cursor is not None
             self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
-            version = TransactionMetadata(version=self.tx_cursor.version)
-            tx.merge_from(version)
-            return version
+            return TransactionMetadata()
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
@@ -252,19 +241,16 @@ class StorageWriterFilter(AsyncFilter):
 
         logging.debug('input tx %s', tx)
 
-        version = TransactionMetadata(version=self.tx_cursor.version)
-
         if created and self.create_leased:
             with self.mu:
                 self.upstream_cursor = self.tx_cursor
-                self.tx_cursor = None
+                self.tx_cursor = self.tx_cursor.clone()
                 self.cv.notify_all()
 
         # TODO even though this no longer does inflight waiting on the
         # upstream, it's possible one of the version conflict paths
         # yielded upstream responses?
-        tx.merge_from(version)
-        return version
+        return TransactionMetadata()
 
     def get_blob_writer(self,
                         create : bool,
@@ -308,8 +294,6 @@ class StorageWriterFilter(AsyncFilter):
         assert self.tx_cursor.tx is not None
         assert self.tx_cursor.version is not None
         tx = self.tx_cursor.tx.copy()
-        # xxx parity with get()
-        tx.version = self.tx_cursor.version
         return (self.tx_cursor.version, tx, True, None)
 
     def check(self) -> Optional[AsyncFilter.CheckTxResult]:
@@ -322,5 +306,5 @@ class StorageWriterFilter(AsyncFilter):
         if res is None:
             return None
         leased, other_session = res
-        assert self.tx_cursor.version is not None
-        return (self.tx_cursor.version, None, leased, other_session)
+        assert self.version is not None
+        return (self.version, None, leased, other_session)
