@@ -87,12 +87,13 @@ class TransactionCursor:
         self.db_id = db_id
         self.rest_id = rest_id
         if (self.db_id is not None) or (self.rest_id is not None):
-            self.id_version = self.parent.tx_versions.get(self.db_id, self.rest_id)
+            self.id_version = self.parent.tx_versions.get(
+                self.db_id, self.rest_id)
             if self.id_version is not None:
                 self.version = self.id_version.version
 
     def clone(self, for_cache=False) -> 'TransactionCursor':
-        out = TransactionCursor(self.parent, self.db_id, self.rest_id)  #, no_id_version=True)
+        out = TransactionCursor(self.parent, self.db_id, self.rest_id)
         out.copy_from(self)
         if for_cache:
             out.id_version = None
@@ -107,10 +108,11 @@ class TransactionCursor:
             self.rest_id = rhs.rest_id
         else:
             assert self.rest_id == rhs.rest_id
-        #self.attempt_id = rhs.attempt_id
+        if rhs.attempt_id is not None:
+            self.attempt_id = rhs.attempt_id
         assert rhs.version is not None
         self.version = rhs.version
-        #self.creation = rhs.creation
+        self.creation = rhs.creation
         self.input_done = rhs.input_done
         self.final_attempt_reason = rhs.final_attempt_reason
         # xxx parity with _load_db()
@@ -127,7 +129,7 @@ class TransactionCursor:
         assert not self.id_version or not rhs.id_version or self.id_version == rhs.id_version
         if not self.id_version and rhs.id_version:
             self.id_version = rhs.id_version
-        # XXX self.in_attempt
+        # do not copy in_attempt
         self.inflight_session_id = rhs.inflight_session_id
         self.created = rhs.created
         self.session_uri = rhs.session_uri

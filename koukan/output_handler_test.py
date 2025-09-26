@@ -132,7 +132,7 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp_rcpt)
 
         def run_handler(tx_cursor):
-            tx_cursor.start_attempt()
+            self.assertTrue(tx_cursor.start_attempt())
             self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
             handler = OutputHandler(tx_cursor, chain,
                                     downstream_timeout=5,

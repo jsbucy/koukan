@@ -630,7 +630,7 @@ class StorageTestBase(unittest.TestCase):
                 mail_from = Mailbox('alice'),
                 rcpt_to = [Mailbox('bob')]),
             create_leased=True)
-        self.assertIsNotNone(upstream.load(start_attempt=True))
+        self.assertIsNotNone(upstream.start_attempt())
         upstream.write_envelope(TransactionMetadata(
             mail_response=Response(201),
             rcpt_response=[Response(202)]))
@@ -649,6 +649,168 @@ class StorageTestBase(unittest.TestCase):
             logging.debug(downstream.check())
         duration = time.monotonic() - start
         logging.debug('%f %f', duration, duration/iters)
+
+
+    # verify handoff via VersionCache returns the same cursor/tx you
+    # would have gotten by doing a fresh read
+    # basic setup: 2 cursors representing downstream/RestHandler and
+    # upstream/OutputHandler
+    # one does a write
+    # the other verifies it reads it back from the cache
+    # then a 3rd cursor reads it from the db and verfies it got the
+    # same thing as the cache
+    def test_handoff(self):
+        prev_reads = self.s._tx_reads
+        upstream = self.s.get_transaction_cursor()
+        upstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host',
+                mail_from = Mailbox('alice'),
+                rcpt_to = [Mailbox('bob')],
+                body = BlobSpec(create_tx_body=True)),
+            create_leased=True)
+        self.assertIsNotNone(upstream.start_attempt())
+        self.assertTrue(upstream.in_attempt)
+        self.assertIsNotNone(upstream.inflight_session_id)
+
+        downstream = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(downstream.try_cache())
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+        self.assertFalse(downstream.in_attempt)
+        self.assertEqual(upstream.inflight_session_id,
+                         downstream.inflight_session_id)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        self.assertFalse(from_db.in_attempt)
+        self.assertEqual(upstream.inflight_session_id,
+                         from_db.inflight_session_id)
+
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+        prev_reads = self.s._tx_reads
+
+
+        upstream.write_envelope(TransactionMetadata(
+            mail_response=Response(201),
+            rcpt_response=[Response(202)]))
+        self.assertTrue(downstream.try_cache())
+        self.assertEqual(upstream.tx.rcpt_response,
+                         downstream.tx.rcpt_response)
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        self.assertEqual(upstream.tx.rcpt_response,
+                         from_db.tx.rcpt_response)
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+        prev_reads = self.s._tx_reads
+
+
+        blob_writer = downstream.get_blob_for_append(
+            BlobUri('tx_rest_id', tx_body=True))
+        b = b'hello, world!'
+        blob_writer.append_data(0, b, last=True)
+
+        self.assertTrue(upstream.try_cache())
+        self.assertEqual(len(b), upstream.tx.body.content_length())
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        self.assertEqual(len(b), from_db.tx.body.content_length())
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+
+
+    def test_handoff_message_builder(self):
+        prev_reads = self.s._tx_reads
+        upstream = self.s.get_transaction_cursor()
+
+        message_builder = MessageBuilderSpec(
+            { "headers": [ ["subject", "hello"] ] },
+            blob_specs=[
+                BlobSpec(create_id='blob1'),
+                BlobSpec(create_id='blob2')])
+        upstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525), host='host',
+                mail_from = Mailbox('alice'),
+                rcpt_to = [Mailbox('bob')],
+                body = message_builder),
+            create_leased=True)
+        self.assertIsNotNone(upstream.start_attempt())
+        self.assertTrue(upstream.in_attempt)
+        self.assertIsNotNone(upstream.inflight_session_id)
+
+        downstream = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(downstream.try_cache())
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+        self.assertFalse(downstream.in_attempt)
+        self.assertEqual(upstream.inflight_session_id,
+                         downstream.inflight_session_id)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        self.assertFalse(from_db.in_attempt)
+        self.assertEqual(upstream.inflight_session_id,
+                         from_db.inflight_session_id)
+
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+        prev_reads = self.s._tx_reads
+
+        blob1_writer = downstream.get_blob_for_append(
+            BlobUri('tx_rest_id', blob='blob1'))
+        b1 = b'hello blob1'
+        blob1_writer.append_data(0, b1, last=True)
+
+        self.assertTrue(upstream.try_cache())
+        blob1_reader = upstream.blobs[0]
+        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual(len(b1), blob1_reader.content_length())
+        blob2_reader = upstream.blobs[1]
+        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertIsNone(blob2_reader.content_length())
+
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        blob1_reader = from_db.blobs[0]
+        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual(len(b1), blob1_reader.content_length())
+        blob2_reader = from_db.blobs[1]
+        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertIsNone(blob2_reader.content_length())
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+        prev_reads = self.s._tx_reads
+
+        blob2_writer = downstream.get_blob_for_append(
+            BlobUri('tx_rest_id', blob='blob2'))
+        b2 = b'hello blob2'
+        blob2_writer.append_data(0, b2, last=True)
+
+        self.assertTrue(upstream.try_cache())
+        blob1_reader = upstream.blobs[0]
+        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual(len(b1), blob1_reader.content_length())
+        blob2_reader = upstream.blobs[1]
+        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual(len(b2), blob2_reader.content_length())
+
+        self.assertEqual(0, self.s._tx_reads - prev_reads)
+
+        from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(from_db.load())
+        blob1_reader = from_db.blobs[0]
+        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual(len(b1), blob1_reader.content_length())
+        blob2_reader = from_db.blobs[1]
+        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual(len(b2), blob2_reader.content_length())
+        self.assertEqual(1, self.s._tx_reads - prev_reads)
+        prev_reads = self.s._tx_reads
+
 
 class StorageTestSqlite(StorageTestBase):
     def setUp(self):
