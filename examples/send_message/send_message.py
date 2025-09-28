@@ -39,10 +39,14 @@ class Sender:
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
-    # has blobs uris referencing first first recipient transaction
-    message_builder_blobs : Optional[dict] = None
     body_filename : Optional[str] = None
-    body_path : Optional[str] = None
+    body_uri : Optional[str] = None
+
+    # create_id -> uri
+    blob_uris : Dict[str, str]
+
+    # key is json node of message builder spec tree
+    blob_ids : Dict[Any, str]
 
     def __init__(self,
                  base_url : str,
@@ -62,14 +66,13 @@ class Sender:
             self.fixup_headers()
         self.base_url = base_url
         self.host = host
+        self.blob_uris = {}
 
     # -> url path (for reuse)
     def send_part(self,
-                  tx_url,
-                  blob_id : str,
+                  blob_id,
+                  uri,
                   filename : str) -> Optional[str]:
-        path = tx_url + '/blob/' + blob_id
-        uri = urljoin(self.base_url, path)
         logging.info('PUT %s', uri)
 
         with open(filename, 'rb') as file:
@@ -77,20 +80,27 @@ class Sender:
 
         logging.info('PUT %s %s', uri, resp)
         if resp.status_code >= 300:
-            return None
-        return path
+            return False
+        self.blob_uris[blob_id] = uri
+        return True
 
     def strip_filenames(self, json : Dict[str, Any]):
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
             if not (multipart := json.get(multi, [])):
                 continue
             for part in multipart:
-                if 'filename' in part['content']:
-                    del part['content']['filename']
+                content = part['content']
+                if 'filename' in content:
+                    del content['filename']
+                if ((create_id := content.get('create_id', None)) and
+                    (reuse_uri := self.blob_uris.get(create_id, None))):
+                    self.blob_ids[id(content)] = create_id
+                    del content['create_id']
+                    part['content']['reuse_uri'] = reuse_uri
         return json
 
 
-    def send_body(self, tx_url, json : dict):
+    def send_body(self, tx_json, json : dict):
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
             if not (multipart := json.get(multi, [])):
                 continue
@@ -99,38 +109,46 @@ class Sender:
                 # cf MessageBuilderSpec._add_part_blob()
                 content = part['content']
                 if 'reuse_uri' in content:
-                    continue
+                    blob_id = self.blob_ids.get(id(content), None)
+                    if ((blob := tx_json['body'].get(blob_id)) is not None and
+                        blob.get('finalized', False)):
+                        logging.debug('reused %s', blob_id)
+                        continue
+                    # else server didn't reuse -> upload again
+
                 if ('create_id' not in content or
                     'filename' not in content):
                     continue
                 filename = content['filename']
                 del content['filename']
-                if (uri := self.send_part(
-                        tx_url, content['create_id'],
-                        filename=filename)) is None:
+                uri = tx_json['body'][content['create_id']]['uri']
+                if not self.send_part(
+                        content['create_id'],
+                        uri,
+                        filename=filename):
                     return False
                 content['reuse_uri'] = uri
 
         return True
 
     def send(self, rcpt_to : str, max_wait=30):
+        logging.debug(self.blob_uris)
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
+
+        self.blob_ids = {}
 
         tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
         }
         assert tx_json is not None
-        if self.body_path is not None:
-            tx_json['body'] = {'reuse_uri': self.body_path}
+        if self.body_uri is not None:
+            tx_json['body'] = {'reuse_uri': self.body_uri}
         elif self.body_filename is not None:
             pass
-        elif (self.message_builder_blobs is None and
-              self.message_builder is not None):
+        elif self.message_builder is not None:
             tx_json['body'] = {'message_builder': self.strip_filenames(
                 copy.deepcopy(self.message_builder))}
-        else:
-            tx_json['body'] = {'message_builder': self.message_builder_blobs}
 
         logging.debug(json.dumps(tx_json, indent=2))
 
@@ -148,6 +166,7 @@ class Sender:
             return
 
         tx_json = rest_resp.json()
+        logging.debug(tx_json)
         tx_path = rest_resp.headers['location']
         tx_url = urljoin(self.base_url, tx_path)
 
@@ -163,22 +182,20 @@ class Sender:
                              resp_field, rest_resp, rest_resp.json())
                 return
 
-        if self.body_filename is not None and self.body_path is None:
+        # cf send_body(), if the server sent back a different body
+        # uri, it didn't reuse the one we sent -> upload again
+        if self.body_filename is not None and (self.body_uri is None or self.body_uri != tx_json['body']['uri']):
             with open(self.body_filename, 'rb') as body_file:
-                body_path = tx_path + '/body'
-                resp = self.session.put(
-                    urljoin(self.base_url, body_path),
-                    data=body_file)
-                logging.debug('PUT %s %s %s', body_path, resp, resp.text)
-                if resp.status_code == 201:
-                    self.body_path = body_path
-        elif (self.message_builder is not None and
-              self.message_builder_blobs is None):
-            if not self.send_body(tx_path, self.message_builder):
+                body_uri = tx_json['body']['uri']
+                resp = self.session.put(body_uri, data=body_file)
+                logging.debug('PUT %s %s %s', body_uri, resp, resp.text)
+                if resp.status_code == 200:
+                    self.body_uri = body_uri
+        elif self.message_builder is not None:
+            if not self.send_body(tx_json, self.message_builder):
                 return
             logging.info('main message_builder spec %s',
                          json.dumps(self.message_builder, indent=2))
-            message_builder_blobs = self.message_builder
             rest_resp = None
 
         done = False
@@ -210,6 +227,7 @@ class Sender:
                 continue
 
             tx_json = rest_resp.json()
+            logging.debug(tx_json)
 
             for resp in ['mail_response', 'rcpt_response', 'data_response']:
                 if not (resp_json := tx_json.get(resp, None)):

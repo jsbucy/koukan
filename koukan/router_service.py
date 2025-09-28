@@ -179,12 +179,13 @@ class Service:
         # top-level: http host -> endpoint
 
         self.endpoint_factory = StorageWriterFactory(self)
+        session_uri = listener_yaml.get('session_uri', None)
         self.rest_handler_factory = RestHandlerFactory(
             self.rest_executor,
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
-            session_uri=listener_yaml.get('session_uri', None),
-            service_uri=listener_yaml.get('service_uri', None),
+            session_uri=session_uri,
+            service_uri=listener_yaml.get('service_uri', session_uri),
             chunk_size=listener_yaml.get('chunk_size', None))
 
         with self.lock:

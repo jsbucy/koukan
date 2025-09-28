@@ -52,7 +52,7 @@ class HostPort:
         return HostPort(yaml['host'], yaml['port'])
     def to_tuple(self):
         return (self.host, self.port)
-    def to_json(self):
+    def to_json(self, which_json):
         return self.to_tuple()
 
     def __str__(self):
@@ -111,7 +111,7 @@ class EsmtpParam:
             out += '=' + self.value
         return out
 
-    def to_json(self):
+    def to_json(self, which_json):
         json = { 'k': self.keyword }
         if self.value:
             json['p'] = self.value
@@ -146,10 +146,10 @@ class Mailbox:
     def __repr__(self):
         return self.mailbox
 
-    def to_json(self):
+    def to_json(self, which_json):
         out = {'m': self.mailbox}
         if self.esmtp:
-            out['e'] = [e.to_json() for e in self.esmtp]
+            out['e'] = [e.to_json(which_json) for e in self.esmtp]
         return out
 
     @staticmethod
@@ -230,7 +230,48 @@ def body_from_json(body_json):
         return spec
     return None
 
-def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None]):
+def blob_to_json(blob : Blob) -> Tuple[str, dict]:
+    out = {'length' : blob.len()}
+    if blob.content_length is not None:
+        out['content_length'] = blob.content_length()
+    if blob.finalized():
+        out['finalized'] = True
+
+    blob_id = None
+    if hasattr(blob, 'blob_uri'):
+        uri = blob.blob_uri
+        if not uri.tx_body:
+            blob_id = uri.blob
+
+        logging.debug(uri)
+        if uri.tx_body:  #  xxx fix
+            out['uri'] = make_blob_uri(uri.tx_id, tx_body=True,
+                                       base_uri=uri.base_uri)
+        else:
+            out['uri'] = make_blob_uri(uri.tx_id, blob=uri.blob,
+                                       base_uri=uri.base_uri)
+    logging.debug(blob)
+    logging.debug(out)
+    return blob_id,out
+
+def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
+                 which_json : WhichJson):
+    if which_json == WhichJson.REST_READ:
+        if isinstance(body, Blob):
+            # xxx this should probably be blob: {...}
+            blob_id, json = blob_to_json(body)
+            return json
+        elif isinstance(body, MessageBuilderSpec):
+            # xxx this needs to be ~message_builder: {blobs: {...}}
+            out = {}
+            for b in body.blobs:
+                blob_id, json = blob_to_json(b)
+                out[blob_id] = json
+            return out
+        else:
+            logging.debug(body)
+            raise ValueError()
+
     # TODO unify with MessageBuilderSpec._add_part_blob()
     if isinstance(body, InlineBlob):
         # assert body.finalized() ?
@@ -315,7 +356,6 @@ _tx_fields = [
     TxField('attempt_count',
             validity=set([WhichJson.REST_READ])),
     TxField('body',
-            rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
@@ -604,14 +644,14 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v_js = [{}] * len(v)
                 else:
-                    v_js = [vv.to_json() for vv in v]
+                    v_js = [vv.to_json(which_js) for vv in v]
                 offset = getattr(self, field.list_offset(), None)
                 if which_js == WhichJson.REST_UPDATE and offset:
                     json[field.list_offset()] = offset
         elif field.emit_rest_placeholder(which_js):
             v_js = {}
         elif field.to_json is not None:
-            v_js = field.to_json(v)
+            v_js = field.to_json(v, which_js)
         else:  # POD
             v_js = v
 

@@ -53,6 +53,7 @@ from koukan.rest_schema import (
     parse_blob_uri )
 from koukan.version_cache import IdVersion
 from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.message_builder import MessageBuilderSpec
 
 
 MAX_TIMEOUT=30
@@ -236,16 +237,18 @@ class RestHandler(Handler):
             return err
 
         tx.host = self.http_host
-        body = tx.body
 
         upstream = self.async_filter.update(tx, tx.copy())
+        cached = self.async_filter.check_cache()
+        assert cached is not None
+        version, cached_tx, local, remote = cached
+        logging.debug(cached_tx)
         if upstream is None or tx.rest_id is None:
             return self.response(code=400, msg='bad request')
         version = self.async_filter.version
         assert version is not None
         self._tx_rest_id = tx.rest_id
 
-        tx.body = body
         # return uri qualified to session or service per self.endpoint_yaml
         tx_path = make_tx_uri(tx.rest_id)
         if self.endpoint_yaml.get('rest_lro', False) is False:
@@ -254,13 +257,27 @@ class RestHandler(Handler):
             tx_uri = urljoin(self.service_uri, tx_path)
         else:
             tx_uri = tx_path
+        self._update_body_blob_uri(cached_tx)
         resp = self.response(
             code=201,
-            resp_json=tx.to_json(WhichJson.REST_READ),
+            resp_json=cached_tx.to_json(WhichJson.REST_READ),
             headers=[('location', tx_uri)],
             etag=self._etag(version))
         logging.debug('RestHandler._create %s', resp)
         return resp
+
+    def _update_blob_uri(self, blob):
+        if blob.finalized():
+            blob.blob_uri.base_uri = self.service_uri
+        else:
+            blob.blob_uri.base_uri = self.session_uri
+
+    def _update_body_blob_uri(self, tx):
+        if isinstance(tx.body, Blob):
+            self._update_blob_uri(tx.body)
+        elif isinstance(tx.body, MessageBuilderSpec):
+            for b in tx.body.blobs:
+                self._update_blob_uri(b)
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
@@ -457,6 +474,7 @@ class RestHandler(Handler):
             return self.response(
                 code=400, msg='RestHandler.patch_tx bad request')
 
+        # if session_uri is not None and not this process, 308
         if (err := self._maybe_schedule_ping(
                 request, tx.session_uri, self._tx_rest_id)):
             return err
@@ -567,6 +585,7 @@ class RestHandler(Handler):
         if resp.status_code != 200:
             return resp
         assert self.blob is not None
+        # if session_uri is not None and not this process, 308
         if (err := self._maybe_schedule_ping(
                 request, self.blob.session_uri(), self._tx_rest_id)):
             return err

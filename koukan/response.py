@@ -55,7 +55,7 @@ class Response:
     def temp(self):
         return self.code >= 400 and self.code <= 499
 
-    def to_json(self) -> Dict[object, object]:
+    def to_json(self, which_json) -> Dict[object, object]:
         return {'code': self.code, 'message': self.message}
 
     def __eq__(self, r):

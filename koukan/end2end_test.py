@@ -11,6 +11,7 @@ import asyncio
 from dkim import dknewkey
 import tempfile
 import yaml
+import sys
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
@@ -374,9 +375,11 @@ class End2EndTest(unittest.TestCase):
         for handler in self.fake_smtpd.handlers:
             logging.debug(handler)
             if len(handler.rcpt_to) != 1:
+                logging.debug(handler.rcpt_to)
                 continue
             rcpt = handler.rcpt_to[0]
             if rcpt not in ['bob@example.com', 'bob2@example.com']:
+                logging.debug(rcpt)
                 continue
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler

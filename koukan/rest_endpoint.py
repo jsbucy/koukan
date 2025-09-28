@@ -648,8 +648,8 @@ class RestEndpoint(Filter):
             logging.debug('RestEndpoint.get_json %s %s',
                           rest_resp, [r.headers for r in rest_resp.history])
         except RequestError as e:
-            logging.debug('RestEndpoint.get_json() timeout %s',
-                          self.transaction_url)
+            logging.debug('RestEndpoint.get_json() %s error %s',
+                          self.transaction_url, e)
             return None
         if rest_resp.status_code not in [200, 304]:
             logging.debug(rest_resp.text)

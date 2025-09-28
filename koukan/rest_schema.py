@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
 
+from urllib.parse import urljoin, urlparse
+
 FINALIZE_BLOB_HEADER = 'x-finalize-blob-length'
 
 def make_tx_uri(tx):
     return '/transactions/' + tx
 
 def make_blob_uri(tx, blob : Optional[str] = None,
-                  tx_body : Optional[bool] = None) -> str:
+                  tx_body : Optional[bool] = None,
+                  base_uri : Optional[str] = None) -> str:
     assert not (blob and tx_body)
     assert blob or tx_body
     uri = make_tx_uri(tx)
+    if base_uri is not None:
+        uri = urljoin(base_uri, uri)
     if blob:
         uri += ('/blob/' + blob)
     else:
@@ -22,6 +27,7 @@ class BlobUri:
     tx_id : str
     tx_body : bool = False
     blob : Optional[str] = None
+    base_uri : Optional[str] = None
     def __init__(self, tx_id : str, tx_body : bool = False,
                  blob : Optional[str] = None):
         assert tx_body or blob
@@ -43,9 +49,12 @@ class BlobUri:
 
 
 def parse_blob_uri(uri) -> Optional[BlobUri]:
-    if not uri.startswith('/transactions/'):
+    result = urlparse(uri)
+    if result is None:
         return None
-    u = uri.removeprefix('/transactions/')
+    if not result.path.startswith('/transactions/'):
+        return None
+    u = result.path.removeprefix('/transactions/')
     slash = u.find('/')
     if slash == -1:
         return None

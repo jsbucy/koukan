@@ -13,7 +13,7 @@ class RestSchemaTest(unittest.TestCase):
         self.assertIsNone(parse_blob_uri('/transactions'))
         self.assertIsNone(parse_blob_uri('/transactions/123'))
         self.assertIsNone(parse_blob_uri('/transactions/123/blob/'))
-        uri = parse_blob_uri(make_blob_uri('my-tx', 'my-blob'))
+        uri = parse_blob_uri(make_blob_uri('my-tx', 'my-blob', base_uri='http://router'))
         self.assertEqual(uri.tx_id, 'my-tx')
         self.assertEqual(uri.blob, 'my-blob')
         self.assertFalse(uri.tx_body)
