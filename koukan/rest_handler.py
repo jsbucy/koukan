@@ -240,9 +240,11 @@ class RestHandler(Handler):
 
         upstream = self.async_filter.update(tx, tx.copy())
         cached = self.async_filter.check_cache()
+        # the factory path up to router_service fails if the OH
+        # couldn't be scheduled so if we got here, it should be leased
         assert cached is not None
         version, cached_tx, local, remote = cached
-        logging.debug(cached_tx)
+        assert cached_tx is not None
         if upstream is None or tx.rest_id is None:
             return self.response(code=400, msg='bad request')
         version = self.async_filter.version

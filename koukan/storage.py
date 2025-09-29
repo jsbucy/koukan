@@ -532,7 +532,7 @@ class TransactionCursor:
 
     # loads version, session only
     # returns True if leased in this process, uri of other session
-    def check(self) -> Tuple[bool, Optional[str]]:
+    def check(self) -> Optional[Tuple[bool, Optional[str]]]:
         assert self.rest_id is not None
         with self.parent.begin_transaction() as db_tx:
             sel = select(self.parent.tx_table.c.id,

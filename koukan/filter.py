@@ -172,7 +172,7 @@ def list_from_js(js, builder):
     return [builder(j) for j in js]
 
 FromJson = Callable[[Dict[object, object]], object]
-ToJson = Callable[[Any], Dict[object, object]]
+ToJson = Callable[[Any, WhichJson], Dict[object, object]]
 Copy = Callable[[Any, WhichJson], Any]
 class TxField:
     json_field : str
@@ -230,10 +230,10 @@ def body_from_json(body_json):
         return spec
     return None
 
-def blob_to_json(blob : Blob) -> Tuple[str, dict]:
-    out = {'length' : blob.len()}
-    if blob.content_length is not None:
-        out['content_length'] = blob.content_length()
+def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
+    out : Dict[str, Any] = {'length' : blob.len()}
+    if (l := blob.content_length()) is not None:
+        out['content_length'] = l
     if blob.finalized():
         out['finalized'] = True
 
@@ -743,6 +743,10 @@ class TransactionMetadata:
             # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
+            # xxx kludge, this is now a "live status" field and needs
+            # first-class support?
+            if f == 'body' and which_json == WhichJson.REST_READ and new_v is None:
+                continue
             if ((which_json is not None) and (
                     json_field.emit_rest_placeholder(which_json)) and
                 (old_v is not None and new_v is None)):

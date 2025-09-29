@@ -72,7 +72,7 @@ class Sender:
     def send_part(self,
                   blob_id,
                   uri,
-                  filename : str) -> Optional[str]:
+                  filename : str) -> bool:
         logging.info('PUT %s', uri)
 
         with open(filename, 'rb') as file:

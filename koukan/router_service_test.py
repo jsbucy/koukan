@@ -557,10 +557,12 @@ class RouterServiceTest(unittest.TestCase):
 
         if 'attempt_count' in tx_json:
             del tx_json['attempt_count']
+        self.assertIn('uri', tx_json['body'])
+        del tx_json['body']['uri']
         self.assertEqual(tx_json, {
             'mail_from': {},
             'rcpt_to': [{}],
-            'body': {},
+            'body': {'content_length': 13, 'length': 13, 'finalized': True},
             'retry': {},
             'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
@@ -704,10 +706,14 @@ class RouterServiceTest(unittest.TestCase):
 
             if 'attempt_count' in tx_json:
                 del tx_json['attempt_count']
+            if 'uri' not in tx_json['body']:
+                continue
+            del tx_json['body']['uri']
+
             if tx_json == {
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {},
+                'body': {'content_length': 13, 'length': 13, 'finalized': True},
                 'retry': {},
                 'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
@@ -800,10 +806,15 @@ class RouterServiceTest(unittest.TestCase):
         for i in range(0, 5):
             tx_json = rest_endpoint.get_json()
             logging.debug(tx_json)
+
+            if 'uri' not in tx_json['body']:
+                continue
+            del tx_json['body']['uri']
+
             if tx_json == {
                     'mail_from': {},
                     'rcpt_to': [{}],
-                    'body': {},
+                    'body': {'content_length': 15, 'length': 15, 'finalized': True},
                     'retry': {},
                     'notification': {},
                     'mail_response': {'code': 201, 'message': 'ok'},
@@ -858,22 +869,18 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
 
-        blob_uri = parse_blob_uri(rest_endpoint.transaction_path + '/body')
-        logging.debug(blob_uri)
-
         tx_json = rest_endpoint.get_json()
         logging.debug('RouterServiceTest.test_reuse_body create %s',
                       tx_json)
+
+        blob_uri = parse_blob_uri(tx_json['body']['uri'])
+        logging.debug(blob_uri)
 
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice@example.com'),
-            rcpt_to=[Mailbox('bob2@example.com')],
-            body=BlobSpec(reuse_uri=blob_uri))
 
         upstream_endpoint = FakeFilter()
         def exp2(tx, tx_delta):
@@ -893,14 +900,19 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp2)
         upstream_endpoint.add_expectation(exp2)
         self.add_endpoint(upstream_endpoint)
-        tx.merge_from(delta)
-        rest_endpoint.on_update(delta)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        tx.rcpt_to = [Mailbox('bob2@example.com')]
+        tx.body = BlobSpec(reuse_uri=blob_uri)
+        rest_endpoint.on_update(prev.delta(tx))
         tx_json = rest_endpoint.get_json()
         logging.debug(tx_json)
+        self.assertIn('uri', tx_json['body'])
+        del tx_json['body']['uri']
         self.assertEqual(
             {'mail_from': {},
              'rcpt_to': [{}],
-             'body': {},
+             'body': {'content_length': 13, 'length': 13, 'finalized': True},
              'retry': {},
              'notification': {},
              'mail_response': {'code': 201, 'message': 'ok'},

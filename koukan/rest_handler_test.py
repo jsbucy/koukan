@@ -51,8 +51,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        # resp = await handler.handle_async(
-        #     req, lambda: handler.create_tx(req, req_json={}))
+
+        endpoint.check_cache_expectation.append(
+            lambda: (1, TransactionMetadata(), True, None))
+
         resp = handler.create_tx(req, req_json={})
         logging.debug(resp.body)
         logging.debug(resp.headers)
@@ -250,7 +252,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],
-            'body': {},
+            'body': {'content_length': 13, 'finalized': True, 'length': 13},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
                               {'code': 203, 'message': 'ok'}],
@@ -269,7 +271,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],
-            'body': {},
+            'body': {'content_length': 13, 'finalized': True, 'length': 13},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
                               {'code': 203, 'message': 'ok'}],
@@ -571,6 +573,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         scope = {'type': 'http',
                  'headers': self._headers([])}
         req = FastApiRequest(scope)
+
+        endpoint.check_cache_expectation.append(
+            lambda: (1, TransactionMetadata(), True, None))
 
         def exp(tx, tx_delta):
             prev = tx.copy()

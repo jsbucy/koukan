@@ -777,8 +777,8 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]},
+                'mail_response': mail_resp.to_json(WhichJson.REST_READ),
+                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)]},
             location = '/transactions/123',
             etag='1'))
 
@@ -796,8 +796,8 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
-                'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json()]},
+                'mail_response': mail_resp.to_json(WhichJson.REST_READ),
+                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)]},
             etag='2'))
         # GET /transactions/123
         self.responses.append(Response(
@@ -805,9 +805,9 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
-                'mail_response': mail_resp.to_json(),
-                'rcpt_response': [rcpt0_resp.to_json(),
-                                  rcpt1_resp.to_json()]},
+                'mail_response': mail_resp.to_json(WhichJson.REST_READ),
+                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ),
+                                  rcpt1_resp.to_json(WhichJson.REST_READ)]},
             etag='3'))
 
         prev = tx.copy()
