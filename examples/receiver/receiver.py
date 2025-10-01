@@ -41,6 +41,7 @@ class Transaction:
             del self.tx_json['smtp_meta']
         self.tx_json['mail_response'] = {'code': 250, 'message': 'ok'}
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
+        # TODO populate blob status/uris
         self.dir = dir
         self.ping()
         self.next_inline = 0
@@ -49,6 +50,8 @@ class Transaction:
         self.last_update = int(time.monotonic())
 
     def get_json(self):
+        # TODO populate blob_status/uris
+
         json_out = copy.copy(self.tx_json)
         if 'mail_from' in json_out:
             json_out['mail_from'] = {}

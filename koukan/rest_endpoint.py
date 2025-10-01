@@ -24,6 +24,7 @@ import werkzeug.http
 
 from koukan.deadline import Deadline
 from koukan.filter import (
+    BodyStatus,
     HostPort,
     Resolution,
     TransactionMetadata,
@@ -313,11 +314,21 @@ class RestEndpoint(Filter):
         else:
             self.rest_upstream_tx.merge_from(downstream_delta)
 
-        # router_service_test uses this for submission and sends
-        # BlobSpec for body reuse here.  Otherwise clear blobs so the
-        # _get() after POST doesn't wait on
+        # XXX router_service_test test_reuse_body (apparently the only
+        # one) uses this for submission and sends BlobSpec for body
+        # reuse here. That test should really be using
+        # examples/send_message instead?
+
+        # Otherwise clear blobs so the _get() after POST doesn't wait on
         # data_response/req_inflight() (cf below)
-        if isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
+
+        # XXX sort of weird the way rest_upstream_tx.body will change
+        # from MessageBuilderSpec to BlobStatus or whatever
+        # downstream body shouldn't go into rest_upstream_tx at all
+        # since we get the blobs to send from the delta anyway?
+        if isinstance(self.rest_upstream_tx.body, BodyStatus):
+            pass
+        elif isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
             self.rest_upstream_tx.body = copy.copy(self.rest_upstream_tx.body)
             self.rest_upstream_tx.body.blobs = []
         elif isinstance(self.rest_upstream_tx.body, Blob):
@@ -326,7 +337,7 @@ class RestEndpoint(Filter):
             pass
         elif self.rest_upstream_tx.body is not None:
             raise ValueError()
-        upstream_tx = self.rest_upstream_tx.copy()
+        #xxx dead upstream_tx = self.rest_upstream_tx.copy()
 
         logging.debug('RestEndpoint.on_update merged tx %s', self.rest_upstream_tx)
 
@@ -395,13 +406,18 @@ class RestEndpoint(Filter):
                 return FilterResult()
 
             upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
+            downstream_delta = upstream_delta.copy()
+            if isinstance(downstream_delta.body, BodyStatus):
+                downstream_delta.body = None
             if (upstream_delta is None or
                 (self.rest_upstream_tx.merge_from(upstream_delta) is None) or
-                (self.downstream_tx.merge_from(upstream_delta) is None)):
+                (self.downstream_tx.merge_from(downstream_delta) is None)):
                 self.downstream_tx.fill_inflight_responses(
                     Response(450,
                              'RestEndpoint upstream invalid resp/delta update'))
                 return FilterResult()
+
+        assert not isinstance(self.downstream_tx.body, BodyStatus)
 
         if tx_delta.body is None:
             return FilterResult()
@@ -429,13 +445,19 @@ class RestEndpoint(Filter):
                     " (RestEndpoint)")
             return FilterResult()
 
-        blobs : List[Tuple[Blob, bool]]  # bool: non_body_blob
+        blobs : List[Tuple[Blob, str]]  # uri
+        logging.debug(self.rest_upstream_tx)
         if isinstance(tx_delta.body, Blob):
-            blobs = [ (tx_delta.body, False) ]
+            blobs = [ (tx_delta.body,
+                       self.rest_upstream_tx.body.blob_status.uri) ]
         elif isinstance(tx_delta.body, MessageBuilderSpec):
-            blobs = [(b, True) for b in tx_delta.body.blobs]
+            blobs = []
+            for blob in tx_delta.body.blobs:
+                uri = self.rest_upstream_tx.body.message_builder[blob.rest_id()].uri
+                blobs.append((blob, uri))
             if tx_delta.body.body_blob is not None:
-                blobs.append((tx_delta.body.body_blob, False))
+                blobs.append((tx_delta.body.body_blob,
+                              self.rest_upstream_tx.body.blob_status.uri))
         elif isinstance(tx_delta.body, BlobSpec):
             return FilterResult()
         else:
@@ -448,13 +470,11 @@ class RestEndpoint(Filter):
         # NOTE this assumes that message_builder includes all blobs on
         # the first call
         finalized = True
-        for blob,non_body_blob in blobs:
-            put_blob_resp = self._put_blob(blob, non_body_blob=non_body_blob)
+        for blob, uri in blobs:
+            put_blob_resp = self._put_blob(blob, uri)
             if not put_blob_resp.ok():
                 self.downstream_tx.data_response = put_blob_resp
                 return FilterResult()
-            if non_body_blob:
-                self.blob_url = None  # xxx wat?
             if not blob.finalized():
                 finalized = False
         if finalized:
@@ -471,35 +491,34 @@ class RestEndpoint(Filter):
         # fields we aren't going to send upstream (above)
         if (tx_out is None or
             (blob_delta := self.rest_upstream_tx.delta(
-                tx_out, WhichJson.REST_READ)) is None or
-            (self.rest_upstream_tx.merge_from(blob_delta) is None) or
-            (self.downstream_tx.merge_from(blob_delta) is None)):
+                tx_out, WhichJson.REST_READ)) is None):
+            self.downstream_tx.fill_inflight_responses(
+                Response(450, 'RestEndpoint upstream invalid resp/delta get'))
+            return FilterResult()
+
+        downstream_delta = blob_delta.copy()
+        if isinstance(downstream_delta.body, BodyStatus):
+            downstream_delta.body = None
+        if ((self.rest_upstream_tx.merge_from(blob_delta) is None) or
+            (self.downstream_tx.merge_from(downstream_delta) is None)):
             self.downstream_tx.fill_inflight_responses(
                 Response(450, 'RestEndpoint upstream invalid resp/delta get'))
             return FilterResult()
 
         self.downstream_tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'))
-        for t in [upstream_tx, tx_out]:
+        for t in [#upstream_tx,
+                tx_out]:
             t.remote_host = None
         return FilterResult()
 
     # Send a finalized blob with a single http request.
-    def _put_blob_single(self, blob : Blob,
-                         body : bool,
-                         blob_rest_id : Optional[str] = None
-                         ) -> Response:
+    def _put_blob_single(self, blob : Blob, uri : str) -> Response:
         assert self.transaction_path is not None
         assert blob.finalized()
-        assert not(body and blob_rest_id)
-        assert body or blob_rest_id
-        if blob_rest_id is not None:
-            self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
-        elif body:
-            self.blob_path = self.transaction_path + '/body'
-        self.blob_url, self.blob_path = self._maybe_qualify_url(self.blob_path)
+        self.blob_url = uri
         logging.debug('_put_blob_single %d %s',
-                      blob.content_length(), self.blob_url)
+                      blob.content_length(), uri)
         headers = {}
         if self.http_host:
             headers['host'] = self.http_host
@@ -507,7 +526,7 @@ class RestEndpoint(Filter):
         rest_resp = None
         try:
             rest_resp = self.client.put(
-                self.blob_url, headers=headers, content = BlobReader(blob))
+                uri, headers=headers, content = BlobReader(blob))
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
         if rest_resp is None or rest_resp.status_code != 200:
@@ -516,13 +535,12 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint._put_blob_single %s', rest_resp)
         return Response()
 
-    def _put_blob(self, blob : Blob, non_body_blob=False) -> Response:
+    def _put_blob(self, blob : Blob, uri : str) -> Response:
         if blob not in self.blob_readers:
             self.blob_readers[blob] = BlobReader(blob)
         blob_reader = self.blob_readers[blob]
         if blob_reader is None and self.chunk_size is None and blob.finalized():
-            return self._put_blob_single(
-                blob, not non_body_blob, blob.rest_id())
+            return self._put_blob_single(blob, uri)
 
         empty_put = (blob.finalized() and
                      (blob.len() == blob.content_length()) and
@@ -543,8 +561,7 @@ class RestEndpoint(Filter):
                 offset=offset,
                 d=chunk,
                 last=chunk_last,
-                non_body_blob=non_body_blob,
-                blob_rest_id=blob.rest_id())
+                uri=uri)
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
@@ -567,10 +584,9 @@ class RestEndpoint(Filter):
         return Response()
 
     # -> (resp, len)
-    def _put_blob_chunk(self, offset, d : bytes, last : bool,
-                        non_body_blob=False,
-                        blob_rest_id : Optional[str] = None
-                        ) -> Tuple[Optional[Response], Optional[int]]:
+    def _put_blob_chunk(
+            self, offset, d : bytes, last : bool, uri : str
+    ) -> Tuple[Optional[Response], Optional[int]]:
         assert self.transaction_path is not None
 
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
@@ -585,16 +601,7 @@ class RestEndpoint(Filter):
         if self.http_host:
             headers['host'] = self.http_host
         try:
-            if self.blob_url is None:
-                if blob_rest_id is not None:
-                    self.blob_path = self.transaction_path + '/blob/' + blob_rest_id
-                elif not non_body_blob:
-                    self.blob_path = self.transaction_path + '/body'
-                else:
-                    raise ValueError()
-
-                self.blob_url, self.blob_path = (
-                    self._maybe_qualify_url(self.blob_path))
+            self.blob_url = uri
 
             logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
                          self.blob_url, headers)

@@ -104,13 +104,16 @@ class Sender:
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
             if not (multipart := json.get(multi, [])):
                 continue
+            blob_status = tx_json['body']['message_builder']['blob_status']
+            logging.debug(blob_status)
             for part in multipart:
                 logging.info('send_body %s', part)
                 # cf MessageBuilderSpec._add_part_blob()
                 content = part['content']
-                if 'reuse_uri' in content:
-                    blob_id = self.blob_ids.get(id(content), None)
-                    if ((blob := tx_json['body'].get(blob_id)) is not None and
+                logging.debug(content)
+                if blob_id := content.get('create_id', None):
+                    logging.debug(blob_id)
+                    if ((blob := blob_status.get(blob_id)) is not None and
                         blob.get('finalized', False)):
                         logging.debug('reused %s', blob_id)
                         continue
@@ -121,18 +124,17 @@ class Sender:
                     continue
                 filename = content['filename']
                 del content['filename']
-                uri = tx_json['body'][content['create_id']]['uri']
+                blob_id = content['create_id']
+                uri = blob_status[blob_id]['uri']
                 if not self.send_part(
-                        content['create_id'],
-                        uri,
-                        filename=filename):
+                        content['create_id'], uri, filename=filename):
                     return False
-                content['reuse_uri'] = uri
+                # content['reuse_uri'] = uri
 
         return True
 
     def send(self, rcpt_to : str, max_wait=30):
-        logging.debug(self.blob_uris)
+        logging.debug('blob uris %s', self.blob_uris)
         logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
 
         self.blob_ids = {}
@@ -194,8 +196,8 @@ class Sender:
         elif self.message_builder is not None:
             if not self.send_body(tx_json, self.message_builder):
                 return
-            logging.info('main message_builder spec %s',
-                         json.dumps(self.message_builder, indent=2))
+            # logging.info('main message_builder spec %s',
+            #              json.dumps(self.message_builder, indent=2))
             rest_resp = None
 
         done = False

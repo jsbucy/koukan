@@ -54,7 +54,9 @@ class HostPort:
         return (self.host, self.port)
     def to_json(self, which_json):
         return self.to_tuple()
-
+    @staticmethod
+    def from_json(js, which_json):
+        return HostPort.from_seq(js)
     def __str__(self):
         return '%s:%d' % (self.host, self.port)
     def __repr__(self):
@@ -99,7 +101,7 @@ class EsmtpParam:
         return EsmtpParam(s[0:eq], s[eq+1:])
 
     @staticmethod
-    def from_json(json : dict):
+    def from_json(json : dict, which_js : WhichJson):
         if not (k := json.get('k', None)):
             return None
         p = json.get('p', None)
@@ -153,13 +155,13 @@ class Mailbox:
         return out
 
     @staticmethod
-    def from_json(json):
+    def from_json(json, which_js : WhichJson):
         # XXX this should fail pytype since esmtp is arbitrary json
         # (in practice List[str]), Esmtp (above) isn't actually used?
         esmtp = json.get('e', [])
         params = []
         if isinstance(esmtp, list):  # xxx else fail?
-            params = [EsmtpParam.from_json(j) for j in esmtp]
+            params = [EsmtpParam.from_json(j, which_js) for j in esmtp]
         return Mailbox(json['m'], params)
 
     def copy(self, valid : WhichJson) -> 'Mailbox':
@@ -171,7 +173,7 @@ class Mailbox:
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
-FromJson = Callable[[Dict[object, object]], object]
+FromJson = Callable[[Dict[object, object], WhichJson], object]
 ToJson = Callable[[Any, WhichJson], Dict[object, object]]
 Copy = Callable[[Any, WhichJson], Any]
 class TxField:
@@ -184,6 +186,7 @@ class TxField:
     to_json : Optional[ToJson] = None
     is_list : bool = False
     copy : Optional[Copy] = None
+    is_live_status = False
 
     def __init__(self,
                  json_field : str,
@@ -192,7 +195,8 @@ class TxField:
                  to_json : Optional[ToJson] = None,
                  rest_placeholder : bool = False,
                  is_list : bool = False,
-                 copy : Optional[Copy] = None):
+                 copy : Optional[Copy] = None,
+                 is_live_status = False):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -203,6 +207,7 @@ class TxField:
         self.rest_placeholder = rest_placeholder
         self.is_list = is_list
         self.copy = copy
+        self.is_live_status = is_live_status
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -218,7 +223,53 @@ class TxField:
         assert self.is_list
         return self.json_field + '_list_offset'
 
-def body_from_json(body_json):
+class BlobStatus:
+    finalized : bool
+    uri : Optional[str]
+
+    def __init__(self, f, u):
+        self.finalized = f
+        self.uri = u
+
+    @staticmethod
+    def from_json(js, which_js : WhichJson):
+        return BlobStatus(js.get('finalized', False),
+                          js.get('uri', None))
+
+# XXX fold this into MessageBuilderSpec/BlobSpec
+class BodyStatus:
+    blob_status : Optional[BlobStatus] = None
+    message_builder : Optional[Dict[str, BlobStatus]] = None
+
+    def finalized(self):
+        if self.blob_status and not self.blob_status.finalized:
+            return False
+        if self.message_builder:
+            for b in self.message_builder.values():
+                if not b.finalized:
+                    return False
+        return True
+
+    @staticmethod
+    def from_json(js, which_js : WhichJson):
+        out = BodyStatus()
+        if (b := js.get('blob_status', None)) is not None:
+            out.blob_status = BlobStatus.from_json(b, which_js)
+        if ((m := js.get('message_builder', None)) is not None and
+              (bs := m.get('blob_status', None)) is not None):
+            out.message_builder = {
+                b : BlobStatus.from_json(v, which_js) for b,v in bs.items()
+            }
+        # xxx none if not blob_status and not message_builder?
+        return out
+
+    # xxx hack
+    def delta(self, rhs):
+        return True
+
+def body_from_json(body_json, which_js : WhichJson):
+    if which_js == WhichJson.REST_READ:
+        return BodyStatus.from_json(body_json, which_js)
     if 'inline' in body_json:
         # xxx utf8/bytes roundtrip
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
@@ -258,16 +309,14 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
                  which_json : WhichJson):
     if which_json == WhichJson.REST_READ:
         if isinstance(body, Blob):
-            # xxx this should probably be blob: {...}
             blob_id, json = blob_to_json(body)
-            return json
+            return {'blob_status': json}
         elif isinstance(body, MessageBuilderSpec):
-            # xxx this needs to be ~message_builder: {blobs: {...}}
             out = {}
             for b in body.blobs:
                 blob_id, json = blob_to_json(b)
                 out[blob_id] = json
-            return out
+            return {'message_builder': {'blob_status': out}}
         else:
             logging.debug(body)
             raise ValueError()
@@ -306,7 +355,7 @@ _tx_fields = [
                             WhichJson.EXPLODER_CREATE,
                             WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
-            from_json=HostPort.from_seq),
+            from_json=HostPort.from_json),
     TxField('local_host',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
@@ -314,7 +363,7 @@ _tx_fields = [
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
-            from_json=HostPort.from_seq),
+            from_json=HostPort.from_json),
     TxField('mail_from',
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
@@ -363,7 +412,8 @@ _tx_fields = [
                           WhichJson.EXPLODER_UPDATE,
                           WhichJson.ADD_ROUTE]),
             to_json=body_to_json,
-            from_json=body_from_json),
+            from_json=body_from_json,
+            is_live_status=True),
     TxField('notification',
             validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
@@ -423,7 +473,7 @@ class TransactionMetadata:
     attempt_count : Optional[int] = None
 
     # BlobSpec only rest -> storage
-    body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None
+    body : Union[BlobSpec, Blob, MessageBuilderSpec, BodyStatus, None] = None
 
     # arbitrary json for now
     notification : Optional[dict] = None
@@ -531,7 +581,7 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
                 elif field.from_json is not None:
-                    v = [field.from_json(v) for v in js_v]
+                    v = [field.from_json(v, which_js) for v in js_v]
                 else:
                     raise ValueError()
                 if field.list_offset() in tx_json and (
@@ -545,7 +595,7 @@ class TransactionMetadata:
                     else:
                         v = None
                 else:
-                    v = field.from_json(js_v) if field.from_json else js_v
+                    v = field.from_json(js_v, which_js) if field.from_json else js_v
 
             setattr(tx, f, v)
         return tx
@@ -553,7 +603,7 @@ class TransactionMetadata:
     def _body_last(self):
         if isinstance(self.body, BlobSpec):
             return True
-        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+        elif isinstance(self.body, Union[Blob, MessageBuilderSpec, BodyStatus]):
             return self.body.finalized()
         elif self.body is not None:
             raise ValueError()
@@ -684,6 +734,9 @@ class TransactionMetadata:
             if old_v is not None and new_v is None:
                 setattr(out, f, old_v)
                 continue
+            # if field.is_live_status:  # unconditional overwrite
+            #     setattr(out, f, new_v)
+            #     continue
 
             # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
@@ -740,20 +793,19 @@ class TransactionMetadata:
             new_v = getattr(successor, f, None)
             if old_v is None and new_v is None:
                 continue
-            # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
+            #logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
-            # xxx kludge, this is now a "live status" field and needs
-            # first-class support?
-            if f == 'body' and which_json == WhichJson.REST_READ and new_v is None:
-                continue
+
+            # if json_field.is_live_status and (which_json == WhichJson.REST_READ):
+            #     setattr(out, f, new_v)
+            #     continue
             if ((which_json is not None) and (
                     json_field.emit_rest_placeholder(which_json)) and
                 (old_v is not None and new_v is None)):
                 continue
             if (old_v is not None) and (new_v is None):
                logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
-               #raise ValueError()
                return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)

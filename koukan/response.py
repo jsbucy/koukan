@@ -64,7 +64,7 @@ class Response:
         return self.code == r.code and self.message == r.message
 
     @staticmethod
-    def from_json(d : Dict[object, object]) -> Optional["Response"]:
+    def from_json(d : Dict[object, object], which_js) -> Optional["Response"]:
         code = d.get('code', None)
         if not isinstance(code, int):
             return None

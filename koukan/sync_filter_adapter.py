@@ -123,6 +123,12 @@ class SyncFilterAdapter(AsyncFilter):
         self.id_version = IdVersion(db_id=1, rest_id='1', version=1)
         self.chain.init(TransactionMetadata())
 
+        self.body = InlineBlob(b'')
+        self.tx.body = self.body
+        self.tx.body.blob_uri = BlobUri(rest_id, tx_body=True)
+        self.blob_writer = SyncFilterAdapter.BlobWriter(self)
+
+
     def incremental(self):
         return True
 
@@ -264,19 +270,12 @@ class SyncFilterAdapter(AsyncFilter):
             return self.tx.copy()
 
     def get_blob_writer(self,
-                        create : bool,
+                        create : bool,  # vestigal
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
                         ) -> Optional[WritableBlob]:
         if not tx_body:
             raise NotImplementedError()
-        if create and self.blob_writer is None:
-            with self.mu:
-                assert self.body is None
-                assert self.blob_writer is None
-                self.body = InlineBlob(b'')
-                self.tx.body = self.body
-                self.blob_writer = SyncFilterAdapter.BlobWriter(self)
         return self.blob_writer
 
 

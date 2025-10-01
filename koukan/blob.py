@@ -6,6 +6,8 @@ import os
 from io import IOBase
 import os
 
+from koukan.rest_schema import BlobUri
+
 class Blob(ABC):
     @abstractmethod
     def len(self) -> int:
@@ -102,6 +104,7 @@ class InlineBlob(Blob, WritableBlob):
     _content_length : Optional[int] = None
     _rest_id : Optional[str] = None
     _offset : int = 0
+    blob_uri : Optional[BlobUri] = None
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
