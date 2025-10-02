@@ -223,62 +223,48 @@ class TxField:
         assert self.is_list
         return self.json_field + '_list_offset'
 
-class BlobStatus:
-    finalized : bool
-    uri : Optional[str]
+def blob_spec_from_json(blob_json):
+    logging.debug(blob_json)
+    out = BlobSpec()
+    out.finalized = blob_json.get('finalized', False)
+    if uri := blob_json.get('uri', None):
+        out.reuse_uri = BlobUri('xxx', blob='yyy', parsed_uri = uri)
+    return out
 
-    def __init__(self, f, u):
-        self.finalized = f
-        self.uri = u
+def body_from_json(body_json, which_js : WhichJson
+                   ) -> Union[Blob, BlobSpec, MessageBuilderSpec, None]:
+    message_builder = None
+    body_blob_json = None
 
-    @staticmethod
-    def from_json(js, which_js : WhichJson):
-        return BlobStatus(js.get('finalized', False),
-                          js.get('uri', None))
+    if message_builder_json := body_json.get('message_builder', None):
+        blob_specs = None
+        if blob_status := message_builder_json.get('blob_status', None):
+            blob_specs = {
+                bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
+            del message_builder_json['blob_status']
+        message_builder = MessageBuilderSpec(
+            message_builder_json,
+            blob_specs=blob_specs)
+        if blob_specs is None:
+            message_builder.parse_blob_specs()
 
-# XXX fold this into MessageBuilderSpec/BlobSpec
-class BodyStatus:
-    blob_status : Optional[BlobStatus] = None
-    message_builder : Optional[Dict[str, BlobStatus]] = None
+    if body_blob_json := body_json.get('blob_status', None):
+        body_blob = blob_spec_from_json(body_blob_json)
+        if message_builder:
+            message_builder.body_blob = body_blob
+        else:
+            return body_blob
 
-    def finalized(self):
-        if self.blob_status and not self.blob_status.finalized:
-            return False
-        if self.message_builder:
-            for b in self.message_builder.values():
-                if not b.finalized:
-                    return False
-        return True
+    if message_builder is not None:
+        logging.debug('message builder')
+        return message_builder
+    logging.debug(body_json)
 
-    @staticmethod
-    def from_json(js, which_js : WhichJson):
-        out = BodyStatus()
-        if (b := js.get('blob_status', None)) is not None:
-            out.blob_status = BlobStatus.from_json(b, which_js)
-        if ((m := js.get('message_builder', None)) is not None and
-              (bs := m.get('blob_status', None)) is not None):
-            out.message_builder = {
-                b : BlobStatus.from_json(v, which_js) for b,v in bs.items()
-            }
-        # xxx none if not blob_status and not message_builder?
-        return out
-
-    # xxx hack
-    def delta(self, rhs):
-        return True
-
-def body_from_json(body_json, which_js : WhichJson):
-    if which_js == WhichJson.REST_READ:
-        return BodyStatus.from_json(body_json, which_js)
     if 'inline' in body_json:
         # xxx utf8/bytes roundtrip
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
     elif 'reuse_uri' in body_json:
         return BlobSpec(reuse_uri=parse_blob_uri(body_json['reuse_uri']))
-    elif 'message_builder' in body_json:
-        spec = MessageBuilderSpec(body_json['message_builder'])
-        spec.parse_blob_specs()
-        return spec
     return None
 
 def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
@@ -308,6 +294,7 @@ def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
 def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
                  which_json : WhichJson):
     if which_json == WhichJson.REST_READ:
+        logging.debug(body)
         if isinstance(body, Blob):
             blob_id, json = blob_to_json(body)
             return {'blob_status': json}
@@ -317,6 +304,11 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
                 blob_id, json = blob_to_json(b)
                 out[blob_id] = json
             return {'message_builder': {'blob_status': out}}
+        elif isinstance(body, BlobSpec) and body.reuse_uri:
+            return {'blob_status': {
+                'uri': make_blob_uri(body.reuse_uri.tx_id,
+                                     tx_body=True,
+                                     base_uri=body.reuse_uri.base_uri)}}
         else:
             logging.debug(body)
             raise ValueError()
@@ -473,7 +465,7 @@ class TransactionMetadata:
     attempt_count : Optional[int] = None
 
     # BlobSpec only rest -> storage
-    body : Union[BlobSpec, Blob, MessageBuilderSpec, BodyStatus, None] = None
+    body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None
 
     # arbitrary json for now
     notification : Optional[dict] = None
@@ -566,17 +558,20 @@ class TransactionMetadata:
                 continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
+                assert False, f
                 return None  # invalid
             js_v = tx_json[f]
             if js_v is None:
                 # TODO for now setting a non-null field back to null
                 # is not a valid operation so reject json with that
+                raise ValueError()
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
             v : Any
             if field.is_list:
                 if not isinstance(js_v, list):
+                    raise ValueError()
                     return None
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
@@ -591,6 +586,7 @@ class TransactionMetadata:
             else:
                 if field.emit_rest_placeholder(which_js):
                     if js_v != {}:
+                        raise ValueError()
                         return None
                     else:
                         v = None
@@ -602,8 +598,8 @@ class TransactionMetadata:
 
     def _body_last(self):
         if isinstance(self.body, BlobSpec):
-            return True
-        elif isinstance(self.body, Union[Blob, MessageBuilderSpec, BodyStatus]):
+            return self.body.finalized  # XXX True
+        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
             return self.body.finalized()
         elif self.body is not None:
             raise ValueError()

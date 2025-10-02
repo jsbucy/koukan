@@ -24,7 +24,6 @@ import werkzeug.http
 
 from koukan.deadline import Deadline
 from koukan.filter import (
-    BodyStatus,
     HostPort,
     Resolution,
     TransactionMetadata,
@@ -326,9 +325,7 @@ class RestEndpoint(Filter):
         # from MessageBuilderSpec to BlobStatus or whatever
         # downstream body shouldn't go into rest_upstream_tx at all
         # since we get the blobs to send from the delta anyway?
-        if isinstance(self.rest_upstream_tx.body, BodyStatus):
-            pass
-        elif isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
+        if isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
             self.rest_upstream_tx.body = copy.copy(self.rest_upstream_tx.body)
             self.rest_upstream_tx.body.blobs = []
         elif isinstance(self.rest_upstream_tx.body, Blob):
@@ -407,8 +404,7 @@ class RestEndpoint(Filter):
 
             upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             downstream_delta = upstream_delta.copy()
-            if isinstance(downstream_delta.body, BodyStatus):
-                downstream_delta.body = None
+            downstream_delta.body = None
             if (upstream_delta is None or
                 (self.rest_upstream_tx.merge_from(upstream_delta) is None) or
                 (self.downstream_tx.merge_from(downstream_delta) is None)):
@@ -416,8 +412,6 @@ class RestEndpoint(Filter):
                     Response(450,
                              'RestEndpoint upstream invalid resp/delta update'))
                 return FilterResult()
-
-        assert not isinstance(self.downstream_tx.body, BodyStatus)
 
         if tx_delta.body is None:
             return FilterResult()
@@ -433,6 +427,12 @@ class RestEndpoint(Filter):
             if data_err is not None:
                 self.downstream_tx.data_response = data_err
                 return FilterResult()
+            # xxx possibly this POST should return the spec decorated
+            # with the blob uris but for the moment just GET the tx
+            # again
+            tx_out = self._get(deadline)
+            d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
+            self.rest_upstream_tx.merge_from(d)
 
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
@@ -448,16 +448,18 @@ class RestEndpoint(Filter):
         blobs : List[Tuple[Blob, str]]  # uri
         logging.debug(self.rest_upstream_tx)
         if isinstance(tx_delta.body, Blob):
-            blobs = [ (tx_delta.body,
-                       self.rest_upstream_tx.body.blob_status.uri) ]
+            assert isinstance(self.rest_upstream_tx.body, BlobSpec)
+            blobs = [ (tx_delta.body, self.rest_upstream_tx.body.reuse_uri.parsed_uri) ]
         elif isinstance(tx_delta.body, MessageBuilderSpec):
             blobs = []
             for blob in tx_delta.body.blobs:
-                uri = self.rest_upstream_tx.body.message_builder[blob.rest_id()].uri
+                logging.debug(blob.rest_id())
+                uri = self.rest_upstream_tx.body.blob_specs[blob.rest_id()].reuse_uri.parsed_uri
                 blobs.append((blob, uri))
             if tx_delta.body.body_blob is not None:
+                logging.debug(self.rest_upstream_tx.body.body_blob)
                 blobs.append((tx_delta.body.body_blob,
-                              self.rest_upstream_tx.body.blob_status.uri))
+                              self.rest_upstream_tx.body.body_blob.reuse_uri.parsed_uri))
         elif isinstance(tx_delta.body, BlobSpec):
             return FilterResult()
         else:
@@ -497,8 +499,7 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         downstream_delta = blob_delta.copy()
-        if isinstance(downstream_delta.body, BodyStatus):
-            downstream_delta.body = None
+        downstream_delta.body = None
         if ((self.rest_upstream_tx.merge_from(blob_delta) is None) or
             (self.downstream_tx.merge_from(downstream_delta) is None)):
             self.downstream_tx.fill_inflight_responses(

@@ -231,6 +231,10 @@ class RestHandler(Handler):
                     code=400, msg='transaction creation to '
                     'non-incremental endpoint must contain mail_from and '
                     'exactly 1 rcpt_to')
+            # for smtp gw/exploder, we don't do this until they start
+            # sending the data because
+            # 'body is not None'
+            # is used as a proxy for 'done with rcpts'
             if tx.body is None:
                 tx.body = BlobSpec(create_tx_body=True)
         elif err := self._validate_incremental_tx(tx):
@@ -259,6 +263,7 @@ class RestHandler(Handler):
             tx_uri = urljoin(self.service_uri, tx_path)
         else:
             tx_uri = tx_path
+        self._maybe_populate_body_uri(cached_tx)
         self._update_body_blob_uri(cached_tx)
         resp = self.response(
             code=201,
@@ -281,6 +286,15 @@ class RestHandler(Handler):
             for b in tx.body.blobs:
                 self._update_blob_uri(b)
 
+    def _maybe_populate_body_uri(self, tx):
+        if tx.body is not None:
+            return
+        # we don't actually create it for interactive/exploder
+        # here (cf above) but need to return the uri in the json
+        tx.body = BlobSpec(create_tx_body=True)
+        tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
+        tx.body.reuse_uri.base_uri = self.service_uri
+
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
             logging.debug('_get_tx')
@@ -296,6 +310,7 @@ class RestHandler(Handler):
 
     def _get_tx_resp(self, request, tx, version):
         tx_out = tx.copy()
+        self._maybe_populate_body_uri(tx_out)
         return self.response(
             etag=self._etag(version) if tx else None,
             resp_json=tx_out.to_json(WhichJson.REST_READ))

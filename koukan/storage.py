@@ -292,7 +292,7 @@ class TransactionCursor:
         if isinstance(body, BlobSpec):
             blob_specs = [body]
         elif isinstance(body, MessageBuilderSpec):
-            blob_specs = body.blob_specs
+            blob_specs = body.blob_specs.values()
         elif isinstance(body, Blob):
             blob_spec = BlobSpec(blob=body)
             if not isinstance(body, BlobCursor):

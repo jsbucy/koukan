@@ -9,6 +9,8 @@ import os
 import time
 from contextlib import nullcontext
 
+from urllib.parse import urljoin
+
 import secrets
 import copy
 
@@ -30,9 +32,11 @@ class Transaction:
 
     last_update : int
     version = 1
+    base_url : str
 
     def __init__(self, tx_id : str, tx_json,
-                 dir : str):
+                 dir : str,
+                 base_url):
         self.blob_paths = {}
         self.tx_id = tx_id
         logging.debug('Tx.init %s', tx_json)
@@ -41,24 +45,36 @@ class Transaction:
             del self.tx_json['smtp_meta']
         self.tx_json['mail_response'] = {'code': 250, 'message': 'ok'}
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
-        # TODO populate blob status/uris
         self.dir = dir
         self.ping()
         self.next_inline = 0
+        self.base_url = base_url
 
     def ping(self):
         self.last_update = int(time.monotonic())
 
     def get_json(self):
-        # TODO populate blob_status/uris
-
         json_out = copy.copy(self.tx_json)
         if 'mail_from' in json_out:
             json_out['mail_from'] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
-        if self.body_path:
+
+        if self.body_path or self.message_json:
             json_out['body'] = {}
+            if self.message_json is not None:
+                json_out['body']['blob_status'] = {
+                    'uri': urljoin(self.base_url, '/transactions/' + self.tx_id + '/body'),
+                    'finalized': self.body_path is not None
+                }
+
+                blob_status = {}
+                json_out['body']['message_builder'] = {'blob_status': blob_status}
+                for bid,bp in self.blob_paths.items():
+                    blob_status[bid] = {
+                        'uri': urljoin(self.base_url, '/transactions/' + self.tx_id + '/blob/' + bid),
+                        'finalized': bp is not None
+                    }
         logging.debug('Tx.get %s', json_out)
         return json_out
 
@@ -253,15 +269,18 @@ class Receiver:
     gc_ttl : int
     gc_interval : int
     last_gc : int
+    base_url = None
 
     def __init__(self, dir = '/tmp',
                  gc_ttl = 300,
-                 gc_interval = 30):
+                 gc_interval = 30,
+                 base_url = None):
         self.transactions = {}
         self.dir = dir
         self.last_gc = int(time.monotonic())
         self.gc_ttl = gc_ttl
         self.gc_interval = gc_interval
+        self.base_url = base_url
 
     def _get_tx(self, tx_rest_id : str) -> Transaction:
         tx = self.transactions.get(tx_rest_id, None)
@@ -288,7 +307,7 @@ class Receiver:
 
     def create_tx(self, tx_json) -> Tuple[str,dict,str]:
         tx_id = secrets.token_urlsafe()
-        tx = Transaction(tx_id, tx_json, self.dir)
+        tx = Transaction(tx_id, tx_json, self.dir, self.base_url)
         self.transactions[tx_id] = tx
         return tx_id, tx.get_json(), str(tx.version)
 

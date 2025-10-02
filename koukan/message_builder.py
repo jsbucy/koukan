@@ -19,18 +19,17 @@ from koukan.storage_schema import BlobSpec
 
 class MessageBuilderSpec:
     json : dict
-    blob_specs : List[BlobSpec]
+    blob_specs : Dict[str, BlobSpec]
     blobs : Sequence[Blob]
-    body_blob : Optional[Blob] = None
+    body_blob : Optional[Blob] = None  # XXX Union[Blob, BlobSpec]
     # part['content']['create_id']  XXX rename
     ids : Optional[Set[str]] = None
 
     def __init__(self, json, blobs : Optional[List[Blob]] = None,
-                 blob_specs : Optional[List[BlobSpec]] = None):
+                 blob_specs : Optional[Dict[str, BlobSpec]] = None):
         self.json = json
         self.blobs = blobs if blobs else []
-
-        self.blob_specs = blob_specs if blob_specs else []
+        self.blob_specs = blob_specs if blob_specs else {}
 
     def clone(self):
         out = copy.copy(self)
@@ -88,7 +87,8 @@ class MessageBuilderSpec:
         if blob_id is None:
             raise ValueError()
         part['content'] = {'create_id': blob_id}
-        self.blob_specs.append(blob_spec)
+        assert blob_id not in self.blob_specs
+        self.blob_specs[blob_id] = blob_spec
 
     def finalized(self):
         return (len(self.ids) == len(self.blobs) and
@@ -115,7 +115,7 @@ class MessageBuilderSpec:
 
 
     def __repr__(self):
-        return '%s %s' % (self.json, self.blobs)
+        return '%s %s %s' % (self.json, self.blobs, self.blob_specs)
 
 class MessageBuilder:
     blobs : Dict[str, Blob]

@@ -36,7 +36,11 @@ def create_app(receiver = None, path = None):
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
-        tx_json, etag = receiver.get_tx(tx_rest_id)
+        try:
+            tx_json, etag = receiver.get_tx(tx_rest_id)
+        except Exception as e:
+            logging.exception('fastapi_receiver.get_transaction')
+            return FastApiResponse(status_code=500)
         return FastApiJsonResponse(status_code=200, content=tx_json,
                                    headers={'etag': etag})
 

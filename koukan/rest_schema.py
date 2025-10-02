@@ -28,8 +28,11 @@ class BlobUri:
     tx_body : bool = False
     blob : Optional[str] = None
     base_uri : Optional[str] = None
+    parsed_uri : Optional[str] = None
+
     def __init__(self, tx_id : str, tx_body : bool = False,
-                 blob : Optional[str] = None):
+                 blob : Optional[str] = None,
+                 parsed_uri : Optional[str] = None):
         assert tx_body or blob
         # TODO storage instantiates this with tx_body and __internal_tx_body
         # but if RestHandler instantiates with both, it's a bug
@@ -37,6 +40,8 @@ class BlobUri:
         self.tx_id = tx_id
         self.tx_body = tx_body
         self.blob = blob
+        self.parsed_uri = parsed_uri
+
     def __repr__(self):
         out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
         if self.blob:
@@ -48,7 +53,7 @@ class BlobUri:
         return self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and self.blob == rhs.blob
 
 
-def parse_blob_uri(uri) -> Optional[BlobUri]:
+def parse_blob_uri(uri : str) -> Optional[BlobUri]:
     result = urlparse(uri)
     if result is None:
         return None
@@ -67,4 +72,4 @@ def parse_blob_uri(uri) -> Optional[BlobUri]:
     u = u.removeprefix('blob/')
     if not u:
         return None
-    return BlobUri(tx_id=tx, blob=u)
+    return BlobUri(tx_id=tx, blob=u, parsed_uri=uri)
