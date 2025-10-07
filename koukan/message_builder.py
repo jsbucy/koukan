@@ -116,7 +116,7 @@ class MessageBuilderSpec:
             return None
         out = False
         for i,blob in enumerate(self.blobs):
-            blob_delta = blob.delta(rhs.blobs[i], which_json)
+            blob_delta = blob.delta(rhs.blobs[i])  #, which_json)
             if blob_delta is None:
                 logging.debug(i)
                 logging.debug(self.blobs)

@@ -402,7 +402,7 @@ class RestEndpoint(Filter):
                     Response(450, 'RestEndpoint ' + err))
                 return FilterResult()
 
-            upstream_delta = self.rest_upstream_tx.delta(tx_out)  #, WhichJson.REST_READ)
+            upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             downstream_delta = upstream_delta.copy()
             downstream_delta.body = None
             if (upstream_delta is None or
