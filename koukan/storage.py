@@ -882,7 +882,7 @@ class BlobCursor(Blob, WritableBlob):
     def clone(self):
         return copy.copy(self)
 
-    def delta(self, rhs):  #   which_json):
+    def delta(self, rhs, which_json):
         if not isinstance(rhs, BlobCursor):
             return None
         if self.db_id != rhs.db_id:

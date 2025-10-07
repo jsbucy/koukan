@@ -241,6 +241,7 @@ def body_from_json(body_json, which_js : WhichJson
         if blob_status := message_builder_json.get('blob_status', None):
             blob_specs = {
                 bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
+            logging.debug(blob_specs)
             del message_builder_json['blob_status']
         message_builder = MessageBuilderSpec(
             message_builder_json,
@@ -277,7 +278,7 @@ def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
         out['finalized'] = True
 
     blob_id = None
-    if hasattr(blob, 'blob_uri'):
+    if hasattr(blob, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
         uri = blob.blob_uri
         if not uri.tx_body:
             blob_id = uri.blob
@@ -740,8 +741,13 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('list-ness mismatch')
                 return None  # invalid
+
+            # cd6c8bd2 double-check that body didn't change in some
+            # unexpected way
+            # TODO I'm not sure why this is necessary/the check in
+            # delta() isn't sufficient
             if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v)
+                body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
                 if body_delta is None:
                     return None
                 if body_delta:
@@ -812,7 +818,9 @@ class TransactionMetadata:
 
             # emit body in the delta if it changed
             if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v)  #, which_json)
+                logging.debug(old_v)
+                logging.debug(new_v)
+                body_delta = old_v.delta(new_v, which_json)
                 if body_delta is None:
                     raise ValueError()
                     return None

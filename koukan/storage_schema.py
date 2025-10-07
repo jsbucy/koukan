@@ -1,5 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+import logging
+
 from enum import IntEnum
 from typing import Dict, Optional
 from koukan.rest_schema import BlobUri
@@ -38,8 +40,24 @@ class BlobSpec:
         self.create_tx_body = create_tx_body
 
     # xxx hack
-    def delta(self, rhs):
-        return True
+    def delta(self, rhs, which_json) -> Optional[bool]:
+        if not isinstance(rhs, BlobSpec):
+            raise ValueError()
+            return None
+        if self.reuse_uri is not None and rhs.reuse_uri is None:
+            raise ValueError()
+        # elif self.reuse_uri is None and rhs.reuse_uri is not None:
+        #     pass
+        elif self.reuse_uri is not None and rhs.reuse_uri is not None:
+            if self.reuse_uri.parsed_uri and (self.reuse_uri.parsed_uri != rhs.reuse_uri.parsed_uri):
+                logging.debug(self.reuse_uri)
+                logging.debug(rhs.reuse_uri)
+                raise ValueError()
+                return None
+        if self.finalized and not rhs.finalized:
+            raise ValueError()
+            return None
+        return self.finalized != rhs.finalized
 
     def __repr__(self):
         return '%s %s %s %s %s' % (

@@ -289,13 +289,19 @@ class RestHandler(Handler):
                 self._update_blob_uri(tx.body.body_blob)
 
     def _maybe_populate_body_uri(self, tx):
-        if tx.body is not None:
-            return
-        # we don't actually create it for interactive/exploder
-        # here (cf above) but need to return the uri in the json
-        tx.body = BlobSpec(create_tx_body=True)
-        tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
-        tx.body.reuse_uri.base_uri = self.service_uri
+        if tx.body is None:
+            # we don't actually create it for interactive/exploder
+            # here (cf above) but need to return the uri in the json
+            tx.body = BlobSpec(create_tx_body=True)
+            tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
+            tx.body.reuse_uri.base_uri = self.service_uri
+        # elif isinstance(tx.body, MessageBuilderSpec):
+        #     pass
+        # xxx cf blob_to_json()
+        elif hasattr(tx.body, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
+            blob_uri = tx.body.blob_uri
+            blob_uri.base_uri = self.service_uri
+
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
@@ -499,6 +505,7 @@ class RestHandler(Handler):
             return err
 
         tx.body = body
+        self._maybe_populate_body_uri(tx)
         version = self.async_filter.version
         assert version is not None
         return self.response(

@@ -455,6 +455,8 @@ class RestEndpoint(Filter):
             blobs = [ (tx_delta.body, self.rest_upstream_tx.body.reuse_uri.parsed_uri) ]
         elif isinstance(tx_delta.body, MessageBuilderSpec):
             blobs = []
+            # logging.debug(self.rest_upstream_tx.body.blob_specs)
+            # logging.debug(self.rest_upstream_tx.body.body_blob)
             for blob in tx_delta.body.blobs:
                 logging.debug(blob.rest_id())
                 assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)

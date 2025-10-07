@@ -101,7 +101,7 @@ class MessageBuilderSpec:
         return (len(self.ids) == len(self.blobs) and
                 not any([not b.finalized() for b in self.blobs]))
 
-    def delta(self, rhs #, which_json
+    def delta(self, rhs, which_json
               ) -> Optional[bool]:
         logging.debug(self)
         logging.debug(rhs)
@@ -109,20 +109,34 @@ class MessageBuilderSpec:
             return None
         # xxx rhs can be None if REST_READ
         # which_json != WhichJson.REST_READ and
-        if self.json != rhs.json:
+        # if which_json == WhichJson.REST_READ:
+        #     if rhs.json != {} and rhs.json != self.json:
+        #         return None
+        if rhs.json != {} and self.json != rhs.json:
             return None
         if len(self.blobs) != len(rhs.blobs):
             logging.debug('blobs len')
             return None
         out = False
         for i,blob in enumerate(self.blobs):
-            blob_delta = blob.delta(rhs.blobs[i])  #, which_json)
+            blob_delta = blob.delta(rhs.blobs[i], which_json)
             if blob_delta is None:
                 logging.debug(i)
                 logging.debug(self.blobs)
                 logging.debug(rhs.blobs)
                 return None
             out |= blob_delta
+        if not self.blob_specs and rhs.blob_specs:
+            out = True
+        elif self.blob_specs:
+            if self.blob_specs.keys() != rhs.blob_specs.keys():
+                return None
+            for blob_id,blob_spec in self.blob_specs.items():
+                rblob_spec = rhs.blob_specs[blob_id]
+                bdelta = blob_spec.delta(rblob_spec, which_json)
+                if bdelta is None:
+                    return None
+                out |= bdelta
         return out
 
 

@@ -46,7 +46,10 @@ class BlobUri:
         out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
         if self.blob:
             out += ' blob=' + self.blob
+        if self.parsed_uri:
+            out += ' parsed_uri=' + self.parsed_uri
         return out
+
     def __eq__(self, rhs):
         if not isinstance(rhs, BlobUri):
             return False

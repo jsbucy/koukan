@@ -34,7 +34,7 @@ class Blob(ABC):
 
     # returns True if rhs is a proper superset of self,
     # False if they are the same, else None
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         raise NotImplementedError()
 
 class WritableBlob(ABC):
@@ -115,7 +115,7 @@ class InlineBlob(Blob, WritableBlob):
         self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
 
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):
             return None
         # leading edge of self may have moved forward
@@ -203,7 +203,7 @@ class FileLikeBlob(Blob, WritableBlob):
     # this is currently only used in MessageBuilderFilter which writes
     # it to completion when it renders the message so upstream won't
     # see differing successive values.
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, FileLikeBlob):
             return None
         return False
@@ -325,7 +325,7 @@ class CompositeBlob(Blob):
     # same object between successive calls. cf TODO in
     # received_header_filter, if one wanted to trickle out the body,
     # this needs a real implementation.
-    def delta(self, rhs):
+    def delta(self, rh, which_json):
         if not isinstance(rhs, CompositeBlob) or rhs is not self:
             return None
         return False
