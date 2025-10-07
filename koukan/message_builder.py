@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Set, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Set, Sequence, Tuple, Union
 
 import logging
 import datetime
@@ -16,13 +16,15 @@ from koukan.blob import Blob, InlineBlob
 
 from koukan.rest_schema import parse_blob_uri
 from koukan.storage_schema import BlobSpec
+#from koukan.filter import WhichJson
 
 class MessageBuilderSpec:
     json : dict
     blob_specs : Dict[str, BlobSpec]
     blobs : Sequence[Blob]
-    body_blob : Optional[Blob] = None  # XXX Union[Blob, BlobSpec]
+    body_blob : Union[Blob, BlobSpec, None] = None
     # part['content']['create_id']  XXX rename
+    # xxx is this blob_specs.keys()?
     ids : Optional[Set[str]] = None
 
     def __init__(self, json, blobs : Optional[List[Blob]] = None,
@@ -54,6 +56,8 @@ class MessageBuilderSpec:
                 self.ids.add(part['content']['create_id'])
 
     def parse_blob_specs(self):
+        assert self.ids is None
+        self.ids = set()
         create_blob_id = 0
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
@@ -89,14 +93,22 @@ class MessageBuilderSpec:
         part['content'] = {'create_id': blob_id}
         assert blob_id not in self.blob_specs
         self.blob_specs[blob_id] = blob_spec
+        assert self.ids is not None
+        assert blob_id not in self.ids
+        self.ids.add(blob_id)
 
     def finalized(self):
         return (len(self.ids) == len(self.blobs) and
                 not any([not b.finalized() for b in self.blobs]))
 
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs #, which_json
+              ) -> Optional[bool]:
+        logging.debug(self)
+        logging.debug(rhs)
         if not isinstance(rhs, MessageBuilderSpec):
             return None
+        # xxx rhs can be None if REST_READ
+        # which_json != WhichJson.REST_READ and
         if self.json != rhs.json:
             return None
         if len(self.blobs) != len(rhs.blobs):
@@ -104,7 +116,7 @@ class MessageBuilderSpec:
             return None
         out = False
         for i,blob in enumerate(self.blobs):
-            blob_delta = blob.delta(rhs.blobs[i])
+            blob_delta = blob.delta(rhs.blobs[i], which_json)
             if blob_delta is None:
                 logging.debug(i)
                 logging.debug(self.blobs)

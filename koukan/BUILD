@@ -4,7 +4,8 @@ py_library(name='deadline',
            srcs=['deadline.py'])
 
 py_library(name='blob',
-           srcs=['blob.py'])
+           srcs=['blob.py'],
+           deps=[':rest_schema'])
 
 py_test(name='blob_test',
         srcs=['blob_test.py'],

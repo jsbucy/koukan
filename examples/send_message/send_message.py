@@ -186,9 +186,9 @@ class Sender:
 
         # cf send_body(), if the server sent back a different body
         # uri, it didn't reuse the one we sent -> upload again
-        if self.body_filename is not None and (self.body_uri is None or self.body_uri != tx_json['body']['uri']):
+        if self.body_filename is not None and (self.body_uri is None or self.body_uri != tx_json['body']['blob_status']['uri']):
             with open(self.body_filename, 'rb') as body_file:
-                body_uri = tx_json['body']['uri']
+                body_uri = tx_json['body']['blob_status']['uri']
                 resp = self.session.put(body_uri, data=body_file)
                 logging.debug('PUT %s %s %s', body_uri, resp, resp.text)
                 if resp.status_code == 200:

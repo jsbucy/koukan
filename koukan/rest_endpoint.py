@@ -34,7 +34,7 @@ from koukan.blob import Blob, BlobReader
 
 from koukan.message_builder import MessageBuilderSpec
 from koukan.storage_schema import BlobSpec
-from koukan.rest_schema import FINALIZE_BLOB_HEADER
+from koukan.rest_schema import FINALIZE_BLOB_HEADER, BlobUri
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -402,7 +402,7 @@ class RestEndpoint(Filter):
                     Response(450, 'RestEndpoint ' + err))
                 return FilterResult()
 
-            upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
+            upstream_delta = self.rest_upstream_tx.delta(tx_out)  #, WhichJson.REST_READ)
             downstream_delta = upstream_delta.copy()
             downstream_delta.body = None
             if (upstream_delta is None or
@@ -449,17 +449,33 @@ class RestEndpoint(Filter):
         logging.debug(self.rest_upstream_tx)
         if isinstance(tx_delta.body, Blob):
             assert isinstance(self.rest_upstream_tx.body, BlobSpec)
+            assert isinstance(self.rest_upstream_tx.body.reuse_uri, BlobUri)
+
+            assert isinstance(self.rest_upstream_tx.body.reuse_uri.parsed_uri, str)
             blobs = [ (tx_delta.body, self.rest_upstream_tx.body.reuse_uri.parsed_uri) ]
         elif isinstance(tx_delta.body, MessageBuilderSpec):
             blobs = []
             for blob in tx_delta.body.blobs:
                 logging.debug(blob.rest_id())
-                uri = self.rest_upstream_tx.body.blob_specs[blob.rest_id()].reuse_uri.parsed_uri
+                assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+                brid = blob.rest_id()
+                assert brid  is not None
+                blob_spec = self.rest_upstream_tx.body.blob_specs[brid]
+                assert isinstance(blob_spec, BlobSpec)
+                assert blob_spec.reuse_uri is not None
+                uri = blob_spec.reuse_uri.parsed_uri
+                assert uri is not None
                 blobs.append((blob, uri))
             if tx_delta.body.body_blob is not None:
+                assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+                assert isinstance(self.rest_upstream_tx.body.body_blob, BlobSpec)
                 logging.debug(self.rest_upstream_tx.body.body_blob)
-                blobs.append((tx_delta.body.body_blob,
-                              self.rest_upstream_tx.body.body_blob.reuse_uri.parsed_uri))
+                body_blob = tx_delta.body.body_blob
+                assert isinstance(body_blob, Blob)
+                blob_spec = self.rest_upstream_tx.body.body_blob
+                assert isinstance(blob_spec.reuse_uri, BlobUri)
+                assert isinstance(blob_spec.reuse_uri.parsed_uri, str)
+                blobs.append((body_blob, blob_spec.reuse_uri.parsed_uri))
         elif isinstance(tx_delta.body, BlobSpec):
             return FilterResult()
         else:

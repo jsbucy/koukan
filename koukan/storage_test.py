@@ -219,7 +219,7 @@ class StorageTestBase(unittest.TestCase):
             tx_writer2.create('tx_rest_id2', TransactionMetadata(
                 body=MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs=[BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])))
+                    {'': BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))})))
         # non-finalized blobs cannot be reused
         with self.assertRaises(ValueError):
             tx.body = MessageBuilderSpec(
@@ -261,9 +261,10 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs = [BlobSpec(create_id='blob_rest_id1'),
-                                  BlobSpec(create_id='blob_rest_id2'),
-                                  BlobSpec(create_id='blob_rest_id3')])))
+                    blob_specs = {
+                        'blob_rest_id1': BlobSpec(create_id='blob_rest_id1'),
+                        'blob_rest_id2': BlobSpec(create_id='blob_rest_id2'),
+                        'blob_rest_id3': BlobSpec(create_id='blob_rest_id3')})))
         self.assertEqual(3, len(tx_writer.blobs))
         contents = []
         for i, blob in enumerate(tx_writer.blobs):
@@ -281,10 +282,11 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs=[BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri),
-                                BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri),
-                                BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri),
-                                BlobSpec(create_id='blob_rest_id4')])))
+                    blob_specs={
+                        'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri),
+                        'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri),
+                        'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri),
+                        'blob_rest_id4': BlobSpec(create_id='blob_rest_id4')})))
         blob4 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id4')
         blob_writer4 = tx_writer2.get_blob_for_append(blob4)
         b4 = b'another blob'
@@ -728,9 +730,9 @@ class StorageTestBase(unittest.TestCase):
 
         message_builder = MessageBuilderSpec(
             { "headers": [ ["subject", "hello"] ] },
-            blob_specs=[
-                BlobSpec(create_id='blob1'),
-                BlobSpec(create_id='blob2')])
+            blob_specs={
+                'blob1': BlobSpec(create_id='blob1'),
+                'blob2': BlobSpec(create_id='blob2')})
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(
@@ -759,6 +761,7 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(1, self.s._tx_reads - prev_reads)
         prev_reads = self.s._tx_reads
 
+        logging.debug(downstream.blobs)
         blob1_writer = downstream.get_blob_for_append(
             BlobUri('tx_rest_id', blob='blob1'))
         b1 = b'hello blob1'

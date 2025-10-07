@@ -224,7 +224,7 @@ class TxField:
         return self.json_field + '_list_offset'
 
 def blob_spec_from_json(blob_json):
-    logging.debug(blob_json)
+    # logging.debug(blob_json)
     out = BlobSpec()
     out.finalized = blob_json.get('finalized', False)
     if uri := blob_json.get('uri', None):
@@ -247,6 +247,8 @@ def body_from_json(body_json, which_js : WhichJson
             blob_specs=blob_specs)
         if blob_specs is None:
             message_builder.parse_blob_specs()
+        else:
+            message_builder.ids = {k for k in blob_specs.keys()}  # xxx hack
 
     if body_blob_json := body_json.get('blob_status', None):
         body_blob = blob_spec_from_json(body_blob_json)
@@ -564,14 +566,14 @@ class TransactionMetadata:
             if js_v is None:
                 # TODO for now setting a non-null field back to null
                 # is not a valid operation so reject json with that
-                raise ValueError()
+                # raise ValueError()
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
             v : Any
             if field.is_list:
                 if not isinstance(js_v, list):
-                    raise ValueError()
+                    # raise ValueError()
                     return None
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
@@ -586,7 +588,7 @@ class TransactionMetadata:
             else:
                 if field.emit_rest_placeholder(which_js):
                     if js_v != {}:
-                        raise ValueError()
+                        # raise ValueError()
                         return None
                     else:
                         v = None
@@ -802,6 +804,7 @@ class TransactionMetadata:
                 continue
             if (old_v is not None) and (new_v is None):
                logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
+               raise ValueError()
                return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
@@ -809,8 +812,9 @@ class TransactionMetadata:
 
             # emit body in the delta if it changed
             if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v)
+                body_delta = old_v.delta(new_v)  #, which_json)
                 if body_delta is None:
+                    raise ValueError()
                     return None
                 if body_delta:
                     setattr(out, f, new_v)
@@ -819,11 +823,13 @@ class TransactionMetadata:
             # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('tx.delta is-list != is-list %s', f)
+                raise ValueError()
                 return None  # invalid
             if not isinstance(old_v, list):
                 if old_v != new_v:
                     logging.debug('tx.delta value change %s %s %s',
                                   f, old_v, new_v)
+                    raise ValueError()
                     return None  # invalid
                 setattr(out, f, None)
                 continue
@@ -832,9 +838,11 @@ class TransactionMetadata:
             if json_field.emit_rest_placeholder(which_json):
                 if any([x != None for x in new_v]):
                     logging.debug('non-None placeholder')
+                    raise ValueError()
                     return None
                 if len(new_v) < len(old_v):
                     logging.debug('list shrink placeholder')
+                    raise ValueError()
                     return None
                 # XXX need this??
                 # setattr(out, json_field.list_offset(), len(old_v))
@@ -843,15 +851,18 @@ class TransactionMetadata:
             old_len = len(old_v)
             if old_len > len(new_v):
                 logging.debug('tx.delta invalid list trunc %s', f)
+                raise ValueError()
                 return None  # invalid
             for i in range(0, old_len):
                 if old_v[i] is None and new_v[i] is not None:
                     pass  #ok   XXX why would old_v be None?
                 if old_v[i] is not None and new_v[i] is None:
                     logging.debug('tx.delta %s ->None', f)
+                    raise ValueError()
                     return None  # bad
                 if old_v[i] != new_v[i]:
                     logging.debug('tx.delta %s !=', f)
+                    raise ValueError()
                     return None  # bad
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)

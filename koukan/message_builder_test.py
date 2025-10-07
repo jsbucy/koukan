@@ -65,7 +65,7 @@ class MessageBuilderTest(unittest.TestCase):
         spec = MessageBuilderSpec(json)
         spec.parse_blob_specs()
         self.assertEqual(1, len(spec.blob_specs))
-        blob_spec = spec.blob_specs[0]
+        blob_spec = spec.blob_specs['xyz']
         self.assertEqual('123', blob_spec.reuse_uri.tx_id)
         self.assertEqual('xyz', blob_spec.reuse_uri.blob)
         self.assertEqual(json, { 'text_body': [ {

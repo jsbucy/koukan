@@ -557,12 +557,13 @@ class RouterServiceTest(unittest.TestCase):
 
         if 'attempt_count' in tx_json:
             del tx_json['attempt_count']
-        self.assertIn('uri', tx_json['body'])
-        del tx_json['body']['uri']
+        self.assertIn('blob_status', tx_json['body'])
+        self.assertIn('uri', tx_json['body']['blob_status'])
+        del tx_json['body']['blob_status']['uri']
         self.assertEqual(tx_json, {
             'mail_from': {},
             'rcpt_to': [{}],
-            'body': {'content_length': 13, 'length': 13, 'finalized': True},
+            'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
             'retry': {},
             'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
@@ -706,14 +707,16 @@ class RouterServiceTest(unittest.TestCase):
 
             if 'attempt_count' in tx_json:
                 del tx_json['attempt_count']
-            if 'uri' not in tx_json['body']:
+            if 'blob_status' not in tx_json['body']:
                 continue
-            del tx_json['body']['uri']
+            if 'uri' not in tx_json['body']['blob_status']:
+                continue
+            del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {'content_length': 13, 'length': 13, 'finalized': True},
+                'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
                 'retry': {},
                 'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
@@ -807,14 +810,14 @@ class RouterServiceTest(unittest.TestCase):
             tx_json = rest_endpoint.get_json()
             logging.debug(tx_json)
 
-            if 'uri' not in tx_json['body']:
+            if 'blob_status' not in tx_json['body'] or 'uri' not in tx_json['body']['blob_status']:
                 continue
-            del tx_json['body']['uri']
+            del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
                     'mail_from': {},
                     'rcpt_to': [{}],
-                    'body': {'content_length': 15, 'length': 15, 'finalized': True},
+                    'body': {'blob_status': {'content_length': 15, 'length': 15, 'finalized': True}},
                     'retry': {},
                     'notification': {},
                     'mail_response': {'code': 201, 'message': 'ok'},
@@ -873,7 +876,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_reuse_body create %s',
                       tx_json)
 
-        blob_uri = parse_blob_uri(tx_json['body']['uri'])
+        blob_uri = parse_blob_uri(tx_json['body']['blob_status']['uri'])
         logging.debug(blob_uri)
 
         rest_endpoint = self.create_endpoint(
@@ -907,12 +910,12 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(prev.delta(tx))
         tx_json = rest_endpoint.get_json()
         logging.debug(tx_json)
-        self.assertIn('uri', tx_json['body'])
-        del tx_json['body']['uri']
+        self.assertIn('uri', tx_json['body']['blob_status'])
+        del tx_json['body']['blob_status']['uri']
         self.assertEqual(
             {'mail_from': {},
              'rcpt_to': [{}],
-             'body': {'content_length': 13, 'length': 13, 'finalized': True},
+             'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
              'retry': {},
              'notification': {},
              'mail_response': {'code': 201, 'message': 'ok'},

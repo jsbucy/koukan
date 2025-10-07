@@ -292,7 +292,7 @@ class TransactionCursor:
         if isinstance(body, BlobSpec):
             blob_specs = [body]
         elif isinstance(body, MessageBuilderSpec):
-            blob_specs = body.blob_specs.values()
+            blob_specs = [v for v in body.blob_specs.values()]
         elif isinstance(body, Blob):
             blob_spec = BlobSpec(blob=body)
             if not isinstance(body, BlobCursor):
@@ -882,7 +882,7 @@ class BlobCursor(Blob, WritableBlob):
     def clone(self):
         return copy.copy(self)
 
-    def delta(self, rhs):
+    def delta(self, rhs, which_json):
         if not isinstance(rhs, BlobCursor):
             return None
         if self.db_id != rhs.db_id:

@@ -285,6 +285,8 @@ class RestHandler(Handler):
         elif isinstance(tx.body, MessageBuilderSpec):
             for b in tx.body.blobs:
                 self._update_blob_uri(b)
+            if tx.body.body_blob is not None:
+                self._update_blob_uri(tx.body.body_blob)
 
     def _maybe_populate_body_uri(self, tx):
         if tx.body is not None:
