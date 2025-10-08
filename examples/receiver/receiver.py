@@ -317,7 +317,10 @@ class Receiver:
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
         tx = self._get_tx(tx_rest_id)
-        return tx.update_message_builder(message_json)
+        err = tx.update_message_builder(message_json)
+        if err:
+            return err, None
+        return None, self.get_tx(tx_rest_id)
 
     # asgi/fastapi-only
     def put_blob(self, tx_rest_id: str, req_headers,

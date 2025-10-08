@@ -79,6 +79,7 @@ class Sender:
             resp = self.session.put(uri, data=file)
 
         logging.info('PUT %s %s', uri, resp)
+        # xxx exact match
         if resp.status_code >= 300:
             return False
         self.blob_uris[blob_id] = uri

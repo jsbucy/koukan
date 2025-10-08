@@ -48,10 +48,18 @@ def create_app(receiver = None, path = None):
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
                                      ) -> FastApiResponse:
         builder_json = await request.json()
-        if err := receiver.update_tx_message_builder(tx_rest_id, builder_json):
+        
+        err, res = receiver.update_tx_message_builder(tx_rest_id, builder_json)
+
+        if err is not None:
             code, msg = err
             return FastApiResponse(status_code=code, content=msg)
-        return FastApiResponse()
+        elif res is not None:
+            tx_json, etag = res
+            return FastApiJsonResponse(status_code=200, content=tx_json,
+                                       headers={'etag': etag})
+        else:
+            assert False
 
     @app.put('/transactions/{tx_rest_id}/body')
     async def create_tx_body(tx_rest_id : str,

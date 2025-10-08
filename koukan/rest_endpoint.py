@@ -239,18 +239,6 @@ class RestEndpoint(Filter):
             return rest_resp
         return rest_resp
 
-    def _update_message_builder(self, delta : TransactionMetadata,
-                                deadline : Deadline
-                                ) -> Optional[Response]:
-        assert self.transaction_url is not None
-        assert isinstance(delta.body, MessageBuilderSpec)
-        rest_resp = self._post_tx(
-            self.transaction_url + '/message_builder',
-            delta.body.json, self.client.post, deadline)
-        if rest_resp is None or rest_resp.status_code != 200:
-            return Response(400, 'RestEndpoint._update_message_builder err')
-        return None
-
     def _cancel(self):
         logging.debug('RestEndpoint._cancel %s ', self.transaction_url)
         if not self.transaction_url:
@@ -417,6 +405,8 @@ class RestEndpoint(Filter):
                              'RestEndpoint upstream invalid resp/delta update'))
                 return FilterResult()
 
+        assert self.transaction_url is not None
+
         if tx_delta.body is None:
             return FilterResult()
 
@@ -427,14 +417,19 @@ class RestEndpoint(Filter):
         # get it all in the initial on_update() so don't send it again
         # here.
         if not created and isinstance(tx_delta.body, MessageBuilderSpec):
-            data_err = self._update_message_builder(tx_delta, deadline)
-            if data_err is not None:
-                self.downstream_tx.data_response = data_err
+
+            rest_resp = self._post_tx(
+                self.transaction_url + '/message_builder',
+                tx_delta.body.json, self.client.post, deadline)
+            if rest_resp is None or rest_resp.status_code != 200:
+                self.downstream_tx.data_response = Response(400, 'RestEndpoint._update_message_builder err')
                 return FilterResult()
-            # xxx possibly this POST should return the spec decorated
-            # with the blob uris but for the moment just GET the tx
-            # again
-            tx_out = self._get(deadline)
+            resp_json = get_resp_json(rest_resp) if rest_resp else None
+            resp_json = resp_json if resp_json else {}
+
+            tx_out = TransactionMetadata.from_json(
+                resp_json, WhichJson.REST_READ)
+
             d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             self.rest_upstream_tx.merge_from(d)
 

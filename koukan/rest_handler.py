@@ -292,8 +292,15 @@ class RestHandler(Handler):
         elif isinstance(tx.body, MessageBuilderSpec):
             for blob_id, blob in tx.body.blobs.items():
                 self._update_blob_uri(blob)
+            # whereas the standalone rest receiver gets the
+            # original message in addition to the parsed, this is only
+            # used for router <-> gw where it's either one or the
+            # other but never both so this doesn't need to populate
+            # body_blob uri here
+            # TODO so probably this is moot?
             if tx.body.body_blob is not None:
                 self._update_blob_uri(tx.body.body_blob)
+
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
