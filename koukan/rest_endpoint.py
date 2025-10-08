@@ -393,7 +393,7 @@ class RestEndpoint(Filter):
                 self.downstream_tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint ' + err))
                 return FilterResult()
-
+            assert tx_out is not None
             upstream_delta = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             downstream_delta = upstream_delta.copy()
             downstream_delta.body = None
@@ -422,13 +422,16 @@ class RestEndpoint(Filter):
                 self.rest_upstream_tx.body.uri,
                 tx_delta.body.json, self.client.post, deadline)
             if rest_resp is None or rest_resp.status_code != 200:
-                self.downstream_tx.data_response = Response(400, 'RestEndpoint._update_message_builder err')
+                self.downstream_tx.data_response = Response(400, 'RestEndpoint update_message_builder http err')
                 return FilterResult()
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
 
             tx_out = TransactionMetadata.from_json(
                 resp_json, WhichJson.REST_READ)
+            if tx_out is None:
+                self.downstream_tx.data_response = Response(400, 'RestEndpoint update message_builder bad response')
+                return FilterResult()
 
             d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
             self.rest_upstream_tx.merge_from(d)

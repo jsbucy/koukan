@@ -794,9 +794,9 @@ class TransactionMetadata:
         return out
 
     # compute a delta from self to successor
-    def maybe_delta(self, successor : "TransactionMetadata",
-                    which_json : Optional[WhichJson] = None
-                    ) -> Optional["TransactionMetadata"]:
+    def delta(self, successor : "TransactionMetadata",
+              which_json : Optional[WhichJson] = None
+              ) -> "TransactionMetadata":
         assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
@@ -818,7 +818,6 @@ class TransactionMetadata:
             if (old_v is not None) and (new_v is None):
                logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
                raise ValueError()
-               return None  # invalid
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue
@@ -830,7 +829,6 @@ class TransactionMetadata:
                 body_delta = old_v.delta(new_v, which_json)
                 if body_delta is None:
                     raise ValueError()
-                    return None
                 if body_delta:
                     setattr(out, f, new_v)
                 continue
@@ -839,13 +837,11 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('tx.delta is-list != is-list %s', f)
                 raise ValueError()
-                return None  # invalid
             if not isinstance(old_v, list):
                 if old_v != new_v:
                     logging.debug('tx.delta value change %s %s %s',
                                   f, old_v, new_v)
                     raise ValueError()
-                    return None  # invalid
                 setattr(out, f, None)
                 continue
             assert isinstance(old_v, list)
@@ -854,11 +850,9 @@ class TransactionMetadata:
                 if any([x != None for x in new_v]):
                     logging.debug('non-None placeholder')
                     raise ValueError()
-                    return None
                 if len(new_v) < len(old_v):
                     logging.debug('list shrink placeholder')
                     raise ValueError()
-                    return None
                 # XXX need this??
                 # setattr(out, json_field.list_offset(), len(old_v))
                 continue
@@ -867,27 +861,26 @@ class TransactionMetadata:
             if old_len > len(new_v):
                 logging.debug('tx.delta invalid list trunc %s', f)
                 raise ValueError()
-                return None  # invalid
             for i in range(0, old_len):
                 if old_v[i] is None and new_v[i] is not None:
                     pass  #ok   XXX why would old_v be None?
                 if old_v[i] is not None and new_v[i] is None:
                     logging.debug('tx.delta %s ->None', f)
                     raise ValueError()
-                    return None  # bad
                 if old_v[i] != new_v[i]:
                     logging.debug('tx.delta %s !=', f)
                     raise ValueError()
-                    return None  # bad
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)
 
         return out
 
-    def delta(self, next, which_json : Optional[WhichJson] = None):
-        if (out := self.maybe_delta(next, which_json)) is None:
-            raise ValueError()
-        return out
+    def maybe_delta(self, next, which_json : Optional[WhichJson] = None
+                    ) -> Optional['TransactionMetadata']:
+        try:
+            return self.delta(next, which_json)
+        except ValueError:
+            return None
 
     # NOTE this copies the rcpt req/resp lists which we know we mutate
     # but not the underlying Mailbox/Response objects which shouldn't
