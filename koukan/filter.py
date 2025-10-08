@@ -243,13 +243,9 @@ def body_from_json(body_json, which_js : WhichJson
                 bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
             logging.debug(blob_specs)
             del message_builder_json['blob_status']
-        message_builder = MessageBuilderSpec(
-            message_builder_json,
-            blob_specs=blob_specs)
+        message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
         if blob_specs is None:
             message_builder.parse_blob_specs()
-        else:
-            message_builder.ids = {k for k in blob_specs.keys()}  # xxx hack
 
     if body_blob_json := body_json.get('blob_status', None):
         body_blob = blob_spec_from_json(body_blob_json)
@@ -259,7 +255,7 @@ def body_from_json(body_json, which_js : WhichJson
             return body_blob
 
     if message_builder is not None:
-        logging.debug('message builder')
+        logging.debug('message builder %s', message_builder.blobs)
         return message_builder
     logging.debug(body_json)
 
@@ -270,12 +266,20 @@ def body_from_json(body_json, which_js : WhichJson
         return BlobSpec(reuse_uri=parse_blob_uri(body_json['reuse_uri']))
     return None
 
-def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
-    out : Dict[str, Any] = {'length' : blob.len()}
-    if (l := blob.content_length()) is not None:
-        out['content_length'] = l
-    if blob.finalized():
-        out['finalized'] = True
+def blob_to_json(blob : Union[Blob, BlobSpec, None]
+                 ) -> Tuple[Optional[str], dict]:
+    out : Dict[str, Any] = {}
+    if isinstance(blob, Blob):
+        out['length'] = blob.len()
+        if (l := blob.content_length()) is not None:
+            out['content_length'] = l
+        if blob.finalized():
+            out['finalized'] = True
+    elif isinstance(blob, BlobSpec):
+        if blob.finalized:
+            out['finalized'] = True
+    else:
+        raise ValueError()
 
     blob_id = None
     if hasattr(blob, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
@@ -284,6 +288,7 @@ def blob_to_json(blob : Blob) -> Tuple[Optional[str], dict]:
             blob_id = uri.blob
 
         logging.debug(uri)
+        assert uri.base_uri is not None
         if uri.tx_body:  #  xxx fix
             out['uri'] = make_blob_uri(uri.tx_id, tx_body=True,
                                        base_uri=uri.base_uri)
@@ -303,8 +308,8 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
             return {'blob_status': json}
         elif isinstance(body, MessageBuilderSpec):
             out = {}
-            for b in body.blobs:
-                blob_id, json = blob_to_json(b)
+            for bid,blob in body.blobs.items():
+                blob_id, json = blob_to_json(blob)
                 out[blob_id] = json
             return {'message_builder': {'blob_status': out}}
         elif isinstance(body, BlobSpec) and body.reuse_uri:

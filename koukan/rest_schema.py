@@ -48,6 +48,8 @@ class BlobUri:
             out += ' blob=' + self.blob
         if self.parsed_uri:
             out += ' parsed_uri=' + self.parsed_uri
+        if self.base_uri:
+            out += ' base_uri=' + str(self.base_uri)
         return out
 
     def __eq__(self, rhs):

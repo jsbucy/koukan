@@ -93,6 +93,7 @@ class RestHandler(Handler):
                  session_uri : Optional[str] = None,
                  service_uri : Optional[str] = None,
                  client : Optional[HTTP_CLIENT] = None):
+        assert service_uri is not None
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
@@ -283,8 +284,8 @@ class RestHandler(Handler):
         if isinstance(tx.body, Blob):
             self._update_blob_uri(tx.body)
         elif isinstance(tx.body, MessageBuilderSpec):
-            for b in tx.body.blobs:
-                self._update_blob_uri(b)
+            for blob_id, blob in tx.body.blobs.items():
+                self._update_blob_uri(blob)
             if tx.body.body_blob is not None:
                 self._update_blob_uri(tx.body.body_blob)
 
@@ -295,13 +296,22 @@ class RestHandler(Handler):
             tx.body = BlobSpec(create_tx_body=True)
             tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
             tx.body.reuse_uri.base_uri = self.service_uri
+            logging.debug(tx.body.reuse_uri)
         # elif isinstance(tx.body, MessageBuilderSpec):
-        #     pass
+        #     for blob in tx.body.blobs:
+        #         if isinstance(blob, BlobSpec):
+        #             blob.reuse_uri.base_uri = self.service_uri
+        #         elif isinstance(blob, Blob):
+        #             blob.blob_uri.base_uri = self.service_uri
+        #     if tx.body.body_blob:
         # xxx cf blob_to_json()
         elif hasattr(tx.body, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
-            blob_uri = tx.body.blob_uri
-            blob_uri.base_uri = self.service_uri
-
+            assert isinstance(tx.body.blob_uri, BlobUri)
+            # xxx _update_body_blob_uri?
+            tx.body.blob_uri.base_uri = self.service_uri
+            logging.debug('%s %s', self.service_uri, tx.body.blob_uri)
+        else:
+            logging.debug(tx.body)
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:

@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Set, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Sequence, Tuple, Union
 
 import logging
 import datetime
@@ -20,24 +20,27 @@ from koukan.storage_schema import BlobSpec
 
 class MessageBuilderSpec:
     json : dict
-    blob_specs : Dict[str, BlobSpec]
-    blobs : Sequence[Blob]
+    blobs : Dict[str, Union[Blob, BlobSpec, None]]
     body_blob : Union[Blob, BlobSpec, None] = None
-    # part['content']['create_id']  XXX rename
-    # xxx is this blob_specs.keys()?
-    ids : Optional[Set[str]] = None
 
-    def __init__(self, json, blobs : Optional[List[Blob]] = None,
-                 blob_specs : Optional[Dict[str, BlobSpec]] = None):
+    def __init__(self, json,
+                 blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None):
         self.json = json
-        self.blobs = blobs if blobs else []
-        self.blob_specs = blob_specs if blob_specs else {}
+        # XXX Mapping?
+        self.blobs = {bi:bs for bi,bs in blobs.items() } if blobs else {}
+
+    def set_blobs(self, blobs : Sequence[Blob]):
+        for blob in blobs:
+            bid = blob.rest_id()
+            assert bid is not None
+            self.blobs[bid] = blob
 
     def clone(self):
         out = copy.copy(self)
         out.blobs = copy.copy(self.blobs)
         return out
 
+    # walks mime part tree in json and populates placeholder entries in blobs
     def check_ids(self):
         self.ids = set()
         if root_part := self.json.get('parts', None):
@@ -52,12 +55,11 @@ class MessageBuilderSpec:
         for p in part.get('parts', []):
             self._check_ids(p)
         if content := part.get('content', {}):
-            if 'create_id' in part['content']:
-                self.ids.add(part['content']['create_id'])
+            if (blob_id := part['content'].get('create_id', None)) and blob_id not in self.blobs:
+
+                self.blobs[blob_id] = None
 
     def parse_blob_specs(self):
-        assert self.ids is None
-        self.ids = set()
         create_blob_id = 0
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
@@ -91,15 +93,25 @@ class MessageBuilderSpec:
         if blob_id is None:
             raise ValueError()
         part['content'] = {'create_id': blob_id}
-        assert blob_id not in self.blob_specs
-        self.blob_specs[blob_id] = blob_spec
-        assert self.ids is not None
-        assert blob_id not in self.ids
-        self.ids.add(blob_id)
+        assert blob_id not in self.blobs
+        self.blobs[blob_id] = blob_spec
 
     def finalized(self):
-        return (len(self.ids) == len(self.blobs) and
-                not any([not b.finalized() for b in self.blobs]))
+        logging.debug('finalized %s', self.blobs)
+        for blob_id, blob in self.blobs.items():
+            #logging.debug('%s %s %s', blob_id, blob, blob.finalized() if blob else None)
+            if isinstance(blob, Blob):
+                if not blob.finalized():
+                    return False
+            elif isinstance(blob, BlobSpec) and not blob.finalized:
+                return False
+            elif blob is None:
+                return False
+            else:
+                assert False, blob
+        return True
+        # return not any([
+        #     blob is None or not blob.finalized() for bid, blob in self.blobs.items()])
 
     def delta(self, rhs, which_json
               ) -> Optional[bool]:
@@ -114,26 +126,31 @@ class MessageBuilderSpec:
         #         return None
         if rhs.json != {} and self.json != rhs.json:
             return None
-        if len(self.blobs) != len(rhs.blobs):
-            logging.debug('blobs len')
-            return None
+        # if len(self.blobs) != len(rhs.blobs):
+        #     logging.debug('blobs len')
+        #     return None
         out = False
-        for i,blob in enumerate(self.blobs):
-            blob_delta = blob.delta(rhs.blobs[i], which_json)
-            if blob_delta is None:
-                logging.debug(i)
-                logging.debug(self.blobs)
-                logging.debug(rhs.blobs)
-                return None
-            out |= blob_delta
-        if not self.blob_specs and rhs.blob_specs:
+        # for i,blob in enumerate(self.blobs):
+        #     blob_delta = blob.delta(rhs.blobs[i], which_json)
+        #     if blob_delta is None:
+        #         logging.debug(i)
+        #         logging.debug(self.blobs)
+        #         logging.debug(rhs.blobs)
+        #         return None
+        #     out |= blob_delta
+        if not self.blobs and rhs.blobs:
             out = True
-        elif self.blob_specs:
-            if self.blob_specs.keys() != rhs.blob_specs.keys():
+        elif self.blobs:
+            if self.blobs.keys() != rhs.blobs.keys():
                 return None
-            for blob_id,blob_spec in self.blob_specs.items():
-                rblob_spec = rhs.blob_specs[blob_id]
-                bdelta = blob_spec.delta(rblob_spec, which_json)
+            for blob_id,blob in self.blobs.items():
+                rblob = rhs.blobs[blob_id]
+                if rblob is None:
+                    return None
+                if blob is None and rblob is not None:
+                    out = True
+                    continue
+                bdelta = blob.delta(rblob, which_json)
                 if bdelta is None:
                     return None
                 out |= bdelta
@@ -141,13 +158,16 @@ class MessageBuilderSpec:
 
 
     def __repr__(self):
-        return '%s %s %s' % (self.json, self.blobs, self.blob_specs)
+        return '%s %s' % (self.json, self.blobs)
 
 class MessageBuilder:
     blobs : Dict[str, Blob]
-    def __init__(self, json, blobs : Dict[str, Blob]):
+    def __init__(self, json, blobs : Dict[str, Any]):
         self.json = json
-        self.blobs = blobs
+        def _blob(b):
+            assert isinstance(b, Blob)
+            return b
+        self.blobs = { bid : _blob(blob) for bid,blob in blobs.items() }
         self.header_json = self.json.get('headers', {})
         self._header_adders = {
             'from': MessageBuilder._add_address_header,

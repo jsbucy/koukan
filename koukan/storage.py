@@ -135,7 +135,8 @@ class TransactionCursor:
         self.session_uri = rhs.session_uri
         self.blobs = [b.clone() for b in rhs.blobs] if rhs.blobs else None
         if self.tx and isinstance(self.tx.body, MessageBuilderSpec):
-            self.tx.body.blobs = list(self.blobs) if self.blobs else []
+            if self.blobs:
+                self.tx.body.set_blobs(self.blobs)
 
     def _update_version_cache(self, leased : Optional[bool]):
         assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
@@ -292,7 +293,10 @@ class TransactionCursor:
         if isinstance(body, BlobSpec):
             blob_specs = [body]
         elif isinstance(body, MessageBuilderSpec):
-            blob_specs = [v for v in body.blob_specs.values()]
+            def _spec(b):
+                assert isinstance(b, BlobSpec)
+                return b
+            blob_specs = [_spec(v) for v in body.blobs.values()]
         elif isinstance(body, Blob):
             blob_spec = BlobSpec(blob=body)
             if not isinstance(body, BlobCursor):
@@ -518,7 +522,7 @@ class TransactionCursor:
 
         if self.tx.body is not None and isinstance(self.tx.body, MessageBuilderSpec):
             if self.blobs:
-                self.tx.body.blobs = self.blobs
+                self.tx.body.set_blobs(self.blobs)
             self.tx.body.check_ids()
 
 
@@ -720,7 +724,8 @@ class TransactionCursor:
         if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
             self.tx.body = blobs[0]
         elif self.message_builder:
-            message_builder = MessageBuilderSpec(self.message_builder, blobs)
+            message_builder = MessageBuilderSpec(self.message_builder)
+            message_builder.set_blobs(blobs)
             message_builder.check_ids()
             self.tx.body = message_builder
         elif blobs:
@@ -852,7 +857,7 @@ class TransactionCursor:
                 all_done = all_done and b.finalized()
 
         if isinstance(self.tx.body, MessageBuilderSpec):
-            self.tx.body.blobs = self.blobs
+            self.tx.body.set_blobs(self.blobs)
 
         return all_done
 

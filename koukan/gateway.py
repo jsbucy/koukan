@@ -261,11 +261,12 @@ class SmtpGateway(EndpointFactory):
                 smtps=service_yaml.get('smtps', False)
             ))
 
+        session_uri=rest_listener_yaml.get('session_uri', None)
         self.adapter_factory = RestHandlerFactory(
             self.executor, endpoint_factory=self,
             rest_id_factory=self.rest_id_factory,
-            session_uri=rest_listener_yaml.get('session_uri', None),
-            service_uri=rest_listener_yaml.get('service_uri', None),
+            session_uri=session_uri,
+            service_uri=rest_listener_yaml.get('service_uri', session_uri),
             chunk_size=rest_listener_yaml.get('chunk_size', None))
 
         rest_listener_yaml = root_yaml['rest_listener']

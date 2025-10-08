@@ -325,7 +325,7 @@ class CompositeBlob(Blob):
     # same object between successive calls. cf TODO in
     # received_header_filter, if one wanted to trickle out the body,
     # this needs a real implementation.
-    def delta(self, rh, which_json):
+    def delta(self, rhs, which_json):
         if not isinstance(rhs, CompositeBlob) or rhs is not self:
             return None
         return False

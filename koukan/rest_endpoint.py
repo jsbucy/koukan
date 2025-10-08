@@ -327,7 +327,10 @@ class RestEndpoint(Filter):
         # since we get the blobs to send from the delta anyway?
         if isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
             self.rest_upstream_tx.body = copy.copy(self.rest_upstream_tx.body)
-            self.rest_upstream_tx.body.blobs = []
+            # XXX
+            self.rest_upstream_tx.body.blobs = {
+                blob_id : None for blob_id in self.rest_upstream_tx.body.blobs.keys()
+            }
         elif isinstance(self.rest_upstream_tx.body, Blob):
             self.rest_upstream_tx.body = None
         elif isinstance(self.rest_upstream_tx.body, BlobSpec):
@@ -395,6 +398,7 @@ class RestEndpoint(Filter):
             err = None
             if tx_out is None:
                 err = 'bad resp GET after POST/PUT'
+                logging.debug(err)
             elif self.rest_upstream_tx.req_inflight(tx_out):
                 err = 'upstream timeout'
             if err:
@@ -457,12 +461,13 @@ class RestEndpoint(Filter):
             blobs = []
             # logging.debug(self.rest_upstream_tx.body.blob_specs)
             # logging.debug(self.rest_upstream_tx.body.body_blob)
-            for blob in tx_delta.body.blobs:
+            for blob_id, blob in tx_delta.body.blobs.items():
+                assert isinstance(blob, Blob)
                 logging.debug(blob.rest_id())
                 assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-                brid = blob.rest_id()
-                assert brid  is not None
-                blob_spec = self.rest_upstream_tx.body.blob_specs[brid]
+                # brid = blob.rest_id()
+                # assert brid  is not None
+                blob_spec = self.rest_upstream_tx.body.blobs[blob_id]
                 assert isinstance(blob_spec, BlobSpec)
                 assert blob_spec.reuse_uri is not None
                 uri = blob_spec.reuse_uri.parsed_uri
@@ -482,6 +487,8 @@ class RestEndpoint(Filter):
             return FilterResult()
         else:
             raise ValueError()
+
+        logging.debug(blobs)
 
         # NOTE _get() will wait on tx version even if nothing inflight
         if not blobs:

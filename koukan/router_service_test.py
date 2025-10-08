@@ -1377,7 +1377,9 @@ class RouterServiceTest(unittest.TestCase):
         }
         b = b"hello, world!"
         blob = InlineBlob(b, rest_id='my_plain_body', last=True)
-        delta.body = MessageBuilderSpec(message_builder_spec, blobs=[blob])
+        delta.body = MessageBuilderSpec(message_builder_spec)
+        #blobs={'my_plain_body': blob})
+        delta.body.set_blobs([blob])
         delta.body.check_ids()
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
@@ -1464,9 +1466,9 @@ class RouterServiceTest(unittest.TestCase):
                 # NOTE: I can't figure out how to get email.parser to
                 # leave the line endings alone
                 self.assertEqual(2, len(tx_delta.body.blobs))
-                self.assertEqual(tx_delta.body.blobs[0].pread(0),
+                self.assertEqual(tx_delta.body.blobs['0'].pread(0),
                                  b'yolocat')
-                self.assertEqual(tx_delta.body.blobs[1].pread(0),
+                self.assertEqual(tx_delta.body.blobs['1'].pread(0),
                                  b'yolocat2')
                 self.assertIsNotNone(tx_delta.body.json)
                 upstream_delta.data_response=Response(203)

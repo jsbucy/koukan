@@ -42,18 +42,16 @@ class MessageBuilderFilter(ProxyFilter):
         assert self.validation is not False
         assert self.upstream_tx.body is None
 
-        def blob_rest_id(b) -> str:
-            bid = b.rest_id()
-            assert bid is not None
-            return bid
-
         if body.finalized():
-            blobs = { blob_rest_id(blob): blob for blob in body.blobs }
+            b = body.blobs
+            for blob in b.values():
+                assert isinstance(blob, Blob), blob
+            blobs = b
         elif self.validation is None:
             # do a dry run with placeholder blobs so we can fastfail
             # on invalid json before we possibly hang on the upstream
-            blobs = { blob_rest_id(blob): InlineBlob(b'xyz', last=True)
-                      for blob in body.blobs }
+            blobs = { blob_id: InlineBlob(b'xyz', last=True)
+                      for blob_id in body.blobs.keys() }
         builder = MessageBuilder(body.json, blobs)
 
         upstream_body = None

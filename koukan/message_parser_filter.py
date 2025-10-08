@@ -70,8 +70,8 @@ class MessageParserFilter(ProxyFilter):
         file.close()
         self.parsed = True
         if parsed_message is not None:
-            spec = MessageBuilderSpec(
-                parsed_message.json, parsed_message.blobs)
+            spec = MessageBuilderSpec(parsed_message.json)
+            spec.set_blobs(parsed_message.blobs)
             spec.check_ids()
             assert isinstance(tx.body, Blob)
             spec.body_blob = tx.body
