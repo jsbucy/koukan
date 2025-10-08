@@ -149,10 +149,10 @@ class StorageWriterFilter(AsyncFilter):
         if self.tx_cursor is None:
             self.tx_cursor = self.storage.get_transaction_cursor(
                 rest_id=self.rest_id)
-            if self.tx_cursor.try_cache() and self.tx_cursor.tx is not None:
-                tx = self.tx_cursor.tx
-                logging.debug(tx)
-        if tx is None:
+        if self.tx_cursor.try_cache() and self.tx_cursor.tx is not None:
+            tx = self.tx_cursor.tx
+            logging.debug(tx)
+        else:
             tx = self.tx_cursor.load()
         if tx is None:  # 404 e.g. after GC
             return

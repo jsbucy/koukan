@@ -25,10 +25,12 @@ class MessageBuilderSpec:
     uri : Optional[str] = None
 
     def __init__(self, json,
-                 blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None):
+                 blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None,
+                 body_blob : Union[Blob, BlobSpec, None] = None):
         self.json = json
         # XXX Mapping?
         self.blobs = {bi:bs for bi,bs in blobs.items() } if blobs else {}
+        self.body_blob = body_blob
 
     def set_blobs(self, blobs : Sequence[Blob]):
         for blob in blobs:

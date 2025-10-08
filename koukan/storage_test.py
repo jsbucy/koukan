@@ -215,20 +215,26 @@ class StorageTestBase(unittest.TestCase):
             remote_host=HostPort('remote_host', 2525), host='host',
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
+        # reusing body of non-existent tx should fail
+        with self.assertRaises(ValueError):
+            tx_writer2.create('tx_rest_id2', TransactionMetadata(
+                body=BlobSpec(
+                    reuse_uri=BlobUri(tx_id='nonexistent', tx_body=True))))
+
+        # non-finalized blobs cannot be reused
+        with self.assertRaises(ValueError):
+            tx.body = BlobSpec(
+                reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))
+            tx_writer2 = self.s.get_transaction_cursor()
+            tx_writer2.create('tx_rest_id2', tx)
+
+        # reusing tx body as message builder blob should fail
         with self.assertRaises(ValueError):
             tx_writer2.create('tx_rest_id2', TransactionMetadata(
                 body=MessageBuilderSpec(
                     {"text_body": []},
-                    {'': BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))})))
-        # non-finalized blobs cannot be reused
-        with self.assertRaises(ValueError):
-            tx.body = MessageBuilderSpec(
-                {"text_body": []},
-                blob_specs = [BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id',
-                                                         tx_body=True))])
-            #'body_rest_id'
-            tx_writer2 = self.s.get_transaction_cursor()
-            tx_writer2.create('tx_rest_id2', tx)
+                    {'blob_rest_id': BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))})))
+
 
         # shouldn't have been ref'd into tx2
         tx_writer2.load()
@@ -240,8 +246,7 @@ class StorageTestBase(unittest.TestCase):
 
         tx_writer.load()
         tx_writer = self.s.get_transaction_cursor()
-        tx.body = MessageBuilderSpec({"text_body": []}, blob_specs=[
-            BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))])
+        tx.body = BlobSpec(reuse_uri=BlobUri(tx_id='tx_rest_id', tx_body=True))
         tx_writer.create('tx_rest_id2', tx)
         self.assertTrue(tx_writer.input_done)
 
@@ -261,16 +266,16 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs = {
+                    blobs = {
                         'blob_rest_id1': BlobSpec(create_id='blob_rest_id1'),
                         'blob_rest_id2': BlobSpec(create_id='blob_rest_id2'),
                         'blob_rest_id3': BlobSpec(create_id='blob_rest_id3')})))
         self.assertEqual(3, len(tx_writer.blobs))
-        contents = []
+        contents = {}
         for i, blob in enumerate(tx_writer.blobs):
             self.assertEqual('blob_rest_id%d' % (i + 1), blob.rest_id())
             b = b'hello, world %d!' % i
-            contents.append(b)
+            contents[blob.rest_id()] = b
             blob.append_data(0, b, last=True)
 
         tx_writer2 = self.s.get_transaction_cursor()
@@ -282,7 +287,7 @@ class StorageTestBase(unittest.TestCase):
                 rcpt_to=[Mailbox('bob')],
                 body = MessageBuilderSpec(
                     {"text_body": []},
-                    blob_specs={
+                    blobs={
                         'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri),
                         'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri),
                         'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri),
@@ -295,9 +300,11 @@ class StorageTestBase(unittest.TestCase):
 
         # verify blobs were ref'd into tx_rest_id2
         self.assertEqual(4, len(tx_writer2.tx.body.blobs))
-        exp_content = contents+[b4]
-        for i,blob in enumerate(tx_writer2.tx.body.blobs):
-            self.assertEqual(exp_content[i], blob.pread(0))
+        exp_content = contents
+        exp_content['blob_rest_id4'] = b4
+        self.assertEqual(exp_content.keys(), tx_writer2.tx.body.blobs.keys())
+        for blob_id,blob in tx_writer2.tx.body.blobs.items():
+            self.assertEqual(exp_content[blob_id], blob.pread(0))
 
 
     def test_message_builder_no_blob(self):
@@ -730,7 +737,7 @@ class StorageTestBase(unittest.TestCase):
 
         message_builder = MessageBuilderSpec(
             { "headers": [ ["subject", "hello"] ] },
-            blob_specs={
+            blobs={
                 'blob1': BlobSpec(create_id='blob1'),
                 'blob2': BlobSpec(create_id='blob2')})
         upstream.create(

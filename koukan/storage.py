@@ -948,7 +948,8 @@ class BlobCursor(Blob, WritableBlob):
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None
                     ) -> Tuple[bool, int, Optional[int]]:
-        logging.info('BlobWriter.append_data %d [%s] offset=%d self.length=%d d.len=%d '
+        logging.info('BlobWriter.append_data %d [%s] '
+                     'offset=%d self.length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
                      self.db_id, self.blob_uri, offset, self.length, len(d),
                      self._content_length, content_length)
@@ -963,109 +964,131 @@ class BlobCursor(Blob, WritableBlob):
         cursor = None
         with (nullcontext(self.db_tx) if self.db_tx is not None
               else self.parent.begin_transaction() as db_tx):
-            # TODO is this extra read redundant with the WHERE
-            # conditions on the update?
-            stmt = select(
-                func.length(self.parent.blob_table.c.content),
-                self.parent.blob_table.c.length,
-                self.parent.blob_table.c.last_update,
-                self.parent._current_timestamp_epoch()).where(
-                    self.parent.blob_table.c.id == self.db_id)
-            res = db_tx.execute(stmt)
-            row = res.fetchone()
-            assert row is not None
-            db_length, db_content_length, last_update, db_now = row
-            self.length = db_length
-            self._content_length = db_content_length
-            self.last_update = last_update
-            if offset != db_length or self.length != db_length:
-                return False, db_length, db_content_length
-            if (db_content_length is not None) and (
-                    (content_length is None) or
-                    (content_length != db_content_length)):
-                return False, db_length, db_content_length
+            for i in range(0,5):
+                try:
+                    success, db_length, db_content_length, cursor = (
+                        self._append_data(
+                            db_tx, offset, d, content_length, last))
+                    logging.debug('%s %d %s %s',
+                                  success, db_length, db_content_length, cursor)
+                    if not success:
+                        db_tx.rollback()
+                        return False, db_length, db_content_length
+                    break
+                except VersionConflictException:
+                    logging.debug('VersionConflictException')
+                    if i == 4:
+                        raise
+                    backoff(i)
 
-            upd = (update(self.parent.blob_table)
-                   .where(self.parent.blob_table.c.id == self.db_id)
-                   .where(func.length(self.parent.blob_table.c.content) ==
-                          self.length)
-                   .where(or_(self.parent.blob_table.c.length == None,
-                              self.parent.blob_table.c.length ==
-                              content_length))
-                   # in sqlite, the result of blob||blob seems to be text
-                   .values(content =
-                           cast(self.parent.blob_table.c.content.concat(d),
-                                LargeBinary),
-                           length = content_length,
-                           last_update = self.parent._current_timestamp_epoch())
-                   .returning(func.length(self.parent.blob_table.c.content)))
+        self.length = db_length
+        self._content_length = content_length
+        self.last = (self.length == self._content_length)
 
-            res = db_tx.execute(upd)
-            row = res.fetchone()
-            # we should have early-returned after the select if the offset
-            # didn't match, etc.
-            assert row is not None
-            logging.debug('append_data %d %d %d', row[0], self.length, len(d))
-            assert row[0] == (self.length + len(d))
-            blob_done = content_length is not None and (
-                row[0] == content_length)
-
-            self.length = row[0]
-            self._content_length = content_length
-            self.last = (self.length == self._content_length)
-            logging.debug('append_data %d %s last=%s',
-                          self.length, self._content_length, self.last)
-
-        stale = (db_now - last_update) > self.parent.blob_tx_refresh_interval
-        if self.update_tx is not None:
-            if stale or blob_done:
-                cursor = self.parent.get_transaction_cursor(
-                    rest_id=self.update_tx)
-                for i in range(0,5):
-                    try:
-                        # TODO should this be in the same db_tx as the
-                        # blob write? as it is, possible for a reader to
-                        # see finalized body but input_done == False
-                        with self.parent.begin_transaction() as db_tx:
-                            cached = cursor.try_cache()
-                            if not cached:
-                                cursor._load_db(db_tx)
-                            kwargs = {}
-                            input_done = False
-                            if self.last:
-                                input_done = cursor._blob_done(self)
-                            if input_done:
-                                kwargs['input_done'] = True
-                            else:
-                                kwargs['ping_tx'] = True  # ping last_update
-                            logging.debug('BlobWriter.append_data tx %s %s',
-                                          self.update_tx, kwargs)
-                            cursor._write(db_tx, TransactionMetadata(), **kwargs)
-                            break
-                    except VersionConflictException:
-                        logging.debug('VersionConflictException')
-                        if i == 4:
-                            raise
-                        backoff(i)
-            else:
-                cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
-                logging.debug(self)
-                if cursor.try_cache() and cursor.blobs:
-                    for i,blob in enumerate(cursor.blobs):
-                        if blob.db_id != self.db_id:
-                            continue
-                        logging.debug(blob)
-                        cursor.blobs[i] = self.clone()
-                        break
+        if cursor is None and self.update_tx is not None:
+            cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
+            if not cursor.try_cache():
+                cursor = None
+        if cursor is not None:
+            # update BlobCursor in cached tx
+            logging.debug(self)
+            if cursor.blobs:
+                for i,blob in enumerate(cursor.blobs):
+                    if blob.db_id != self.db_id:
+                        continue
+                    logging.debug(blob)
+                    cursor.blobs[i] = self.clone()
+                    break
                 else:
                     cursor = None
 
+            if cursor is not None:
+                cursor._update_version_cache(leased=None)
 
-        if cursor is not None:
-            cursor._update_version_cache(leased=None)
-            self._session_uri = cursor.session_uri
-        return True, self.length, self._content_length
+        return True, db_length, self._content_length
 
+    def _append_data(self, db_tx, offset: int, d : bytes,
+                    content_length : Optional[int] = None,
+                    # last: set content_length to offset + len(d)
+                    last : Optional[bool] = None):
+        # TODO is this extra read redundant with the WHERE
+        # conditions on the update?
+        stmt = select(
+            func.length(self.parent.blob_table.c.content),
+            self.parent.blob_table.c.length,
+            self.parent.blob_table.c.last_update,
+            self.parent._current_timestamp_epoch()).where(
+                self.parent.blob_table.c.id == self.db_id)
+        res = db_tx.execute(stmt)
+        row = res.fetchone()
+        assert row is not None
+        db_length, db_content_length, last_update, db_now = row
+        self.length = db_length
+        self._content_length = db_content_length
+        self.last_update = last_update
+        if offset != db_length or self.length != db_length:
+            return False, db_length, db_content_length, None
+        if (db_content_length is not None) and (
+                (content_length is None) or
+                (content_length != db_content_length)):
+            return False, db_length, db_content_length, None
+
+        upd = (update(self.parent.blob_table)
+               .where(self.parent.blob_table.c.id == self.db_id)
+               .where(func.length(self.parent.blob_table.c.content) ==
+                      self.length)
+               .where(or_(self.parent.blob_table.c.length == None,
+                          self.parent.blob_table.c.length ==
+                          content_length))
+               # in sqlite, the result of blob||blob seems to be text
+               .values(content =
+                       cast(self.parent.blob_table.c.content.concat(d),
+                            LargeBinary),
+                       length = content_length,
+                       last_update = self.parent._current_timestamp_epoch())
+               .returning(func.length(self.parent.blob_table.c.content)))
+
+        res = db_tx.execute(upd)
+        row = res.fetchone()
+        # we should have early-returned after the select if the offset
+        # didn't match, etc.
+        assert row is not None
+        db_length = row[0]
+        logging.debug('append_data %d %d %d', db_length, self.length, len(d))
+        assert db_length == (self.length + len(d))
+        blob_done = content_length is not None and (db_length == content_length)
+
+        logging.debug('append_data %d %s last=%s',
+                      self.length, self._content_length, self.last)
+
+        if self.update_tx is None:
+            return True, db_length, content_length, None
+
+        stale = (db_now - last_update) > self.parent.blob_tx_refresh_interval
+        if not stale and not blob_done:
+            return True, db_length, content_length, None
+
+        cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
+
+        cached = cursor.try_cache()
+        if not cached:
+            cursor._load_db(db_tx)
+        if cursor.tx.session_uri is not None:
+            self._session_uri = cursor.tx.session_uri
+            return False, db_length, db_content_length, None
+        kwargs = {}
+        input_done = False
+        if db_length == content_length:
+            input_done = cursor._blob_done(self)
+        if input_done:
+            kwargs['input_done'] = True
+        else:
+            kwargs['ping_tx'] = True  # ping last_update
+        logging.debug('BlobWriter.append_data tx %s %s',
+                      self.update_tx, kwargs)
+        cursor._write(db_tx, TransactionMetadata(), **kwargs)
+
+        return True, db_length, content_length, cursor
 
     def pread(self, offset, length=None) -> Optional[bytes]:
         # TODO this should maybe have the same effect as load() if the

@@ -133,29 +133,6 @@ class RestHandler(Handler):
         return PlainTextResponse(
             status_code=code, content=msg, headers=headers_dict)
 
-    def _ping_tx(self, session_uri, tx_rest_id):
-        logging.debug('ping tx %s', self._tx_rest_id)
-
-        # TODO HEAD makes more sense but this should work for now
-        try:
-            uri = urljoin(session_uri, make_tx_uri(tx_rest_id))
-            resp = self.client(uri)
-            logging.debug('%s %d', uri, resp.status_code)
-        except:
-            logging.exception('_ping_tx')
-
-
-    def _maybe_schedule_ping(self, request, session_uri, tx_rest_id
-                             ) -> Optional[HttpResponse]:
-        if session_uri is None:
-            return None
-
-        if self.executor.submit(
-                partial(self._ping_tx, session_uri,
-                        self._tx_rest_id)) is None:
-            return self.response(code=500, msg='schedule ping tx')
-        return None
-
     def _handle_async(self, request, fn):
         try:
             return fn()
@@ -401,21 +378,16 @@ class RestHandler(Handler):
                 return self.response(code=500, msg='check tx failed')
         version, tx, is_local, other = check_result
         if other is not None:
-            # this should be 308 with the understanding that the
-            # client always starts from the uri they got back from the
-            # initial create but creates a new httpx.Client w/redirect caching
-            # for each session of waiting on the LRO?
             return self.response(
-                code=307, headers=[
-                    ('location',
-                     urljoin(other, make_tx_uri(self._tx_rest_id)))])
+                code=308, headers=[
+                    ('location', urljoin(other, request.url.path))])
 
         fresh_etag = etag is not None and self._check_etag(etag, version)
         if timeout is None or not is_local or not fresh_etag:
             if fresh_etag:
                 return self.response(code=304, msg='unchanged',
                                      headers=[('etag', self._etag(version))])
-            # do a full read every time with no etag e.g. ping/wakeup
+            # do a full read every time with no etag
             if tx is None or etag is None:
                 err, tx = await self._get_tx_async()
                 if err is not None:
@@ -470,6 +442,11 @@ class RestHandler(Handler):
             return self.response(
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
+        if tx.session_uri:
+            return self.response(
+                code=308, headers=[
+                    ('location', urljoin(tx.session_uri, request.url.path))])
+
         if req_json is None:  # heartbeat/ping
             pass
         elif not self.async_filter.incremental():
@@ -497,11 +474,9 @@ class RestHandler(Handler):
         if upstream_delta is None:
             return self.response(
                 code=400, msg='RestHandler.patch_tx bad request')
-
-        # if session_uri is not None and not this process, 308
-        if (err := self._maybe_schedule_ping(
-                request, tx.session_uri, self._tx_rest_id)):
-            return err
+        # checked this earlier, should have gotten a version conflict
+        # if the tx changed
+        assert tx.session_uri is None
 
         tx.body = body
         self._update_body_blob_uri(tx)
@@ -532,6 +507,22 @@ class RestHandler(Handler):
                          blob_rest_id : Optional[str] = None,
                          tx_body : bool = False
                          ) -> Optional[HttpResponse]:
+        assert self.async_filter is not None
+
+        cached = self.async_filter.check_cache()
+        if cached is None:
+            tx = self.async_filter.get()
+        else:
+            tx = cached[1]
+        if tx is None:
+            return self.response(code=404, msg='unknown transaction')
+
+        if tx.session_uri is not None:
+            return self.response(
+                code=308, headers=[
+                    ('location',
+                     urljoin(tx.session_uri, request.url.path))])
+
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -545,7 +536,6 @@ class RestHandler(Handler):
 
         # this just returns the blob writer now if it already exists,
         # append will fail precondition/offset check downstream -> 416
-        assert self.async_filter is not None
         blob = self.async_filter.get_blob_writer(
             create = create, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
@@ -610,10 +600,6 @@ class RestHandler(Handler):
         if resp.status_code != 200:
             return resp
         assert self.blob is not None
-        # if session_uri is not None and not this process, 308
-        if (err := self._maybe_schedule_ping(
-                request, self.blob.session_uri(), self._tx_rest_id)):
-            return err
 
         return resp
 
@@ -660,6 +646,12 @@ class RestHandler(Handler):
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
+        if not appended and (uri := self.blob.session_uri()) is not None:
+            path = request.url.path
+            return self.response(
+                code=308,
+                headers=[('location', urljoin(uri, request.url.path))])
+
 
         headers : List[Tuple[str, Any]] = []
         headers.append(
