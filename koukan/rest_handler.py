@@ -264,7 +264,6 @@ class RestHandler(Handler):
             tx_uri = urljoin(self.service_uri, tx_path)
         else:
             tx_uri = tx_path
-        self._maybe_populate_body_uri(cached_tx)
         self._update_body_blob_uri(cached_tx)
         resp = self.response(
             code=201,
@@ -281,15 +280,6 @@ class RestHandler(Handler):
             blob.blob_uri.base_uri = self.session_uri
 
     def _update_body_blob_uri(self, tx):
-        if isinstance(tx.body, Blob):
-            self._update_blob_uri(tx.body)
-        elif isinstance(tx.body, MessageBuilderSpec):
-            for blob_id, blob in tx.body.blobs.items():
-                self._update_blob_uri(blob)
-            if tx.body.body_blob is not None:
-                self._update_blob_uri(tx.body.body_blob)
-
-    def _maybe_populate_body_uri(self, tx):
         if tx.body is None:
             # we don't actually create it for interactive/exploder
             # here (cf above) but need to return the uri in the json
@@ -297,21 +287,13 @@ class RestHandler(Handler):
             tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
             tx.body.reuse_uri.base_uri = self.service_uri
             logging.debug(tx.body.reuse_uri)
-        # elif isinstance(tx.body, MessageBuilderSpec):
-        #     for blob in tx.body.blobs:
-        #         if isinstance(blob, BlobSpec):
-        #             blob.reuse_uri.base_uri = self.service_uri
-        #         elif isinstance(blob, Blob):
-        #             blob.blob_uri.base_uri = self.service_uri
-        #     if tx.body.body_blob:
-        # xxx cf blob_to_json()
-        elif hasattr(tx.body, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
-            assert isinstance(tx.body.blob_uri, BlobUri)
-            # xxx _update_body_blob_uri?
-            tx.body.blob_uri.base_uri = self.service_uri
-            logging.debug('%s %s', self.service_uri, tx.body.blob_uri)
-        else:
-            logging.debug(tx.body)
+        elif isinstance(tx.body, Blob):
+            self._update_blob_uri(tx.body)
+        elif isinstance(tx.body, MessageBuilderSpec):
+            for blob_id, blob in tx.body.blobs.items():
+                self._update_blob_uri(blob)
+            if tx.body.body_blob is not None:
+                self._update_blob_uri(tx.body.body_blob)
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
@@ -328,7 +310,7 @@ class RestHandler(Handler):
 
     def _get_tx_resp(self, request, tx, version):
         tx_out = tx.copy()
-        self._maybe_populate_body_uri(tx_out)
+        self._update_body_blob_uri(tx_out)
         return self.response(
             etag=self._etag(version) if tx else None,
             resp_json=tx_out.to_json(WhichJson.REST_READ))
@@ -515,7 +497,7 @@ class RestHandler(Handler):
             return err
 
         tx.body = body
-        self._maybe_populate_body_uri(tx)
+        self._update_body_blob_uri(tx)
         version = self.async_filter.version
         assert version is not None
         return self.response(
