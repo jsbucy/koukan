@@ -244,6 +244,8 @@ def body_from_json(body_json, which_js : WhichJson
             logging.debug(blob_specs)
             del message_builder_json['blob_status']
         message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
+        if uri := message_builder_json.get('uri', None):
+            message_builder.uri = uri
         if blob_specs is None:
             message_builder.parse_blob_specs()
 

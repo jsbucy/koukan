@@ -22,6 +22,7 @@ class MessageBuilderSpec:
     json : dict
     blobs : Dict[str, Union[Blob, BlobSpec, None]]
     body_blob : Union[Blob, BlobSpec, None] = None
+    uri : Optional[str] = None
 
     def __init__(self, json,
                  blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None):
@@ -99,19 +100,18 @@ class MessageBuilderSpec:
     def finalized(self):
         logging.debug('finalized %s', self.blobs)
         for blob_id, blob in self.blobs.items():
-            #logging.debug('%s %s %s', blob_id, blob, blob.finalized() if blob else None)
+            logging.debug('%s %s', blob_id, blob)
             if isinstance(blob, Blob):
                 if not blob.finalized():
                     return False
-            elif isinstance(blob, BlobSpec) and not blob.finalized:
-                return False
+            elif isinstance(blob, BlobSpec):
+                if not blob.finalized:
+                    return False
             elif blob is None:
                 return False
             else:
                 assert False, blob
         return True
-        # return not any([
-        #     blob is None or not blob.finalized() for bid, blob in self.blobs.items()])
 
     def delta(self, rhs, which_json
               ) -> Optional[bool]:
@@ -126,21 +126,11 @@ class MessageBuilderSpec:
         #         return None
         if rhs.json != {} and self.json != rhs.json:
             return None
-        # if len(self.blobs) != len(rhs.blobs):
-        #     logging.debug('blobs len')
-        #     return None
         out = False
-        # for i,blob in enumerate(self.blobs):
-        #     blob_delta = blob.delta(rhs.blobs[i], which_json)
-        #     if blob_delta is None:
-        #         logging.debug(i)
-        #         logging.debug(self.blobs)
-        #         logging.debug(rhs.blobs)
-        #         return None
-        #     out |= blob_delta
-        if not self.blobs and rhs.blobs:
-            out = True
-        elif self.blobs:
+        if not self.blobs:
+            if rhs.blobs:
+                out = True
+        else:
             if self.blobs.keys() != rhs.blobs.keys():
                 return None
             for blob_id,blob in self.blobs.items():

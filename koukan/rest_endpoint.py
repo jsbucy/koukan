@@ -417,9 +417,9 @@ class RestEndpoint(Filter):
         # get it all in the initial on_update() so don't send it again
         # here.
         if not created and isinstance(tx_delta.body, MessageBuilderSpec):
-
+            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
             rest_resp = self._post_tx(
-                self.transaction_url + '/message_builder',
+                self.rest_upstream_tx.body.uri,
                 tx_delta.body.json, self.client.post, deadline)
             if rest_resp is None or rest_resp.status_code != 200:
                 self.downstream_tx.data_response = Response(400, 'RestEndpoint._update_message_builder err')

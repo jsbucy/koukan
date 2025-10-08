@@ -60,21 +60,26 @@ class Transaction:
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
 
-        if self.body_path or self.message_json:
-            json_out['body'] = {}
-            if self.message_json is not None:
-                json_out['body']['blob_status'] = {
-                    'uri': urljoin(self.base_url, '/transactions/' + self.tx_id + '/body'),
-                    'finalized': self.body_path is not None
-                }
+        json_out['body'] = {}
+        json_out['body']['blob_status'] = {
+            'uri': urljoin(self.base_url, '/transactions/' + self.tx_id + '/body'),
+            'finalized': self.body_path is not None
+        }
 
-                blob_status = {}
-                json_out['body']['message_builder'] = {'blob_status': blob_status}
-                for bid,bp in self.blob_paths.items():
-                    blob_status[bid] = {
-                        'uri': urljoin(self.base_url, '/transactions/' + self.tx_id + '/blob/' + bid),
-                        'finalized': bp is not None
-                    }
+        message_builder = json_out['body']['message_builder'] = {}
+        if self.message_json is None:
+            message_builder['uri'] = urljoin(self.base_url, '/transactions/' + self.tx_id + '/message_builder')
+        else:
+            blob_status = {}
+            for bid,bp in self.blob_paths.items():
+                blob_status[bid] = {
+                    'uri': urljoin(
+                        self.base_url,
+                        '/transactions/' + self.tx_id + '/blob/' + bid),
+                    'finalized': bp is not None
+                }
+            message_builder['blob_status'] = blob_status
+
         logging.debug('Tx.get %s', json_out)
         return json_out
 
