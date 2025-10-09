@@ -312,12 +312,17 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url)
         delta = TransactionMetadata(mail_from=Mailbox('alice'))
+
+        tx_path = '/transactions/124'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         self.responses.append(Response(
             http_resp = '201 created',
             content_type = 'application/json',
             resp_json={
                 'mail_from': {},
-                'mail_response': {'code': 200}},
+                'mail_response': {'code': 200},
+                'body': {'blob_status': {'uri': body_uri }}},
             location = '/transactions/124',
             etag='1'))
         tx.merge_from(delta)
@@ -435,15 +440,19 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url, chunk_size=8)
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            location='/transactions/123',
+            location=tx_path,
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
+                'body': {'blob_status': {'uri': body_uri }}
             },
             etag='1'))
 
@@ -476,7 +485,8 @@ class RestEndpointTest(unittest.TestCase):
         logging.debug('finalized blob')
 
         blob = InlineBlob(b'hello, world!', last=True)
-        rest_endpoint._put_blob(blob)
+        rest_endpoint._put_blob(
+            blob, rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri)
 
         # POST /transactions
         req = self.requests.pop(0)
@@ -512,15 +522,20 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url)
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
-            location='/transactions/123',
+            location=tx_path,
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
+                'body': {'blob_status': {'uri': body_uri }}
+
             },
             etag='1'))
 
@@ -555,6 +570,10 @@ class RestEndpointTest(unittest.TestCase):
             mail_response=MailResponse(201),
             rcpt_response=[MailResponse(202)])
 
+        tx_path = '/transactions/123'
+        body_path = tx_path + '/body'
+        body_uri = self.static_base_url + body_path
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
@@ -562,15 +581,13 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'mail_response': {'code': 201},
                 'rcpt_to': [{}],
-                'rcpt_response': [{'code': 202}] },
-            location = '/transactions/124',
+                'rcpt_response': [{'code': 202}],
+                'body': {'blob_status': {'uri': body_uri }}},
+            location = tx_path,
             etag='1'))
 
         # POST /transactions/123/body
-        self.responses.append(Response(
-            http_resp = '200 created',
-            resp_json={},
-            location = '/transactions/123/body'))
+        self.responses.append(Response(http_resp = '200 ok'))
 
         # PUT /transactions/123/body -> server returns invalid
         # content-range header
@@ -594,14 +611,18 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint, tx = self.create_endpoint(
             static_base_url=self.static_base_url, timeout_data=1, chunk_size=4)
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_to': [{}],
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {'blob_status': {'uri': body_uri }}},
+            location = tx_path,
             etag='1'))
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -614,10 +635,7 @@ class RestEndpointTest(unittest.TestCase):
         tx_delta = TransactionMetadata(
            body=InlineBlob(b'hello', last=True))
         tx.merge_from(tx_delta)
-        self.responses.append(Response(
-            http_resp = '200 ok',
-            resp_json={'body': '/blob/123'},
-            location = '/transactions/124'))
+        self.responses.append(Response(http_resp = '200 ok'))
         self.responses.append(Response(timeout=True))
         rest_endpoint.on_update(tx_delta, None)
         logging.debug(tx)
@@ -629,6 +647,9 @@ class RestEndpointTest(unittest.TestCase):
             min_poll=0.1,
             chunk_size=8)
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST
         self.responses.append(Response(
             http_resp = '201 created',
@@ -636,8 +657,14 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri
+                    }
+                }
+            },
+            location = tx_path,
             etag = '1'))
 
         logging.debug('testFilterApi envelope')
@@ -696,7 +723,12 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {},
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri,
+                        'finalized': True
+                    }
+                },
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'}}))
@@ -723,6 +755,9 @@ class RestEndpointTest(unittest.TestCase):
 
         body = b'hello, world!'
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
@@ -730,8 +765,14 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # POST /transactions/123/body
@@ -747,7 +788,11 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {},
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri, 'finalized': True
+                    }
+                },
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'} },
@@ -823,6 +868,9 @@ class RestEndpointTest(unittest.TestCase):
 
         body = b'hello, world!'
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
@@ -830,14 +878,19 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}]},
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # PUT /transactions/123/body
         self.responses.append(Response(
             http_resp = '200 ok',
-            resp_json={},
             content_range=ContentRange(
                 'bytes', 0, len(body))))
 
@@ -875,7 +928,12 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {},
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri, 'finalized': True
+                    }
+                },
+
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'} },
@@ -922,7 +980,6 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123',
             etag='2'))
 
         delta = TransactionMetadata(
@@ -979,14 +1036,28 @@ class RestEndpointTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+        blob_uri = self.static_base_url + tx_path + '/blob/blob_rest_id'
+        message_builder_uri = self.static_base_url + tx_path + '/message_builder'
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
-                'rcpt_to': [{}] },
-            location = '/transactions/123',
+                'rcpt_to': [{}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # GET /transactions/123
@@ -997,8 +1068,17 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
             etag='2'))
 
         tx.merge_from(delta)
@@ -1015,14 +1095,29 @@ class RestEndpointTest(unittest.TestCase):
             {'text_body': [{
                 "content": {"create_id": "blob_rest_id"}
             }]},
-            blobs = [InlineBlob(blob, rest_id='blob_rest_id', last=True)])
+            blobs = {'blob_rest_id': InlineBlob(blob, rest_id='blob_rest_id', last=True)})
         parsed_delta.body.check_ids()
         parsed_delta.body.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
         self.responses.append(Response(
-            http_resp = '200 ok'))
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            }))
 
         # PUT /transactions/123/blob/blob_id
         self.responses.append(Response(
@@ -1039,13 +1134,22 @@ class RestEndpointTest(unittest.TestCase):
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}},
+                'data_response': {'code': 203, 'message': 'ok'},
+                'body': {
+                    'blob_status': {'uri': body_uri, 'finalized': True},
+                    'message_builder': {
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri, 'finalized': True}
+                        }
+                    }
+                }
+            },
             etag='3'))
 
         rest_endpoint.on_update(parsed_delta, None)
+        logging.debug(tx)
         self.assertEqual(tx.data_response.code, 203)
 
 
@@ -1056,14 +1160,29 @@ class RestEndpointTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+        blob_uri = self.static_base_url + tx_path + '/blob/blob_rest_id'
+        message_builder_uri = self.static_base_url + tx_path + '/message_builder'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
-                'rcpt_to': [{}] },
-            location = '/transactions/123',
+                'rcpt_to': [{}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # GET /transactions/123
@@ -1074,8 +1193,17 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
             etag='2'))
 
         tx.merge_from(delta)
@@ -1089,8 +1217,8 @@ class RestEndpointTest(unittest.TestCase):
             {'text_body': [{
                 'content': {'create_id': 'blob_rest_id'}
             }]},
-            blobs=[InlineBlob(
-            blob, rest_id='blob_rest_id', last=True)])
+            blobs={'blob_rest_id':InlineBlob(
+                blob, rest_id='blob_rest_id', last=True)})
         parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
@@ -1113,14 +1241,29 @@ class RestEndpointTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+        blob_uri = self.static_base_url + tx_path + '/blob/blob_rest_id'
+        message_builder_uri = self.static_base_url + tx_path + '/message_builder'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
             resp_json={
                 'remote_host': ['mx.example.com', 25],
                 'mail_from': {},
-                'rcpt_to': [{}] },
-            location = '/transactions/123',
+                'rcpt_to': [{}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # GET /transactions/123
@@ -1131,8 +1274,17 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}] },
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            },
             etag='2'))
 
         tx.merge_from(delta)
@@ -1147,7 +1299,7 @@ class RestEndpointTest(unittest.TestCase):
             {'text_body': [{
                 'content': {'create_id': 'blob_rest_id'}
             }]},
-            blobs = [InlineBlob(blob, rest_id='blob_rest_id', last=True)])
+            blobs = {'blob_rest_id': InlineBlob(blob, rest_id='blob_rest_id', last=True)})
         parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
@@ -1156,7 +1308,25 @@ class RestEndpointTest(unittest.TestCase):
         tx.merge_from(parsed_delta)
 
         # POST /transactions/123/message_builder
-        self.responses.append(Response(http_resp = '200 ok'))
+        self.responses.append(Response(
+            http_resp = '200 ok',
+            resp_json={
+                'remote_host': ['mx.example.com', 25],
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {
+                    'blob_status': {'uri': body_uri},
+                    'message_builder': {
+                        'uri': message_builder_uri,
+                        'blob_status': {
+                            'blob_rest_id': {'uri': blob_uri}
+                        }
+                    }
+                }
+            }
+        ))
 
         # POST /transactions/123/blob/blob_id
         self.responses.append(Response(http_resp = '500 err'))
@@ -1199,6 +1369,9 @@ class RestEndpointTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
 
+        tx_path = '/transactions/123'
+        body_uri = self.static_base_url + tx_path + '/body'
+
         # POST /transactions
         self.responses.append(Response(
             http_resp = '201 created',
@@ -1207,8 +1380,14 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'err'}] },
-            location = '/transactions/123',
+                'rcpt_response': [{'code': 202, 'message': 'err'}],
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri
+                    }
+                }
+            },
+            location = tx_path,
             etag='1'))
 
         # POST /transactions/123/body
@@ -1224,7 +1403,11 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'err'}],
-                'body': {}},
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri, 'finalized': True
+                    }
+                }},
             etag='2'))
 
         # GET /transactions/123
@@ -1236,7 +1419,11 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'err'}],
-                'body': {},
+                'body': {
+                    'blob_status': {
+                        'uri': body_uri, 'finalized': True
+                    }
+                },
                 'data_response': {'code': 203, 'message': 'ok'}},
             etag='3'))
 

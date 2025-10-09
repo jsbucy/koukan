@@ -28,7 +28,7 @@ class BlobUri:
     tx_body : bool = False
     blob : Optional[str] = None
     base_uri : Optional[str] = None
-    parsed_uri : Optional[str] = None
+    parsed_uri : Optional[str] = None  # XXX original_uri
 
     def __init__(self, tx_id : str, tx_body : bool = False,
                  blob : Optional[str] = None,

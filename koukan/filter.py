@@ -568,7 +568,6 @@ class TransactionMetadata:
                 continue
             field = tx_json_fields.get(f, None)
             if not field or not field.valid(which_js):
-                assert False, f
                 return None  # invalid
             js_v = tx_json[f]
             if js_v is None:

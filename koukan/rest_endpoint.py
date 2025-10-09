@@ -183,6 +183,7 @@ class RestEndpoint(Filter):
             if rest_resp.status_code != 201:
                 continue
             location = rest_resp.headers['location']
+            # XXX this should always be a full uri now?
             self.transaction_url, self.transaction_path = self._maybe_qualify_url(location)
             if 'etag' not in rest_resp.headers:
                 return None
@@ -230,7 +231,8 @@ class RestEndpoint(Filter):
                 **kwargs,
                 headers=req_headers,
                 timeout=deadline_left)
-        except RequestError:
+        except RequestError as e:
+            logging.debug(e)
             return None
         logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.http_version)
@@ -422,6 +424,7 @@ class RestEndpoint(Filter):
                 self.rest_upstream_tx.body.uri,
                 tx_delta.body.json, self.client.post, deadline)
             if rest_resp is None or rest_resp.status_code != 200:
+                logging.debug(rest_resp)
                 self.downstream_tx.data_response = Response(400, 'RestEndpoint update_message_builder http err')
                 return FilterResult()
             resp_json = get_resp_json(rest_resp) if rest_resp else None
