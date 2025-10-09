@@ -17,7 +17,7 @@ class MessageBuilderTest(unittest.TestCase):
     def test_smoke(self):
         with open('testdata/message_builder.json', 'r') as f:
             js = json.loads(f.read())
-        builder = MessageBuilder(js, blobs=[])
+        builder = MessageBuilder(js, blobs={})
         with TemporaryFile('w+b') as out:
             #with open('/tmp/out', 'w+b') as out:
             builder.build(out)
@@ -64,8 +64,8 @@ class MessageBuilderTest(unittest.TestCase):
             'reuse_uri': '/transactions/123/blob/xyz' }} ] }
         spec = MessageBuilderSpec(json)
         spec.parse_blob_specs()
-        self.assertEqual(1, len(spec.blob_specs))
-        blob_spec = spec.blob_specs['xyz']
+        self.assertEqual(1, len(spec.blobs))
+        blob_spec = spec.blobs['xyz']
         self.assertEqual('123', blob_spec.reuse_uri.tx_id)
         self.assertEqual('xyz', blob_spec.reuse_uri.blob)
         self.assertEqual(json, { 'text_body': [ {
