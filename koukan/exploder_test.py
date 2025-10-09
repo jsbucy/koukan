@@ -191,9 +191,12 @@ class ExploderTest(unittest.TestCase):
             prev = tx.copy()
             exploder.on_update(tx_delta)
             upstream_delta = prev.delta(exploder.downstream_tx)
+            def _code(r):
+                assert r is not None
+                return r.code
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
-                [rr.code for rr in upstream_delta.rcpt_response])
+                [_code(rr) for rr in upstream_delta.rcpt_response])
 
         def code(r):
             assert r is not None
