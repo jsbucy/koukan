@@ -5,7 +5,7 @@ import logging
 import os
 
 from koukan.blob import BlobReader, InlineBlob, CompositeBlob
-
+from koukan.filter import WhichJson
 
 class BlobTest(unittest.TestCase):
     def setUp(self):
@@ -35,14 +35,14 @@ class BlobTest(unittest.TestCase):
 
     def test_inline_fifo_delta(self):
         b1 = InlineBlob(b'uv')
-        self.assertFalse(b1.delta(b1))
+        self.assertFalse(b1.delta(b1, WhichJson.ALL))
         b1.trim_front(1)
         b2 = InlineBlob(b'uvw')
-        self.assertTrue(b1.delta(b2))
-        self.assertIsNone(b2.delta(b1))
+        self.assertTrue(b1.delta(b2, WhichJson.ALL))
+        self.assertIsNone(b2.delta(b1, WhichJson.ALL))
 
         b3 = InlineBlob(b'uxw')
-        self.assertIsNone(b1.delta(b3))
+        self.assertIsNone(b1.delta(b3, WhichJson.ALL))
 
 
     def test_composite(self):
