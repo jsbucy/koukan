@@ -38,11 +38,12 @@ class MessageParserFilterTest(unittest.TestCase):
 
         tx = filter.upstream_tx
         logging.debug(tx)
-        exp_blobs = [b'yolocat', b'yolocat2']
+        exp_blobs = {'0': b'yolocat', '1': b'yolocat2'}
         self.assertTrue(isinstance(tx.body, MessageBuilderSpec))
-        self.assertEqual(len(exp_blobs), len(tx.body.blobs))
-        for i in range(0, len(exp_blobs)):
-            self.assertEqual(tx.body.blobs[i].pread(0), exp_blobs[i])
+        self.assertEqual(exp_blobs.keys(), tx.body.blobs.keys())
+        for blob_id,blob in exp_blobs.items():
+            self.assertEqual(
+                exp_blobs[blob_id], tx.body.blobs[blob_id].pread(0))
 
         self.assertEqual(
             tx.body.json['parts']['content_type'],
