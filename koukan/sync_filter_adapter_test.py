@@ -65,6 +65,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         for i in range(0,3):
             sync_filter_adapter.wait(version, 1)
             tx = sync_filter_adapter.get()
+            logging.debug(tx)
             if [r.code for r in tx.rcpt_response] == [202]:
                 break
             self.assertFalse(sync_filter_adapter.done)
