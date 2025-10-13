@@ -445,21 +445,16 @@ class RestEndpoint(Filter):
                     " (RestEndpoint)")
             return FilterResult()
 
-        blobs : List[Tuple[Blob, str]]  # uri
+        blobs : List[Tuple[Blob, str]] = []  # uri
+        def add_blob(blob, blob_spec):
+            assert isinstance(blob, Blob)
+            assert isinstance(blob_spec, BlobSpec)
+            assert isinstance(blob_spec.reuse_uri, BlobUri)
+            blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
         if isinstance(tx_delta.body, Blob):
-            assert isinstance(self.rest_upstream_tx.body, BlobSpec)
-            assert isinstance(self.rest_upstream_tx.body.reuse_uri, BlobUri)
-
-            assert isinstance(self.rest_upstream_tx.body.reuse_uri.parsed_uri, str)
-            blobs = [ (tx_delta.body, self.rest_upstream_tx.body.reuse_uri.parsed_uri) ]
+            add_blob(tx_delta.body, self.rest_upstream_tx.body)
         elif isinstance(tx_delta.body, MessageBuilderSpec):
-            blobs = []
             assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-            def add_blob(blob, blob_spec):
-                assert isinstance(blob, Blob)
-                assert isinstance(blob_spec, BlobSpec)
-                assert isinstance(blob_spec.reuse_uri, BlobUri)
-                blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
             for blob_id, blob in tx_delta.body.blobs.items():
                 add_blob(blob, self.rest_upstream_tx.body.blobs[blob_id])
             if tx_delta.body.body_blob is not None:
