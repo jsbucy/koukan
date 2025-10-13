@@ -11,7 +11,6 @@ import asyncio
 from dkim import dknewkey
 import tempfile
 import yaml
-import sys
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service

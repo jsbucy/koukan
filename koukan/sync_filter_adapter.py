@@ -264,7 +264,7 @@ class SyncFilterAdapter(AsyncFilter):
             return self.tx.copy()
 
     def get_blob_writer(self,
-                        create : bool,  # vestigal
+                        create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None,
                         ) -> Optional[WritableBlob]:

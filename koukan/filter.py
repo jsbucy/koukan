@@ -793,7 +793,6 @@ class TransactionMetadata:
             new_v = getattr(successor, f, None)
             if old_v is None and new_v is None:
                 continue
-            #logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
 

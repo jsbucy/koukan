@@ -509,9 +509,7 @@ class RestEndpoint(Filter):
 
         self.downstream_tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'))
-        for t in [#upstream_tx,
-                tx_out]:
-            t.remote_host = None
+        tx_out.remote_host = None
         return FilterResult()
 
     # Send a finalized blob with a single http request.
