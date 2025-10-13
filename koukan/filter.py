@@ -186,7 +186,6 @@ class TxField:
     to_json : Optional[ToJson] = None
     is_list : bool = False
     copy : Optional[Copy] = None
-    is_live_status = False
 
     def __init__(self,
                  json_field : str,
@@ -195,8 +194,7 @@ class TxField:
                  to_json : Optional[ToJson] = None,
                  rest_placeholder : bool = False,
                  is_list : bool = False,
-                 copy : Optional[Copy] = None,
-                 is_live_status = False):
+                 copy : Optional[Copy] = None):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -207,7 +205,6 @@ class TxField:
         self.rest_placeholder = rest_placeholder
         self.is_list = is_list
         self.copy = copy
-        self.is_live_status = is_live_status
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -414,8 +411,7 @@ _tx_fields = [
                           WhichJson.EXPLODER_UPDATE,
                           WhichJson.ADD_ROUTE]),
             to_json=body_to_json,
-            from_json=body_from_json,
-            is_live_status=True),
+            from_json=body_from_json),
     TxField('notification',
             validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
@@ -573,14 +569,12 @@ class TransactionMetadata:
             if js_v is None:
                 # TODO for now setting a non-null field back to null
                 # is not a valid operation so reject json with that
-                # raise ValueError()
                 return None
             if isinstance(js_v, list) and not js_v:
                 return None
             v : Any
             if field.is_list:
                 if not isinstance(js_v, list):
-                    # raise ValueError()
                     return None
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
@@ -595,7 +589,6 @@ class TransactionMetadata:
             else:
                 if field.emit_rest_placeholder(which_js):
                     if js_v != {}:
-                        # raise ValueError()
                         return None
                     else:
                         v = None
@@ -739,9 +732,6 @@ class TransactionMetadata:
             if old_v is not None and new_v is None:
                 setattr(out, f, old_v)
                 continue
-            # if field.is_live_status:  # unconditional overwrite
-            #     setattr(out, f, new_v)
-            #     continue
 
             # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
@@ -807,9 +797,6 @@ class TransactionMetadata:
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
 
-            # if json_field.is_live_status and (which_json == WhichJson.REST_READ):
-            #     setattr(out, f, new_v)
-            #     continue
             if ((which_json is not None) and (
                     json_field.emit_rest_placeholder(which_json)) and
                 (old_v is not None and new_v is None)):
@@ -823,8 +810,6 @@ class TransactionMetadata:
 
             # emit body in the delta if it changed
             if f == 'body' and old_v is not None and new_v is not None:
-                logging.debug(old_v)
-                logging.debug(new_v)
                 body_delta = old_v.delta(new_v, which_json)
                 if body_delta is None:
                     raise ValueError()
