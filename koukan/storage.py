@@ -523,8 +523,6 @@ class TransactionCursor:
         if self.tx.body is not None and isinstance(self.tx.body, MessageBuilderSpec):
             if self.blobs:
                 self.tx.body.set_blobs(self.blobs)
-            self.tx.body.check_ids()
-
 
         if finalize_attempt:
             self.in_attempt = False
@@ -726,7 +724,6 @@ class TransactionCursor:
         elif self.message_builder:
             message_builder = MessageBuilderSpec(self.message_builder)
             message_builder.set_blobs(blobs)
-            message_builder.check_ids()
             self.tx.body = message_builder
         elif blobs:
             raise ValueError()

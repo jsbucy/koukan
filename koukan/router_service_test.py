@@ -1380,7 +1380,6 @@ class RouterServiceTest(unittest.TestCase):
         delta.body = MessageBuilderSpec(message_builder_spec)
         #blobs={'my_plain_body': blob})
         delta.body.set_blobs([blob])
-        delta.body.check_ids()
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
         logging.debug(tx)
@@ -1398,7 +1397,6 @@ class RouterServiceTest(unittest.TestCase):
         # send another tx with the same spec to exercise blob reuse
         logging.info('RouterServiceTest.test_message_builder start tx #2')
         spec = MessageBuilderSpec(message_builder_spec)
-        spec.check_ids()
         delta = TransactionMetadata(
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob2@example.com')],

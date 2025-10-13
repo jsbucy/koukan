@@ -1095,8 +1095,8 @@ class RestEndpointTest(unittest.TestCase):
             {'text_body': [{
                 "content": {"create_id": "blob_rest_id"}
             }]},
-            blobs = {'blob_rest_id': InlineBlob(blob, rest_id='blob_rest_id', last=True)})
-        parsed_delta.body.check_ids()
+            blobs = {'blob_rest_id':
+                     InlineBlob(blob, rest_id='blob_rest_id', last=True)})
         parsed_delta.body.body_blob = InlineBlob(body, last=True)
         tx.merge_from(parsed_delta)
 
@@ -1219,7 +1219,6 @@ class RestEndpointTest(unittest.TestCase):
             }]},
             blobs={'blob_rest_id':InlineBlob(
                 blob, rest_id='blob_rest_id', last=True)})
-        parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')
@@ -1300,7 +1299,6 @@ class RestEndpointTest(unittest.TestCase):
                 'content': {'create_id': 'blob_rest_id'}
             }]},
             blobs = {'blob_rest_id': InlineBlob(blob, rest_id='blob_rest_id', last=True)})
-        parsed_delta.body.check_ids()
         body = (b'Message-id: <abc@def>\r\n'
                 b'\r\n'
                 b'hello, world!\r\n')

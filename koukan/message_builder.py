@@ -37,30 +37,18 @@ class MessageBuilderSpec:
             bid = blob.rest_id()
             assert bid is not None
             self.blobs[bid] = blob
+        # TODO this should probably verify that it covered all of the
+        # entries in blobs that were previously populated by
+        # parse_blob_specs() i.e. that there isn't any BlobSpec
+        # remaining in blobs. However this is mainly called from the
+        # storage load path and we don't really have a way to
+        # quarantine invalid transactions so we'll just leave it in
+        # place and and let it throw in MessageBuilder._add_part()
 
     def clone(self):
         out = copy.copy(self)
         out.blobs = copy.copy(self.blobs)
         return out
-
-    # walks mime part tree in json and populates placeholder entries in blobs
-    def check_ids(self):
-        self.ids = set()
-        if root_part := self.json.get('parts', None):
-            self._check_ids(root_part)
-        for multipart in [
-                'text_body', 'related_attachments', 'file_attachments']:
-            parts = self.json.get(multipart, [])
-            for part in parts:
-                self._check_ids(part)
-
-    def _check_ids(self, part):
-        for p in part.get('parts', []):
-            self._check_ids(p)
-        if content := part.get('content', {}):
-            if (blob_id := part['content'].get('create_id', None)) and blob_id not in self.blobs:
-
-                self.blobs[blob_id] = None
 
     def parse_blob_specs(self):
         create_blob_id = 0
@@ -184,8 +172,7 @@ class MessageBuilder:
         if inline_content := content_json.get('inline', None):
             content = inline_content.encode('utf-8')
         elif create_id := content_json.get('create_id', None):
-            if not (blob := self.blobs.get(create_id, None)):
-                raise ValueError('invalid blob id')
+            assert isinstance((blob := self.blobs.get(create_id, None)), Blob), blob_id
             content = blob.pread(0)
         else:
             raise ValueError('invalid part content')
