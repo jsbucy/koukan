@@ -310,16 +310,12 @@ class RestEndpoint(Filter):
 
         # Otherwise clear blobs so the _get() after POST doesn't wait on
         # data_response/req_inflight() (cf below)
-
-        # XXX sort of weird the way rest_upstream_tx.body will change
-        # from MessageBuilderSpec to BlobStatus or whatever
-        # downstream body shouldn't go into rest_upstream_tx at all
-        # since we get the blobs to send from the delta anyway?
         if isinstance(self.rest_upstream_tx.body, MessageBuilderSpec):
             self.rest_upstream_tx.body = copy.copy(self.rest_upstream_tx.body)
-            # XXX
+            # initialize with placeholder entries
             self.rest_upstream_tx.body.blobs = {
-                blob_id : None for blob_id in self.rest_upstream_tx.body.blobs.keys()
+                blob_id : None
+                for blob_id in self.rest_upstream_tx.body.blobs.keys()
             }
         elif isinstance(self.rest_upstream_tx.body, Blob):
             self.rest_upstream_tx.body = None
@@ -327,7 +323,6 @@ class RestEndpoint(Filter):
             pass
         elif self.rest_upstream_tx.body is not None:
             raise ValueError()
-        #xxx dead upstream_tx = self.rest_upstream_tx.copy()
 
         logging.debug('RestEndpoint.on_update merged tx %s', self.rest_upstream_tx)
 
@@ -451,7 +446,6 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         blobs : List[Tuple[Blob, str]]  # uri
-        logging.debug(self.rest_upstream_tx)
         if isinstance(tx_delta.body, Blob):
             assert isinstance(self.rest_upstream_tx.body, BlobSpec)
             assert isinstance(self.rest_upstream_tx.body.reuse_uri, BlobUri)
@@ -460,36 +454,21 @@ class RestEndpoint(Filter):
             blobs = [ (tx_delta.body, self.rest_upstream_tx.body.reuse_uri.parsed_uri) ]
         elif isinstance(tx_delta.body, MessageBuilderSpec):
             blobs = []
-            # logging.debug(self.rest_upstream_tx.body.blob_specs)
-            # logging.debug(self.rest_upstream_tx.body.body_blob)
-            for blob_id, blob in tx_delta.body.blobs.items():
+            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+            def add_blob(blob, blob_spec):
                 assert isinstance(blob, Blob)
-                logging.debug(blob.rest_id())
-                assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-                # brid = blob.rest_id()
-                # assert brid  is not None
-                blob_spec = self.rest_upstream_tx.body.blobs[blob_id]
                 assert isinstance(blob_spec, BlobSpec)
-                assert blob_spec.reuse_uri is not None
-                uri = blob_spec.reuse_uri.parsed_uri
-                assert uri is not None
-                blobs.append((blob, uri))
-            if tx_delta.body.body_blob is not None:
-                assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-                assert isinstance(self.rest_upstream_tx.body.body_blob, BlobSpec)
-                logging.debug(self.rest_upstream_tx.body.body_blob)
-                body_blob = tx_delta.body.body_blob
-                assert isinstance(body_blob, Blob)
-                blob_spec = self.rest_upstream_tx.body.body_blob
                 assert isinstance(blob_spec.reuse_uri, BlobUri)
-                assert isinstance(blob_spec.reuse_uri.parsed_uri, str)
-                blobs.append((body_blob, blob_spec.reuse_uri.parsed_uri))
+                blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
+            for blob_id, blob in tx_delta.body.blobs.items():
+                add_blob(blob, self.rest_upstream_tx.body.blobs[blob_id])
+            if tx_delta.body.body_blob is not None:
+                add_blob(tx_delta.body.body_blob,
+                         self.rest_upstream_tx.body.body_blob)
         elif isinstance(tx_delta.body, BlobSpec):
             return FilterResult()
         else:
             raise ValueError()
-
-        logging.debug(blobs)
 
         # NOTE _get() will wait on tx version even if nothing inflight
         if not blobs:
