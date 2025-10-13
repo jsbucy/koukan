@@ -420,7 +420,8 @@ class RestEndpoint(Filter):
                 tx_delta.body.json, self.client.post, deadline)
             if rest_resp is None or rest_resp.status_code != 200:
                 logging.debug(rest_resp)
-                self.downstream_tx.data_response = Response(400, 'RestEndpoint update_message_builder http err')
+                self.downstream_tx.data_response = Response(
+                    400, 'RestEndpoint update_message_builder http err')
                 return FilterResult()
             resp_json = get_resp_json(rest_resp) if rest_resp else None
             resp_json = resp_json if resp_json else {}
@@ -428,7 +429,8 @@ class RestEndpoint(Filter):
             tx_out = TransactionMetadata.from_json(
                 resp_json, WhichJson.REST_READ)
             if tx_out is None:
-                self.downstream_tx.data_response = Response(400, 'RestEndpoint update message_builder bad response')
+                self.downstream_tx.data_response = Response(
+                    400, 'RestEndpoint update message_builder bad response')
                 return FilterResult()
 
             d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
@@ -483,7 +485,6 @@ class RestEndpoint(Filter):
             self.sent_data_last = True
         else:
             return FilterResult()
-
 
         tx_out = self._get(deadline)
         logging.debug('RestEndpoint.on_update %s tx from GET %s',
@@ -559,10 +560,7 @@ class RestEndpoint(Filter):
                           offset, len(chunk), chunk_last)
 
             resp, result_length = self._put_blob_chunk(
-                offset=offset,
-                d=chunk,
-                last=chunk_last,
-                uri=uri)
+                offset=offset, d=chunk, last=chunk_last, uri=uri)
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
