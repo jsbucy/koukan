@@ -100,9 +100,7 @@ class MessageBuilderSpec:
         self.blobs[blob_id] = blob_spec
 
     def finalized(self):
-        logging.debug('finalized %s', self.blobs)
         for blob_id, blob in self.blobs.items():
-            logging.debug('%s %s', blob_id, blob)
             if isinstance(blob, Blob):
                 if not blob.finalized():
                     return False
