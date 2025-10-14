@@ -57,6 +57,15 @@ class BlobUri:
             return False
         return self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and self.blob == rhs.blob
 
+    def to_uri(self) -> str:
+        if self.tx_body:
+            return make_blob_uri(self.tx_id, tx_body=True,
+                                 base_uri=self.base_uri)
+        else:
+            return make_blob_uri(self.tx_id, blob=self.blob,
+                                 base_uri=self.base_uri)
+
+
 
 def parse_blob_uri(uri : str) -> Optional[BlobUri]:
     result = urlparse(uri)

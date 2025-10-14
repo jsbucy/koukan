@@ -275,7 +275,7 @@ class SyncFilterAdapter(AsyncFilter):
                 assert self.body is None
                 assert self.blob_writer is None
                 self.body = InlineBlob(b'')
-                self.body.blob_uri = BlobUri(self.rest_id, tx_body=True)
+                self.body.set_blob_uri(BlobUri(self.rest_id, tx_body=True))
                 self.tx.body = self.body
                 self.blob_writer = SyncFilterAdapter.BlobWriter(self)
         return self.blob_writer

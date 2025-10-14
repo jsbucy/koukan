@@ -251,10 +251,13 @@ class RestHandler(Handler):
         return resp
 
     def _update_blob_uri(self, blob):
+        out = BlobSpec(reuse_uri = blob.blob_uri(),
+                       finalized = blob.finalized())
         if blob.finalized():
-            blob.blob_uri.base_uri = self.service_uri
+            out.reuse_uri.base_uri = self.service_uri
         else:
-            blob.blob_uri.base_uri = self.session_uri
+            out.reuse_uri.base_uri = self.session_uri
+        return out
 
     def _update_body_blob_uri(self, tx):
         if tx.body is None:
@@ -265,10 +268,12 @@ class RestHandler(Handler):
             tx.body.reuse_uri.base_uri = self.service_uri
             logging.debug(tx.body.reuse_uri)
         elif isinstance(tx.body, Blob):
-            self._update_blob_uri(tx.body)
+            tx.body = self._update_blob_uri(tx.body)
         elif isinstance(tx.body, MessageBuilderSpec):
-            for blob_id, blob in tx.body.blobs.items():
-                self._update_blob_uri(blob)
+            tx.body.blobs = {
+                blob_id: self._update_blob_uri(blob)
+                for blob_id,blob in tx.body.blobs.items()
+            }
             # whereas the standalone rest receiver gets the
             # original message in addition to the parsed, this is only
             # used for router <-> gw where it's either one or the
@@ -276,7 +281,7 @@ class RestHandler(Handler):
             # body_blob uri here
             # TODO so probably this is moot?
             if tx.body.body_blob is not None:
-                self._update_blob_uri(tx.body.body_blob)
+                tx.body.body_blob = self._update_blob_uri(tx.body.body_blob)
 
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
@@ -295,9 +300,10 @@ class RestHandler(Handler):
     def _get_tx_resp(self, request, tx, version):
         tx_out = tx.copy()
         self._update_body_blob_uri(tx_out)
+        json_out = tx_out.to_json(WhichJson.REST_READ)
         return self.response(
             etag=self._etag(version) if tx else None,
-            resp_json=tx_out.to_json(WhichJson.REST_READ))
+            resp_json=json_out)
 
     def _check_etag(self, etag, cached_version) -> bool:
         etag = etag.strip('"')

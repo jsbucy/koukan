@@ -32,12 +32,14 @@ class BlobSpec:
     def __init__(self, blob : Optional[Blob] = None,
                  create_id : Optional[str] = None,
                  reuse_uri : Optional[BlobUri] = None,
-                 create_tx_body : Optional[bool] = None):
+                 create_tx_body : Optional[bool] = None,
+                 finalized : bool = False):
         # TODO put back assert, blob and create_id can both be present if inline
         self.blob = blob
         self.create_id = create_id
         self.reuse_uri = reuse_uri
         self.create_tx_body = create_tx_body
+        self.finalized = finalized
 
     def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, BlobSpec):
@@ -55,7 +57,7 @@ class BlobSpec:
         return self.finalized != rhs.finalized
 
     def __repr__(self):
-        return '%s %s %s %s %s' % (
+        return 'blob=%s create_id=%s reuse_uri=%s create_tx_body=%s finalized=%s' % (
             self.blob,
             self.create_id,
             self.reuse_uri,

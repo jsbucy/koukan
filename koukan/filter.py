@@ -279,45 +279,31 @@ def blob_to_json(blob : Union[Blob, BlobSpec, None]
             out['finalized'] = True
     else:
         raise ValueError()
-
     blob_id = None
-    if hasattr(blob, 'blob_uri'):  # XXX  isinstance(blob, BlobCursor)?
-        uri = blob.blob_uri
-        if not uri.tx_body:
-            blob_id = uri.blob
+    if isinstance(blob, Blob) and (blob_uri := blob.blob_uri()) is not None:
+        out['uri'] = blob_uri.to_uri()
+    elif isinstance(blob, BlobSpec):
+        assert blob.reuse_uri
+        out['uri'] = blob.reuse_uri.to_uri()
 
-        logging.debug(uri)
-        assert uri.base_uri is not None
-        if uri.tx_body:  #  xxx fix
-            out['uri'] = make_blob_uri(uri.tx_id, tx_body=True,
-                                       base_uri=uri.base_uri)
-        else:
-            out['uri'] = make_blob_uri(uri.tx_id, blob=uri.blob,
-                                       base_uri=uri.base_uri)
-    logging.debug(blob)
-    logging.debug(out)
-    return blob_id,out
+    return blob_id, out
 
 def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
                  which_json : WhichJson):
     if which_json == WhichJson.REST_READ:
-        logging.debug(body)
-        if isinstance(body, Blob):
+        if isinstance(body, Blob) or isinstance(body, BlobSpec):
             blob_id, json = blob_to_json(body)
             return {'blob_status': json}
         elif isinstance(body, MessageBuilderSpec):
-            out = {}
-            for bid,blob in body.blobs.items():
-                blob_id, json = blob_to_json(blob)
-                out[blob_id] = json
-            return {'message_builder': {'blob_status': out}}
-        elif isinstance(body, BlobSpec) and body.reuse_uri:
-            return {'blob_status': {
-                'uri': make_blob_uri(body.reuse_uri.tx_id,
-                                     tx_body=True,
-                                     base_uri=body.reuse_uri.base_uri)}}
+            out : Dict[str, Any] = {'message_builder': {'blob_status': {
+                blob_id : blob_to_json(blob)[1]
+                for blob_id, blob in body.blobs.items() }}}
+            body_blob = body.body_blob
+            if isinstance(body_blob, Blob) or isinstance(body_blob, BlobSpec):
+                blob_id, json = blob_to_json(body_blob)
+                out['blob_status'] = json
+            return out
         else:
-            logging.debug(body)
             raise ValueError()
 
     # TODO unify with MessageBuilderSpec._add_part_blob()

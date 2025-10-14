@@ -89,7 +89,7 @@ class StorageTestBase(unittest.TestCase):
 
         with self.s.begin_transaction() as db_tx:
             self.assertFalse(downstream.check_input_done(db_tx))
-        logging.debug(blob_writer.blob_uri)
+        logging.debug(blob_writer.blob_uri())
         blob_writer.append_data(0, d=b'abc')
         self.assertFalse(blob_writer.last)
 
@@ -288,9 +288,9 @@ class StorageTestBase(unittest.TestCase):
                 body = MessageBuilderSpec(
                     {"text_body": []},
                     blobs={
-                        'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri),
-                        'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri),
-                        'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri),
+                        'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri()),
+                        'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri()),
+                        'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri()),
                         'blob_rest_id4': BlobSpec(create_id='blob_rest_id4')})))
         blob4 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id4')
         blob_writer4 = tx_writer2.get_blob_for_append(blob4)
@@ -776,10 +776,10 @@ class StorageTestBase(unittest.TestCase):
 
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]
-        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual('blob1', blob1_reader.blob_uri().blob)
         self.assertEqual(len(b1), blob1_reader.content_length())
         blob2_reader = upstream.blobs[1]
-        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual('blob2', blob2_reader.blob_uri().blob)
         self.assertIsNone(blob2_reader.content_length())
 
         self.assertEqual(0, self.s._tx_reads - prev_reads)
@@ -787,10 +787,10 @@ class StorageTestBase(unittest.TestCase):
         from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
         self.assertTrue(from_db.load())
         blob1_reader = from_db.blobs[0]
-        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual('blob1', blob1_reader.blob_uri().blob)
         self.assertEqual(len(b1), blob1_reader.content_length())
         blob2_reader = from_db.blobs[1]
-        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual('blob2', blob2_reader.blob_uri().blob)
         self.assertIsNone(blob2_reader.content_length())
         self.assertEqual(1, self.s._tx_reads - prev_reads)
         prev_reads = self.s._tx_reads
@@ -802,10 +802,10 @@ class StorageTestBase(unittest.TestCase):
 
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]
-        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual('blob1', blob1_reader.blob_uri().blob)
         self.assertEqual(len(b1), blob1_reader.content_length())
         blob2_reader = upstream.blobs[1]
-        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual('blob2', blob2_reader.blob_uri().blob)
         self.assertEqual(len(b2), blob2_reader.content_length())
 
         self.assertEqual(0, self.s._tx_reads - prev_reads)
@@ -813,10 +813,10 @@ class StorageTestBase(unittest.TestCase):
         from_db = self.s.get_transaction_cursor(rest_id='tx_rest_id')
         self.assertTrue(from_db.load())
         blob1_reader = from_db.blobs[0]
-        self.assertEqual('blob1', blob1_reader.blob_uri.blob)
+        self.assertEqual('blob1', blob1_reader.blob_uri().blob)
         self.assertEqual(len(b1), blob1_reader.content_length())
         blob2_reader = from_db.blobs[1]
-        self.assertEqual('blob2', blob2_reader.blob_uri.blob)
+        self.assertEqual('blob2', blob2_reader.blob_uri().blob)
         self.assertEqual(len(b2), blob2_reader.content_length())
         self.assertEqual(1, self.s._tx_reads - prev_reads)
         prev_reads = self.s._tx_reads

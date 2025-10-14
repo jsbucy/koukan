@@ -144,7 +144,7 @@ class TransactionCursor:
         if self.inflight_session_id is not None and self.inflight_session_id == self.parent.session_id:
             clone = self.clone(for_cache=True)
         if clone is not None and clone.tx is not None:
-            if clone.blobs and len(clone.blobs) == 1 and clone.blobs[0].blob_uri is not None and clone.blobs[0].blob_uri.tx_body:
+            if clone.blobs and len(clone.blobs) == 1 and (blob_uri := clone.blobs[0].blob_uri()) is not None and blob_uri.tx_body:
                 clone.tx.body = clone.blobs[0]
                 logging.debug(clone.tx.body)
             logging.debug(clone.tx)
@@ -313,8 +313,8 @@ class TransactionCursor:
         for i,blob_spec in enumerate(blob_specs):
             blob = blob_spec.blob
             if isinstance(blob, BlobCursor):
-                assert blob.blob_uri is not None
-                reuse_uris.append(blob.blob_uri)
+                assert (u := blob.blob_uri()) is not None
+                reuse_uris.append(u)
                 continue
 
             if blob_spec.reuse_uri:
@@ -329,7 +329,7 @@ class TransactionCursor:
                     create_id = str(i)
                 blob_rest_id = (TX_BODY if blob_spec.create_tx_body
                                 else blob_spec.create_id)
-                blob_cursor.blob_uri = BlobUri(
+                blob_cursor._blob_uri = BlobUri(
                     self.rest_id, tx_body = (blob_rest_id == TX_BODY),
                     blob = blob_rest_id)
                 blob_cursor.update_tx = self.rest_id
@@ -343,13 +343,13 @@ class TransactionCursor:
         blobrefs = []
         blobs_done = True
         for blob_cursor in blobs:
-            assert blob_cursor.blob_uri is not None
+            assert (blob_uri := blob_cursor.blob_uri()) is not None
             if not blob_cursor.finalized():
                 blobs_done = False
             blobrefs.append({ "transaction_id": self.db_id,
                               "tx_rest_id": self.rest_id,
                               "blob_id": blob_cursor.db_id,
-                              "rest_id": blob_cursor.blob_uri.blob })
+                              "rest_id": blob_uri.blob })
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
                       self.db_id, blobrefs, blobs_done)
@@ -364,8 +364,8 @@ class TransactionCursor:
             return False
         if isinstance(tx.body, MessageBuilderSpec):
             return True
-        assert blobs[0].blob_uri is not None
-        assert len(blobs) == 1 and blobs[0].blob_uri.blob == TX_BODY
+        assert (blob_uri := blobs[0].blob_uri()) is not None
+        assert len(blobs) == 1 and blob_uri.blob == TX_BODY
         return True
 
     def _write(self,
@@ -517,7 +517,7 @@ class TransactionCursor:
 
         # RestHandler creation -> OH handoff tx needs to have the
         # same effect as _load_blobs()
-        if self.blobs and len(self.blobs) == 1 and self.blobs[0].blob_uri is not None and self.blobs[0].blob_uri.tx_body:
+        if self.blobs and len(self.blobs) == 1 and (blob_uri := self.blobs[0].blob_uri()) is not None and blob_uri.tx_body:
             self.tx.body = self.blobs[0]
 
         if self.tx.body is not None and isinstance(self.tx.body, MessageBuilderSpec):
@@ -719,7 +719,7 @@ class TransactionCursor:
                       content_length, last_update, length)
             blobs.append(blob)
         self.blobs = blobs
-        if len(blobs) == 1 and blobs[0].blob_uri.tx_body:
+        if len(blobs) == 1 and blobs[0].blob_uri().tx_body:
             self.tx.body = blobs[0]
         elif self.message_builder:
             message_builder = MessageBuilderSpec(self.message_builder)
@@ -841,7 +841,7 @@ class TransactionCursor:
         if not self.blobs:
             return None
         for b in self.blobs:
-            if b.blob_uri == blob_uri:
+            if b.blob_uri() == blob_uri:
                 return b
         return None
 
@@ -865,7 +865,7 @@ class BlobCursor(Blob, WritableBlob):
     _content_length : Optional[int] = None  # overall length from content-range
     last = False
     update_tx : Optional[str] = None
-    blob_uri : Optional[BlobUri] = None
+    _blob_uri : Optional[BlobUri] = None
     _session_uri : Optional[str] = None
     db_tx : Optional[Connection] = None
     last_update : Optional[int] = None
@@ -880,6 +880,9 @@ class BlobCursor(Blob, WritableBlob):
 
     def __hash__(self):
         return hash(self.db_id)
+
+    def blob_uri(self):
+        return self._blob_uri
 
     def clone(self):
         return copy.copy(self)
@@ -902,7 +905,7 @@ class BlobCursor(Blob, WritableBlob):
         self.length = length
         self.last_update = last_update
         self.last = (self.length == self._content_length)
-        self.blob_uri = BlobUri(
+        self._blob_uri = BlobUri(
             tx_rest_id, tx_body=(blob_rest_id == TX_BODY), blob=blob_rest_id)
         self.update_tx = tx_rest_id
 
@@ -912,11 +915,11 @@ class BlobCursor(Blob, WritableBlob):
         return self.db_id == x.db_id
 
     def rest_id(self) -> Optional[str]:
-        if self.blob_uri is None:
+        if self._blob_uri is None:
             return None
-        if self.blob_uri.blob == TX_BODY:
+        if self._blob_uri.blob == TX_BODY:
             return None
-        return self.blob_uri.blob
+        return self._blob_uri.blob
 
     def len(self):
         return self.length
@@ -948,7 +951,7 @@ class BlobCursor(Blob, WritableBlob):
         logging.info('BlobWriter.append_data %d [%s] '
                      'offset=%d self.length=%d d.len=%d '
                      'content_length=%s new content_length=%s',
-                     self.db_id, self.blob_uri, offset, self.length, len(d),
+                     self.db_id, self._blob_uri, offset, self.length, len(d),
                      self._content_length, content_length)
 
         if last:
@@ -1106,7 +1109,8 @@ class BlobCursor(Blob, WritableBlob):
             return row[0]
 
     def __repr__(self):
-        return 'BlobCursor id=%d uri=%s length=%d content_length=%s' % (self.db_id, str(self.blob_uri), self.length, self._content_length)
+        return 'BlobCursor id=%d uri=%s length=%d content_length=%s' % (
+            self.db_id, str(self._blob_uri), self.length, self._content_length)
 
 class Storage():
     session_id : Optional[int] = None

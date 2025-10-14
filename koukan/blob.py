@@ -16,6 +16,9 @@ class Blob(ABC):
     def rest_id(self) -> Optional[str]:
         return None
 
+    def blob_uri(self) -> Optional[BlobUri]:
+        return None
+
     def unref(self, Any) -> None:
         return None
 
@@ -104,7 +107,7 @@ class InlineBlob(Blob, WritableBlob):
     _content_length : Optional[int] = None
     _rest_id : Optional[str] = None
     _offset : int = 0
-    blob_uri : Optional[BlobUri] = None
+    _blob_uri : Optional[BlobUri] = None
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
@@ -114,6 +117,12 @@ class InlineBlob(Blob, WritableBlob):
         self.d = d
         self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
+
+    def blob_uri(self):
+        return self._blob_uri
+
+    def set_blob_uri(self, u):
+        self._blob_uri = u
 
     def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):

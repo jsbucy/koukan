@@ -271,6 +271,8 @@ class StorageWriterFilter(AsyncFilter):
                     body = self.tx_cursor.tx.body
                     if isinstance(body, WritableBlob):
                         return body
+                    else:
+                        assert body is None
                     self.tx_cursor.write_envelope(
                         TransactionMetadata(body=BlobSpec(create_tx_body=True)))
                     break

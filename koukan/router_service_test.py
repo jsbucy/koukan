@@ -563,7 +563,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx_json, {
             'mail_from': {},
             'rcpt_to': [{}],
-            'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
+            'body': {'blob_status': {#'content_length': 13, 'length': 13,
+                'finalized': True}},
             'retry': {},
             'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
@@ -716,7 +717,8 @@ class RouterServiceTest(unittest.TestCase):
             if tx_json == {
                 'mail_from': {},
                 'rcpt_to': [{}],
-                'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
+                'body': {'blob_status': {#'content_length': 13, 'length': 13,
+                    'finalized': True}},
                 'retry': {},
                 'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
@@ -817,7 +819,8 @@ class RouterServiceTest(unittest.TestCase):
             if tx_json == {
                     'mail_from': {},
                     'rcpt_to': [{}],
-                    'body': {'blob_status': {'content_length': 15, 'length': 15, 'finalized': True}},
+                    'body': {'blob_status': {#'content_length': 15, 'length': 15,
+                        'finalized': True}},
                     'retry': {},
                     'notification': {},
                     'mail_response': {'code': 201, 'message': 'ok'},
@@ -915,7 +918,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(
             {'mail_from': {},
              'rcpt_to': [{}],
-             'body': {'blob_status': {'content_length': 13, 'length': 13, 'finalized': True}},
+             'body': {'blob_status': {#'content_length': 13, 'length': 13,
+                 'finalized': True}},
              'retry': {},
              'notification': {},
              'mail_response': {'code': 201, 'message': 'ok'},

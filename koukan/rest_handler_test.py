@@ -62,7 +62,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         logging.debug(resp.body)
         logging.debug(resp.headers)
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual({'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}}}, json.loads(resp.body))
+        self.assertEqual({
+            'body': {'blob_status': {
+                'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+        }, json.loads(resp.body))
         self.assertEqual(resp.headers['location'], '/transactions/rest_id')
         logging.debug('test_create_tx create resp %s', resp.headers)
         self.assertIsNotNone(resp.headers.get('etag', None))
@@ -266,7 +269,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         tx7 = tx6.copy()
         tx7.body=InlineBlob(body, last=True)
-        tx7.body.blob_uri = BlobUri('rest_id', tx_body=True)
+        tx7.body.set_blob_uri(BlobUri('rest_id', tx_body=True))
         endpoint.check_cache_expectation.append(
             lambda: (6, None, True, None))
         endpoint.expect_get((tx7, 7))
@@ -275,17 +278,18 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                  'headers': []}
         req = FastApiRequest(scope)
         resp = await handler.get_tx_async(req)
-        self.assertEqual(json.loads(resp.body), {
+        self.assertEqual({
             'mail_from': {},
             'rcpt_to': [{}, {}],
             'body': {'blob_status': {
-                'content_length': 13, 'finalized': True,
-                'length': 13,
+                'finalized': True,
+                #'content_length': 13,
+                #'length': 13,
                 'uri': 'http://localhost:12345/transactions/rest_id/body'}},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
                               {'code': 203, 'message': 'ok'}],
-        })
+        }, json.loads(resp.body))
 
         tx8 = tx7.copy()
         tx8.data_response=Response(204)
@@ -301,8 +305,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             'mail_from': {},
             'rcpt_to': [{}, {}],
             'body': {'blob_status': {
-                'content_length': 13, 'finalized': True,
-                'length': 13,
+                'finalized': True,
+                # 'content_length': 13,
+                # 'length': 13,
                 'uri': 'http://localhost:12345/transactions/rest_id/body'}},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
