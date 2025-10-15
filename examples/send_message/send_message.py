@@ -157,10 +157,11 @@ class Sender:
 
         tx_start = time.monotonic()
 
-        logging.debug('POST /transactions')
+        url = urljoin(self.base_url, '/transactions')
+        logging.debug('POST /transactions %s', url)
         start = time.monotonic()
         rest_resp = self.session.post(
-            urljoin(self.base_url, '/transactions'),
+            url,
             headers={'host': self.host,
                      'request-timeout': '5'},
             json=tx_json)
@@ -170,8 +171,7 @@ class Sender:
 
         tx_json = rest_resp.json()
         logging.debug(tx_json)
-        tx_path = rest_resp.headers['location']
-        tx_url = urljoin(self.base_url, tx_path)
+        tx_url = rest_resp.headers['location']
 
         for resp_field in ['mail_response', 'rcpt_response']:
             if not (resp := tx_json.get(resp_field, None)):

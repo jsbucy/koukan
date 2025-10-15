@@ -56,9 +56,9 @@ runs the gateway listening on 1025 (mx/receive) and 1587 (submission/send) for s
 `bash config/local-test/run_router.sh`
 listens on 8000 for rest  
 ```
-PYTHONPATH=. hypercorn -b localhost:8002 -w0 --access-logfile - \
+PYTHONPATH=. uvicorn --host localhost --port 8002 \
 --log-level debug \
-'examples.receiver.fastapi_receiver:create_app(path="/tmp/my_messages")'
+--factory 'examples.receiver.fastapi_receiver:create_app'
 ```
 listens on 8002 for rest and drops files in `/tmp/my_messages`
 

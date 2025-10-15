@@ -168,8 +168,7 @@ class End2EndTest(unittest.TestCase):
         self.receiver_tempdir = tempfile.TemporaryDirectory()
         self.receiver = Receiver(
             self.receiver_tempdir.name,
-            gc_interval=0, # gc on every access
-            base_url=self.receiver_base_url)
+            gc_interval=0)  # gc on every access
         self.http_server = uvicorn_main.Server(
             create_app(self.receiver),
             ('localhost', self.receiver_rest_port),

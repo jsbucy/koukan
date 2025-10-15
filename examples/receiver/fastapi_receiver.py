@@ -3,8 +3,8 @@
 
 # this keeps the inflight transaction state in-process so it's not
 # compatible with multiple workers
-# hypercorn -b localhost:8002 -w0 \
-#   'examples.receiver.fastapi_receiver:create_app(path="/tmp/my_messages")'
+# uvicorn --log-level debug --host localhost --port 8002 --factory
+#   'examples.receiver.fastapi_receiver:create_app'
 
 from typing import Union
 import logging
@@ -21,17 +21,26 @@ def create_app(receiver = None, path = None):
     app = FastAPI()
 
     if receiver is None:
-        receiver = Receiver(path)
+        kwargs = {}
+        if path:
+            kwargs['dir'] = path
+        receiver = Receiver(**kwargs)
 
     @app.post('/transactions')
     async def create_transaction(request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
-        tx_id, tx_json, etag = receiver.create_tx(req_json)
-        return FastApiJsonResponse(
-            status_code=201,
-            headers={'location': '/transactions/' + tx_id,
-                     'etag': etag},
-            content=tx_json)
+        tx_url, tx_json, etag = receiver.create_tx(
+            req_json,
+            lambda tx_id: str(request.url_for(
+                'get_transaction', tx_rest_id=tx_id)))
+        try:
+            return FastApiJsonResponse(
+                status_code=201,
+                headers={'location': tx_url, 'etag': etag},
+                content=tx_json)
+        except Exception as e:
+            logging.debug(e)
+            return FastApiResponse(status_code=500)
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,

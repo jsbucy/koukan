@@ -77,21 +77,12 @@ class RestEndpointClientProvider:
         self.close()
 
 class RestEndpoint(Filter):
-    transaction_path : Optional[str] = None
     transaction_url : Optional[str] = None
     base_url : Optional[str] = None
     remote_host : Optional[HostPort] = None
     etag : Optional[str] = None
     max_inline : int
     chunk_size : Optional[int]
-
-    blob_path : Optional[str] = None
-    blob_url : Optional[str] = None
-
-    # PATCH sends rcpts to append but it sends back the responses for
-    # all rcpts so far, need to remember how many we've sent to know
-    # if we have all the responses.
-    rcpts = 0
 
     client : Client
 
@@ -132,13 +123,6 @@ class RestEndpoint(Filter):
         self.client = client_provider.get()
         self.blob_readers = {}
 
-    # -> full-url, path
-    def _maybe_qualify_url(self, url) -> Tuple[str, str]:
-        parsed = urlparse(url)
-        if parsed.scheme and parsed.netloc:
-            return url, parsed.path
-        return urljoin(self.base_url, url), url
-
     def _create(self,
                 resolution : Optional[Resolution],
                 tx : TransactionMetadata,
@@ -178,13 +162,11 @@ class RestEndpoint(Filter):
             except RequestError as e:
                 logging.debug('RestEndpoint._create http error %s', e)
                 continue
-            logging.info('RestEndpoint._create req_headers %s resp %s %s',
-                         req_headers, rest_resp, rest_resp.text)
+            logging.info('RestEndpoint._create req_headers %s resp %s %s %s',
+                         req_headers, rest_resp, rest_resp.headers, rest_resp.text)
             if rest_resp.status_code != 201:
                 continue
-            location = rest_resp.headers['location']
-            # XXX this should always be a full uri now?
-            self.transaction_url, self.transaction_path = self._maybe_qualify_url(location)
+            self.transaction_url = rest_resp.headers['location']
             if 'etag' not in rest_resp.headers:
                 return None
             self.etag = rest_resp.headers['etag']
@@ -208,10 +190,10 @@ class RestEndpoint(Filter):
             return None
         return rest_resp
 
-    def _post_tx(self, uri, body_json : dict,
+    def _post_tx(self, url, body_json : dict,
                  http_method,
                  deadline : Deadline) -> Optional[HttpResponse]:
-        logging.debug('RestEndpoint._post_tx %s', uri)
+        logging.debug('RestEndpoint._post_tx %s', url)
         req_headers = {}
         if self.http_host:
             req_headers['host'] = self.http_host
@@ -227,7 +209,7 @@ class RestEndpoint(Filter):
             else:
                 kwargs['data'] = b''
             rest_resp = http_method(
-                uri,
+                url,
                 **kwargs,
                 headers=req_headers,
                 timeout=deadline_left)
@@ -447,7 +429,7 @@ class RestEndpoint(Filter):
                     " (RestEndpoint)")
             return FilterResult()
 
-        blobs : List[Tuple[Blob, str]] = []  # uri
+        blobs : List[Tuple[Blob, str]] = []  # url
         def add_blob(blob, blob_spec):
             assert isinstance(blob, Blob)
             assert isinstance(blob_spec, BlobSpec)
@@ -474,8 +456,8 @@ class RestEndpoint(Filter):
         # NOTE this assumes that message_builder includes all blobs on
         # the first call
         finalized = True
-        for blob, uri in blobs:
-            put_blob_resp = self._put_blob(blob, uri)
+        for blob, url in blobs:
+            put_blob_resp = self._put_blob(blob, url)
             if not put_blob_resp.ok():
                 self.downstream_tx.data_response = put_blob_resp
                 return FilterResult()
@@ -513,12 +495,10 @@ class RestEndpoint(Filter):
         return FilterResult()
 
     # Send a finalized blob with a single http request.
-    def _put_blob_single(self, blob : Blob, uri : str) -> Response:
-        assert self.transaction_path is not None
+    def _put_blob_single(self, blob : Blob, blob_url : str) -> Response:
         assert blob.finalized()
-        self.blob_url = uri
         logging.debug('_put_blob_single %d %s',
-                      blob.content_length(), uri)
+                      blob.content_length(), blob_url)
         headers = {}
         if self.http_host:
             headers['host'] = self.http_host
@@ -526,7 +506,7 @@ class RestEndpoint(Filter):
         rest_resp = None
         try:
             rest_resp = self.client.put(
-                uri, headers=headers, content = BlobReader(blob))
+                blob_url, headers=headers, content = BlobReader(blob))
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
         if rest_resp is None or rest_resp.status_code != 200:
@@ -535,12 +515,12 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint._put_blob_single %s', rest_resp)
         return Response()
 
-    def _put_blob(self, blob : Blob, uri : str) -> Response:
+    def _put_blob(self, blob : Blob, blob_url : str) -> Response:
         if blob not in self.blob_readers:
             self.blob_readers[blob] = BlobReader(blob)
         blob_reader = self.blob_readers[blob]
         if blob_reader is None and self.chunk_size is None and blob.finalized():
-            return self._put_blob_single(blob, uri)
+            return self._put_blob_single(blob, blob_url)
 
         empty_put = (blob.finalized() and
                      (blob.len() == blob.content_length()) and
@@ -558,7 +538,7 @@ class RestEndpoint(Filter):
                           offset, len(chunk), chunk_last)
 
             resp, result_length = self._put_blob_chunk(
-                offset=offset, d=chunk, last=chunk_last, uri=uri)
+                offset=offset, d=chunk, last=chunk_last, blob_url=blob_url)
             if resp is None:
                 return Response(450, 'RestEndpoint blob upload error')
             elif not resp.ok():
@@ -582,10 +562,8 @@ class RestEndpoint(Filter):
 
     # -> (resp, len)
     def _put_blob_chunk(
-            self, offset, d : bytes, last : bool, uri : str
+            self, offset, d : bytes, last : bool, blob_url : str
     ) -> Tuple[Optional[Response], Optional[int]]:
-        assert self.transaction_path is not None
-
         logging.info('RestEndpoint._put_blob_chunk %d %d %s',
                      offset, len(d), last)
         headers = {}
@@ -598,15 +576,13 @@ class RestEndpoint(Filter):
         if self.http_host:
             headers['host'] = self.http_host
         try:
-            self.blob_url = uri
-
             logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
-                         self.blob_url, headers)
+                         blob_url, headers)
             rest_resp = self.client.put(
-                self.blob_url, headers=headers, content=d,
+                blob_url, headers=headers, content=d,
                 timeout=self.timeout_data)
             logging.info('RestEndpoint._put_blob_chunk PUT %s %s %s',
-                         self.blob_url, rest_resp, rest_resp.headers)
+                         blob_url, rest_resp, rest_resp.headers)
             if rest_resp.status_code not in [200, 416]:
                 return Response(
                     450, 'RestEndpoint._put_blob_chunk PUT err'), None

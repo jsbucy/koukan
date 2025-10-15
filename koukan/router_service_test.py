@@ -8,7 +8,7 @@ import unittest
 import socketserver
 import time
 from functools import partial
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from datetime import timedelta
 import copy
 import cProfile
@@ -471,7 +471,7 @@ class RouterServiceTest(unittest.TestCase):
             json = tx.to_json(WhichJson.REST_CREATE),
             headers={'host': 'submission'})
         self.assertEqual(201, post_resp.status_code)
-        tx_url = rest_endpoint._maybe_qualify_url(post_resp.headers['location'])[0]
+        tx_url = post_resp.headers['location']
         logging.debug(tx_url)
 
         post_body_resp = rest_endpoint.client.put(
@@ -617,8 +617,7 @@ class RouterServiceTest(unittest.TestCase):
 
         try:
             resp = rest_endpoint.client.put(
-                rest_endpoint._maybe_qualify_url(
-                    rest_endpoint.transaction_path + '/body')[0],
+                rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri,
                 content = data())
             self.assertEqual(200, resp.status_code)
         except:
@@ -631,8 +630,7 @@ class RouterServiceTest(unittest.TestCase):
 
         body += b'world!'
         resp = rest_endpoint.client.put(
-            rest_endpoint._maybe_qualify_url(
-                rest_endpoint.transaction_path + '/body')[0],
+            rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri,
             content = body)
         logging.debug(resp)
         logging.debug(resp.headers)
@@ -647,8 +645,7 @@ class RouterServiceTest(unittest.TestCase):
         range.stop = len(body)
         range.length = len(body)
         resp = rest_endpoint.client.put(
-            rest_endpoint._maybe_qualify_url(
-                rest_endpoint.transaction_path + '/body')[0],
+            rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri,
             headers={'content-range': range.to_header()},
             content = body[range.start:])
         logging.debug(resp)
@@ -696,8 +693,7 @@ class RouterServiceTest(unittest.TestCase):
             yield b'world!'
 
         resp = rest_endpoint.client.put(
-            rest_endpoint._maybe_qualify_url(
-                rest_endpoint.transaction_path + '/body')[0],
+            rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri,
             content = data())
         logging.debug(resp)
 
@@ -768,8 +764,7 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint.add_expectation(exp_body)
 
-        body_url = rest_endpoint._maybe_qualify_url(
-            rest_endpoint.transaction_path + '/body')[0]
+        body_url = rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri
 
         data = b'hello, world!\r\n'  # 15B
         chunk1 = 7
@@ -1395,7 +1390,7 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('start second tx')
 
         message_builder_spec['text_body'][0]['content'] = {
-            'reuse_uri': rest_endpoint.transaction_path + '/blob/my_plain_body'
+            'reuse_uri': rest_endpoint.rest_upstream_tx.body.blobs['my_plain_body'].reuse_uri.parsed_uri
         }
 
         # send another tx with the same spec to exercise blob reuse
@@ -1505,17 +1500,17 @@ class RouterServiceTest(unittest.TestCase):
 
         tx.merge_from(delta)
         rest_endpoint.on_update(delta, timeout=1)
-        logging.debug(rest_endpoint.transaction_path)
+        logging.debug(rest_endpoint.transaction_url)
+        parsed = urlparse(rest_endpoint.transaction_url)
 
         # GET the tx from service2, point read should be serivced directly
-        transaction_url=urljoin(url2, rest_endpoint.transaction_path)
+        transaction_url=urljoin(url2, parsed.path)
         logging.debug(transaction_url)
         endpoint2 = self.create_endpoint(
             transaction_url=transaction_url,
             static_http_host='submission',
             timeout_start=5, timeout_data=5)
         endpoint2.base_url = url2
-        endpoint2.transaction_path = rest_endpoint.transaction_path
         tx_json = endpoint2.get_json()
 
         # hanging GET should be redirected to self.service
