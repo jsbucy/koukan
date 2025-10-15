@@ -236,6 +236,39 @@ class RestEndpoint(Filter):
                           rest_resp)
         return
 
+    def _maybe_update_message_builder(self, created, tx_delta, deadline):
+        # rest receiving with message parsing sends message builder
+        # spec out the back. Without pipelining, this will always be
+        # in a separate update from the initial creation. However rest
+        # submission could send an inline body in which case you'll
+        # get it all in the initial on_update() so don't send it again
+        # here.
+        if created or not isinstance(tx_delta.body, MessageBuilderSpec):
+            return None
+
+        assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+        rest_resp = self._post_tx(
+            self.rest_upstream_tx.body.uri,
+            tx_delta.body.json, self.client.post, deadline)
+        if rest_resp is None or rest_resp.status_code != 200:
+            logging.debug(rest_resp)
+            self.downstream_tx.data_response = Response(
+                400, 'RestEndpoint update_message_builder http err')
+            return FilterResult()
+        resp_json = get_resp_json(rest_resp) if rest_resp else None
+        resp_json = resp_json if resp_json else {}
+
+        tx_out = TransactionMetadata.from_json(
+            resp_json, WhichJson.REST_READ)
+        if tx_out is None:
+            self.downstream_tx.data_response = Response(
+                400, 'RestEndpoint update message_builder bad response')
+            return FilterResult()
+
+        d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
+        self.rest_upstream_tx.merge_from(d)
+        return None
+
     def on_update(self, tx_delta : TransactionMetadata,
                         timeout : Optional[float] = None) -> FilterResult:
         assert self.downstream_tx is not None
@@ -389,34 +422,9 @@ class RestEndpoint(Filter):
         if tx_delta.body is None:
             return FilterResult()
 
-        # rest receiving with message parsing sends message builder
-        # spec out the back. Without pipelining, this will always be
-        # in a separate update from the initial creation. However rest
-        # submission could send an inline body in which case you'll
-        # get it all in the initial on_update() so don't send it again
-        # here.
-        if not created and isinstance(tx_delta.body, MessageBuilderSpec):
-            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-            rest_resp = self._post_tx(
-                self.rest_upstream_tx.body.uri,
-                tx_delta.body.json, self.client.post, deadline)
-            if rest_resp is None or rest_resp.status_code != 200:
-                logging.debug(rest_resp)
-                self.downstream_tx.data_response = Response(
-                    400, 'RestEndpoint update_message_builder http err')
-                return FilterResult()
-            resp_json = get_resp_json(rest_resp) if rest_resp else None
-            resp_json = resp_json if resp_json else {}
-
-            tx_out = TransactionMetadata.from_json(
-                resp_json, WhichJson.REST_READ)
-            if tx_out is None:
-                self.downstream_tx.data_response = Response(
-                    400, 'RestEndpoint update message_builder bad response')
-                return FilterResult()
-
-            d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
-            self.rest_upstream_tx.merge_from(d)
+        if (err := self._maybe_update_message_builder(
+                created, tx_delta, deadline)) is not None:
+            return err
 
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
