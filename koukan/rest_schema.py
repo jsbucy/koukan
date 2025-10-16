@@ -1,8 +1,23 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
+from enum import IntEnum
 
 from urllib.parse import urljoin, urlparse
+
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
+class WhichJson(IntEnum):
+    ALL = 0
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
+    DB = 4
+    DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
+
 
 FINALIZE_BLOB_HEADER = 'x-finalize-blob-length'
 

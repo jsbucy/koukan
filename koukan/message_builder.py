@@ -14,9 +14,8 @@ from email import policy
 
 from koukan.blob import Blob, InlineBlob
 
-from koukan.rest_schema import parse_blob_uri
+from koukan.rest_schema import WhichJson, parse_blob_uri
 from koukan.storage_schema import BlobSpec
-#from koukan.filter import WhichJson
 
 class MessageBuilderSpec:
     json : dict
@@ -101,18 +100,13 @@ class MessageBuilderSpec:
                 assert False, blob
         return True
 
-    def delta(self, rhs, which_json
-              ) -> Optional[bool]:
-        logging.debug(self)
-        logging.debug(rhs)
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, MessageBuilderSpec):
             return None
-        # xxx rhs can be None if REST_READ
-        # which_json != WhichJson.REST_READ and
-        # if which_json == WhichJson.REST_READ:
-        #     if rhs.json != {} and rhs.json != self.json:
-        #         return None
-        if rhs.json != {} and self.json != rhs.json:
+        if which_json == WhichJson.REST_READ:
+            if bool(rhs.json) and rhs.json != self.json:
+                return None
+        elif rhs.json != {} and self.json != rhs.json:
             return None
         out = False
         if not self.blobs:

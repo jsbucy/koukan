@@ -1,6 +1,5 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from enum import IntEnum
 from typing import (
     Any,
     Callable,
@@ -20,23 +19,11 @@ from koukan.response import Response
 
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
-from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
+from koukan.rest_schema import BlobUri, WhichJson, make_blob_uri, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
 
-# TODO I'm starting to think maybe we should invert this and have a
-# field mask thing instead, many of these could live in their own module
-class WhichJson(IntEnum):
-    ALL = 0
-    REST_READ = 1
-    REST_CREATE = 2
-    REST_UPDATE = 3
-    DB = 4
-    DB_ATTEMPT = 5
-    EXPLODER_CREATE = 6
-    EXPLODER_UPDATE = 7
-    ADD_ROUTE = 8
 
 class HostPort:
     host : str
