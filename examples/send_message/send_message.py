@@ -31,6 +31,19 @@ import copy
 from sys import argv
 from contextlib import nullcontext
 
+class BlobCache:
+    class Blob:
+        filename : str
+        url : Optional[str] = None
+        def __init__(self, filename):
+            self.filename = filename
+
+    blobs : Dict[str, Blob]  # key is message builder spec create_id
+    body_blob : Optional[Blob] = None
+
+    def __init__(self):
+        self.blobs = {}
+
 # Sends a message to one or more recipients. Does hanging GET to wait
 # for upstream status. Reuses blobs across recipients.
 class Sender:
@@ -39,14 +52,7 @@ class Sender:
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
-    body_filename : Optional[str] = None
-    body_uri : Optional[str] = None
-
-    # create_id -> uri
-    blob_uris : Dict[str, str]
-
-    # key is json node of message builder spec tree
-    blob_ids : Dict[Any, str]
+    blob_cache : BlobCache
 
     def __init__(self,
                  base_url : str,
@@ -66,92 +72,95 @@ class Sender:
             self.fixup_headers()
         self.base_url = base_url
         self.host = host
-        self.blob_uris = {}
+        self.blob_cache = BlobCache()
 
-    # -> url path (for reuse)
+        if body_filename:
+            self.blob_cache.body_blob = BlobCache.Blob(body_filename)
+        elif message_builder:
+            self.prep_message_builder_spec(message_builder)
+        else:
+            assert False
+
     def send_part(self,
-                  blob_id,
-                  uri,
-                  filename : str) -> bool:
-        logging.info('PUT %s', uri)
+                  url,
+                  filename : str,
+                  tx_body = False,
+                  blob_id = None) -> bool:
+        logging.info('PUT %s', url)
 
         with open(filename, 'rb') as file:
-            resp = self.session.put(uri, data=file)
+            resp = self.session.put(url, data=file)
 
-        logging.info('PUT %s %s', uri, resp)
-        # xxx exact match
-        if resp.status_code >= 300:
+        logging.info('PUT %s %s', url, resp)
+        if resp.status_code != 200:
             return False
-        self.blob_uris[blob_id] = uri
+        if tx_body:
+            assert self.blob_cache.body_blob is not None
+            self.blob_cache.body_blob.url = url
+        elif blob_id:
+            self.blob_cache.blobs[blob_id].url = url
+        else:
+            assert False
         return True
 
-    def strip_filenames(self, json : Dict[str, Any]):
+    # adds blob id -> filename to BlobCache and drops filename from
+    # message builder spec json
+    def prep_message_builder_spec(self, spec):
         for multi in ['text_body', 'related_attachments', 'file_attachments']:
-            if not (multipart := json.get(multi, [])):
+            if not (multipart := spec.get(multi, [])):
                 continue
             for part in multipart:
                 content = part['content']
-                if 'filename' in content:
-                    del content['filename']
-                if ((create_id := content.get('create_id', None)) and
-                    (reuse_uri := self.blob_uris.get(create_id, None))):
-                    self.blob_ids[id(content)] = create_id
-                    del content['create_id']
-                    part['content']['reuse_uri'] = reuse_uri
-        return json
-
-
-    def send_body(self, tx_json, json : dict):
-        for multi in ['text_body', 'related_attachments', 'file_attachments']:
-            if not (multipart := json.get(multi, [])):
-                continue
-            blob_status = tx_json['body']['message_builder']['blob_status']
-            logging.debug(blob_status)
-            for part in multipart:
-                logging.info('send_body %s', part)
-                # cf MessageBuilderSpec._add_part_blob()
-                content = part['content']
-                logging.debug(content)
-                if blob_id := content.get('create_id', None):
-                    logging.debug(blob_id)
-                    if ((blob := blob_status.get(blob_id)) is not None and
-                        blob.get('finalized', False)):
-                        logging.debug('reused %s', blob_id)
-                        continue
-                    # else server didn't reuse -> upload again
-
-                if ('create_id' not in content or
-                    'filename' not in content):
+                if (filename := content.get('filename', None)) is None:
                     continue
-                filename = content['filename']
                 del content['filename']
                 blob_id = content['create_id']
-                uri = blob_status[blob_id]['uri']
-                if not self.send_part(
-                        content['create_id'], uri, filename=filename):
-                    return False
-                # content['reuse_uri'] = uri
+                self.blob_cache.blobs[blob_id] = BlobCache.Blob(filename)
 
-        return True
+    # sends blobs that were not finalized tx json
+    def send_blobs(self, tx_json):
+        if self.body_filename:
+            blob_spec = tx_json['body']['blob_status']
+            if not blob_spec.get('finalized', False):
+                self.send_part(blob_spec['uri'], self.body_filename,
+                               tx_body=True)
+            return
+        assert self.message_builder
+        for blob_id,blob in self.blob_cache.blobs.items():
+            blob_spec = tx_json['body']['message_builder']['blob_status'][blob_id]
+            if not blob_spec.get('finalized', False):
+                self.send_part(blob_spec['uri'], blob.filename, blob_id=blob_id)
+
+    # populates initial tx creation json with previous blob uris to
+    # reuse from blob_cache
+    def reuse_blobs(self, tx_json):
+        if self.blob_cache.body_blob:
+            if self.blob_cache.body_blob.url:
+                tx_json['body'] = {'reuse_uri': self.blob_cache.body_blob.url}
+            return
+        assert self.message_builder
+
+        for multi in ['text_body', 'related_attachments', 'file_attachments']:
+            if not (multipart := self.message_builder.get(multi, [])):
+                continue
+            for part in multipart:
+                content = part['content']
+                if not (blob_id := content.get('create_id', None)) or not (
+                        blob_url := self.blob_cache.blobs[blob_id].url):
+                    continue
+                content[blob_id] = blob_url
 
     def send(self, rcpt_to : str, max_wait=30):
-        logging.debug('blob uris %s', self.blob_uris)
-        logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
-
-        self.blob_ids = {}
+        logging.debug('Sender.send from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
         }
-        assert tx_json is not None
-        if self.body_uri is not None:
-            tx_json['body'] = {'reuse_uri': self.body_uri}
-        elif self.body_filename is not None:
-            pass
-        elif self.message_builder is not None:
-            tx_json['body'] = {'message_builder': self.strip_filenames(
-                copy.deepcopy(self.message_builder))}
+        assert tx_json is not None  # optional
+        if self.message_builder:
+            tx_json['body'] = {'message_builder': self.message_builder}
+        self.reuse_blobs(tx_json)
 
         logging.debug(json.dumps(tx_json, indent=2))
 
@@ -185,21 +194,7 @@ class Sender:
                              resp_field, rest_resp, rest_resp.json())
                 return
 
-        # cf send_body(), if the server sent back a different body
-        # uri, it didn't reuse the one we sent -> upload again
-        if self.body_filename is not None and (self.body_uri is None or self.body_uri != tx_json['body']['blob_status']['uri']):
-            with open(self.body_filename, 'rb') as body_file:
-                body_uri = tx_json['body']['blob_status']['uri']
-                resp = self.session.put(body_uri, data=body_file)
-                logging.debug('PUT %s %s %s', body_uri, resp, resp.text)
-                if resp.status_code == 200:
-                    self.body_uri = body_uri
-        elif self.message_builder is not None:
-            if not self.send_body(tx_json, self.message_builder):
-                return
-            # logging.info('main message_builder spec %s',
-            #              json.dumps(self.message_builder, indent=2))
-            rest_resp = None
+        self.send_blobs(tx_json)
 
         done = False
         etag = None
