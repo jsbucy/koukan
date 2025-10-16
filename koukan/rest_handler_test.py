@@ -50,7 +50,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(async_filter=endpoint, http_host='msa',
                               executor=self.executor,
-                              service_uri='http://localhost:12345')
+                              service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -81,7 +81,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
                               executor=self.executor,
-                              service_uri='http://localhost:12345')
+                              service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('if-match', resp.headers['etag']),
@@ -102,7 +102,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
                               executor=self.executor,
-                              service_uri='http://localhost:12345')
+                              service_url='http://localhost:12345')
 
         scope = {'type': 'http',
                  'headers': self._headers(
@@ -134,7 +134,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
                               executor=self.executor,
-                              service_uri='http://localhost:12345')
+                              service_url='http://localhost:12345')
 
         scope = {'type': 'http',
                  'headers': self._headers([
@@ -187,7 +187,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         handler = RestHandler(
             async_filter=endpoint, tx_rest_id='rest_id', http_host='msa',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('if-match', resp.headers['etag'])])}
@@ -248,7 +248,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             tx_rest_id='rest_id',
             executor=self.executor,
             chunk_size=8,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
 
         endpoint.expect_get((tx6, 6))
 
@@ -332,7 +332,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             #rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -343,7 +343,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
 
         endpoint.expect_get((TransactionMetadata(), 1))
 
@@ -373,7 +373,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
         b2 = b'world!'
         range = ContentRange('bytes', len(b), len(b) + len(b2),
                              len(b) + len(b2))
@@ -404,7 +404,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -415,7 +415,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
 
         b = b'hello, '
         b2 = b'world!'
@@ -451,7 +451,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -462,7 +462,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
 
         b = b'hello, '
         b2 = b'world!'
@@ -538,7 +538,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
-            service_uri='http://localhost:12345')
+            service_url='http://localhost:12345')
 
         # invalid header
         scope = {'type': 'http',
@@ -614,7 +614,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def _test_uri_qualification(
             self,
-            session_uri : Optional[str], service_uri : Optional[str],
+            session_url : Optional[str], service_url : Optional[str],
             rest_lro : bool):
         endpoint = MockAsyncFilter(incremental=True)
 
@@ -625,8 +625,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            session_uri=session_uri,
-            service_uri=service_uri,
+            session_url=session_url,
+            service_url=service_url,
             endpoint_yaml={'rest_lro': rest_lro})
 
         scope = {'type': 'http',
@@ -650,14 +650,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_uri_qualification(self):
         location = await self._test_uri_qualification(
             'http://0.router', 'http://router', rest_lro=True)
-        self.assertTrue(location.startswith('http://router'))
+        self.assertTrue(location.startswith('http://0.router'))
         location = await self._test_uri_qualification(
             'http://0.router', 'http://router', rest_lro=False)
         self.assertTrue(location.startswith('http://0.router'))
-        # xxx always required now
-        # location = await self._test_uri_qualification(
-        #     None, None, rest_lro=False)
-        # self.assertTrue(location.startswith('/transactions'))
 
 
     async def _test_get_redirect(self, session_uri : Optional[str] = None
@@ -671,8 +667,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            session_uri='http://0.router',
-            service_uri='http://router')
+            session_url='http://0.router',
+            service_url='http://router')
 
         scope = {'type': 'http',
                  'path': '/transactions/tx_rest_id',

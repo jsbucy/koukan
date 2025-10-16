@@ -76,8 +76,8 @@ class RestHandler(Handler):
     final_blob_length : Optional[int] = None
 
     endpoint_yaml : dict
-    session_uri : Optional[str] = None
-    service_uri : Optional[str] = None
+    session_url : Optional[str] = None
+    service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
 
@@ -90,10 +90,10 @@ class RestHandler(Handler):
                  http_host : Optional[str] = None,
                  chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
-                 session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None,
+                 session_url : Optional[str] = None,
+                 service_url : Optional[str] = None,
                  client : Optional[HTTP_CLIENT] = None):
-        assert service_uri is not None
+        assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
@@ -105,8 +105,8 @@ class RestHandler(Handler):
             self.endpoint_yaml = endpoint_yaml
         else:
             self.endpoint_yaml = {}
-        self.session_uri = session_uri
-        self.service_uri = service_uri
+        self.session_url = session_url
+        self.service_url = service_url
         if client is not None:
             self.client = client
 
@@ -233,14 +233,9 @@ class RestHandler(Handler):
         assert version is not None
         self._tx_rest_id = tx.rest_id
 
-        # return uri qualified to session or service per self.endpoint_yaml
+        # new tx url always initially scoped to creator session
         tx_path = make_tx_uri(tx.rest_id)
-        if self.endpoint_yaml.get('rest_lro', False) is False:
-            tx_uri = urljoin(self.session_uri, tx_path)
-        elif self.service_uri is not None:
-            tx_uri = urljoin(self.service_uri, tx_path)
-        else:
-            tx_uri = tx_path
+        tx_uri = urljoin(self.session_url, tx_path)
         self._update_body_blob_uri(cached_tx)
         resp = self.response(
             code=201,
@@ -251,21 +246,24 @@ class RestHandler(Handler):
         return resp
 
     def _update_blob_uri(self, blob):
-        out = BlobSpec(reuse_uri = blob.blob_uri(),
-                       finalized = blob.finalized())
+        reuse_uri = blob.blob_uri().copy()
         if blob.finalized():
-            out.reuse_uri.base_uri = self.service_uri
+            reuse_uri.base_uri = self.service_url
         else:
-            out.reuse_uri.base_uri = self.session_uri
+            reuse_uri.base_uri = self.session_url
+        out = BlobSpec(reuse_uri = reuse_uri,
+                       finalized = blob.finalized())
         return out
 
     def _update_body_blob_uri(self, tx):
+        # we should have redirected by now if it's leased somewhere else
+        assert tx.session_uri is None
         if tx.body is None:
             # we don't actually create it for interactive/exploder
             # here (cf above) but need to return the uri in the json
             tx.body = BlobSpec(create_tx_body=True)
-            tx.body.reuse_uri = BlobUri(self._tx_rest_id, tx_body=True)
-            tx.body.reuse_uri.base_uri = self.service_uri
+            tx.body.reuse_uri = BlobUri(
+                self._tx_rest_id, tx_body=True, base_uri=self.service_url)
             logging.debug(tx.body.reuse_uri)
         elif isinstance(tx.body, Blob):
             tx.body = self._update_blob_uri(tx.body)
@@ -274,15 +272,11 @@ class RestHandler(Handler):
                 blob_id: self._update_blob_uri(blob)
                 for blob_id,blob in tx.body.blobs.items()
             }
-            # whereas the standalone rest receiver gets the
-            # original message in addition to the parsed, this is only
-            # used for router <-> gw where it's either one or the
-            # other but never both so this doesn't need to populate
-            # body_blob uri here
-            # TODO so probably this is moot?
-            if tx.body.body_blob is not None:
-                tx.body.body_blob = self._update_blob_uri(tx.body.body_blob)
-
+            # whereas rest receivers get the original message in
+            # addition to the parsed, this is only used for
+            # router <-> gw where it's either one or the other but
+            # never both so this doesn't need to populate body_blob
+            # uri here
 
     def _get_tx(self) -> Optional[TransactionMetadata]:
         try:
@@ -653,7 +647,6 @@ class RestHandler(Handler):
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
         if not appended and (uri := self.blob.session_uri()) is not None:
-            path = request.url.path
             return self.response(
                 code=308,
                 headers=[('location', urljoin(uri, request.url.path))])
@@ -701,8 +694,8 @@ class EndpointFactory(ABC):
 class RestHandlerFactory(HandlerFactory):
     executor : Executor
     endpoint_factory : EndpointFactory
-    session_uri : Optional[str] = None
-    service_uri : Optional[str] = None
+    session_url : Optional[str] = None
+    service_url : Optional[str] = None
     rest_id_factory : Callable[[], str]
     chunk_size : Optional[int] = None
     client : Client
@@ -710,14 +703,14 @@ class RestHandlerFactory(HandlerFactory):
     def __init__(self, executor,
                  endpoint_factory,
                  rest_id_factory : Callable[[], str],
-                 session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None,
+                 session_url : Optional[str] = None,
+                 service_url : Optional[str] = None,
                  chunk_size : Optional[int] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
-        self.session_uri = session_uri
-        self.service_uri = service_uri
+        self.session_url = session_url
+        self.service_url = service_url
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
@@ -736,8 +729,8 @@ class RestHandlerFactory(HandlerFactory):
             http_host=http_host,
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
-            session_uri = self.session_uri,
-            service_uri = self.service_uri,
+            session_url = self.session_url,
+            service_url = self.service_url,
             client = self.client.get,
             **kwargs)
 
@@ -751,7 +744,7 @@ class RestHandlerFactory(HandlerFactory):
             async_filter=filter,
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory,
-            session_uri = self.session_uri,
-            service_uri = self.service_uri,
+            session_url = self.session_url,
+            service_url = self.service_url,
             client = self.client.get,
             **kwargs)
