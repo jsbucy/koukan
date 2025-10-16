@@ -962,10 +962,15 @@ class BlobCursor(Blob, WritableBlob):
 
         tx_version = None
         cursor = None
-        with (nullcontext(self.db_tx) if self.db_tx is not None
-              else self.parent.begin_transaction() as db_tx):
-            for i in range(0,5):
-                try:
+        # TODO it might be possible to move this version conflict
+        # retry loop into _append_data() but we would need to ensure that
+        # tx_cursor._load_db()
+        # tx_cursor._write()
+        # is idempotent when executed multiple times within the same db_tx
+        for i in range(0,5):
+            try:
+                with (nullcontext(self.db_tx) if self.db_tx is not None
+                      else self.parent.begin_transaction() as db_tx):
                     success, db_length, db_content_length, cursor = (
                         self._append_data(
                             db_tx, offset, d, content_length, last))
@@ -975,11 +980,11 @@ class BlobCursor(Blob, WritableBlob):
                         db_tx.rollback()
                         return False, db_length, db_content_length
                     break
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    if i == 4:
-                        raise
-                    backoff(i)
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                backoff(i)
 
         self.length = db_length
         self._content_length = content_length
