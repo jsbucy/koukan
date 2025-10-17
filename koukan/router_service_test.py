@@ -14,6 +14,7 @@ import copy
 import cProfile
 from pstats import SortKey
 import gc
+import tempfile
 
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
@@ -38,6 +39,8 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 from koukan.message_builder import MessageBuilderSpec
 
 from koukan.storage_schema import BlobSpec
+
+from examples.send_message.send_message import Sender
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -832,17 +835,17 @@ class RouterServiceTest(unittest.TestCase):
 
     def test_reuse_body(self):
         logging.debug('RouterServiceTest.test_reuse_body')
-        rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
-            timeout_start=5, timeout_data=5)
+
+        body_file = tempfile.NamedTemporaryFile()
         body = 'hello, world!'
         body_utf8 = body.encode('utf-8')
-        tx = TransactionMetadata()
-        rest_endpoint.wire_downstream(tx)
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice@example.com'),
-            rcpt_to=[Mailbox('bob@example.com')],
-            body=InlineBlob(body_utf8, last=True))
+        body_file.write(body_utf8)
+        body_file.flush()
+
+        sender = Sender(self.router_url,
+                        'submission',
+                        'alice@example.com',
+                        body_filename=body_file.name)
 
         upstream_endpoint = FakeFilter()
         def exp_env(tx, tx_delta):
@@ -864,24 +867,13 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp_body)
         self.add_endpoint(upstream_endpoint)
 
-        tx.merge_from(delta)
-        rest_endpoint.on_update(delta)
-        self.assertEqual(201, tx.mail_response.code)
-        self.assertEqual([202], [r.code for r in tx.rcpt_response])
-        self.assertEqual(203, tx.data_response.code)
 
-        tx_json = rest_endpoint.get_json()
-        logging.debug('RouterServiceTest.test_reuse_body create %s',
-                      tx_json)
+        sender.send('bob@example.com')
 
-        blob_uri = parse_blob_uri(tx_json['body']['blob_status']['uri'])
-        logging.debug(blob_uri)
-
-        rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
-            timeout_start=5, timeout_data=5)
-        tx = TransactionMetadata()
-        rest_endpoint.wire_downstream(tx)
+        self.assertEqual(201, sender.tx_json['mail_response']['code'])
+        self.assertEqual(
+            [202], [r['code'] for r in sender.tx_json['rcpt_response']])
+        self.assertEqual(203, sender.tx_json['data_response']['code'])
 
         upstream_endpoint = FakeFilter()
         def exp2(tx, tx_delta):
@@ -901,28 +893,14 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint.add_expectation(exp2)
         upstream_endpoint.add_expectation(exp2)
         self.add_endpoint(upstream_endpoint)
-        prev = tx.copy()
-        tx.mail_from = Mailbox('alice@example.com')
-        tx.rcpt_to = [Mailbox('bob2@example.com')]
-        tx.body = BlobSpec(reuse_uri=blob_uri)
-        rest_endpoint.on_update(prev.delta(tx))
-        tx_json = rest_endpoint.get_json()
-        logging.debug(tx_json)
-        self.assertIn('uri', tx_json['body']['blob_status'])
-        del tx_json['body']['blob_status']['uri']
+
+        # Sender throw if reuse failed and it tries to resend the blob
+        sender.blob_cache.body_blob.filename = None
+        sender.send('bob2@example.com')
+        self.assertEqual(201, sender.tx_json['mail_response']['code'])
         self.assertEqual(
-            {'mail_from': {},
-             'rcpt_to': [{}],
-             'body': {'blob_status': {#'content_length': 13, 'length': 13,
-                 'finalized': True}},
-             'retry': {},
-             'notification': {},
-             'mail_response': {'code': 201, 'message': 'ok'},
-             'rcpt_response': [{'code': 202, 'message': 'ok'}],
-             'data_response': {'code': 203, 'message': 'ok'},
-             'attempt_count': 1,
-             'final_attempt_reason': 'upstream response success'},
-            tx_json)
+            [202], [r['code'] for r in sender.tx_json['rcpt_response']])
+        self.assertEqual(203, sender.tx_json['data_response']['code'])
 
     # xxx need non-exploder test w/filter api, problems in
     # post-exploder/upstream tx won't be reported out synchronously,

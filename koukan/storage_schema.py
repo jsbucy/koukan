@@ -49,9 +49,9 @@ class BlobSpec:
         elif self.reuse_uri is None and rhs.reuse_uri is not None:
             return True
         elif self.reuse_uri is not None and rhs.reuse_uri is not None:
-            if self.reuse_uri.parsed_uri and (
-                    self.reuse_uri.parsed_uri != rhs.reuse_uri.parsed_uri):
-                return None
+            if (d := self.reuse_uri.delta(rhs.reuse_uri, which_json)
+                ) is not False:
+                return d
         if self.finalized and not rhs.finalized:
             return None
         return self.finalized != rhs.finalized

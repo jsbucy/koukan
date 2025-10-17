@@ -85,7 +85,16 @@ class BlobUri:
             return make_blob_uri(self.tx_id, blob=self.blob,
                                  base_uri=self.base_uri)
 
-
+    def delta(self, rhs, which_json) -> Optional[bool]:
+        if not isinstance(rhs, BlobUri):
+            raise ValueError()
+        if self.tx_body != rhs.tx_body:
+            raise ValueError()
+        if self.blob != rhs.blob:
+            raise ValueError()
+        if self.parsed_uri != rhs.parsed_uri:
+            raise ValueError()
+        return False
 
 def parse_blob_uri(uri : str) -> Optional[BlobUri]:
     result = urlparse(uri)
@@ -100,7 +109,7 @@ def parse_blob_uri(uri : str) -> Optional[BlobUri]:
     tx = u[0:slash]
     u = u[slash+1:]
     if u == 'body':
-        return BlobUri(tx_id=tx, tx_body=True)
+        return BlobUri(tx_id=tx, tx_body=True, parsed_uri=uri)
     if not u.startswith('blob/'):
         return None
     u = u.removeprefix('blob/')

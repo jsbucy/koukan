@@ -53,6 +53,7 @@ class Sender:
 
     message_builder : Optional[Dict[str, Any]]
     blob_cache : BlobCache
+    tx_json : Optional[Dict[str, Any]] = None
 
     def __init__(self,
                  base_url : str,
@@ -171,12 +172,14 @@ class Sender:
         start = time.monotonic()
         rest_resp = self.session.post(
             url,
-            headers={'host': self.host,
-                     'request-timeout': '5'},
+            headers={'host': self.host},
             json=tx_json)
         logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
+        # TODO tx creation POST hasn't waited on req_inflight for
+        # awhile, could do a hanging GET here to get early RCPT error
+        # etc.
 
         tx_json = rest_resp.json()
         logging.debug(tx_json)
@@ -246,6 +249,7 @@ class Sender:
                     break
 
             if tx_json.get('final_attempt_reason', None):
+                self.tx_json = tx_json
                 done = True
 
             rest_resp = None

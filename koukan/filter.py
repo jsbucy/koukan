@@ -208,12 +208,12 @@ class TxField:
         return self.json_field + '_list_offset'
 
 def blob_spec_from_json(blob_json):
-    # logging.debug(blob_json)
-    out = BlobSpec()
-    out.finalized = blob_json.get('finalized', False)
-    if uri := blob_json.get('uri', None):
-        out.reuse_uri = BlobUri('xxx', blob='yyy', parsed_uri = uri)
-    return out
+    blob_uri = None
+    if (uri := blob_json.get('uri', None)) is not None:
+        logging.debug(uri)
+        blob_uri = parse_blob_uri(uri)
+    return BlobSpec(reuse_uri = blob_uri,
+                    finalized = blob_json.get('finalized', False))
 
 def body_from_json(body_json, which_js : WhichJson
                    ) -> Union[Blob, BlobSpec, MessageBuilderSpec, None]:
@@ -225,7 +225,8 @@ def body_from_json(body_json, which_js : WhichJson
         if blob_status := message_builder_json.get('blob_status', None):
             blob_specs = {
                 bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
-            logging.debug(blob_specs)
+            # xxx wat? this was to avoid a conflict in RestEndpoint?
+            # we clear the whole thing now?
             del message_builder_json['blob_status']
         message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
         if uri := message_builder_json.get('uri', None):
@@ -241,7 +242,6 @@ def body_from_json(body_json, which_js : WhichJson
             return body_blob
 
     if message_builder is not None:
-        logging.debug('message builder %s', message_builder.blobs)
         return message_builder
     logging.debug(body_json)
 
@@ -255,6 +255,8 @@ def body_from_json(body_json, which_js : WhichJson
 def blob_to_json(blob : Union[Blob, BlobSpec, None]
                  ) -> Tuple[Optional[str], dict]:
     out : Dict[str, Any] = {}
+    # XXX dead code since RestHandler._update_blob_uri() always
+    # replaces with BlobSpec now?
     if isinstance(blob, Blob):
         out['length'] = blob.len()
         if (l := blob.content_length()) is not None:
@@ -573,7 +575,7 @@ class TransactionMetadata:
 
     def _body_last(self):
         if isinstance(self.body, BlobSpec):
-            return self.body.finalized  # XXX True
+            return self.body.finalized
         elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
             return self.body.finalized()
         elif self.body is not None:
