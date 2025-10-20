@@ -194,9 +194,9 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={},
             location=self.tx_url,
             etag='1'))
-        rest_resp = rest_endpoint._create(
+        upstream_delta = rest_endpoint._create(
             resolution=None, tx=tx, deadline=Deadline())
-        self.assertEqual(rest_resp.status_code, 201)
+        self.assertIsNotNone(upstream_delta)
         req = self.requests.pop(0)
         self.assertEqual(req.path, '/transactions')
         self.assertEqual(req.body, b'{}')
@@ -340,7 +340,8 @@ class RestEndpointTest(unittest.TestCase):
             resp_json={
                 'mail_from': {},
                 'mail_response': {'code': 200},
-                'rcpt_to': [{}]},
+                'rcpt_to': [{}],
+                'body': {'blob_status': {'uri': self.body_url }}},
             etag='2'))
         self.responses.append(Response(
             http_resp = '200 ok',
@@ -398,7 +399,6 @@ class RestEndpointTest(unittest.TestCase):
             self.responses.append(Response(
                 http_resp = '304 unchanged',
                 content_type = 'application/json',
-                resp_json={'mail_from': {}},
                 etag = '1'))
 
         tx.merge_from(delta)
@@ -532,7 +532,6 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}],
                 'rcpt_response': [{'code': 202}],
                 'body': {'blob_status': {'uri': self.body_url }}
-
             },
             etag='1'))
 
@@ -545,6 +544,7 @@ class RestEndpointTest(unittest.TestCase):
                                     body=InlineBlob(b, last=True))
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
+        logging.debug(tx)
 
         # POST /transactions
         req = self.requests.pop(0)
@@ -660,7 +660,7 @@ class RestEndpointTest(unittest.TestCase):
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'POST')
         self.assertEqual(req.path, '/transactions')
-
+        logging.debug(tx)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 

@@ -129,7 +129,14 @@ class MessageBuilderSpec:
 
 
     def __repr__(self):
-        return '%s %s' % (self.json, self.blobs)
+        out = 'json=' + str(self.json)
+        if self.blobs:
+            out += ' blobs=' + str(self.blobs)
+        if self.body_blob:
+            out += ' body_blob=' + str(self.body_blob)
+        if self.uri:
+            out += ' uri=' + self.uri
+        return out
 
 class MessageBuilder:
     blobs : Dict[str, Blob]
