@@ -265,7 +265,7 @@ class RestEndpoint(Filter):
                           rest_resp)
         return
 
-    def _maybe_update_message_builder(self, created, tx_delta, deadline
+    def _maybe_update_message_builder(self, created, downstream_body, deadline
                                       ) -> Optional[FilterResult]:
         assert self.rest_upstream_tx is not None
         assert self.downstream_tx is not None
@@ -276,13 +276,16 @@ class RestEndpoint(Filter):
         # submission could send an inline body in which case you'll
         # get it all in the initial on_update() so don't send it again
         # here.
-        if created or not isinstance(tx_delta.body, MessageBuilderSpec):
+        if created or not isinstance(downstream_body, MessageBuilderSpec):
             return None
 
-        assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+        upstream_body = self.rest_upstream_tx.body
+        assert isinstance(upstream_body, MessageBuilderSpec), upstream_body
+
+        assert isinstance(downstream_body, MessageBuilderSpec)
         rest_resp = self._post_tx(
-            self.rest_upstream_tx.body.uri,
-            tx_delta.body.json, self.client.post, deadline)
+            upstream_body.uri,
+            downstream_body.json, self.client.post, deadline)
         if rest_resp is None or rest_resp.status_code != 200:
             logging.debug(rest_resp)
             self.downstream_tx.data_response = Response(
@@ -334,13 +337,6 @@ class RestEndpoint(Filter):
         if r := self._maybe_cancel(tx_delta):
             return r
 
-        if self.http_host is None and self.transaction_url is None:
-            if self.downstream_tx.upstream_http_host:
-                self.http_host = self.downstream_tx.upstream_http_host
-            elif self.static_http_host:
-                self.http_host = self.static_http_host
-
-
         # xxx envelope vs data timeout
         if timeout is None:
             timeout = self.timeout_start
@@ -351,8 +347,6 @@ class RestEndpoint(Filter):
                       self.transaction_url, timeout, self.downstream_tx)
 
         downstream_delta = tx_delta.copy()
-        if downstream_delta.attempt_count:
-            del downstream_delta.attempt_count
 
         downstream_body = downstream_delta.body
         upstream_body = self.rest_upstream_tx.body if self.rest_upstream_tx else None
@@ -376,33 +370,33 @@ class RestEndpoint(Filter):
         elif downstream_body is not None:
             raise ValueError()
 
-        # We are going to send a slightly different delta upstream per
-        # remote_host (discovery in _create()) and body (below).
-        # When we look at the delta of what we got back, these fields
-        # should not appear so it will merge cleanly with the original input.
-        if self.rest_upstream_tx is None:
+        tx_update = False
+        created = False
+        upstream_delta = None
+        if not self.transaction_url:
+            if self.http_host is None:
+                if self.downstream_tx.upstream_http_host:
+                    self.http_host = self.downstream_tx.upstream_http_host
+                elif self.static_http_host:
+                    self.http_host = self.static_http_host
+
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
             self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
             self.rest_upstream_tx.body = downstream_body
+
+            upstream_delta = self._create(self.downstream_tx.resolution,
+                                          self.rest_upstream_tx, deadline)
+            tx_update = True
+            created = True
         else:
+            assert self.rest_upstream_tx is not None
             # XXX hack around full tree body delta
             downstream_delta.body = None
             self.rest_upstream_tx.merge_from(downstream_delta)
             if downstream_body:
                 downstream_delta.body = self.rest_upstream_tx.body = downstream_body
 
-        logging.debug('RestEndpoint.on_update merged tx %s', self.rest_upstream_tx)
-
-        tx_update = False
-        created = False
-        upstream_delta = None
-        if not self.transaction_url:
-            upstream_delta = self._create(self.downstream_tx.resolution,
-                                          self.rest_upstream_tx, deadline)
-            tx_update = True
-            created = True
-        else:
             # as long as the delta isn't just the body, send a patch even
             # if it's empty as a heartbeat
             # TODO maybe this should have nospin logic i.e. don't send
@@ -440,7 +434,7 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         if (res := self._maybe_update_message_builder(
-                created, downstream_delta, deadline)) is not None:
+                created, downstream_body, deadline)) is not None:
             return res
 
         # delta/merge bugs in the chain downstream from here have been
@@ -500,10 +494,10 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         # TODO/NOTE:
-        # _get() loops on rest_upstream_tx.req_inflight()
-        # req_inflight() only returns true if body.finalized()
-        # this is per the upstream blob specs/json in rest_upstream_tx
-        # we could do pedantic validation of that to make sure that it
+        # _get() loops on rest_upstream_tx.req_inflight().
+        # req_inflight() only returns true if body.finalized().
+        # This is per the upstream blob specs/json in rest_upstream_tx.
+        # We could do pedantic validation of that to make sure that it
         # is consistent with whether we think we've sent all the data
         # from blob_readers, etc.
 
