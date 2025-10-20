@@ -298,23 +298,6 @@ class RestEndpoint(Filter):
             return FilterResult()
         return None
 
-        resp_json = get_resp_json(rest_resp) if rest_resp else None
-        resp_json = resp_json if resp_json else {}
-
-        # dedupe _on_upstream_tx_json()
-        tx_out = TransactionMetadata.from_json(
-            resp_json, WhichJson.REST_READ)
-        if tx_out is None:
-            self.downstream_tx.data_response = Response(
-                400, 'RestEndpoint update message_builder bad response')
-            return FilterResult()
-        body = tx_out.body
-        self.rest_upstream_tx.body = tx_out.body = None
-        d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
-        self.rest_upstream_tx.merge_from(d)
-        self.rest_upstream_tx.body = body
-        return None
-
     def _maybe_cancel(self, tx_delta) -> Optional[FilterResult]:
         assert self.downstream_tx is not None
         if tx_delta.cancelled:
