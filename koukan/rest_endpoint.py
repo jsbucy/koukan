@@ -331,27 +331,13 @@ class RestEndpoint(Filter):
             return FilterResult()
         return None
 
-    def on_update(self, tx_delta : TransactionMetadata,
-                  timeout : Optional[float] = None) -> FilterResult:
-        assert self.downstream_tx is not None
-        if r := self._maybe_cancel(tx_delta):
-            return r
-
-        # xxx envelope vs data timeout
-        if timeout is None:
-            timeout = self.timeout_start
-        deadline = Deadline(timeout)
-
-        logging.debug('RestEndpoint.on_update start %s '
-                      'timeout=%s downstream tx %s',
-                      self.transaction_url, timeout, self.downstream_tx)
-
+    def _update_body(self, tx_delta):
         downstream_delta = tx_delta.copy()
+        downstream_delta.body = None
 
-        downstream_body = downstream_delta.body
+        downstream_body = tx_delta.body
         upstream_body = self.rest_upstream_tx.body if self.rest_upstream_tx else None
         if isinstance(downstream_body, MessageBuilderSpec):
-            logging.debug(downstream_body)
             assert downstream_body is None or isinstance(downstream_body, MessageBuilderSpec)
             # xxx this is sort of a 3-way merge when
             # rest receiver sent us back body_blob/message_builder uris
@@ -368,7 +354,25 @@ class RestEndpoint(Filter):
         elif isinstance(downstream_body, Blob):
             downstream_body = None
         elif downstream_body is not None:
-            raise ValueError()
+            assert False, downstream_body
+        return downstream_delta, downstream_body
+
+    def on_update(self, tx_delta : TransactionMetadata,
+                  timeout : Optional[float] = None) -> FilterResult:
+        assert self.downstream_tx is not None
+        if r := self._maybe_cancel(tx_delta):
+            return r
+
+        # xxx envelope vs data timeout
+        if timeout is None:
+            timeout = self.timeout_start
+        deadline = Deadline(timeout)
+
+        logging.debug('RestEndpoint.on_update start %s '
+                      'timeout=%s downstream tx %s',
+                      self.transaction_url, timeout, self.downstream_tx)
+
+        downstream_delta, downstream_body = self._update_body(tx_delta)
 
         tx_update = False
         created = False
@@ -391,20 +395,14 @@ class RestEndpoint(Filter):
             created = True
         else:
             assert self.rest_upstream_tx is not None
-            # XXX hack around full tree body delta
-            downstream_delta.body = None
             self.rest_upstream_tx.merge_from(downstream_delta)
-            if downstream_body:
-                downstream_delta.body = self.rest_upstream_tx.body = downstream_body
 
             # as long as the delta isn't just the body, send a patch even
             # if it's empty as a heartbeat
             # TODO maybe this should have nospin logic i.e. don't send
             # a heartbeat more often than every n secs?
-            delta_no_body = tx_delta.copy()
-            delta_no_body.body = None  # XXX
             if (tx_delta.empty(WhichJson.REST_UPDATE) or
-                not delta_no_body.empty(WhichJson.REST_UPDATE)):
+                not downstream_delta.empty(WhichJson.REST_UPDATE)):
                upstream_delta = self._update(downstream_delta, deadline)
                tx_update = True
 
