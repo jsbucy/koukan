@@ -122,6 +122,29 @@ class RestEndpoint(Filter):
         self.client = client_provider.get()
         self.blob_readers = {}
 
+    def _merge_upstream_tx(self, rest_resp : HttpResponse
+                           ) -> Optional[TransactionMetadata]:
+        assert self.rest_upstream_tx is not None
+        assert self.downstream_tx is not None
+        resp_json = get_resp_json(rest_resp)
+        if resp_json is None:
+            return None
+        upstream_tx = TransactionMetadata.from_json(
+            resp_json, WhichJson.REST_READ)
+        if upstream_tx is None:
+            return None
+        upstream_delta = self.rest_upstream_tx.delta(upstream_tx, WhichJson.REST_READ)
+        if upstream_delta is None:
+            return None
+        assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
+
+        delta = upstream_delta.copy()
+        delta.body = None
+        if self.downstream_tx.merge_from(delta) is None:
+            logging.debug('bad')
+            return None
+        return upstream_delta
+
     def _create(self,
                 resolution : Optional[Resolution],
                 tx : TransactionMetadata,
@@ -176,21 +199,8 @@ class RestEndpoint(Filter):
             if resp_json is None:
                 return None
             self.rest_upstream_tx = tx.copy()
-            # xxx dedupe _on_upstream_tx_json()
-            upstream_tx = TransactionMetadata.from_json(
-                resp_json, WhichJson.REST_READ)
-            if upstream_tx is None:
-                return None
-            upstream_delta = tx.delta(upstream_tx, WhichJson.REST_READ)
-            if self.rest_upstream_tx.merge_from(upstream_delta) is None:
-                logging.debug('bad')
-                return None
-            logging.debug(self.rest_upstream_tx)
-            upstream_delta.body = None  # XXX
-            if self.downstream_tx.merge_from(upstream_delta) is None:
-                logging.debug('bad')
-                return None
-            return upstream_delta
+            return self._merge_upstream_tx(rest_resp)
+
         return None
 
     def _update(self, downstream_delta : TransactionMetadata,
@@ -207,22 +217,7 @@ class RestEndpoint(Filter):
         if 'etag' not in rest_resp.headers:
             return None
         self.etag = rest_resp.headers['etag']
-        resp_json = get_resp_json(rest_resp)
-        logging.info('RestEndpoint._update resp_json %s', resp_json)
-        if resp_json is None:
-            return None
-        # xxx dedupe _on_upstream_tx_json()
-        upstream_tx = TransactionMetadata.from_json(
-            rest_resp.json(), WhichJson.REST_READ)
-        if upstream_tx is None:
-            return None
-        upstream_delta = self.rest_upstream_tx.delta(
-            upstream_tx, WhichJson.REST_READ)
-        if self.rest_upstream_tx.merge_from(upstream_delta) is None:
-            return None
-        if self.downstream_tx.merge_from(upstream_delta) is None:
-            return None
-        return upstream_delta
+        return self._merge_upstream_tx(rest_resp)
 
     def _post_tx(self, url, body_json : dict,
                  http_method,
@@ -270,7 +265,11 @@ class RestEndpoint(Filter):
                           rest_resp)
         return
 
-    def _maybe_update_message_builder(self, created, tx_delta, deadline):
+    def _maybe_update_message_builder(self, created, tx_delta, deadline
+                                      ) -> Optional[FilterResult]:
+        assert self.rest_upstream_tx is not None
+        assert self.downstream_tx is not None
+
         # rest receiving with message parsing sends message builder
         # spec out the back. Without pipelining, this will always be
         # in a separate update from the initial creation. However rest
@@ -289,6 +288,13 @@ class RestEndpoint(Filter):
             self.downstream_tx.data_response = Response(
                 400, 'RestEndpoint update_message_builder http err')
             return FilterResult()
+
+        # xxx hack around full tree body delta
+        self.rest_upstream_tx.body = None
+        if self._merge_upstream_tx(rest_resp) is None:
+            return FilterResult()
+        return None
+
         resp_json = get_resp_json(rest_resp) if rest_resp else None
         resp_json = resp_json if resp_json else {}
 
@@ -299,7 +305,6 @@ class RestEndpoint(Filter):
             self.downstream_tx.data_response = Response(
                 400, 'RestEndpoint update message_builder bad response')
             return FilterResult()
-        # xxx hack around full tree body delta
         body = tx_out.body
         self.rest_upstream_tx.body = tx_out.body = None
         d = self.rest_upstream_tx.delta(tx_out, WhichJson.REST_READ)
@@ -434,9 +439,9 @@ class RestEndpoint(Filter):
         if tx_delta.body is None:
             return FilterResult()
 
-        if (err := self._maybe_update_message_builder(
+        if (res := self._maybe_update_message_builder(
                 created, downstream_delta, deadline)) is not None:
-            return err
+            return res
 
         # delta/merge bugs in the chain downstream from here have been
         # known to drop response fields on subsequent calls so use
@@ -643,7 +648,7 @@ class RestEndpoint(Filter):
 
     def _get_json(self, timeout : Optional[float] = None,
                   testonly_point_read = False
-                  ) -> Union[None, dict, _Unchanged]:
+                  ) -> Union[None, HttpResponse, _Unchanged]:
         assert self.transaction_url is not None
         try:
             req_headers = {}
@@ -674,16 +679,19 @@ class RestEndpoint(Filter):
         else:  # 200
             self.etag = etag
 
-        return get_resp_json(rest_resp)
+        return rest_resp
 
     # test only
     def get_json(self, timeout : Optional[float] = None,
                  point_read = True
                  ) -> Optional[dict]:
-        json = self._get_json(timeout, testonly_point_read=point_read)
-        if json is not None:
-            assert isinstance(json, dict)
-        return json
+        rest_resp = self._get_json(timeout, testonly_point_read=point_read)
+        if rest_resp is None:
+            return None
+        resp_json = get_resp_json(rest_resp)
+        if resp_json is not None:
+            assert isinstance(resp_json, dict)
+        return resp_json
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns delta vs initial rest_upstream_tx
@@ -698,47 +706,27 @@ class RestEndpoint(Filter):
                           self.transaction_url, deadline.deadline_left())
             start = time.monotonic()
             prev_etag = self.etag
-            tx_json = self._get_json(timeout=deadline.deadline_left())
-            if tx_json is None:  # timeout or invalid json
+            rest_resp = self._get_json(timeout=deadline.deadline_left())
+            dt = time.monotonic() - start
+            if rest_resp is None:  # timeout or invalid json
                 return None
-            delta = time.monotonic() - start
-
-            if isinstance(tx_json, dict):
-                logging.debug('RestEndpoint._get() %s done %s',
-                              self.transaction_url, tx_json)
-
-                # xxx dedupe _on_upstream_tx_json()
-                tx_out = TransactionMetadata.from_json(
-                    tx_json, WhichJson.REST_READ)
-                if tx_out is None:  # invalid json tx contents
+            elif isinstance(rest_resp, HttpResponse):
+                if (delta := self._merge_upstream_tx(rest_resp)) is None:
                     return None
 
-                upstream_delta = self.rest_upstream_tx.delta(
-                    tx_out, WhichJson.REST_READ)
-                if upstream_delta is None:
-                    return None
-                if self.rest_upstream_tx.merge_from(upstream_delta) is None:
-                    return None
-                upstream_delta.body = None  # XXX
-                if self.downstream_tx.merge_from(upstream_delta) is None:
-                    return None
+            if oneshot:
+                return prev.delta(self.rest_upstream_tx)
 
-                logging.debug('RestEndpoint._get() %s done %s tx_out %s',
-                              self.transaction_url, self.etag, tx_out)
-
-                if oneshot:
-                    return prev.delta(self.rest_upstream_tx)
-
-                if not self.rest_upstream_tx.req_inflight():
-                    return prev.delta(self.rest_upstream_tx)
+            if not self.rest_upstream_tx.req_inflight():
+                return prev.delta(self.rest_upstream_tx)
 
             # min delta
             # XXX configurable
             # XXX backoff?
             if not deadline.remaining(1):
                 break
-            if (self.etag is None or self.etag == prev_etag) and (delta < 1):
-                nospin = 1 - delta
+            if (self.etag is None or self.etag == prev_etag) and (dt < 1):
+                nospin = 1 - dt
                 logging.debug('nospin %s %f', self.transaction_url, nospin)
                 time.sleep(nospin)
             if oneshot and self.etag != prev_etag:
