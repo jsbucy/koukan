@@ -486,7 +486,7 @@ class RestEndpointTest(unittest.TestCase):
 
         blob = InlineBlob(b'hello, world!', last=True)
         rest_endpoint._put_blob(
-            blob, rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri)
+            blob, rest_endpoint.upstream_body.reuse_uri.parsed_uri)
 
         # POST /transactions
         req = self.requests.pop(0)
@@ -1106,6 +1106,30 @@ class RestEndpointTest(unittest.TestCase):
         logging.debug(tx)
         self.assertEqual(tx.data_response.code, 203)
 
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions')
+        self.assertEqual('POST', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123')
+        self.assertEqual('GET', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123/message_builder')
+        self.assertEqual('POST', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123/blob/blob_rest_id')
+        self.assertEqual('PUT', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123/body')
+        self.assertEqual('PUT', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual(req.path, '/transactions/123')
+        self.assertEqual('GET', req.method)
+
 
     def test_parsed_json_err(self):
         rest_endpoint, tx = self.create_endpoint(
@@ -1367,6 +1391,24 @@ class RestEndpointTest(unittest.TestCase):
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
 
+        req = self.requests.pop(0)
+        self.assertEqual('/transactions', req.path)
+        self.assertEqual('POST', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual('/transactions/123/body', req.path)
+        self.assertEqual('PUT', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual('/transactions/123', req.path)
+        self.assertEqual('GET', req.method)
+
+        req = self.requests.pop(0)
+        self.assertEqual('/transactions/123', req.path)
+        self.assertEqual('GET', req.method)
+
+        self.assertFalse(self.requests)
+
 
     def test_cancel(self):
         rest_endpoint, tx = self.create_endpoint(
@@ -1397,6 +1439,7 @@ class RestEndpointTest(unittest.TestCase):
         delta = TransactionMetadata(cancelled = True)
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
+
 
 
 if __name__ == '__main__':

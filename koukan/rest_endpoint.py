@@ -93,6 +93,8 @@ class RestEndpoint(Filter):
 
     blob_readers : Dict[Blob, BlobReader]
 
+    blobs_finalized = False
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -138,9 +140,10 @@ class RestEndpoint(Filter):
             return None
         assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
         self.upstream_body = self.rest_upstream_tx.body
-        # if downstream_body is None:
-        #   # so this doesn't spoof req_inflight()
-        #   self.rest_upstream_tx.body = None
+        # skeleton MessageBuilderSpec with just uris shouldn't spoof
+        # req_inflight()
+        if not self.blobs_finalized:
+            self.rest_upstream_tx.body = None
 
         delta = upstream_delta.copy()
         delta.body = None
@@ -283,12 +286,11 @@ class RestEndpoint(Filter):
         if created or not isinstance(downstream_body, MessageBuilderSpec):
             return None
 
-        upstream_body = self.rest_upstream_tx.body
-        assert isinstance(upstream_body, MessageBuilderSpec), upstream_body
+        assert isinstance(self.upstream_body, MessageBuilderSpec), self.upstream_body
 
         assert isinstance(downstream_body, MessageBuilderSpec)
         rest_resp = self._post_tx(
-            upstream_body.uri,
+            self.upstream_body.uri,
             downstream_body.json, self.client.post, deadline)
         if rest_resp is None or rest_resp.status_code != 200:
             logging.debug(rest_resp)
@@ -455,6 +457,8 @@ class RestEndpoint(Filter):
         if not finalized:
             return FilterResult()
 
+        self.blobs_finalized = True
+
         # TODO/NOTE:
         # _get() loops on rest_upstream_tx.req_inflight().
         # req_inflight() only returns true if body.finalized().
@@ -486,7 +490,7 @@ class RestEndpoint(Filter):
             blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
         if isinstance(tx_delta.body, Blob):
             body_blob : Union[Blob, BlobSpec, MessageBuilderSpec, None] = None
-            b = self.rest_upstream_tx.body
+            b = self.upstream_body
             if isinstance(b, BlobSpec):
                 body_blob = b
             elif isinstance(b, MessageBuilderSpec):
@@ -495,12 +499,12 @@ class RestEndpoint(Filter):
                 assert False, b
             add_blob(tx_delta.body, body_blob)
         elif isinstance(tx_delta.body, MessageBuilderSpec):
-            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+            assert isinstance(self.upstream_body, MessageBuilderSpec)
             for blob_id, blob in tx_delta.body.blobs.items():
-                add_blob(blob, self.rest_upstream_tx.body.blobs[blob_id])
+                add_blob(blob, self.upstream_body.blobs[blob_id])
             if tx_delta.body.body_blob is not None:
                 add_blob(tx_delta.body.body_blob,
-                         self.rest_upstream_tx.body.body_blob)
+                         self.upstream_body.body_blob)
         else:
             raise ValueError()
         return blobs
