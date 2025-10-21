@@ -1009,9 +1009,6 @@ class RestEndpointTest(unittest.TestCase):
                     'blob_status': {'uri': self.body_url},
                     'message_builder': {
                         'uri': self.message_builder_url,
-                        'blob_status': {
-                            'blob_rest_id': {'uri': self.blob_url}
-                        }
                     }
                 }
             },
@@ -1031,9 +1028,6 @@ class RestEndpointTest(unittest.TestCase):
                     'blob_status': {'uri': self.body_url},
                     'message_builder': {
                         'uri': self.message_builder_url,
-                        'blob_status': {
-                            'blob_rest_id': {'uri': self.blob_url}
-                        }
                     }
                 }
             },
@@ -1043,6 +1037,7 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint.on_update(delta)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
+        logging.debug(tx)
 
         parsed_delta = TransactionMetadata()
         blob = b'hello, world!\r\n'

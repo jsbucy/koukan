@@ -137,6 +137,10 @@ class RestEndpoint(Filter):
         if upstream_delta is None:
             return None
         assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
+        self.upstream_body = self.rest_upstream_tx.body
+        # if downstream_body is None:
+        #   # so this doesn't spoof req_inflight()
+        #   self.rest_upstream_tx.body = None
 
         delta = upstream_delta.copy()
         delta.body = None
@@ -293,7 +297,7 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         # xxx hack around full tree body delta
-        self.rest_upstream_tx.body = None
+        #self.rest_upstream_tx.body = None
         if self._merge_upstream_tx(rest_resp) is None:
             return FilterResult()
         return None
@@ -317,23 +321,23 @@ class RestEndpoint(Filter):
     def _update_body(self, tx_delta):
         downstream_delta = tx_delta.copy()
         downstream_delta.body = None
-
+        # We always handle the body separately and indeed in the
+        # absence of pipelining support in aiosmtpd, it will always
+        # come in a separate update anyway.
         downstream_body = tx_delta.body
         upstream_body = self.rest_upstream_tx.body if self.rest_upstream_tx else None
         if isinstance(downstream_body, MessageBuilderSpec):
-            assert downstream_body is None or isinstance(downstream_body, MessageBuilderSpec)
             # xxx this is sort of a 3-way merge when
             # rest receiver sent us back body_blob/message_builder uris
-            if downstream_body is not None:
-                downstream_body = downstream_body.clone()
-                downstream_body.blobs = {
-                    blob_id : None
-                    for blob_id in downstream_body.blobs.keys()
-                }
-                if upstream_body:
-                    assert isinstance(upstream_body, MessageBuilderSpec)
-                    downstream_body.uri = upstream_body.uri
-                    downstream_body.body_blob = upstream_body.body_blob
+            downstream_body = downstream_body.clone()
+            downstream_body.blobs = None  #{
+            #     blob_id : None
+            #     for blob_id in downstream_body.blobs.keys()
+            # }
+            if upstream_body:
+                assert isinstance(upstream_body, MessageBuilderSpec)
+                downstream_body.uri = upstream_body.uri
+                downstream_body.body_blob = upstream_body.body_blob
         elif isinstance(downstream_body, Blob):
             downstream_body = None
         elif downstream_body is not None:
@@ -370,6 +374,8 @@ class RestEndpoint(Filter):
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
             self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
+            # cf _update_message_builder(), this is probably moot
+            # because downstream_body is None on the first update
             self.rest_upstream_tx.body = downstream_body
 
             upstream_delta = self._create(self.downstream_tx.resolution,
@@ -429,35 +435,10 @@ class RestEndpoint(Filter):
                     " (RestEndpoint)")
             return FilterResult()
 
-        blobs : List[Tuple[Blob, str]] = []  # url
-        def add_blob(blob, blob_spec):
-            assert isinstance(blob, Blob)
-            assert isinstance(blob_spec, BlobSpec), blob_spec
-            assert isinstance(blob_spec.reuse_uri, BlobUri)
-            blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
-        if isinstance(tx_delta.body, Blob):
-            body_blob : Union[Blob, BlobSpec, MessageBuilderSpec, None] = None
-            b = self.rest_upstream_tx.body
-            if isinstance(b, BlobSpec):
-                body_blob = b
-            elif isinstance(b, MessageBuilderSpec):
-                body_blob = b.body_blob
-            else:
-                assert False, b
-            add_blob(tx_delta.body, body_blob)
-        elif isinstance(tx_delta.body, MessageBuilderSpec):
-            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
-            for blob_id, blob in tx_delta.body.blobs.items():
-                add_blob(blob, self.rest_upstream_tx.body.blobs[blob_id])
-            if tx_delta.body.body_blob is not None:
-                add_blob(tx_delta.body.body_blob,
-                         self.rest_upstream_tx.body.body_blob)
-        elif isinstance(tx_delta.body, BlobSpec):
-            return FilterResult()
-        else:
-            raise ValueError()
+        blobs = self._update_blobs(tx_delta)
 
-        # NOTE _get() will wait on tx version even if nothing inflight
+        # NOTE _get() will wait on tx version/etag once even if
+        # not req_inflight()
         if not blobs:
             return FilterResult()
 
@@ -483,8 +464,6 @@ class RestEndpoint(Filter):
         # from blob_readers, etc.
 
         blob_delta = self._get(deadline)
-        logging.debug('RestEndpoint.on_update %s tx from GET %s',
-                      self.transaction_url, self.rest_upstream_tx)
 
         # NB this delta/merge is fragile and depends on dropping
         # fields we aren't going to send upstream (above)
@@ -493,16 +472,38 @@ class RestEndpoint(Filter):
                 Response(450, 'RestEndpoint upstream invalid resp/delta get'))
             return FilterResult()
 
-        blob_delta.body = None
-        if self.downstream_tx.merge_from(blob_delta) is None:
-            self.downstream_tx.fill_inflight_responses(
-                Response(450, 'RestEndpoint upstream invalid resp/delta get'))
-            return FilterResult()
-
         # if there are any empty responses at this point then we timed out
         self.downstream_tx.fill_inflight_responses(
             Response(450, 'RestEndpoint upstream timeout'))
         return FilterResult()
+
+    def _update_blobs(self, tx_delta):
+        blobs : List[Tuple[Blob, str]] = []  # url
+        def add_blob(blob, blob_spec):
+            assert isinstance(blob, Blob)
+            assert isinstance(blob_spec, BlobSpec), blob_spec
+            assert isinstance(blob_spec.reuse_uri, BlobUri)
+            blobs.append((blob, blob_spec.reuse_uri.parsed_uri))
+        if isinstance(tx_delta.body, Blob):
+            body_blob : Union[Blob, BlobSpec, MessageBuilderSpec, None] = None
+            b = self.rest_upstream_tx.body
+            if isinstance(b, BlobSpec):
+                body_blob = b
+            elif isinstance(b, MessageBuilderSpec):
+                body_blob = b.body_blob
+            else:
+                assert False, b
+            add_blob(tx_delta.body, body_blob)
+        elif isinstance(tx_delta.body, MessageBuilderSpec):
+            assert isinstance(self.rest_upstream_tx.body, MessageBuilderSpec)
+            for blob_id, blob in tx_delta.body.blobs.items():
+                add_blob(blob, self.rest_upstream_tx.body.blobs[blob_id])
+            if tx_delta.body.body_blob is not None:
+                add_blob(tx_delta.body.body_blob,
+                         self.rest_upstream_tx.body.body_blob)
+        else:
+            raise ValueError()
+        return blobs
 
     # Send a finalized blob with a single http request.
     def _put_blob_single(self, blob : Blob, blob_url : str) -> Response:
@@ -688,7 +689,7 @@ class RestEndpoint(Filter):
             elif isinstance(rest_resp, HttpResponse):
                 if (delta := self._merge_upstream_tx(rest_resp)) is None:
                     return None
-
+            logging.debug(self.rest_upstream_tx)
             if oneshot:
                 return prev.delta(self.rest_upstream_tx)
 
