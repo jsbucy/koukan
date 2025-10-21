@@ -296,6 +296,7 @@ class TransactionCursor:
             def _spec(b):
                 assert isinstance(b, BlobSpec)
                 return b
+            assert body.blobs is not None
             blob_specs = [_spec(v) for v in body.blobs.values()]
         elif isinstance(body, Blob):
             blob_spec = BlobSpec(blob=body)

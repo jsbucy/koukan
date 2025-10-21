@@ -93,8 +93,6 @@ class RestEndpoint(Filter):
 
     blob_readers : Dict[Blob, BlobReader]
 
-    blobs_finalized = False
-
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -131,6 +129,7 @@ class RestEndpoint(Filter):
         resp_json = get_resp_json(rest_resp)
         if resp_json is None:
             return None
+
         upstream_tx = TransactionMetadata.from_json(
             resp_json, WhichJson.REST_READ)
         if upstream_tx is None:
@@ -140,10 +139,14 @@ class RestEndpoint(Filter):
             return None
         assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
         self.upstream_body = self.rest_upstream_tx.body
-        # skeleton MessageBuilderSpec with just uris shouldn't spoof
-        # req_inflight()
-        if not self.blobs_finalized:
-            self.rest_upstream_tx.body = None
+
+        # TODO/NOTE:
+        # _get() loops on rest_upstream_tx.req_inflight().
+        # req_inflight() only returns true if body.finalized().
+        # This is per the upstream blob specs/json in rest_upstream_tx.
+        # We could do pedantic validation of that to make sure that it
+        # is consistent with whether we think we've sent all the data
+        # from blob_readers, etc.
 
         delta = upstream_delta.copy()
         delta.body = None
@@ -298,8 +301,6 @@ class RestEndpoint(Filter):
                 400, 'RestEndpoint update_message_builder http err')
             return FilterResult()
 
-        # xxx hack around full tree body delta
-        #self.rest_upstream_tx.body = None
         if self._merge_upstream_tx(rest_resp) is None:
             return FilterResult()
         return None
@@ -320,32 +321,6 @@ class RestEndpoint(Filter):
             return FilterResult()
         return None
 
-    def _update_body(self, tx_delta):
-        downstream_delta = tx_delta.copy()
-        downstream_delta.body = None
-        # We always handle the body separately and indeed in the
-        # absence of pipelining support in aiosmtpd, it will always
-        # come in a separate update anyway.
-        downstream_body = tx_delta.body
-        upstream_body = self.rest_upstream_tx.body if self.rest_upstream_tx else None
-        if isinstance(downstream_body, MessageBuilderSpec):
-            # xxx this is sort of a 3-way merge when
-            # rest receiver sent us back body_blob/message_builder uris
-            downstream_body = downstream_body.clone()
-            downstream_body.blobs = None  #{
-            #     blob_id : None
-            #     for blob_id in downstream_body.blobs.keys()
-            # }
-            if upstream_body:
-                assert isinstance(upstream_body, MessageBuilderSpec)
-                downstream_body.uri = upstream_body.uri
-                downstream_body.body_blob = upstream_body.body_blob
-        elif isinstance(downstream_body, Blob):
-            downstream_body = None
-        elif downstream_body is not None:
-            assert False, downstream_body
-        return downstream_delta, downstream_body
-
     def on_update(self, tx_delta : TransactionMetadata,
                   timeout : Optional[float] = None) -> FilterResult:
         assert self.downstream_tx is not None
@@ -361,11 +336,10 @@ class RestEndpoint(Filter):
                       'timeout=%s downstream tx %s',
                       self.transaction_url, timeout, self.downstream_tx)
 
-        downstream_delta, downstream_body = self._update_body(tx_delta)
-
         tx_update = False
         created = False
         upstream_delta = None
+
         if not self.transaction_url:
             if self.http_host is None:
                 if self.downstream_tx.upstream_http_host:
@@ -378,23 +352,29 @@ class RestEndpoint(Filter):
             self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
             # cf _update_message_builder(), this is probably moot
             # because downstream_body is None on the first update
-            self.rest_upstream_tx.body = downstream_body
+
+            # xxx router_service_test test_message_builder sends MessageBuilderSpec here
+            self.rest_upstream_tx.body = None
 
             upstream_delta = self._create(self.downstream_tx.resolution,
                                           self.rest_upstream_tx, deadline)
             tx_update = True
             created = True
         else:
-            assert self.rest_upstream_tx is not None
-            self.rest_upstream_tx.merge_from(downstream_delta)
-
             # as long as the delta isn't just the body, send a patch even
             # if it's empty as a heartbeat
             # TODO maybe this should have nospin logic i.e. don't send
             # a heartbeat more often than every n secs?
+
+            assert self.rest_upstream_tx is not None
+            delta_no_body = tx_delta.copy()
+            delta_no_body.body = None
+
+            self.rest_upstream_tx.merge_from(delta_no_body)
+
             if (tx_delta.empty(WhichJson.REST_UPDATE) or
-                not downstream_delta.empty(WhichJson.REST_UPDATE)):
-               upstream_delta = self._update(downstream_delta, deadline)
+                not delta_no_body.empty(WhichJson.REST_UPDATE)):
+               upstream_delta = self._update(delta_no_body, deadline)
                tx_update = True
 
         if tx_update:
@@ -402,7 +382,6 @@ class RestEndpoint(Filter):
                 self.downstream_tx.fill_inflight_responses(
                     Response(450, 'RestEndpoint upstream http err'))
                 return FilterResult()
-            logging.debug(self.rest_upstream_tx)
             err = None
             if self.rest_upstream_tx.req_inflight():
                 upstream_delta = self._get(deadline)
@@ -423,7 +402,7 @@ class RestEndpoint(Filter):
             return FilterResult()
 
         if (res := self._maybe_update_message_builder(
-                created, downstream_body, deadline)) is not None:
+                created, tx_delta.body, deadline)) is not None:
             return res
 
         # delta/merge bugs in the chain downstream from here have been
@@ -457,16 +436,6 @@ class RestEndpoint(Filter):
         if not finalized:
             return FilterResult()
 
-        self.blobs_finalized = True
-
-        # TODO/NOTE:
-        # _get() loops on rest_upstream_tx.req_inflight().
-        # req_inflight() only returns true if body.finalized().
-        # This is per the upstream blob specs/json in rest_upstream_tx.
-        # We could do pedantic validation of that to make sure that it
-        # is consistent with whether we think we've sent all the data
-        # from blob_readers, etc.
-
         blob_delta = self._get(deadline)
 
         # NB this delta/merge is fragile and depends on dropping
@@ -499,7 +468,7 @@ class RestEndpoint(Filter):
                 assert False, b
             add_blob(tx_delta.body, body_blob)
         elif isinstance(tx_delta.body, MessageBuilderSpec):
-            assert isinstance(self.upstream_body, MessageBuilderSpec)
+            assert isinstance(self.upstream_body, MessageBuilderSpec), self.upstream_body
             for blob_id, blob in tx_delta.body.blobs.items():
                 add_blob(blob, self.upstream_body.blobs[blob_id])
             if tx_delta.body.body_blob is not None:

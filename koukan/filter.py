@@ -210,7 +210,6 @@ class TxField:
 def blob_spec_from_json(blob_json):
     blob_uri = None
     if (uri := blob_json.get('uri', None)) is not None:
-        logging.debug(uri)
         blob_uri = parse_blob_uri(uri)
     return BlobSpec(reuse_uri = blob_uri,
                     finalized = blob_json.get('finalized', False))
@@ -225,8 +224,7 @@ def body_from_json(body_json, which_js : WhichJson
         if blob_status := message_builder_json.get('blob_status', None):
             blob_specs = {
                 bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
-            # xxx wat? this was to avoid a conflict in RestEndpoint?
-            # we clear the whole thing now?
+            # this is just for rest, not part of the message builder spec
             del message_builder_json['blob_status']
         message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
         if uri := message_builder_json.get('uri', None):
@@ -257,10 +255,12 @@ def blob_to_json(blob : Union[Blob, BlobSpec, None]
     out : Dict[str, Any] = {}
     # XXX dead code since RestHandler._update_blob_uri() always
     # replaces with BlobSpec now?
+    logging.debug(blob)
     if isinstance(blob, Blob):
         out['length'] = blob.len()
         if (l := blob.content_length()) is not None:
             out['content_length'] = l
+        logging.debug(blob.finalized())
         if blob.finalized():
             out['finalized'] = True
     elif isinstance(blob, BlobSpec):
@@ -269,6 +269,7 @@ def blob_to_json(blob : Union[Blob, BlobSpec, None]
     else:
         raise ValueError()
     blob_id = None
+    logging.debug(out)
     if isinstance(blob, Blob) and (blob_uri := blob.blob_uri()) is not None:
         out['uri'] = blob_uri.to_uri()
     elif isinstance(blob, BlobSpec):
@@ -284,9 +285,12 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
             blob_id, json = blob_to_json(body)
             return {'blob_status': json}
         elif isinstance(body, MessageBuilderSpec):
-            out : Dict[str, Any] = {'message_builder': {'blob_status': {
-                blob_id : blob_to_json(blob)[1]
-                for blob_id, blob in body.blobs.items() }}}
+            message_builder : Dict[str, Any] = {}
+            out : Dict[str, Any] = {'message_builder': message_builder}
+            if body.blobs is not None:
+                message_builder['blob_status'] = {
+                    blob_id : blob_to_json(blob)[1]
+                    for blob_id, blob in body.blobs.items() }
             body_blob = body.body_blob
             if isinstance(body_blob, Blob) or isinstance(body_blob, BlobSpec):
                 blob_id, json = blob_to_json(body_blob)

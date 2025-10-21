@@ -312,7 +312,9 @@ class StorageTestBase(unittest.TestCase):
         tx = TransactionMetadata(
             remote_host=HostPort('remote_host', 2525),
             host='host')
-        tx.body = MessageBuilderSpec({ "headers": [ ["subject", "hello"] ] })
+        tx.body = MessageBuilderSpec({
+            "headers": [ ["subject", "hello"] ]})
+        tx.body.parse_blob_specs()
         tx_writer.create('tx_rest_id', tx)
         self.assertTrue(tx_writer.input_done)
 
@@ -736,10 +738,17 @@ class StorageTestBase(unittest.TestCase):
         upstream = self.s.get_transaction_cursor()
 
         message_builder = MessageBuilderSpec(
-            { "headers": [ ["subject", "hello"] ] },
+            { "headers": [ ["subject", "hello"] ],
+              "text_body": [
+                  {'content': {'create_id': 'blob1'},
+                   'content_type': 'text/plain'},
+                  {'content': {'create_id': 'blob2'},
+                   'content_type': 'text/html'},
+              ] },
             blobs={
                 'blob1': BlobSpec(create_id='blob1'),
                 'blob2': BlobSpec(create_id='blob2')})
+
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(

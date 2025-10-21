@@ -19,7 +19,7 @@ from koukan.storage_schema import BlobSpec
 
 class MessageBuilderSpec:
     json : dict
-    blobs : Dict[str, Union[Blob, BlobSpec, None]]
+    blobs : Optional[Dict[str, Union[Blob, BlobSpec, None]]] = None
     body_blob : Union[Blob, BlobSpec, None] = None
     uri : Optional[str] = None
 
@@ -27,10 +27,12 @@ class MessageBuilderSpec:
                  blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None,
                  body_blob : Union[Blob, BlobSpec, None] = None):
         self.json = json
-        self.blobs = {bi:bs for bi,bs in blobs.items() } if blobs else {}
+        if blobs is not None:
+            self.blobs = {bi:bs for bi,bs in blobs.items() }
         self.body_blob = body_blob
 
     def set_blobs(self, blobs : Sequence[Blob]):
+        self.blobs = {}
         for blob in blobs:
             bid = blob.rest_id()
             assert bid is not None
@@ -49,6 +51,17 @@ class MessageBuilderSpec:
         return out
 
     def parse_blob_specs(self):
+        # don't populate blobs from the skeleton spec returned from
+        # rest with just the uris
+        for stanza in [
+                'headers', 'text_body', 'related_attachments', 'file_attachments']:
+            if stanza in self.json:
+                break
+        else:
+            return
+        assert self.blobs is None
+        self.blobs = {}
+
         create_blob_id = 0
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
@@ -58,6 +71,8 @@ class MessageBuilderSpec:
                 create_blob_id += 1
 
     def _add_part_blob(self, part, create_blob_id : int):
+        assert self.blobs is not None
+
         # if not present -> invalid spec
         content = part.get('content')
         if 'reuse_uri' in content:
@@ -86,6 +101,9 @@ class MessageBuilderSpec:
         self.blobs[blob_id] = blob_spec
 
     def finalized(self):
+        logging.debug(self.blobs)
+        if self.blobs is None:
+            return False
         for blob_id, blob in self.blobs.items():
             if isinstance(blob, Blob):
                 if not blob.finalized():
@@ -112,6 +130,10 @@ class MessageBuilderSpec:
             if rhs.blobs:
                 out = True
         else:
+            if self.blobs is None and rhs.blobs is not None:
+                return True
+            if self.blobs is not None and rhs.blobs is None:
+                return None
             if self.blobs.keys() != rhs.blobs.keys():
                 return None
             for blob_id,blob in self.blobs.items():
@@ -130,8 +152,7 @@ class MessageBuilderSpec:
 
     def __repr__(self):
         out = 'json=' + str(self.json)
-        if self.blobs:
-            out += ' blobs=' + str(self.blobs)
+        out += ' blobs=' + str(self.blobs)
         if self.body_blob:
             out += ' body_blob=' + str(self.body_blob)
         if self.uri:

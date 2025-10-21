@@ -54,6 +54,7 @@ class Sender:
     message_builder : Optional[Dict[str, Any]]
     blob_cache : BlobCache
     tx_json : Optional[Dict[str, Any]] = None
+    force_reuse = False
 
     def __init__(self,
                  base_url : str,
@@ -87,6 +88,7 @@ class Sender:
                   filename : str,
                   tx_body = False,
                   blob_id = None) -> bool:
+        assert not self.force_reuse
         logging.info('PUT %s', url)
 
         with open(filename, 'rb') as file:
@@ -127,10 +129,11 @@ class Sender:
                                tx_body=True)
             return
         assert self.message_builder
-        for blob_id,blob in self.blob_cache.blobs.items():
-            blob_spec = tx_json['body']['message_builder']['blob_status'][blob_id]
-            if not blob_spec.get('finalized', False):
-                self.send_part(blob_spec['uri'], blob.filename, blob_id=blob_id)
+        if blobs := tx_json['body']['message_builder'].get('blob_status', None):
+            for blob_id,blob in self.blob_cache.blobs.items():
+                blob_spec = blobs[blob_id]
+                if not blob_spec.get('finalized', False):
+                    self.send_part(blob_spec['uri'], blob.filename, blob_id=blob_id)
 
     # populates initial tx creation json with previous blob uris to
     # reuse from blob_cache
@@ -149,9 +152,10 @@ class Sender:
                 if not (blob_id := content.get('create_id', None)) or not (
                         blob_url := self.blob_cache.blobs[blob_id].url):
                     continue
-                content[blob_id] = blob_url
+                content['reuse_uri'] = blob_url
 
     def send(self, rcpt_to : str, max_wait=30):
+        self.tx_json = None
         logging.debug('Sender.send from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json : Optional[Dict[str, Any]] = {

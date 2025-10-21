@@ -536,11 +536,7 @@ class OutputHandlerTest(unittest.TestCase):
 
 
     def test_notification_message_builder(self):
-        tx = TransactionMetadata(
-            host='outbound',
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body = MessageBuilderSpec({
+        body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
                                "address": "alice@example.com"}]],
@@ -553,7 +549,13 @@ class OutputHandlerTest(unittest.TestCase):
                     "content": {"inline": "hello, world!"}
                 }]
             })
-        )
+        body.parse_blob_specs()
+
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body = body )
 
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)

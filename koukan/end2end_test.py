@@ -319,6 +319,7 @@ class End2EndTest(unittest.TestCase):
                         'alice@example.com',
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
+        sender.force_reuse = True
         sender.send('bob2@example.com')
 
         handlers = {}
@@ -368,6 +369,7 @@ class End2EndTest(unittest.TestCase):
                         'alice@example.com',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
+        sender.force_reuse = True
         sender.send('bob2@example.com')
 
         handlers = {}

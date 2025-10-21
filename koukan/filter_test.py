@@ -7,12 +7,15 @@ from koukan.filter import (
     HostPort,
     Mailbox,
     TransactionMetadata,
-    WhichJson )
+    WhichJson,
+    body_from_json,
+    body_to_json )
 from koukan.response import Response
 from koukan.blob import InlineBlob
 from koukan.deadline import Deadline
-
-from koukan.fake_endpoints import MockAsyncFilter
+from koukan.message_builder import MessageBuilderSpec
+from koukan.rest_schema import BlobUri
+from koukan.storage_schema import BlobSpec
 
 class FilterTest(unittest.TestCase):
     def setUp(self):
@@ -270,5 +273,134 @@ class FilterTest(unittest.TestCase):
             data_response=Response(403))
         self.assertFalse(tx.check_preconditions())
 
+
+    # these 3 are basically the same?
+    # gw -> router: no body in req, router returns body_uri
+    # router -> gw: no body in req, router returns body_uri
+    # rest client -> router: no body in req, router returns body_uri
+    def test_body_json_body_uri(self):
+        blob_spec = BlobSpec(
+            reuse_uri=BlobUri(
+                tx_id='123', tx_body=True,
+                parsed_uri='http://router/transactions/123/body'))
+        self.assertEqual({
+            'blob_status': {'uri': '/transactions/123/body'}
+        }, body_to_json(blob_spec, WhichJson.REST_READ))
+
+    # rest client -> router: reuse body uri in req
+    def test_body_json_reuse_body_uri(self):
+        js = {
+            'reuse_uri': '/transactions/123/body'
+        }
+        body = body_from_json(js, WhichJson.REST_CREATE)
+        logging.debug(body)
+        self.assertIsInstance(body, BlobSpec)
+        self.assertEqual('123', body.reuse_uri.tx_id)
+        self.assertEqual(True, body.reuse_uri.tx_body)
+
+    # rest client -> router: message builder spec in req, new blobs
+    def test_body_json_message_builder_new(self):
+        # client req
+        js = {
+            'message_builder': {
+                'headers': [],
+                'text_body': [
+                  {'content': {'create_id': 'blob1'},
+                   'content_type': 'text/plain'}]
+            }
+        }
+        body = body_from_json(js, WhichJson.REST_CREATE)
+        logging.debug(body)
+        self.assertIsInstance(body, MessageBuilderSpec)
+        self.assertEqual({'blob1'}, body.blobs.keys())
+        self.assertIsInstance(body.blobs['blob1'], BlobSpec)
+        self.assertEqual('blob1', body.blobs['blob1'].create_id)
+
+        body.blobs['blob1'].reuse_uri = BlobUri(tx_id='123', blob='blob1')
+
+        # server resp
+        js = body_to_json(body, WhichJson.REST_READ)
+        logging.debug(js)
+        self.assertEqual({
+            'message_builder': {'blob_status': {
+                'blob1': {'uri': '/transactions/123/blob/blob1'}}}
+        }, js)
+
+    # rest client -> router: message builder spec in req, reuse blobs
+    def test_body_json_message_builder_reuse(self):
+        # client req
+        js = {
+            'message_builder': {
+                'headers': [],
+                'text_body': [
+                  {'content': {'reuse_uri': '/transactions/122/blob/blob1'},
+                   'content_type': 'text/plain'}]
+            }
+        }
+        body = body_from_json(js, WhichJson.REST_CREATE)
+        logging.debug(body)
+        self.assertIsInstance(body, MessageBuilderSpec)
+        self.assertEqual({'blob1'}, body.blobs.keys())
+        self.assertIsInstance(body.blobs['blob1'], BlobSpec)
+        self.assertEqual('blob1', body.blobs['blob1'].reuse_uri.blob)
+
+        body.blobs['blob1'] = InlineBlob(b'hello', last=True)
+
+        # server resp
+        js = body_to_json(body, WhichJson.REST_READ)
+        logging.debug(js)
+        self.assertEqual({
+            'message_builder': {'blob_status': {
+                'blob1': {'length': 5, 'content_length': 5, 'finalized': True}}}
+        }, js)
+
+
+    # router -> rest receiver (serialized + message builder) no reuse,
+    # after initial request from router, receiver sends 'skeleton'
+    # spec with just body and message_builder uris
+    def test_body_json_receive_parsed_initial(self):
+        js = {
+            'blob_status': {'uri': '/transactions/123/body'},
+            'message_builder': {
+                'uri': '/transactions/123/message_builder'}}
+
+        body = body_from_json(js, WhichJson.REST_READ)
+        logging.debug(body)
+        self.assertIsInstance(body, MessageBuilderSpec)
+        self.assertEqual('/transactions/123/message_builder', body.uri)
+        self.assertIsInstance(body.body_blob, BlobSpec)
+        self.assertEqual('/transactions/123/body',
+                         body.body_blob.reuse_uri.parsed_uri)
+
+
+    # response from /tx/123/message_builder upload with blob uris
+    def test_body_json_receive_parsed_blob_status(self):
+        # RestEndpoint is deeply involved in what's sent to the receiver
+
+        # receiver response
+        js = {
+            'blob_status': {'uri': '/transactions/123/body'},
+            'message_builder': {
+                'blob_status': {
+                    'blob1': {'uri': '/transactions/123/blob/blob1'}
+                }
+            }
+        }
+        body = body_from_json(js, WhichJson.REST_READ)
+        logging.debug(body)
+        self.assertIsInstance(body, MessageBuilderSpec)
+        self.assertIsInstance(body.body_blob, BlobSpec)
+        self.assertEqual('/transactions/123/body',
+                         body.body_blob.reuse_uri.parsed_uri)
+        self.assertEqual({'blob1'}, body.blobs.keys())
+        self.assertIsInstance(body.blobs['blob1'], BlobSpec)
+        self.assertEqual('/transactions/123/blob/blob1',
+                         body.blobs['blob1'].reuse_uri.parsed_uri)
+
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+        '%(message)s')
+
     unittest.main()

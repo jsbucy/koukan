@@ -28,7 +28,10 @@ py_test(name='filter_test',
         deps=[':filter',
               ':blob',
               ':deadline',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              ':message_builder',
+              ':rest_schema',
+              ':storage_schema'])
 
 py_library(name='filter_chain',
            srcs=['filter_chain.py'],
