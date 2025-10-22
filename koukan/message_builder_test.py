@@ -5,7 +5,7 @@ import logging
 import json
 from tempfile import TemporaryFile
 
-
+from koukan.rest_schema import WhichJson
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
 class MessageBuilderTest(unittest.TestCase):
@@ -70,6 +70,15 @@ class MessageBuilderTest(unittest.TestCase):
         self.assertEqual('xyz', blob_spec.reuse_uri.blob)
         self.assertEqual(json, { 'text_body': [ {
             'content': {'create_id': 'xyz' }} ] } )
+
+    def test_delta(self):
+        spec = MessageBuilderSpec({}, blobs=None)
+        spec2 = MessageBuilderSpec({}, blobs={'blob1': None})
+        self.assertTrue(spec.delta(spec2, WhichJson.REST_READ))
+
+        spec = MessageBuilderSpec({}, blobs={'blob1': None, 'blob2': None})
+        spec2 = MessageBuilderSpec({}, blobs={'blob1': None})
+        self.assertIsNone(spec.delta(spec2, WhichJson.REST_READ))
 
 if __name__ == '__main__':
     unittest.main()

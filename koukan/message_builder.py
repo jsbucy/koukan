@@ -126,27 +126,26 @@ class MessageBuilderSpec:
         elif rhs.json != {} and self.json != rhs.json:
             return None
         out = False
-        if not self.blobs:
-            if rhs.blobs:
+        if self.blobs is None and rhs.blobs is None:
+            return False
+        if self.blobs is None and rhs.blobs is not None:
+            return True
+        if self.blobs is not None and rhs.blobs is None:
+            return None
+        assert self.blobs is not None and rhs.blobs is not None
+        if self.blobs.keys() != rhs.blobs.keys():
+            return None
+        for blob_id,blob in self.blobs.items():
+            rblob = rhs.blobs[blob_id]
+            if rblob is None:
+                return None
+            if blob is None and rblob is not None:
                 out = True
-        else:
-            if self.blobs is None and rhs.blobs is not None:
-                return True
-            if self.blobs is not None and rhs.blobs is None:
+                continue
+            bdelta = blob.delta(rblob, which_json)
+            if bdelta is None:
                 return None
-            if self.blobs.keys() != rhs.blobs.keys():
-                return None
-            for blob_id,blob in self.blobs.items():
-                rblob = rhs.blobs[blob_id]
-                if rblob is None:
-                    return None
-                if blob is None and rblob is not None:
-                    out = True
-                    continue
-                bdelta = blob.delta(rblob, which_json)
-                if bdelta is None:
-                    return None
-                out |= bdelta
+            out |= bdelta
         return out
 
 

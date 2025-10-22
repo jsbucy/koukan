@@ -134,19 +134,22 @@ class RestEndpoint(Filter):
             resp_json, WhichJson.REST_READ)
         if upstream_tx is None:
             return None
-        upstream_delta = self.rest_upstream_tx.delta(upstream_tx, WhichJson.REST_READ)
+
+        # NOTE _get() loops on rest_upstream_tx.req_inflight().
+        # req_inflight() only returns true if body.finalized().  This
+        # is per the upstream blob specs/json in rest_upstream_tx.
+        # MessageBuilderSpec.blobs is not None is effectively the
+        # "rest placeholder" for "json has been received." IOW
+        # blob_status is not present in the upstream json until the
+        # receiver has the message builder spec json and then it must
+        # include all of the blobs from the spec. If a buggy receiver
+        # doesn't follow this protocol, this delta will fail.
+        upstream_delta = self.rest_upstream_tx.delta(
+            upstream_tx, WhichJson.REST_READ)
         if upstream_delta is None:
             return None
         assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
         self.upstream_body = self.rest_upstream_tx.body
-
-        # TODO/NOTE:
-        # _get() loops on rest_upstream_tx.req_inflight().
-        # req_inflight() only returns true if body.finalized().
-        # This is per the upstream blob specs/json in rest_upstream_tx.
-        # We could do pedantic validation of that to make sure that it
-        # is consistent with whether we think we've sent all the data
-        # from blob_readers, etc.
 
         delta = upstream_delta.copy()
         delta.body = None
