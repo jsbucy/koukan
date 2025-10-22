@@ -266,7 +266,9 @@ class SmtpGateway(EndpointFactory):
             self.executor, endpoint_factory=self,
             rest_id_factory=self.rest_id_factory,
             session_url=session_uri,
-            service_url=rest_listener_yaml.get('service_uri', session_uri),
+            # for gw the service_url is always the same as the
+            # session_url since tx are local to each node
+            service_url=session_uri,
             chunk_size=rest_listener_yaml.get('chunk_size', None))
 
         rest_listener_yaml = root_yaml['rest_listener']

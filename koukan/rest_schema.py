@@ -60,7 +60,8 @@ class BlobUri:
         self.parsed_uri = parsed_uri
 
     def copy(self):
-        return BlobUri(self.tx_id, self.tx_body, self.blob, self.base_uri, self.parsed_uri)
+        return BlobUri(self.tx_id, self.tx_body, self.blob, self.base_uri,
+                       self.parsed_uri)
 
     def __repr__(self):
         out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
@@ -75,7 +76,8 @@ class BlobUri:
     def __eq__(self, rhs):
         if not isinstance(rhs, BlobUri):
             return False
-        return self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and self.blob == rhs.blob
+        return (self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and
+                self.blob == rhs.blob)
 
     def to_uri(self) -> str:
         if self.tx_body:
@@ -92,8 +94,16 @@ class BlobUri:
             raise ValueError()
         if self.blob != rhs.blob:
             raise ValueError()
+
         if self.parsed_uri != rhs.parsed_uri:
-            raise ValueError()
+            parsed = urlparse(self.parsed_uri)
+            parsed_rhs = urlparse(rhs.parsed_uri)
+            if parsed.path != parsed_rhs.path:
+                raise ValueError()
+            # ignore changes in netloc, this may happen in a
+            # multi-node setting e.g. after the tx finishes and the
+            # url host changes from individual node/replica to
+            # service-wide alias
         return False
 
 def parse_blob_uri(uri : str) -> Optional[BlobUri]:
