@@ -479,6 +479,7 @@ py_test(name='router_service_test_fastapi',
               ':sqlite_test_utils',
               ':hello_filter',
               '//examples/send_message:send_message',
+              '@pypi//httpx',
               '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 
@@ -497,6 +498,7 @@ py_test(name='router_service_test_sqlite',
               ':sqlite_test_utils',
               ':hello_filter',
               '//examples/send_message:send_message',
+              '@pypi//httpx',
               '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 

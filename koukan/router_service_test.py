@@ -16,6 +16,7 @@ from pstats import SortKey
 import gc
 import tempfile
 
+from httpx import Client
 from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
@@ -368,10 +369,12 @@ class RouterServiceTest(unittest.TestCase):
     #         expected_codes,
     #         [Response.from_json(r) for r in resp_json.get('rcpt_response', [])])
 
-    def _dequeue(self, n=1):
+    def _dequeue(self, n=1, service=None):
+        if service is None:
+            service = self.service
         deq = 0
         for i in range(0,10):
-            if self.service.dequeue_one(self.service.output_executor):
+            if service.dequeue_one(service.output_executor):
                 deq += 1
             logging.debug('RouterServiceTest._dequeue %d', deq)
             if deq == n:
@@ -1446,76 +1449,113 @@ class RouterServiceTest(unittest.TestCase):
         self.assertRcptCodesEqual([202], tx.rcpt_response)
         self.assertEqual(tx.data_response.code, 203)
 
-    # XXX no longer representative, needs to verify that reqs to the replica 308
-    def broken_test_multi_node(self):
-        url2, service2 = self._setup_router()
+    def test_multi_node(self):
+        service2_url, service2 = self._setup_router()
 
         # start a tx on self.service
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa',
+            static_base_url=self.router_url, static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
-        delta = TransactionMetadata(mail_from=Mailbox('alice@example.com'))
+        delta = TransactionMetadata(mail_from=Mailbox('alice@example.com'),
+                                    rcpt_to=[Mailbox('bob@example.com')])
 
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
 
+        # NOTE OutputHandler currently sets final_attempt_reason on
+        # downstream_timeout so this only fails over if the OH/router
+        # "unexpectedly" failed.
+        def exp_rcpt(tx, tx_delta):
+            time.sleep(1)
+            raise Exception()  # simulate router crash
+        upstream_endpoint.add_expectation(exp_rcpt)
+
         tx.merge_from(delta)
         rest_endpoint.on_update(delta, timeout=1)
+        tx_url = rest_endpoint.transaction_url
         logging.debug(rest_endpoint.transaction_url)
         parsed = urlparse(rest_endpoint.transaction_url)
 
-        # GET the tx from service2, point read should be serivced directly
-        transaction_url=urljoin(url2, parsed.path)
-        logging.debug(transaction_url)
-        # XXX RestEndpoint refactor broke this
-        endpoint2 = self.create_endpoint(
-            transaction_url=transaction_url,
-            static_http_host='submission',
-            timeout_start=5, timeout_data=5)
-        endpoint2.base_url = url2
-        tx_json = endpoint2.get_json()
+        tx_url2 = urljoin(service2_url, parsed.path)
 
-        # hanging GET should be redirected to self.service
-        tx_json = endpoint2._get_json(timeout = 2)
-        logging.debug(tx_json)
+        # GET the tx from service2, since the tx is leased in
+        # self.service, it should be redirected
 
-        def exp_rcpt(tx, tx_delta):
-            time.sleep(1)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream_endpoint.add_expectation(exp_rcpt)
+        client = Client()
+        resp = client.get(tx_url2)
+        logging.debug('%s %s', resp.status_code, resp.headers)
+        self.assertEqual(308, resp.status_code)
+        self.assertEqual(tx_url, resp.headers['location'])
 
-        # PATCH the tx via service2, it does the update locally and
-        # sends ping to self.service
-        tx_delta = TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')])
-        endpoint2.wire_downstream(tx.copy())
-        endpoint2.downstream_tx.merge_from(tx_delta)
-        endpoint2.on_update(tx_delta, timeout=2)
+        resp = client.patch(tx_url2,
+                            headers={'content-type': 'application/json',
+                                     'if-match': '123'},
+                            json={})
+        logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
+        self.assertEqual(308, resp.status_code)
+        self.assertEqual(tx_url, resp.headers['location'])
 
-        # send the body to service2
+        resp = client.put(tx_url2 + '/body', content=body)
+        logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
+        self.assertEqual(308, resp.status_code)
+        self.assertEqual(tx_url + '/body', resp.headers['location'])
+
+        # OH terminated by uncaught exception from exp_rcpt()
+        # -> tx unleased
+        self.service.shutdown()
+
+        resp = client.get(tx_url2)
+        logging.debug('%s %s', resp.status_code, resp.json())
+        self.assertEqual(200, resp.status_code)
+
+        # sending the body will make the tx input_done -> loadable
+        upstream_endpoint2 = FakeFilter()
+        self.add_endpoint(upstream_endpoint2)
+
         def exp_body(tx, tx_delta):
             time.sleep(1)
-            upstream_delta=TransactionMetadata(data_response=Response(203))
-            tx.merge_from(upstream_delta)
+            upstream_delta=TransactionMetadata()
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(203)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(204)]
+            if tx_delta.body and tx_delta.body.finalized():
+                tx.data_response = Response(205)
             return upstream_delta
-        upstream_endpoint.add_expectation(exp_body)
+        for i in range(0,3):
+            upstream_endpoint2.add_expectation(exp_body)
 
-        tx_delta = TransactionMetadata(
-            body=InlineBlob(body, last=True))
-        endpoint2.downstream_tx.merge_from(tx_delta)
-        upstream_delta = endpoint2.on_update(tx_delta)
-        logging.debug('%s %s', tx, upstream_delta)
+        resp = client.put(tx_url2 + '/body', content=body)
+        logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
+        self.assertEqual(200, resp.status_code)
 
-        tx_json = endpoint2.get_json()
-        self.assertIn(('data_response', {'code': 203, 'message': 'ok'}),
-                      tx_json.items())
+        self._dequeue(1, service2)
 
+        deadline = Deadline(5)
+        while deadline.remaining():
+            resp = client.get(
+                tx_url2,
+                headers={'request-timeout': str(int(deadline.remaining()))},
+                timeout = deadline.remaining())
+
+            tx_json = resp.json()
+            logging.debug('%s %s', resp.status_code, tx_json)
+            if 'final_attempt_reason' not in tx_json:
+                time.sleep(0.3)
+                continue
+            self.assertEqual(203, tx_json['mail_response']['code'])
+            self.assertEqual(
+                [204], [r['code'] for r in tx_json['rcpt_response']])
+            self.assertEqual(205, tx_json['data_response']['code'])
+            self.assertEqual(
+                'upstream response success', tx_json['final_attempt_reason'])
+            break
+        else:
+            self.fail('expected tx')
 
         self.assertTrue(service2.shutdown())
 
