@@ -1327,22 +1327,26 @@ class RestEndpointTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
 
-        # POST /transactions
-        self.expect_request(resp=Response(
-            http_resp = '201 created',
-            resp_json={
-                'remote_host': ['mx.example.com', 25],
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 502, 'message': 'err'}] },
-            location = self.tx_url,
-            etag='1'))
+        self.expect_request(
+            req=Request(
+                method='POST',
+                path='/transactions'
+            ),
+            resp=Response(
+                http_resp = '201 created',
+                resp_json={
+                    'remote_host': ['mx.example.com', 25],
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 502, 'message': 'err'}] },
+                location = self.tx_url,
+                etag='1'))
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([502], [r.code for r in tx.rcpt_response])
-        self.assertEqual(503, tx.data_response.code)
+        self.assertIsNone(tx.data_response)
 
     def test_data_resp_wait(self):
         rest_endpoint, tx = self.create_endpoint(

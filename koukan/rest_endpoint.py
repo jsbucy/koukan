@@ -408,15 +408,8 @@ class RestEndpoint(Filter):
                 created, tx_delta.body, deadline)) is not None:
             return res
 
-        # delta/merge bugs in the chain downstream from here have been
-        # known to drop response fields on subsequent calls so use
-        # upstream_tx, not tx here
-        if not any([isinstance(r, Response) and r.ok()
-                    for r in self.rest_upstream_tx.rcpt_response]):
-            # TODO this should be implemented centrally in FilterChain?
-            self.downstream_tx.data_response = Response(
-                    503, "5.1.1 data failed precondition: all rcpts failed"
-                    " (RestEndpoint)")
+        if not self.rest_upstream_tx.rcpt_ok():
+            # FilterChain populates the "failed precondition" data response.
             return FilterResult()
 
         blobs = self._update_blobs(tx_delta)
