@@ -496,7 +496,8 @@ class RestHandler(Handler):
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
-        if not range or range.units != 'bytes' or range.stop is None or range.start is None:
+        if (not range or range.units != 'bytes' or range.stop is None or
+            range.start is None):
             return self.response(400, 'bad range'), None
         # no idea if underlying stack enforces this
         assert(range.stop - range.start == content_length)
@@ -531,8 +532,10 @@ class RestHandler(Handler):
         if range_err:
             return range_err
         self.range = range
-        create = tx_body
-        create = create and (range is None or range.start == 0)
+        # cf create_tx() blobs are created with in the initial post
+        # for non-incremental/exploder but for incremental/exploder
+        # not until the client actually starts sending the body
+        create = tx_body and (range is None or range.start == 0)
 
         # this just returns the blob writer now if it already exists,
         # append will fail precondition/offset check downstream -> 416
@@ -554,7 +557,7 @@ class RestHandler(Handler):
             return self.response(code=404, msg='transaction not found')
 
         cfut = self.executor.submit(
-            lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
+            partial(self._get_blob_writer, request, blob_rest_id, tx_body), 0)
         if cfut is None:
             return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -574,7 +577,8 @@ class RestHandler(Handler):
             try:
                 final_blob_length = int(finalize_blob_header)
             except:
-                return self.response(code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
+                return self.response(
+                    code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
             self.final_blob_length = final_blob_length
 
         async for chunk in request.stream():

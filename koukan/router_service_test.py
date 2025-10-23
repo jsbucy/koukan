@@ -631,9 +631,6 @@ class RouterServiceTest(unittest.TestCase):
         except:
             pass
 
-        # xxx some race
-        time.sleep(1)
-
         logging.debug('retry')
 
         body += b'world!'
@@ -642,25 +639,8 @@ class RouterServiceTest(unittest.TestCase):
             content = body)
         logging.debug(resp)
         logging.debug(resp.headers)
-        self.assertEqual(416, resp.status_code)
-
-        # xxx some race
-        time.sleep(1)
-
-        range = werkzeug.http.parse_content_range_header(
-            resp.headers.get('content-range'))
-        range.start = range.stop
-        range.stop = len(body)
-        range.length = len(body)
-        resp = rest_endpoint.client.put(
-            rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri,
-            headers={'content-range': range.to_header()},
-            content = body[range.start:])
-        logging.debug(resp)
-        logging.debug(resp.headers)
         self.assertEqual(200, resp.status_code)
 
-        # xxx get tx
 
     def test_rest_body_chunked(self):
         logging.debug('RouterServiceTest.test_rest_body_chunked')

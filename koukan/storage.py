@@ -1017,51 +1017,66 @@ class BlobCursor(Blob, WritableBlob):
                     content_length : Optional[int] = None,
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None):
-        # TODO is this extra read redundant with the WHERE
-        # conditions on the update?
-        stmt = select(
-            func.length(self.parent.blob_table.c.content),
-            self.parent.blob_table.c.length,
-            self.parent.blob_table.c.last_update,
-            self.parent._current_timestamp_epoch()).where(
-                self.parent.blob_table.c.id == self.db_id)
-        res = db_tx.execute(stmt)
-        row = res.fetchone()
-        assert row is not None
-        db_length, db_content_length, last_update, db_now = row
-        self.length = db_length
-        self._content_length = db_content_length
-        self.last_update = last_update
-        if offset != db_length or self.length != db_length:
-            return False, db_length, db_content_length, None
-        if (db_content_length is not None) and (
-                (content_length is None) or
-                (content_length != db_content_length)):
-            return False, db_length, db_content_length, None
+        for i in range(0,2):
+            upd = (update(self.parent.blob_table)
+                   .where(self.parent.blob_table.c.id == self.db_id)
+                   .where(func.length(self.parent.blob_table.c.content) ==
+                          offset)
+                   .where(or_(self.parent.blob_table.c.length == None,
+                              self.parent.blob_table.c.length ==
+                              content_length))
+                   # in sqlite, the result of blob||blob seems to be text
+                   .values(content =
+                           cast(self.parent.blob_table.c.content.concat(d),
+                                LargeBinary),
+                           length = content_length,
+                           last_update = self.parent._current_timestamp_epoch())
+                   .returning(
+                       func.length(self.parent.blob_table.c.content),
+                       self.parent.blob_table.c.length,
+                       self.parent.blob_table.c.last_update,
+                       self.parent._current_timestamp_epoch()
+                   ))
 
-        upd = (update(self.parent.blob_table)
-               .where(self.parent.blob_table.c.id == self.db_id)
-               .where(func.length(self.parent.blob_table.c.content) ==
-                      self.length)
-               .where(or_(self.parent.blob_table.c.length == None,
-                          self.parent.blob_table.c.length ==
-                          content_length))
-               # in sqlite, the result of blob||blob seems to be text
-               .values(content =
-                       cast(self.parent.blob_table.c.content.concat(d),
-                            LargeBinary),
-                       length = content_length,
-                       last_update = self.parent._current_timestamp_epoch())
-               .returning(func.length(self.parent.blob_table.c.content)))
+            res = db_tx.execute(upd)
+            row = res.fetchone()
 
-        res = db_tx.execute(upd)
-        row = res.fetchone()
-        # we should have early-returned after the select if the offset
-        # didn't match, etc.
-        assert row is not None
-        db_length = row[0]
+            if row is not None:
+                db_length, db_content_length, last_update, db_now = row
+                break
+            if i == 1:
+                return False, db_length, db_content_length, None
+
+            sel = select(
+                func.length(self.parent.blob_table.c.content),
+                self.parent.blob_table.c.length,
+                self.parent.blob_table.c.last_update,
+                self.parent._current_timestamp_epoch()).where(
+                    self.parent.blob_table.c.id == self.db_id)
+
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            assert row is not None
+            db_length, db_content_length, last_update, db_now = row
+            if offset > db_length:
+                return False, db_length, db_content_length, None
+            # if there was a previous partial update e.g. due to an http
+            # error, just resync here so rest clients don't have to deal with
+            # chunked PUTs. We expect
+            # - partial updates to be uncommon
+            # - rest clients to be intra-cluster
+            # - blob sizes not to be enormous
+            # so I'm not too worried about redoing the network transfer
+            # here. If that proved to be a problem, you could put a limit on
+            # the max overlap here.
+            if db_length > offset:
+                overlap = db_length - offset
+                d = d[overlap:]
+                if not d:
+                    break
+                offset += overlap
+
         logging.debug('append_data %d %d %d', db_length, self.length, len(d))
-        assert db_length == (self.length + len(d))
         blob_done = content_length is not None and (db_length == content_length)
 
         logging.debug('append_data %d %s last=%s',

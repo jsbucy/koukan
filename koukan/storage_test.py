@@ -559,6 +559,29 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(len(d), tx_reader.tx.body.content_length())
         self.assertEqual(len(d), tx_reader.tx.body.len())
 
+    def test_blob_partial_update(self):
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)),
+            create_leased=True)
+        blob_writer = cursor.get_blob_for_append(
+            BlobUri('tx_rest_id', tx_body=True))
+
+        b = b'hello, world!'
+        appended, length, content_length = blob_writer.append_data(
+            offset=0, d=b, last=True)
+        self.assertTrue(appended)
+        self.assertEqual(len(b), length)
+        self.assertEqual(len(b), content_length)
+
+        appended, length, content_length = blob_writer.append_data(
+            offset=5, d=b[5:], last=True)
+        self.assertTrue(appended)
+        self.assertEqual(len(b), length)
+        self.assertEqual(len(b), content_length)
+
+
     def disabled_test_pingpong(self):
         upstream = self.s.get_transaction_cursor()
         upstream.create(
