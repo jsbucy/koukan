@@ -62,7 +62,7 @@ class Rcpt:
     def output(self, endpoint):
         logging.debug('output start')
         self.cursor = cursor = endpoint.release_transaction_cursor()
-        cursor.load(start_attempt=True)
+        cursor.start_attempt()
         logging.debug(cursor.attempt_id)
         tx = cursor.tx
         while True:
@@ -95,10 +95,11 @@ class Rcpt:
                 if err or data_resp:
                     break
 
-            cursor.wait(0.5)
+            rv, cloned = cursor.wait(0.5)
             # test can finish as soon as we write the last response
             try:
-                tx = cursor.load()
+                if not rv or not cloned:
+                    tx = cursor.load()
             except Exception:
                 break
         logging.debug('output done')
@@ -190,9 +191,12 @@ class ExploderTest(unittest.TestCase):
             prev = tx.copy()
             exploder.on_update(tx_delta)
             upstream_delta = prev.delta(exploder.downstream_tx)
+            def _code(r):
+                assert r is not None
+                return r.code
             self.assertEqual(
                 [test.expected_rcpt_resp[i].code],
-                [rr.code for rr in upstream_delta.rcpt_response])
+                [_code(rr) for rr in upstream_delta.rcpt_response])
 
         def code(r):
             assert r is not None
@@ -537,32 +541,29 @@ class ExploderTest(unittest.TestCase):
 
         def exp_update(tx, delta):
             self.assertFalse(tx.body.finalized())
-            upstream_delta = TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            tx.mail_response=Response(201)
+            tx.rcpt_response=[Response(202)]
+            return prev.delta(tx), 2
 
         upstream.expect_update(exp_update)
 
         body = b'hello, world'
 
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body=InlineBlob(body))
-        tx.merge_from(delta)
-        exploder.on_update(delta)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        tx.body = InlineBlob(body)
+        exploder.on_update(prev.delta(tx))
         self.assertEqual(250, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertIsNone(tx.data_response)
 
         def exp_body(tx, delta):
             self.assertTrue(tx.body.finalized())
-            upstream_delta = TransactionMetadata(
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            tx.data_response=Response(203)
+            return prev.delta(tx), 3
         upstream.expect_update(exp_body)
 
         body += b'!'

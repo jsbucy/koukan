@@ -319,6 +319,7 @@ class End2EndTest(unittest.TestCase):
                         'alice@example.com',
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
+        sender.force_reuse = True
         sender.send('bob2@example.com')
 
         handlers = {}
@@ -368,15 +369,18 @@ class End2EndTest(unittest.TestCase):
                         'alice@example.com',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
+        sender.force_reuse = True
         sender.send('bob2@example.com')
 
         handlers = {}
         for handler in self.fake_smtpd.handlers:
             logging.debug(handler)
             if len(handler.rcpt_to) != 1:
+                logging.debug(handler.rcpt_to)
                 continue
             rcpt = handler.rcpt_to[0]
             if rcpt not in ['bob@example.com', 'bob2@example.com']:
+                logging.debug(rcpt)
                 continue
             self.assertNotIn(rcpt, handlers)
             handlers[rcpt] = handler

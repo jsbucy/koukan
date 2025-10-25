@@ -97,17 +97,22 @@ class Recipient:
 
     def wait(self, timeout : Optional[float]):
         assert self.tx is not None
-        assert self.tx.version is not None
         assert self.filter is not None
-        self.filter.wait(self.tx.version, timeout)
-        t = self.filter.get()
+        old_version = self.filter.version
+        rv, t = self.filter.wait(old_version, timeout)
+        logging.debug('%s', (rv, t))
+        assert not rv or not t or self.filter.version != old_version
+        if t is None:
+            t = self.filter.get()
+            logging.debug(t)
         assert t is not None
         orig = self.tx.copy()
         tt = t.copy()
         for ti in [orig, tt]:
-            ti.version = ti.body = None
+            ti.body = None
         assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
+
 
 FilterFactory = Callable[[], Optional[AsyncFilter]]
 

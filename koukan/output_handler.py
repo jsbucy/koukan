@@ -100,13 +100,20 @@ class OutputHandler:
         # write_envelope() may have picked up a delta from downstream
         downstream_timeout = False
         delta = self._fixup_downstream_tx()
+        empty_delta = delta.empty(WhichJson.ALL)
         now = time.monotonic()
         if (not self.cursor.input_done and
-            delta.empty(WhichJson.ALL) and  # no new downstream
+            empty_delta and  # no new downstream
             not self.tx.cancelled):
-            self.cursor.wait(
-                self.upstream_refresh - (now - self._last_upstream_refresh))
-            tx = self.cursor.load()
+            old_version = self.cursor.version
+            wait_result, cloned = self.cursor.wait(
+                self.upstream_refresh - (now - self._last_upstream_refresh),
+                clone=True)
+            assert not wait_result or old_version != self.cursor.version
+            logging.debug('wait_result %s cloned %s version %d', wait_result, cloned, self.cursor.version)
+            if not cloned:
+                self.cursor.load()
+            tx = self.cursor.tx
             assert tx is not None
             now = time.monotonic()
             assert self.cursor.version is not None
@@ -124,8 +131,11 @@ class OutputHandler:
         refresh_dt = now - self._last_upstream_refresh
         recent_refresh = (refresh_dt < self.upstream_refresh)
         body = delta.body
-        assert body is None or isinstance(body, Blob) or isinstance(body, MessageBuilderSpec)
+        assert body is None or isinstance(body, Blob) or isinstance(body, MessageBuilderSpec), body
         if ((not delta_minus_body) and ((body is None) or (not body.finalized()))) and recent_refresh:
+            # TODO it seems like there may be a latent issue here
+            # where we don't wait above because input_done but then we
+            # (spuriously) computed an empty delta and this spins.
             logging.debug('cooldown')
             return TransactionMetadata(), {}, False
         self._last_upstream_refresh = now
@@ -261,12 +271,15 @@ class OutputHandler:
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
                     if not delta and not env_kwargs and not refresh:
+                        # xxx loop should be inside try, this will go
+                        # to finally as it is?
                         continue
 
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
                 done = env_kwargs.get('finalize_attempt', False)
+                assert not self.cursor.input_done or done
                 err_resp = Response(
                     450, 'internal error: OutputHandler failed to populate '
                     'response')

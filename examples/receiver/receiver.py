@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
+from typing import AsyncGenerator, Callable, Dict, List, Optional, Set, Tuple
 import logging
 import json
 from io import IOBase, TextIOWrapper
@@ -30,9 +30,12 @@ class Transaction:
 
     last_update : int
     version = 1
+    tx_url : str
 
-    def __init__(self, tx_id : str, tx_json,
-                 dir : str):
+    def __init__(self, tx_id : str,
+                 tx_json,
+                 dir : str,
+                 tx_url):
         self.blob_paths = {}
         self.tx_id = tx_id
         logging.debug('Tx.init %s', tx_json)
@@ -44,6 +47,7 @@ class Transaction:
         self.dir = dir
         self.ping()
         self.next_inline = 0
+        self.tx_url = tx_url
 
     def ping(self):
         self.last_update = int(time.monotonic())
@@ -54,8 +58,25 @@ class Transaction:
             json_out['mail_from'] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
-        if self.body_path:
-            json_out['body'] = {}
+
+        json_out['body'] = {}
+        json_out['body']['blob_status'] = {
+            'uri': self.tx_url + '/body',
+            'finalized': self.body_path is not None
+        }
+
+        message_builder = json_out['body']['message_builder'] = {}
+        if self.message_json is None:
+            message_builder['uri'] = self.tx_url + '/message_builder'
+        else:
+            blob_status = {}
+            for bid,bp in self.blob_paths.items():
+                blob_status[bid] = {
+                    'uri': self.tx_url + '/blob/' + bid,
+                    'finalized': bp is not None
+                }
+            message_builder['blob_status'] = blob_status
+
         logging.debug('Tx.get %s', json_out)
         return json_out
 
@@ -283,11 +304,13 @@ class Receiver:
             del self.transactions[tx_id]
         logging.debug('_gc %d live', len(self.transactions) - len(del_tx_id))
 
-    def create_tx(self, tx_json) -> Tuple[str,dict,str]:
+    def create_tx(self, tx_json, create_tx_url : Callable[[str], str]
+                  ) -> Tuple[str,dict,str]:
         tx_id = secrets.token_urlsafe()
-        tx = Transaction(tx_id, tx_json, self.dir)
+        tx_url = create_tx_url(tx_id)
+        tx = Transaction(tx_id, tx_json, self.dir, tx_url)
         self.transactions[tx_id] = tx
-        return tx_id, tx.get_json(), str(tx.version)
+        return tx_url, tx.get_json(), str(tx.version)
 
     def get_tx(self, tx_rest_id : str):
         tx = self._get_tx(tx_rest_id)
@@ -295,7 +318,10 @@ class Receiver:
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
         tx = self._get_tx(tx_rest_id)
-        return tx.update_message_builder(message_json)
+        err = tx.update_message_builder(message_json)
+        if err:
+            return err, None
+        return None, self.get_tx(tx_rest_id)
 
     # asgi/fastapi-only
     def put_blob(self, tx_rest_id: str, req_headers,

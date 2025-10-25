@@ -1,10 +1,11 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Sequence, Tuple, Union
 
 import logging
 import datetime
 import io
+import copy
 
 from email.message import EmailMessage, MIMEPart
 from email.generator import BytesGenerator
@@ -13,42 +14,54 @@ from email import policy
 
 from koukan.blob import Blob, InlineBlob
 
-from koukan.rest_schema import parse_blob_uri
+from koukan.rest_schema import WhichJson, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 class MessageBuilderSpec:
     json : dict
-    blob_specs : List[BlobSpec]
-    blobs : List[Blob]
-    body_blob : Optional[Blob] = None
-    # part['content']['create_id']  XXX rename
-    ids : Optional[Set[str]] = None
+    blobs : Optional[Dict[str, Union[Blob, BlobSpec, None]]] = None
+    body_blob : Union[Blob, BlobSpec, None] = None
+    uri : Optional[str] = None
 
-    def __init__(self, json, blobs : Optional[List[Blob]] = None,
-                 blob_specs : Optional[List[BlobSpec]] = None):
+    def __init__(self, json,
+                 blobs : Optional[Dict[str, Union[Blob, BlobSpec]]] = None,
+                 body_blob : Union[Blob, BlobSpec, None] = None):
         self.json = json
-        self.blobs = blobs if blobs else []
+        if blobs is not None:
+            self.blobs = {bi:bs for bi,bs in blobs.items() }
+        self.body_blob = body_blob
 
-        self.blob_specs = blob_specs if blob_specs else []
+    def set_blobs(self, blobs : Sequence[Blob]):
+        self.blobs = {}
+        for blob in blobs:
+            bid = blob.rest_id()
+            assert bid is not None
+            self.blobs[bid] = blob
+        # TODO this should probably verify that it covered all of the
+        # entries in blobs that were previously populated by
+        # parse_blob_specs() i.e. that there isn't any BlobSpec
+        # remaining in blobs. However this is mainly called from the
+        # storage load path and we don't really have a way to
+        # quarantine invalid transactions so we'll just leave it in
+        # place and and let it throw in MessageBuilder._add_part()
 
-    def check_ids(self):
-        self.ids = set()
-        if root_part := self.json.get('parts', None):
-            self._check_ids(root_part)
-        for multipart in [
-                'text_body', 'related_attachments', 'file_attachments']:
-            parts = self.json.get(multipart, [])
-            for part in parts:
-                self._check_ids(part)
-
-    def _check_ids(self, part):
-        for p in part.get('parts', []):
-            self._check_ids(p)
-        if content := part.get('content', {}):
-            if 'create_id' in part['content']:
-                self.ids.add(part['content']['create_id'])
+    def clone(self):
+        out = copy.copy(self)
+        out.blobs = copy.copy(self.blobs)
+        return out
 
     def parse_blob_specs(self):
+        # don't populate blobs from the skeleton spec returned from
+        # rest with just the uris
+        for stanza in [
+                'headers', 'text_body', 'related_attachments', 'file_attachments']:
+            if stanza in self.json:
+                break
+        else:
+            return
+        assert self.blobs is None
+        self.blobs = {}
+
         create_blob_id = 0
         for multipart in [
                 'text_body', 'related_attachments', 'file_attachments']:
@@ -58,6 +71,8 @@ class MessageBuilderSpec:
                 create_blob_id += 1
 
     def _add_part_blob(self, part, create_blob_id : int):
+        assert self.blobs is not None
+
         # if not present -> invalid spec
         content = part.get('content')
         if 'reuse_uri' in content:
@@ -82,40 +97,75 @@ class MessageBuilderSpec:
         if blob_id is None:
             raise ValueError()
         part['content'] = {'create_id': blob_id}
-        self.blob_specs.append(blob_spec)
+        assert blob_id not in self.blobs
+        self.blobs[blob_id] = blob_spec
 
     def finalized(self):
-        return (len(self.ids) == len(self.blobs) and
-                not any([not b.finalized() for b in self.blobs]))
+        logging.debug(self.blobs)
+        if self.blobs is None:
+            return False
+        for blob_id, blob in self.blobs.items():
+            if isinstance(blob, Blob):
+                if not blob.finalized():
+                    return False
+            elif isinstance(blob, BlobSpec):
+                if not blob.finalized:
+                    return False
+            elif blob is None:
+                return False
+            else:
+                assert False, blob
+        return True
 
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, MessageBuilderSpec):
             return None
-        if self.json != rhs.json:
-            return None
-        if len(self.blobs) != len(rhs.blobs):
-            logging.debug('blobs len')
+        if which_json == WhichJson.REST_READ:
+            if bool(rhs.json) and rhs.json != self.json:
+                return None
+        elif rhs.json != {} and self.json != rhs.json:
             return None
         out = False
-        for i,blob in enumerate(self.blobs):
-            blob_delta = blob.delta(rhs.blobs[i])
-            if blob_delta is None:
-                logging.debug(i)
-                logging.debug(self.blobs)
-                logging.debug(rhs.blobs)
+        if self.blobs is None and rhs.blobs is None:
+            return False
+        if self.blobs is None and rhs.blobs is not None:
+            return True
+        if self.blobs is not None and rhs.blobs is None:
+            return None
+        assert self.blobs is not None and rhs.blobs is not None
+        if self.blobs.keys() != rhs.blobs.keys():
+            return None
+        for blob_id,blob in self.blobs.items():
+            rblob = rhs.blobs[blob_id]
+            if rblob is None:
                 return None
-            out |= blob_delta
+            if blob is None and rblob is not None:
+                out = True
+                continue
+            bdelta = blob.delta(rblob, which_json)
+            if bdelta is None:
+                return None
+            out |= bdelta
         return out
 
 
     def __repr__(self):
-        return '%s %s' % (self.json, self.blobs)
+        out = 'json=' + str(self.json)
+        out += ' blobs=' + str(self.blobs)
+        if self.body_blob:
+            out += ' body_blob=' + str(self.body_blob)
+        if self.uri:
+            out += ' uri=' + self.uri
+        return out
 
 class MessageBuilder:
     blobs : Dict[str, Blob]
-    def __init__(self, json, blobs : Dict[str, Blob]):
+    def __init__(self, json, blobs : Dict[str, Any]):
         self.json = json
-        self.blobs = blobs
+        def _blob(b):
+            assert isinstance(b, Blob)
+            return b
+        self.blobs = { bid : _blob(blob) for bid,blob in blobs.items() }
         self.header_json = self.json.get('headers', {})
         self._header_adders = {
             'from': MessageBuilder._add_address_header,
@@ -142,8 +192,7 @@ class MessageBuilder:
         if inline_content := content_json.get('inline', None):
             content = inline_content.encode('utf-8')
         elif create_id := content_json.get('create_id', None):
-            if not (blob := self.blobs.get(create_id, None)):
-                raise ValueError('invalid blob id')
+            assert isinstance((blob := self.blobs.get(create_id, None)), Blob), blob_id
             content = blob.pread(0)
         else:
             raise ValueError('invalid part content')

@@ -3,8 +3,8 @@
 
 # this keeps the inflight transaction state in-process so it's not
 # compatible with multiple workers
-# hypercorn -b localhost:8002 -w0 \
-#   'examples.receiver.fastapi_receiver:create_app(path="/tmp/my_messages")'
+# uvicorn --log-level debug --host localhost --port 8002 --factory
+#   'examples.receiver.fastapi_receiver:create_app'
 
 from typing import Union
 import logging
@@ -21,22 +21,35 @@ def create_app(receiver = None, path = None):
     app = FastAPI()
 
     if receiver is None:
-        receiver = Receiver(path)
+        kwargs = {}
+        if path:
+            kwargs['dir'] = path
+        receiver = Receiver(**kwargs)
 
     @app.post('/transactions')
     async def create_transaction(request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
-        tx_id, tx_json, etag = receiver.create_tx(req_json)
-        return FastApiJsonResponse(
-            status_code=201,
-            headers={'location': '/transactions/' + tx_id,
-                     'etag': etag},
-            content=tx_json)
+        tx_url, tx_json, etag = receiver.create_tx(
+            req_json,
+            lambda tx_id: str(request.url_for(
+                'get_transaction', tx_rest_id=tx_id)))
+        try:
+            return FastApiJsonResponse(
+                status_code=201,
+                headers={'location': tx_url, 'etag': etag},
+                content=tx_json)
+        except Exception as e:
+            logging.debug(e)
+            return FastApiResponse(status_code=500)
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
-        tx_json, etag = receiver.get_tx(tx_rest_id)
+        try:
+            tx_json, etag = receiver.get_tx(tx_rest_id)
+        except Exception as e:
+            logging.exception('fastapi_receiver.get_transaction')
+            return FastApiResponse(status_code=500)
         return FastApiJsonResponse(status_code=200, content=tx_json,
                                    headers={'etag': etag})
 
@@ -44,10 +57,18 @@ def create_app(receiver = None, path = None):
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
                                      ) -> FastApiResponse:
         builder_json = await request.json()
-        if err := receiver.update_tx_message_builder(tx_rest_id, builder_json):
+        
+        err, res = receiver.update_tx_message_builder(tx_rest_id, builder_json)
+
+        if err is not None:
             code, msg = err
             return FastApiResponse(status_code=code, content=msg)
-        return FastApiResponse()
+        elif res is not None:
+            tx_json, etag = res
+            return FastApiJsonResponse(status_code=200, content=tx_json,
+                                       headers={'etag': etag})
+        else:
+            assert False
 
     @app.put('/transactions/{tx_rest_id}/body')
     async def create_tx_body(tx_rest_id : str,

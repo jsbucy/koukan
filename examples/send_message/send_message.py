@@ -31,6 +31,19 @@ import copy
 from sys import argv
 from contextlib import nullcontext
 
+class BlobCache:
+    class Blob:
+        filename : str
+        url : Optional[str] = None
+        def __init__(self, filename):
+            self.filename = filename
+
+    blobs : Dict[str, Blob]  # key is message builder spec create_id
+    body_blob : Optional[Blob] = None
+
+    def __init__(self):
+        self.blobs = {}
+
 # Sends a message to one or more recipients. Does hanging GET to wait
 # for upstream status. Reuses blobs across recipients.
 class Sender:
@@ -39,10 +52,9 @@ class Sender:
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
-    # has blobs uris referencing first first recipient transaction
-    message_builder_blobs : Optional[dict] = None
-    body_filename : Optional[str] = None
-    body_path : Optional[str] = None
+    blob_cache : BlobCache
+    tx_json : Optional[Dict[str, Any]] = None
+    force_reuse = False
 
     def __init__(self,
                  base_url : str,
@@ -51,6 +63,9 @@ class Sender:
                  message_builder : Optional[dict] = None,
                  body_filename : Optional[str] = None):
         self.session = requests.Session()
+        # TODO this should install requests-cache to cache redirects
+        # in cluster setups
+        # or port to httpx and use hishel
         self.session.verify = 'localhost.crt'
         self.mail_from = mail_from
         self.message_builder = message_builder
@@ -59,94 +74,120 @@ class Sender:
             self.fixup_headers()
         self.base_url = base_url
         self.host = host
+        self.blob_cache = BlobCache()
 
-    # -> url path (for reuse)
+        if body_filename:
+            self.blob_cache.body_blob = BlobCache.Blob(body_filename)
+        elif message_builder:
+            self.prep_message_builder_spec(message_builder)
+        else:
+            assert False
+
     def send_part(self,
-                  tx_url,
-                  blob_id : str,
-                  filename : str) -> Optional[str]:
-        path = tx_url + '/blob/' + blob_id
-        uri = urljoin(self.base_url, path)
-        logging.info('PUT %s', uri)
+                  url,
+                  filename : str,
+                  tx_body = False,
+                  blob_id = None) -> bool:
+        assert not self.force_reuse
+        logging.info('PUT %s', url)
 
         with open(filename, 'rb') as file:
-            resp = self.session.put(uri, data=file)
+            resp = self.session.put(url, data=file)
 
-        logging.info('PUT %s %s', uri, resp)
-        if resp.status_code >= 300:
-            return None
-        return path
-
-    def strip_filenames(self, json : Dict[str, Any]):
-        for multi in ['text_body', 'related_attachments', 'file_attachments']:
-            if not (multipart := json.get(multi, [])):
-                continue
-            for part in multipart:
-                if 'filename' in part['content']:
-                    del part['content']['filename']
-        return json
-
-
-    def send_body(self, tx_url, json : dict):
-        for multi in ['text_body', 'related_attachments', 'file_attachments']:
-            if not (multipart := json.get(multi, [])):
-                continue
-            for part in multipart:
-                logging.info('send_body %s', part)
-                # cf MessageBuilderSpec._add_part_blob()
-                content = part['content']
-                if 'reuse_uri' in content:
-                    continue
-                if ('create_id' not in content or
-                    'filename' not in content):
-                    continue
-                filename = content['filename']
-                del content['filename']
-                if (uri := self.send_part(
-                        tx_url, content['create_id'],
-                        filename=filename)) is None:
-                    return False
-                content['reuse_uri'] = uri
-
+        logging.info('PUT %s %s', url, resp)
+        if resp.status_code != 200:
+            return False
+        if tx_body:
+            assert self.blob_cache.body_blob is not None
+            self.blob_cache.body_blob.url = url
+        elif blob_id:
+            self.blob_cache.blobs[blob_id].url = url
+        else:
+            assert False
         return True
 
+    # adds blob id -> filename to BlobCache and drops filename from
+    # message builder spec json
+    def prep_message_builder_spec(self, spec):
+        for multi in ['text_body', 'related_attachments', 'file_attachments']:
+            if not (multipart := spec.get(multi, [])):
+                continue
+            for part in multipart:
+                content = part['content']
+                if (filename := content.get('filename', None)) is None:
+                    continue
+                del content['filename']
+                blob_id = content['create_id']
+                self.blob_cache.blobs[blob_id] = BlobCache.Blob(filename)
+
+    # sends blobs that were not finalized tx json
+    def send_blobs(self, tx_json):
+        if self.body_filename:
+            blob_spec = tx_json['body']['blob_status']
+            if not blob_spec.get('finalized', False):
+                self.send_part(blob_spec['uri'], self.body_filename,
+                               tx_body=True)
+            return
+        assert self.message_builder
+        if blobs := tx_json['body']['message_builder'].get('blob_status', None):
+            for blob_id,blob in self.blob_cache.blobs.items():
+                blob_spec = blobs[blob_id]
+                if not blob_spec.get('finalized', False):
+                    self.send_part(blob_spec['uri'], blob.filename, blob_id=blob_id)
+
+    # populates initial tx creation json with previous blob uris to
+    # reuse from blob_cache
+    def reuse_blobs(self, tx_json):
+        if self.blob_cache.body_blob:
+            if self.blob_cache.body_blob.url:
+                tx_json['body'] = {'reuse_uri': self.blob_cache.body_blob.url}
+            return
+        assert self.message_builder
+
+        for multi in ['text_body', 'related_attachments', 'file_attachments']:
+            if not (multipart := self.message_builder.get(multi, [])):
+                continue
+            for part in multipart:
+                content = part['content']
+                if not (blob_id := content.get('create_id', None)) or not (
+                        blob_url := self.blob_cache.blobs[blob_id].url):
+                    continue
+                content['reuse_uri'] = blob_url
+
     def send(self, rcpt_to : str, max_wait=30):
-        logging.debug('main from=%s to=%s', self.mail_from, rcpt_to)
+        self.tx_json = None
+        logging.debug('Sender.send from=%s to=%s', self.mail_from, rcpt_to)
 
         tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
         }
-        assert tx_json is not None
-        if self.body_path is not None:
-            tx_json['body'] = {'reuse_uri': self.body_path}
-        elif self.body_filename is not None:
-            pass
-        elif (self.message_builder_blobs is None and
-              self.message_builder is not None):
-            tx_json['body'] = {'message_builder': self.strip_filenames(
-                copy.deepcopy(self.message_builder))}
-        else:
-            tx_json['body'] = {'message_builder': self.message_builder_blobs}
+        assert tx_json is not None  # optional
+        if self.message_builder:
+            tx_json['body'] = {'message_builder': self.message_builder}
+        self.reuse_blobs(tx_json)
 
         logging.debug(json.dumps(tx_json, indent=2))
 
         tx_start = time.monotonic()
 
-        logging.debug('POST /transactions')
+        url = urljoin(self.base_url, '/transactions')
+        logging.debug('POST /transactions %s', url)
         start = time.monotonic()
         rest_resp = self.session.post(
-            urljoin(self.base_url, '/transactions'),
-            headers={'host': self.host,
-                     'request-timeout': '5'},
+            url,
+            headers={'host': self.host},
             json=tx_json)
         logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
+        # TODO tx creation POST hasn't waited on req_inflight for
+        # awhile, could do a hanging GET here to get early RCPT error
+        # etc.
 
         tx_json = rest_resp.json()
-        tx_path = rest_resp.headers['location']
-        tx_url = urljoin(self.base_url, tx_path)
+        logging.debug(tx_json)
+        tx_url = rest_resp.headers['location']
 
         for resp_field in ['mail_response', 'rcpt_response']:
             if not (resp := tx_json.get(resp_field, None)):
@@ -160,23 +201,7 @@ class Sender:
                              resp_field, rest_resp, rest_resp.json())
                 return
 
-        if self.body_filename is not None and self.body_path is None:
-            with open(self.body_filename, 'rb') as body_file:
-                body_path = tx_path + '/body'
-                resp = self.session.put(
-                    urljoin(self.base_url, body_path),
-                    data=body_file)
-                logging.debug('PUT %s %s %s', body_path, resp, resp.text)
-                if resp.status_code == 201:
-                    self.body_path = body_path
-        elif (self.message_builder is not None and
-              self.message_builder_blobs is None):
-            if not self.send_body(tx_path, self.message_builder):
-                return
-            logging.info('main message_builder spec %s',
-                         json.dumps(self.message_builder, indent=2))
-            message_builder_blobs = self.message_builder
-            rest_resp = None
+        self.send_blobs(tx_json)
 
         done = False
         etag = None
@@ -207,6 +232,7 @@ class Sender:
                 continue
 
             tx_json = rest_resp.json()
+            logging.debug(tx_json)
 
             for resp in ['mail_response', 'rcpt_response', 'data_response']:
                 if not (resp_json := tx_json.get(resp, None)):
@@ -227,6 +253,7 @@ class Sender:
                     break
 
             if tx_json.get('final_attempt_reason', None):
+                self.tx_json = tx_json
                 done = True
 
             rest_resp = None

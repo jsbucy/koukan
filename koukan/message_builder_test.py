@@ -5,7 +5,7 @@ import logging
 import json
 from tempfile import TemporaryFile
 
-
+from koukan.rest_schema import WhichJson
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
 
 class MessageBuilderTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class MessageBuilderTest(unittest.TestCase):
     def test_smoke(self):
         with open('testdata/message_builder.json', 'r') as f:
             js = json.loads(f.read())
-        builder = MessageBuilder(js, blobs=[])
+        builder = MessageBuilder(js, blobs={})
         with TemporaryFile('w+b') as out:
             #with open('/tmp/out', 'w+b') as out:
             builder.build(out)
@@ -64,12 +64,21 @@ class MessageBuilderTest(unittest.TestCase):
             'reuse_uri': '/transactions/123/blob/xyz' }} ] }
         spec = MessageBuilderSpec(json)
         spec.parse_blob_specs()
-        self.assertEqual(1, len(spec.blob_specs))
-        blob_spec = spec.blob_specs[0]
+        self.assertEqual(1, len(spec.blobs))
+        blob_spec = spec.blobs['xyz']
         self.assertEqual('123', blob_spec.reuse_uri.tx_id)
         self.assertEqual('xyz', blob_spec.reuse_uri.blob)
         self.assertEqual(json, { 'text_body': [ {
             'content': {'create_id': 'xyz' }} ] } )
+
+    def test_delta(self):
+        spec = MessageBuilderSpec({}, blobs=None)
+        spec2 = MessageBuilderSpec({}, blobs={'blob1': None})
+        self.assertTrue(spec.delta(spec2, WhichJson.REST_READ))
+
+        spec = MessageBuilderSpec({}, blobs={'blob1': None, 'blob2': None})
+        spec2 = MessageBuilderSpec({}, blobs={'blob1': None})
+        self.assertIsNone(spec.delta(spec2, WhichJson.REST_READ))
 
 if __name__ == '__main__':
     unittest.main()

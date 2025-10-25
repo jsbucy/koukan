@@ -25,10 +25,14 @@ from koukan.filter import Mailbox, TransactionMetadata, WhichJson
 from koukan.response import Response
 from koukan.executor import Executor
 from koukan.storage_schema import VersionConflictException
+from koukan.rest_schema import BlobUri
 
 class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
+    uri = None
+
     def setUp(self):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=5)
+        self.maxDiff = 4096
 
     def _headers(self, d : List[Tuple[str,str]]) -> List[Tuple[bytes,bytes]]:
         return [(k.encode('ascii'), v.encode('ascii')) for k,v in d]
@@ -39,149 +43,151 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         def exp(tx, tx_delta):
             self.assertIsNotNone(tx.host)
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            tx.merge_from(delta)
-            return delta
+            prev = tx.copy()
+            tx.rest_id='rest_id'
+            return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
         handler = RestHandler(async_filter=endpoint, http_host='msa',
-                              executor=self.executor)
+                              executor=self.executor,
+                              service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.create_tx(req, req_json={}))
+
+        endpoint.check_cache_expectation.append(
+            lambda: (1, TransactionMetadata(), True, None))
+
+        resp = handler.create_tx(req, req_json={})
+        logging.debug(resp.body)
+        logging.debug(resp.headers)
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.body, b'{}')
+        self.assertEqual({
+            'body': {'blob_status': {
+                'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+        }, json.loads(resp.body))
         self.assertEqual(resp.headers['location'], '/transactions/rest_id')
         logging.debug('test_create_tx create resp %s', resp.headers)
         self.assertIsNotNone(resp.headers.get('etag', None))
 
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            version=1))
+        endpoint.expect_get(
+            (TransactionMetadata(host='msa'), 1))
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
-            upstream_delta = TransactionMetadata(version=2)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 2
         endpoint.expect_update(exp_mail)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
-                              executor=self.executor)
+                              executor=self.executor,
+                              service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('if-match', resp.headers['etag']),
                      ('request-timeout', '1')])}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.patch_tx(
-                req, req_json={"mail_from": {"m": "alice"}}))
+        resp = handler.patch_tx(
+            req, req_json={"mail_from": {"m": "alice"}})
         logging.debug('test_create_tx patch tx resp %s', resp.body)
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
 
+        tx2 = TransactionMetadata(
+            host='msa',
+            mail_from=Mailbox('alice'))
+        tx3 = tx2.copy()
+        tx3.mail_response = Response(201)
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            version=2))
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            version=3))
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
-                              executor=self.executor)
+                              executor=self.executor,
+                              service_url='http://localhost:12345')
 
         scope = {'type': 'http',
                  'headers': self._headers(
-                     [('if-none-match', '2'),
+                     [('if-none-match', resp.headers['etag']),
                       ('request-timeout', '1')])}
         req = FastApiRequest(scope)
 
+        # check_cache
+        endpoint.check_cache_expectation.append(
+            lambda: (2, tx2, True, None))
+        endpoint.expect_get((tx3, 3))
+
         resp = await handler.get_tx_async(req)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(json.loads(resp.body), {
-            'mail_from': {},
-            'mail_response': {'code': 201, 'message': 'ok'}
-        })
+        self.assertEqual(
+            {
+                'mail_from': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}},
+            },
+            json.loads(resp.body))
 
-
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            version=3))
+        endpoint.expect_get((tx3, 3))
         def exp_rcpt(tx, tx_delta):
             self.assertEqual(1, len(tx.rcpt_to))
-            upstream_delta = TransactionMetadata(
-                version=4)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 4
         endpoint.expect_update(exp_rcpt)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
                               http_host='msa',
-                              executor=self.executor)
+                              executor=self.executor,
+                              service_url='http://localhost:12345')
 
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('if-match', resp.headers['etag'])])}
         req = FastApiRequest(scope)
-        resp = await handler.handle_async(
-            req, lambda: handler.patch_tx(
-                req, req_json={"rcpt_to": [{"m": "bob"}]}))
+        resp = handler.patch_tx(
+                req, req_json={"rcpt_to": [{"m": "bob"}]})
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
         logging.debug('test_create_tx patch tx resp %s', resp.body)
-        self.assertEqual(json.loads(resp.body), {
-            'mail_from': {},
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_to': [{}]
-        })
+        self.assertEqual(
+            {
+                'mail_from': {},
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_to': [{}],
+                'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+            },
+            json.loads(resp.body))
 
+        tx4 = tx3.copy()
+        tx4.rcpt_to = [Mailbox('bob')]
+        tx4.rcpt_response = [Response(202)]
+        tx4.version = 4
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob')],
-            rcpt_response=[Response(202)],
-            version=4))
+        # no timeout/etag: point read
+        endpoint.check_cache_expectation.append(lambda: (4, None, True, None))
+        endpoint.expect_get((tx4, 4))
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
         resp = await handler.get_tx_async(req)
+        logging.debug(resp.body)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(json.loads(resp.body), {
-            'mail_from': {},
-            'rcpt_to': [{}],
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_response': [{'code': 202, 'message': 'ok'}]
-        })
+        self.assertEqual(
+            {
+                'mail_from': {},
+                'rcpt_to': [{}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+            },
+            json.loads(resp.body))
 
-
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob')],
-            rcpt_response=[Response(202)],
-            version=4))
+        endpoint.expect_get((tx4, 4))
         def exp_rcpt2(tx, tx_delta):
             self.assertEqual(2, len(tx.rcpt_to))
-            upstream_delta = TransactionMetadata(
-                version=5)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            return TransactionMetadata(), 5
         endpoint.expect_update(exp_rcpt2)
 
         handler = RestHandler(
             async_filter=endpoint, tx_rest_id='rest_id', http_host='msa',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('if-match', resp.headers['etag'])])}
@@ -192,35 +198,41 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                                "rcpt_to_list_offset": 1}))
         self.assertEqual(resp.status_code, 200)
         logging.debug('test_create_tx patch tx resp %s', resp.body)
-        self.assertEqual(json.loads(resp.body), {
-            'mail_from': {},
-            'rcpt_to': [{}, {}],
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_response': [{'code': 202, 'message': 'ok'}]
-        })
+        self.assertEqual(
+            {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+            },
+            json.loads(resp.body)
+        )
 
+        tx6 = tx4.copy()
+        tx6.rcpt_to=[Mailbox('bob'), Mailbox('bob2')]
+        tx6.rcpt_response=[Response(202), Response(203)]
+        tx6.version=6
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            version=6))
+        endpoint.check_cache_expectation.append(
+            lambda: (5, None, True, None))
+        endpoint.expect_get((tx6, 6))
 
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
         resp = await handler.get_tx_async(req)
-        self.assertEqual(json.loads(resp.body), {
-            'mail_from': {},
-            'rcpt_to': [{}, {}],
-            'mail_response': {'code': 201, 'message': 'ok'},
-            'rcpt_response': [{'code': 202, 'message': 'ok'},
-                              {'code': 203, 'message': 'ok'}]
-        })
+        self.assertEqual(
+            {
+                'mail_from': {},
+                'rcpt_to': [{}, {}],
+                'mail_response': {'code': 201, 'message': 'ok'},
+                'rcpt_response': [{'code': 202, 'message': 'ok'},
+                                  {'code': 203, 'message': 'ok'}],
+                'body': {'blob_status': {'uri': 'http://localhost:12345/transactions/rest_id/body'}}
+            },
+            json.loads(resp.body))
         tx_etag = resp.headers['etag']
-
 
         endpoint.body = InlineBlob(b'')
         body = b'hello, world!'
@@ -235,7 +247,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='rest_id',
             executor=self.executor,
-            chunk_size=8)
+            chunk_size=8,
+            service_url='http://localhost:12345')
+
+        endpoint.expect_get((tx6, 6))
 
         scope = {'type': 'http',
                  'headers': self._headers([
@@ -252,37 +267,35 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(body), range.stop)
         self.assertEqual(len(body), range.length)
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            body=InlineBlob(body, last=True),
-            version=7))
+        tx7 = tx6.copy()
+        tx7.body=InlineBlob(body, last=True)
+        tx7.body.set_blob_uri(BlobUri('rest_id', tx_body=True))
+        endpoint.check_cache_expectation.append(
+            lambda: (6, None, True, None))
+        endpoint.expect_get((tx7, 7))
 
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
         resp = await handler.get_tx_async(req)
-        self.assertEqual(json.loads(resp.body), {
+        self.assertEqual({
             'mail_from': {},
             'rcpt_to': [{}, {}],
-            'body': {},
+            'body': {'blob_status': {
+                'finalized': True,
+                #'content_length': 13,
+                #'length': 13,
+                'uri': 'http://localhost:12345/transactions/rest_id/body'}},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
                               {'code': 203, 'message': 'ok'}],
-        })
+        }, json.loads(resp.body))
 
-        endpoint.expect_get(TransactionMetadata(
-            host='msa',
-            mail_from=Mailbox('alice'),
-            mail_response=Response(201),
-            rcpt_to=[Mailbox('bob'), Mailbox('bob2')],
-            rcpt_response=[Response(202), Response(203)],
-            body=InlineBlob(body, last=True),
-            data_response=Response(204),
-            version=8))
+        tx8 = tx7.copy()
+        tx8.data_response=Response(204)
+        endpoint.check_cache_expectation.append(
+            lambda: (7, None, True, None))
+        endpoint.expect_get((tx8, 8))
 
         scope = {'type': 'http',
                  'headers': []}
@@ -291,7 +304,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(resp.body), {
             'mail_from': {},
             'rcpt_to': [{}, {}],
-            'body': {},
+            'body': {'blob_status': {
+                'finalized': True,
+                # 'content_length': 13,
+                # 'length': 13,
+                'uri': 'http://localhost:12345/transactions/rest_id/body'}},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'},
                               {'code': 203, 'message': 'ok'}],
@@ -314,7 +331,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             #rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -324,7 +342,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
+
+        endpoint.expect_get((TransactionMetadata(), 1))
 
         b = b'hello, '
         range = ContentRange('bytes', 0, len(b))
@@ -344,13 +365,15 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                 resp.headers['content-range']),
             ContentRange('bytes', 0, 7, None))
 
+        endpoint.expect_get((TransactionMetadata(), 2))
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
         b2 = b'world!'
         range = ContentRange('bytes', len(b), len(b) + len(b2),
                              len(b) + len(b2))
@@ -380,7 +403,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             async_filter=endpoint,
             http_host='msa',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -390,7 +414,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
 
         b = b'hello, '
         b2 = b'world!'
@@ -398,6 +423,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         range = ContentRange('bytes', 0, len(b))
         scope = {'type': 'http',
                  'headers': self._headers([])}
+
+        endpoint.expect_get((TransactionMetadata(), 1))
 
         chunks = [
             {'type': 'http.request',
@@ -423,7 +450,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             async_filter=endpoint,
             http_host='msa',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
         scope = {'type': 'http',
                  'headers': []}
         req = FastApiRequest(scope)
@@ -433,7 +461,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
 
         b = b'hello, '
         b2 = b'world!'
@@ -445,6 +474,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('content-range', range.to_header())
                  ])}
 
+        endpoint.expect_get((TransactionMetadata(), 1))
+
         async def input():
             return {'type': 'http.request',
                     'body': b,
@@ -455,6 +486,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assert_eq_content_range(
             parse_content_range_header(resp.headers['content-range']),
             range)
+
+        endpoint.expect_get((TransactionMetadata(), 2))
 
         async def input():
             return {'type': 'http.request',
@@ -474,6 +507,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('content-length', str(len(b2))),
                      ('content-range', range.to_header())
                  ])}
+
+        endpoint.expect_get((TransactionMetadata(), 3))
 
         async def input():
             return {'type': 'http.request',
@@ -496,24 +531,22 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         # x-finalize-blob-length: 13
         body = b'hello, world!'
         endpoint.blob['blob-rest-id'] = InlineBlob(body)
-        handler = RestHandler(
-            async_filter=endpoint,
-            http_host='msa',
-            tx_rest_id='tx_rest_id',
-            executor=self.executor)
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            executor=self.executor)
+            executor=self.executor,
+            service_url='http://localhost:12345')
 
         # invalid header
         scope = {'type': 'http',
                  'headers': self._headers([
                      ('x-finalize-blob-length', 'quux')
                  ])}
+
+        endpoint.expect_get((TransactionMetadata(), 1))
 
         async def input():
             return {'type': 'http.request',
@@ -529,6 +562,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('x-finalize-blob-length', str(len(body)))
                  ])}
 
+        endpoint.expect_get((TransactionMetadata(), 2))
+
         async def input():
             return {'type': 'http.request',
                     'body': b'extra body',
@@ -542,6 +577,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                  'headers': self._headers([
                      ('x-finalize-blob-length', '123')
                  ])}
+
+        endpoint.expect_get((TransactionMetadata(), 3))
 
         async def input():
             return {'type': 'http.request',
@@ -561,6 +598,8 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
                      ('x-finalize-blob-length', str(len(body)))
                  ])}
 
+        endpoint.expect_get((TransactionMetadata(), 4))
+
         async def input():
             return {'type': 'http.request',
                     'body': b'',
@@ -575,7 +614,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def _test_uri_qualification(
             self,
-            session_uri : Optional[str], service_uri : Optional[str],
+            session_url : Optional[str], service_url : Optional[str],
             rest_lro : bool):
         endpoint = MockAsyncFilter(incremental=True)
 
@@ -586,19 +625,21 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            session_uri=session_uri,
-            service_uri=service_uri,
+            session_url=session_url,
+            service_url=service_url,
             endpoint_yaml={'rest_lro': rest_lro})
 
         scope = {'type': 'http',
                  'headers': self._headers([])}
         req = FastApiRequest(scope)
 
+        endpoint.check_cache_expectation.append(
+            lambda: (1, TransactionMetadata(), True, None))
+
         def exp(tx, tx_delta):
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            tx.merge_from(delta)
-            return delta
+            prev = tx.copy()
+            tx.rest_id='rest_id'
+            return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
         resp = await handler.handle_async(
@@ -609,13 +650,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_uri_qualification(self):
         location = await self._test_uri_qualification(
             'http://0.router', 'http://router', rest_lro=True)
-        self.assertTrue(location.startswith('http://router'))
+        self.assertTrue(location.startswith('http://0.router'))
         location = await self._test_uri_qualification(
             'http://0.router', 'http://router', rest_lro=False)
         self.assertTrue(location.startswith('http://0.router'))
-        location = await self._test_uri_qualification(
-            None, None, rest_lro=False)
-        self.assertTrue(location.startswith('/transactions'))
 
 
     async def _test_get_redirect(self, session_uri : Optional[str] = None
@@ -629,18 +667,19 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
-            session_uri='http://0.router',
-            service_uri='http://router')
+            session_url='http://0.router',
+            service_url='http://router')
 
         scope = {'type': 'http',
+                 'path': '/transactions/tx_rest_id',
                  'headers': self._headers([('if-none-match', '1'),
                                            ('request-timeout', '5')])}
         req = FastApiRequest(scope)
 
-        tx = TransactionMetadata(rest_id='rest_id',
-                                 version=1)
-        tx.session_uri = session_uri
-        endpoint.expect_get(tx)
+        endpoint.check_cache_expectation.append(
+            lambda: None)
+        endpoint.check_expectation.append(
+            lambda: (1, None, False, session_uri))
 
         return await handler.get_tx_async(req)
 
@@ -649,60 +688,9 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(304, resp.status_code)  # no change
         self.assertNotIn('location', resp.headers)
         resp = await self._test_get_redirect('http://1.router')
-        self.assertEqual(307, resp.status_code)
+        self.assertEqual(308, resp.status_code)
         self.assertTrue(resp.headers['location'].startswith('http://1.router'))
 
-    async def test_ping_session(self):
-        endpoint = MockAsyncFilter(incremental=True)
-
-        mu = Lock()
-        cv = Condition(mu)
-
-        def client(u):
-            logging.debug(u)
-            with mu:
-                self.uri = u
-                cv.notifyAll()
-            return HttpxResponse(200)
-
-        handler = RestHandler(
-            async_filter=endpoint,
-            executor=self.executor,
-            blob_rest_id='blob-rest-id',
-            http_host='msa',
-            rest_id_factory = lambda: 'rest-id',
-            tx_rest_id='tx_rest_id',
-            session_uri='http://0.router',
-            service_uri='http://router',
-            client=client)
-
-        scope = {'type': 'http',
-                 'headers': self._headers([('if-match', '1'),
-                                           ('request-timeout', '5')])}
-        req = FastApiRequest(scope)
-
-        tx = TransactionMetadata(rest_id='rest_id',
-                                 version=1)
-        tx.session_uri = 'http://127.0.0.1:12345'
-        endpoint.expect_get(tx)
-
-        def exp(tx, tx_delta):
-            delta = TransactionMetadata(rest_id='rest_id',
-                                        version=1)
-            delta.session_uri='http://127.0.0.1:12345'
-            tx.merge_from(delta)
-            return delta
-        endpoint.expect_update(exp)
-
-        resp = await handler.handle_async(
-            req, lambda: handler.patch_tx(req, req_json={
-                'mail_from': {'m': 'alice@example.com'}}))
-
-        with mu:
-            self.assertTrue(cv.wait_for(lambda: self.uri is not None, 1))
-        logging.debug('%s %s', resp.status_code, resp.body)
-        self.assertEqual('http://127.0.0.1:12345/transactions/tx_rest_id',
-                         self.uri)
 
 if __name__ == '__main__':
     logging.basicConfig(

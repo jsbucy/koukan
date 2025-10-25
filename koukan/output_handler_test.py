@@ -100,7 +100,7 @@ class OutputHandlerTest(unittest.TestCase):
             TransactionMetadata(host='outbound',
                                 mail_from=Mailbox('alice')),
             create_leased=True)
-        tx_id = tx_cursor.id
+        tx_id = tx_cursor.db_id
 
         endpoint = FakeFilter()
         chain = FilterChain([endpoint])
@@ -132,7 +132,7 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp_rcpt)
 
         def run_handler(tx_cursor):
-            tx_cursor.load(start_attempt=True)
+            self.assertTrue(tx_cursor.start_attempt())
             self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
             handler = OutputHandler(tx_cursor, chain,
                                     downstream_timeout=5,
@@ -353,7 +353,7 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp)
 
         reader = self.storage.load_one()
-        self.assertEqual(tx_cursor.id, reader.id)
+        self.assertEqual(tx_cursor.db_id, reader.db_id)
         retry_params = {'backoff_factor': 0,
                         'min_attempt_time': 0}
         handler = OutputHandler(
@@ -513,7 +513,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
         tx_cursor = self.storage.load_one()
@@ -536,11 +536,7 @@ class OutputHandlerTest(unittest.TestCase):
 
 
     def test_notification_message_builder(self):
-        tx = TransactionMetadata(
-            host='outbound',
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body = MessageBuilderSpec({
+        body = MessageBuilderSpec({
                 'headers': [
                     ["from", [{"display_name": "alice a",
                                "address": "alice@example.com"}]],
@@ -553,7 +549,13 @@ class OutputHandlerTest(unittest.TestCase):
                     "content": {"inline": "hello, world!"}
                 }]
             })
-        )
+        body.parse_blob_specs()
+
+        tx = TransactionMetadata(
+            host='outbound',
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')],
+            body = body )
 
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -597,7 +599,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
 
@@ -631,7 +633,7 @@ class OutputHandlerTest(unittest.TestCase):
             body=BlobSpec(create_tx_body=True))
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
-        tx_id = tx_cursor.id
+        tx_id = tx_cursor.db_id
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True))
         d = (b'from: alice\r\n'
@@ -689,7 +691,7 @@ class OutputHandlerTest(unittest.TestCase):
                 rcpt_response=[Response()],
                 data_response=Response())
             tx.merge_from(upstream_delta)
-            return upstream_delta
+            return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
         endpoint = FakeFilter()

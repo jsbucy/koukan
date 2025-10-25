@@ -1,6 +1,5 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from enum import IntEnum
 from typing import (
     Any,
     Callable,
@@ -20,23 +19,11 @@ from koukan.response import Response
 
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
-from koukan.rest_schema import BlobUri, make_blob_uri, parse_blob_uri
+from koukan.rest_schema import BlobUri, WhichJson, make_blob_uri, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
 
-# TODO I'm starting to think maybe we should invert this and have a
-# field mask thing instead, many of these could live in their own module
-class WhichJson(IntEnum):
-    ALL = 0
-    REST_READ = 1
-    REST_CREATE = 2
-    REST_UPDATE = 3
-    DB = 4
-    DB_ATTEMPT = 5
-    EXPLODER_CREATE = 6
-    EXPLODER_UPDATE = 7
-    ADD_ROUTE = 8
 
 class HostPort:
     host : str
@@ -52,9 +39,11 @@ class HostPort:
         return HostPort(yaml['host'], yaml['port'])
     def to_tuple(self):
         return (self.host, self.port)
-    def to_json(self):
+    def to_json(self, which_json):
         return self.to_tuple()
-
+    @staticmethod
+    def from_json(js, which_json):
+        return HostPort.from_seq(js)
     def __str__(self):
         return '%s:%d' % (self.host, self.port)
     def __repr__(self):
@@ -99,7 +88,7 @@ class EsmtpParam:
         return EsmtpParam(s[0:eq], s[eq+1:])
 
     @staticmethod
-    def from_json(json : dict):
+    def from_json(json : dict, which_js : WhichJson):
         if not (k := json.get('k', None)):
             return None
         p = json.get('p', None)
@@ -111,7 +100,7 @@ class EsmtpParam:
             out += '=' + self.value
         return out
 
-    def to_json(self):
+    def to_json(self, which_json):
         json = { 'k': self.keyword }
         if self.value:
             json['p'] = self.value
@@ -146,20 +135,20 @@ class Mailbox:
     def __repr__(self):
         return self.mailbox
 
-    def to_json(self):
+    def to_json(self, which_json):
         out = {'m': self.mailbox}
         if self.esmtp:
-            out['e'] = [e.to_json() for e in self.esmtp]
+            out['e'] = [e.to_json(which_json) for e in self.esmtp]
         return out
 
     @staticmethod
-    def from_json(json):
+    def from_json(json, which_js : WhichJson):
         # XXX this should fail pytype since esmtp is arbitrary json
         # (in practice List[str]), Esmtp (above) isn't actually used?
         esmtp = json.get('e', [])
         params = []
         if isinstance(esmtp, list):  # xxx else fail?
-            params = [EsmtpParam.from_json(j) for j in esmtp]
+            params = [EsmtpParam.from_json(j, which_js) for j in esmtp]
         return Mailbox(json['m'], params)
 
     def copy(self, valid : WhichJson) -> 'Mailbox':
@@ -171,8 +160,8 @@ class Mailbox:
 def list_from_js(js, builder):
     return [builder(j) for j in js]
 
-FromJson = Callable[[Dict[object, object]], object]
-ToJson = Callable[[Any], Dict[object, object]]
+FromJson = Callable[[Dict[object, object], WhichJson], object]
+ToJson = Callable[[Any, WhichJson], Dict[object, object]]
 Copy = Callable[[Any, WhichJson], Any]
 class TxField:
     json_field : str
@@ -218,19 +207,98 @@ class TxField:
         assert self.is_list
         return self.json_field + '_list_offset'
 
-def body_from_json(body_json):
+def blob_spec_from_json(blob_json):
+    blob_uri = None
+    if (uri := blob_json.get('uri', None)) is not None:
+        blob_uri = parse_blob_uri(uri)
+    return BlobSpec(reuse_uri = blob_uri,
+                    finalized = blob_json.get('finalized', False))
+
+def body_from_json(body_json, which_js : WhichJson
+                   ) -> Union[Blob, BlobSpec, MessageBuilderSpec, None]:
+    message_builder = None
+    body_blob_json = None
+
+    if message_builder_json := body_json.get('message_builder', None):
+        blob_specs = None
+        if blob_status := message_builder_json.get('blob_status', None):
+            blob_specs = {
+                bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
+            # this is just for rest, not part of the message builder spec
+            del message_builder_json['blob_status']
+        message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
+        if uri := message_builder_json.get('uri', None):
+            message_builder.uri = uri
+        if blob_specs is None:
+            message_builder.parse_blob_specs()
+
+    if body_blob_json := body_json.get('blob_status', None):
+        body_blob = blob_spec_from_json(body_blob_json)
+        if message_builder:
+            message_builder.body_blob = body_blob
+        else:
+            return body_blob
+
+    if message_builder is not None:
+        return message_builder
+    logging.debug(body_json)
+
     if 'inline' in body_json:
         # xxx utf8/bytes roundtrip
         return InlineBlob(body_json['inline'].encode('utf-8'), last=True)
     elif 'reuse_uri' in body_json:
         return BlobSpec(reuse_uri=parse_blob_uri(body_json['reuse_uri']))
-    elif 'message_builder' in body_json:
-        spec = MessageBuilderSpec(body_json['message_builder'])
-        spec.parse_blob_specs()
-        return spec
     return None
 
-def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None]):
+def blob_to_json(blob : Union[Blob, BlobSpec, None]
+                 ) -> Tuple[Optional[str], dict]:
+    out : Dict[str, Any] = {}
+    # XXX dead code since RestHandler._update_blob_uri() always
+    # replaces with BlobSpec now?
+    logging.debug(blob)
+    if isinstance(blob, Blob):
+        out['length'] = blob.len()
+        if (l := blob.content_length()) is not None:
+            out['content_length'] = l
+        logging.debug(blob.finalized())
+        if blob.finalized():
+            out['finalized'] = True
+    elif isinstance(blob, BlobSpec):
+        if blob.finalized:
+            out['finalized'] = True
+    else:
+        raise ValueError()
+    blob_id = None
+    logging.debug(out)
+    if isinstance(blob, Blob) and (blob_uri := blob.blob_uri()) is not None:
+        out['uri'] = blob_uri.to_uri()
+    elif isinstance(blob, BlobSpec):
+        assert blob.reuse_uri
+        out['uri'] = blob.reuse_uri.to_uri()
+
+    return blob_id, out
+
+def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
+                 which_json : WhichJson):
+    if which_json == WhichJson.REST_READ:
+        if isinstance(body, Blob) or isinstance(body, BlobSpec):
+            blob_id, json = blob_to_json(body)
+            return {'blob_status': json}
+        elif isinstance(body, MessageBuilderSpec):
+            message_builder : Dict[str, Any] = {}
+            out : Dict[str, Any] = {'message_builder': message_builder}
+            if body.blobs is not None:
+                message_builder['blob_status'] = {
+                    blob_id : blob_to_json(blob)[1]
+                    for blob_id, blob in body.blobs.items() }
+            body_blob = body.body_blob
+            if isinstance(body_blob, Blob) or isinstance(body_blob, BlobSpec):
+                blob_id, json = blob_to_json(body_blob)
+                out['blob_status'] = json
+            return out
+        else:
+            raise ValueError()
+
     # TODO unify with MessageBuilderSpec._add_part_blob()
     if isinstance(body, InlineBlob):
         # assert body.finalized() ?
@@ -265,7 +333,7 @@ _tx_fields = [
                             WhichJson.EXPLODER_CREATE,
                             WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
-            from_json=HostPort.from_seq),
+            from_json=HostPort.from_json),
     TxField('local_host',
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_READ,
@@ -273,7 +341,7 @@ _tx_fields = [
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.ADD_ROUTE]),
             to_json=HostPort.to_json,
-            from_json=HostPort.from_seq),
+            from_json=HostPort.from_json),
     TxField('mail_from',
             rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
@@ -315,7 +383,6 @@ _tx_fields = [
     TxField('attempt_count',
             validity=set([WhichJson.REST_READ])),
     TxField('body',
-            rest_placeholder=True,
             validity=set([WhichJson.REST_CREATE,
                           WhichJson.REST_UPDATE,
                           WhichJson.REST_READ,
@@ -342,7 +409,6 @@ _tx_fields = [
     TxField('rest_id', validity=None),
     TxField('remote_hostname', validity=None),
     TxField('fcrdns', validity=None),
-    TxField('tx_db_id', validity=None),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB,
                                        WhichJson.EXPLODER_CREATE,
@@ -353,7 +419,6 @@ _tx_fields = [
     TxField('options', validity=None),
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
-    TxField('version', validity=None),
     TxField('session_uri', validity=None),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
@@ -396,7 +461,6 @@ class TransactionMetadata:
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
-    tx_db_id : Optional[int] = None
     cancelled : Optional[bool] = None
 
     rest_endpoint : Optional[str] = None
@@ -405,7 +469,6 @@ class TransactionMetadata:
 
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
-    version : Optional[int] = None
     session_uri : Optional[str] = None
 
     def __init__(self, 
@@ -423,8 +486,7 @@ class TransactionMetadata:
                  smtp_meta : Optional[dict] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
-                 rest_id : Optional[str] = None,
-                 version : Optional[int] = None):
+                 rest_id : Optional[str] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -440,7 +502,6 @@ class TransactionMetadata:
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
-        self.version = version
 
     def __repr__(self):
         out = ''
@@ -497,7 +558,7 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v = [None for v in js_v]
                 elif field.from_json is not None:
-                    v = [field.from_json(v) for v in js_v]
+                    v = [field.from_json(v, which_js) for v in js_v]
                 else:
                     raise ValueError()
                 if field.list_offset() in tx_json and (
@@ -511,14 +572,14 @@ class TransactionMetadata:
                     else:
                         v = None
                 else:
-                    v = field.from_json(js_v) if field.from_json else js_v
+                    v = field.from_json(js_v, which_js) if field.from_json else js_v
 
             setattr(tx, f, v)
         return tx
 
     def _body_last(self):
         if isinstance(self.body, BlobSpec):
-            return True
+            return self.body.finalized
         elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
             return self.body.finalized()
         elif self.body is not None:
@@ -569,11 +630,15 @@ class TransactionMetadata:
         dest.rcpt_response.extend(
             [err] * (len(self.rcpt_to) - len(self.rcpt_response)))
         if self.data_response is None and (self.body is not None) and (
-                not any([r is not None and r.ok() for r in self.rcpt_response])):
+                not self.rcpt_ok()):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             dest.data_response = err
         elif self._body_last() and self.data_response is None:
             dest.data_response = resp
+
+    def rcpt_ok(self):
+        return any([isinstance(r, Response) and r.ok()
+                    for r in self.rcpt_response])
 
     # populates responses with 503-5.1.1 if previous commands failed
     # rcpt after mail, etc.
@@ -587,6 +652,7 @@ class TransactionMetadata:
             live = False
         if self.data_response is None and (self.body is not None) and (
                 len(self.rcpt_to) == len(self.rcpt_response) and
+                # note r is None (still inflight?) vs rcpt_ok()
                 not any([r is None or r.ok() for r in self.rcpt_response])):
             err = Response(503, '5.5.1 failed precondition: all rcpts failed')
             self.data_response = err
@@ -610,14 +676,14 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v_js = [{}] * len(v)
                 else:
-                    v_js = [vv.to_json() for vv in v]
+                    v_js = [vv.to_json(which_js) for vv in v]
                 offset = getattr(self, field.list_offset(), None)
                 if which_js == WhichJson.REST_UPDATE and offset:
                     json[field.list_offset()] = offset
         elif field.emit_rest_placeholder(which_js):
             v_js = {}
         elif field.to_json is not None:
-            v_js = field.to_json(v)
+            v_js = field.to_json(v, which_js)
         else:  # POD
             v_js = v
 
@@ -655,8 +721,13 @@ class TransactionMetadata:
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('list-ness mismatch')
                 return None  # invalid
+
+            # cd6c8bd2 double-check that body didn't change in some
+            # unexpected way
+            # TODO I'm not sure why this is necessary/the check in
+            # delta() isn't sufficient
             if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v)
+                body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
                 if body_delta is None:
                     return None
                 if body_delta:
@@ -696,9 +767,9 @@ class TransactionMetadata:
         return out
 
     # compute a delta from self to successor
-    def maybe_delta(self, successor : "TransactionMetadata",
-                    which_json : Optional[WhichJson] = None
-                    ) -> Optional["TransactionMetadata"]:
+    def delta(self, successor : "TransactionMetadata",
+              which_json : Optional[WhichJson] = None
+              ) -> "TransactionMetadata":
         assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
@@ -706,26 +777,25 @@ class TransactionMetadata:
             new_v = getattr(successor, f, None)
             if old_v is None and new_v is None:
                 continue
-            # logging.debug('tx.delta %s %s %s', f, old_v, new_v)
             if ((which_json is not None) and not json_field.valid(which_json)):
                 continue  # ignore
+
             if ((which_json is not None) and (
                     json_field.emit_rest_placeholder(which_json)) and
                 (old_v is not None and new_v is None)):
                 continue
             if (old_v is not None) and (new_v is None):
-               logging.debug('tx.delta invalid del %s', f)
-               #raise ValueError()
-               return None  # invalid
+               logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
+               raise ValueError()
             if (old_v is None) and (new_v is not None):
                 setattr(out, f, new_v)
                 continue
 
             # emit body in the delta if it changed
             if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v)
+                body_delta = old_v.delta(new_v, which_json)
                 if body_delta is None:
-                    return None
+                    raise ValueError()
                 if body_delta:
                     setattr(out, f, new_v)
                 continue
@@ -733,12 +803,12 @@ class TransactionMetadata:
             # XXX TxField.is_list?
             if isinstance(old_v, list) != isinstance(new_v, list):
                 logging.debug('tx.delta is-list != is-list %s', f)
-                return None  # invalid
+                raise ValueError()
             if not isinstance(old_v, list):
                 if old_v != new_v:
                     logging.debug('tx.delta value change %s %s %s',
                                   f, old_v, new_v)
-                    return None  # invalid
+                    raise ValueError()
                 setattr(out, f, None)
                 continue
             assert isinstance(old_v, list)
@@ -746,10 +816,10 @@ class TransactionMetadata:
             if json_field.emit_rest_placeholder(which_json):
                 if any([x != None for x in new_v]):
                     logging.debug('non-None placeholder')
-                    return None
+                    raise ValueError()
                 if len(new_v) < len(old_v):
                     logging.debug('list shrink placeholder')
-                    return None
+                    raise ValueError()
                 # XXX need this??
                 # setattr(out, json_field.list_offset(), len(old_v))
                 continue
@@ -757,25 +827,27 @@ class TransactionMetadata:
             old_len = len(old_v)
             if old_len > len(new_v):
                 logging.debug('tx.delta invalid list trunc %s', f)
-                return None  # invalid
+                raise ValueError()
             for i in range(0, old_len):
                 if old_v[i] is None and new_v[i] is not None:
                     pass  #ok   XXX why would old_v be None?
                 if old_v[i] is not None and new_v[i] is None:
                     logging.debug('tx.delta %s ->None', f)
-                    return None  # bad
+                    raise ValueError()
                 if old_v[i] != new_v[i]:
                     logging.debug('tx.delta %s !=', f)
-                    return None  # bad
+                    raise ValueError()
             setattr(out, f, new_v[old_len:])
             setattr(out, json_field.list_offset(), old_len)
 
         return out
 
-    def delta(self, next, which_json : Optional[WhichJson] = None):
-        if (out := self.maybe_delta(next, which_json)) is None:
-            raise ValueError()
-        return out
+    def maybe_delta(self, next, which_json : Optional[WhichJson] = None
+                    ) -> Optional['TransactionMetadata']:
+        try:
+            return self.delta(next, which_json)
+        except ValueError:
+            return None
 
     # NOTE this copies the rcpt req/resp lists which we know we mutate
     # but not the underlying Mailbox/Response objects which shouldn't
@@ -785,6 +857,8 @@ class TransactionMetadata:
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)
+        if isinstance(self.body, MessageBuilderSpec):
+            out.body = self.body.clone()
         return out
 
     def copy_valid(self, valid : WhichJson):
@@ -822,7 +896,7 @@ class TransactionMetadata:
             return None
         return self.body_blob()
 
-# interface from rest handler to StorageWriterFilter
+# interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not
 # program execution.
 class AsyncFilter(ABC):
@@ -843,6 +917,11 @@ class AsyncFilter(ABC):
     def get(self) -> Optional[TransactionMetadata]:
         pass
 
+    @property
+    @abstractmethod
+    def version(self):
+        pass
+
     # TODO this should encapsulate WritableBlob?
     # def create_blob(self, BlobUri)
     # def append_to_blob(self, BlobUri, offset, d : bytes, content_length)
@@ -857,21 +936,24 @@ class AsyncFilter(ABC):
     ) -> Optional[WritableBlob]:
         pass
 
-    # returns the current version for comparing to an etag;
-    # if this doesn't match the etag, it's definitely stale
-    @abstractmethod
-    def version(self) -> Optional[int]:
-        pass
-
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : Optional[float]) -> bool:
+    def wait(self, version : int, timeout : Optional[float]) -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
     @abstractmethod
     async def wait_async(self, version : int, timeout : Optional[float]
-                         ) -> bool:
+                         )  -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
 
+    CheckTxResult = Tuple[int, Optional[TransactionMetadata], bool, Optional[str]]
+
+    @abstractmethod
+    def check_cache(self) -> Optional[CheckTxResult]:
+        pass
+
+    @abstractmethod
+    def check(self) -> Optional[CheckTxResult]:
+        pass

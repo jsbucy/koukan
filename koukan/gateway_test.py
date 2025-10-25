@@ -47,6 +47,7 @@ class GatewayTest(unittest.TestCase):
         root_yaml['rest_listener']['addr'] = ['127.0.0.1', rest_port]
         root_yaml['smtp_output']['use_system_smtplib'] = self.use_system_smtplib
         root_yaml['smtp_output']['hosts']['outbound']['protocol'] = self.protocol
+        root_yaml['rest_listener']['session_uri'] = 'http://localhost:' + str(rest_port)
 
         self.client_provider = RestEndpointClientProvider()
 

@@ -8,7 +8,7 @@ from threading import Thread
 import time
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.storage_schema import BlobSpec
+from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
@@ -38,9 +38,17 @@ class StorageWriterFilterTest(unittest.TestCase):
                 logging.debug('%s', l)
 
     def update(self, filter, tx, tx_delta):
-        upstream_delta = filter.update(tx, tx_delta)
-        self.assertTrue(len(upstream_delta.rcpt_response) <=
-                        len(tx.rcpt_to))
+        for i in range(0, 5):
+            try:
+                upstream_delta = filter.update(tx, tx_delta)
+                self.assertTrue(len(upstream_delta.rcpt_response) <=
+                                len(tx.rcpt_to))
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                filter.get()
+                time.sleep(0.3)
+                if i == 4:
+                    raise
 
     def start_update(self, filter, tx, tx_delta):
         logging.debug('start_update')
@@ -69,30 +77,32 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(cursor.rest_id, 'tx_rest_id')
 
     def test_body_blob(self):
-        filter = StorageWriterFilter(
+        # from creation, gets handed off to OH
+        upstream_filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True)
         tx = TransactionMetadata(
             host='submission',
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
-        filter.update(tx, tx.copy())
+        upstream_filter.update(tx, tx.copy())
 
-        filter = StorageWriterFilter(
+        # RestHandler
+        downstream_filter = StorageWriterFilter(
             self.storage,
             rest_id = 'tx_rest_id',
             create_leased = False)
-        blob_writer = filter.get_blob_writer(create=True, tx_body=True)
+        blob_writer = downstream_filter.get_blob_writer(create=True, tx_body=True)
         d = b'hello, world!'
         chunk1 = 7
         blob_writer.append_data(0, d[0:chunk1])
 
-        blob_writer = filter.get_blob_writer(
+        blob_writer = downstream_filter.get_blob_writer(
             create=False, tx_body=True)
         blob_writer.append_data(chunk1, d[chunk1:], len(d))
 
-        tx = filter.get()
-        self.assertTrue(filter.tx_cursor.input_done)
+        tx = upstream_filter.get()
+        self.assertTrue(upstream_filter.tx_cursor.input_done)
 
     def test_cancel(self):
         filter = StorageWriterFilter(
@@ -115,16 +125,21 @@ class StorageWriterFilterTest(unittest.TestCase):
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
         orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
-        orig_tx_cursor.load(start_attempt=True)
+        orig_tx_cursor.start_attempt()
+        prev = orig_tx_cursor.tx.copy()
+        tx = orig_tx_cursor.tx
+        tx.mail_response = Response(550)
         orig_tx_cursor.write_envelope(
-            TransactionMetadata(mail_response=Response(550)),
+            prev.delta(tx),
             finalize_attempt=True,
             final_attempt_reason='upstream permfail')
 
         filter = StorageWriterFilter(self.storage, rest_id='tx_rest_id')
-        filter.get()
-        cancel = TransactionMetadata(cancelled=True)
-        filter.update(cancel, cancel.copy())
+        tx = filter.get()
+        self.assertIsNotNone(tx.final_attempt_reason)
+        prev = tx.copy()
+        tx.cancelled = True
+        filter.update(tx, prev.delta(tx))
 
         orig_tx_cursor.load()
         self.assertIsNone(orig_tx_cursor.tx.cancelled)
@@ -155,7 +170,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter.update(tx, tx.copy())
 
         upstream_cursor = filter.release_transaction_cursor()
-        upstream_cursor.load(start_attempt=True)
+        upstream_cursor.start_attempt()
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = self.start_update(filter, tx, tx.copy())
@@ -167,8 +182,16 @@ class StorageWriterFilterTest(unittest.TestCase):
             upstream_cursor.load()
         else:
             self.fail('no mail_from')
-        upstream_cursor.write_envelope(
-            TransactionMetadata(mail_response=Response(201)))
+        for i in range(0, 5):
+            try:
+                upstream_cursor.write_envelope(
+                    TransactionMetadata(mail_response=Response(201)))
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                time.sleep(0.3)
+                upstream_cursor.load()
 
         self.join(t)
         for i in range(0,5):

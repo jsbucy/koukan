@@ -53,9 +53,11 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
             tx_body : Optional[bool] = None):
         raise NotImplementedError()
 
-    def wait(self, version : int, timeout : Optional[float]) -> bool:
+    def wait(self, version : int, timeout : Optional[float]
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
+        tx = None
         if not self.timeout_resp:
-            rv = self.filter.wait(version, timeout)
+            rv, tx = self.filter.wait(version, timeout)
         else:
             rv = True
         if not rv:
@@ -63,14 +65,18 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 Response(450, 'upstream timeout (AsyncFilterWrapper)'),
                 self.timeout_resp)
             # xxx but then does version need to change?
-        return rv
+        if tx is not None:
+            self._update_responses(tx)
+            self.tx = tx.copy()
+            return rv, tx
+        return rv, None
 
-    async def wait_async(self, version : int, timeout : Optional[float]
-                         ) -> bool:
+    async def wait_async(self, version : int, timeout : Optional[float]):
         raise NotImplementedError()
 
+    @property
     def version(self) -> Optional[int]:
-        return self.filter.version()
+        return self.filter.version
 
     def _update(self, tx : TransactionMetadata,
                 tx_delta : TransactionMetadata
@@ -109,7 +115,6 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         self.tx = upstream_tx.copy()
         self._update_responses(upstream_tx)
         logging.debug(upstream_tx)
-        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         downstream_tx.merge_from(upstream_delta)
         return upstream_delta
@@ -218,15 +223,22 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         deadline = Deadline(self.timeout)
         upstream_tx = self.downstream_tx.copy()
         while deadline.remaining() and upstream_tx.req_inflight():
-            version = self.version()
+            version = self.version
             assert version is not None
             dl = deadline.deadline_left()
             assert dl is not None
-            self.wait(version, dl)
-            u = self.get()
+            rv, u = self.wait(version, dl)
+            if u is None:
+                u = self.get()
             assert u is not None
             upstream_tx = u
-        tx_orig.version = None
         upstream_delta = tx_orig.delta(upstream_tx)
         self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()
+
+
+    def check_cache(self):
+        raise NotImplementedError()
+
+    def check(self):
+        raise NotImplementedError()

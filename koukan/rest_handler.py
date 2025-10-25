@@ -53,6 +53,7 @@ from koukan.rest_schema import (
     parse_blob_uri )
 from koukan.version_cache import IdVersion
 from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.message_builder import MessageBuilderSpec
 
 
 MAX_TIMEOUT=30
@@ -75,8 +76,8 @@ class RestHandler(Handler):
     final_blob_length : Optional[int] = None
 
     endpoint_yaml : dict
-    session_uri : Optional[str] = None
-    service_uri : Optional[str] = None
+    session_url : Optional[str] = None
+    service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
 
@@ -89,9 +90,10 @@ class RestHandler(Handler):
                  http_host : Optional[str] = None,
                  chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
-                 session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None,
+                 session_url : Optional[str] = None,
+                 service_url : Optional[str] = None,
                  client : Optional[HTTP_CLIENT] = None):
+        assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
@@ -103,8 +105,8 @@ class RestHandler(Handler):
             self.endpoint_yaml = endpoint_yaml
         else:
             self.endpoint_yaml = {}
-        self.session_uri = session_uri
-        self.service_uri = service_uri
+        self.session_url = session_url
+        self.service_url = service_url
         if client is not None:
             self.client = client
 
@@ -131,28 +133,12 @@ class RestHandler(Handler):
         return PlainTextResponse(
             status_code=code, content=msg, headers=headers_dict)
 
-    def _ping_tx(self, session_uri, tx_rest_id):
-        logging.debug('ping tx %s', self._tx_rest_id)
-
-        # TODO HEAD makes more sense but this should work for now
+    def _handle_async(self, request, fn):
         try:
-            uri = urljoin(session_uri, make_tx_uri(tx_rest_id))
-            resp = self.client(uri)
-            logging.debug('%s %d', uri, resp.status_code)
-        except:
-            logging.exception('_ping_tx')
-
-
-    def _maybe_schedule_ping(self, request, session_uri, tx_rest_id
-                             ) -> Optional[HttpResponse]:
-        if session_uri is None:
+            return fn()
+        except Exception:
+            logging.exception('_handle_async')
             return None
-
-        if self.executor.submit(
-                partial(self._ping_tx, session_uri,
-                        self._tx_rest_id)) is None:
-            return self.response(code=500, msg='schedule ping tx')
-        return None
 
     async def handle_async(self, request : FastApiRequest, fn
                            ) -> FastApiResponse:
@@ -161,7 +147,7 @@ class RestHandler(Handler):
         if err is not None:
             return err
         deadline = Deadline(timeout)
-        cfut = self.executor.submit(fn, 0)
+        cfut = self.executor.submit(partial(self._handle_async, request, fn), 0)
         if cfut is None:
             return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -175,6 +161,9 @@ class RestHandler(Handler):
     def _get_timeout(self, req : HttpRequest
                      ) -> Tuple[Optional[int], Optional[HttpResponse]]:
         # https://datatracker.ietf.org/doc/id/draft-thomson-hybi-http-timeout-00.html
+        if 'if-none-match' not in req.headers:
+            return None, None
+
         if not (timeout_header := req.headers.get('request-timeout', None)):
             return MAX_TIMEOUT, None
         timeout = None
@@ -220,51 +209,95 @@ class RestHandler(Handler):
                     code=400, msg='transaction creation to '
                     'non-incremental endpoint must contain mail_from and '
                     'exactly 1 rcpt_to')
+            # for smtp gw/exploder, we don't do this until they start
+            # sending the data because
+            # 'body is not None'
+            # is used as a proxy for 'done with rcpts'
             if tx.body is None:
                 tx.body = BlobSpec(create_tx_body=True)
         elif err := self._validate_incremental_tx(tx):
             return err
 
         tx.host = self.http_host
-        body = tx.body
 
         upstream = self.async_filter.update(tx, tx.copy())
+        cached = self.async_filter.check_cache()
+        # the factory path up to router_service fails if the OH
+        # couldn't be scheduled so if we got here, it should be leased
+        assert cached is not None
+        version, cached_tx, local, remote = cached
+        assert cached_tx is not None
         if upstream is None or tx.rest_id is None:
             return self.response(code=400, msg='bad request')
-        assert upstream.version is not None
+        version = self.async_filter.version
+        assert version is not None
         self._tx_rest_id = tx.rest_id
 
-        tx.body = body
-        # return uri qualified to session or service per self.endpoint_yaml
+        # new tx url always initially scoped to creator session
         tx_path = make_tx_uri(tx.rest_id)
-        if self.endpoint_yaml.get('rest_lro', False) is False:
-            tx_uri = urljoin(self.session_uri, tx_path)
-        elif self.service_uri is not None:
-            tx_uri = urljoin(self.service_uri, tx_path)
-        else:
-            tx_uri = tx_path
+        tx_uri = urljoin(self.session_url, tx_path)
+        self._update_body_blob_uri(cached_tx)
         resp = self.response(
             code=201,
-            resp_json=tx.to_json(WhichJson.REST_READ),
+            resp_json=cached_tx.to_json(WhichJson.REST_READ),
             headers=[('location', tx_uri)],
-            etag=self._etag(upstream.version))
+            etag=self._etag(version))
         logging.debug('RestHandler._create %s', resp)
         return resp
 
-    def _get_tx(self) -> Optional[TransactionMetadata]:
-        logging.debug('_get_tx')
-        assert self.async_filter is not None
-        tx = self.async_filter.get()
-        if tx is None:
-            return None
-        logging.debug('_get_tx %s', tx)
-        return tx
+    def _update_blob_uri(self, blob):
+        reuse_uri = blob.blob_uri().copy()
+        if blob.finalized():
+            reuse_uri.base_uri = self.service_url
+        else:
+            reuse_uri.base_uri = self.session_url
+        out = BlobSpec(reuse_uri = reuse_uri,
+                       finalized = blob.finalized())
+        return out
 
-    def _get_tx_resp(self, request, tx):
+    def _update_body_blob_uri(self, tx):
+        # we should have redirected by now if it's leased somewhere else
+        assert tx.session_uri is None
+        if tx.body is None:
+            # we don't actually create it for interactive/exploder
+            # here (cf above) but need to return the uri in the json
+            tx.body = BlobSpec(create_tx_body=True)
+            tx.body.reuse_uri = BlobUri(
+                self._tx_rest_id, tx_body=True, base_uri=self.service_url)
+            logging.debug(tx.body.reuse_uri)
+        elif isinstance(tx.body, Blob):
+            tx.body = self._update_blob_uri(tx.body)
+        elif isinstance(tx.body, MessageBuilderSpec):
+            tx.body.blobs = {
+                blob_id: self._update_blob_uri(blob)
+                for blob_id,blob in tx.body.blobs.items()
+            }
+            # whereas rest receivers get the original message in
+            # addition to the parsed, this is only used for
+            # router <-> gw where it's either one or the other but
+            # never both so this doesn't need to populate body_blob
+            # uri here
+
+    def _get_tx(self) -> Optional[TransactionMetadata]:
+        try:
+            logging.debug('_get_tx')
+            assert self.async_filter is not None
+            tx = self.async_filter.get()
+            if tx is None:
+                return None
+            logging.debug('_get_tx %s', tx)
+            return tx
+        except Exception:
+            logging.exception('_get_tx')
+            return None
+
+    def _get_tx_resp(self, request, tx, version):
         tx_out = tx.copy()
+        self._update_body_blob_uri(tx_out)
+        json_out = tx_out.to_json(WhichJson.REST_READ)
         return self.response(
-            etag=self._etag(tx.version) if tx else None,
-            resp_json=tx_out.to_json(WhichJson.REST_READ))
+            etag=self._etag(version) if tx else None,
+            resp_json=json_out)
 
     def _check_etag(self, etag, cached_version) -> bool:
         etag = etag.strip('"')
@@ -273,8 +306,38 @@ class RestHandler(Handler):
             self._tx_rest_id, etag, cached_version)
         return self._etag(cached_version) == etag
 
+    # -> version, leased here?, other session
+    def _check_tx(self) -> Optional[AsyncFilter.CheckTxResult]:
+        assert self.async_filter is not None
+        return self.async_filter.check()
+
+    async def _check_tx_async(
+            self
+    ) -> Tuple[Optional[FastApiResponse], Optional[AsyncFilter.CheckTxResult]]:
+        logging.debug('_check_tx_async')
+        cfut = self.executor.submit(self._check_tx)
+        if cfut is None:
+            return self.response(
+                code=500, msg='_check_tx_async schedule read'), None
+        afut = asyncio.wrap_future(cfut)
+        try:
+            # wait ~forever here, this is a point read
+            # xxx fixed timeout? ignore deadline?
+            await asyncio.wait_for(afut, None)
+        except TimeoutError:
+            # unexpected
+            return self.response(
+                code=500, msg='get tx async read'), None
+        if not afut.done():
+            return self.response(
+                code=500, msg='get tx async read fut done'), None
+        if afut.result() is None:
+            return self.response(code=404, msg='unknown tx'), None
+        logging.debug('_check_tx_async done')
+        return None, afut.result()
+
     async def _get_tx_async(
-            self, request
+            self
     ) -> Tuple[Optional[HttpResponse], Optional[TransactionMetadata]]:
         logging.debug('_get_tx_async')
         cfut = self.executor.submit(self._get_tx)
@@ -299,40 +362,58 @@ class RestHandler(Handler):
         return None, afut.result()
 
     async def get_tx_async(self, request : HttpRequest) -> HttpResponse:
-        if self.async_filter is None:
-            return self.response(code=404, msg='transaction not found')
+        assert self.async_filter is not None
 
         timeout, err = self._get_timeout(request)
         if err is not None:
             return err
 
         etag = request.headers.get('if-none-match', None)
-        err, tx = await self._get_tx_async(request)
-        if err is not None:
-            return err
-        assert tx is not None
-        assert tx.version is not None
-        if (timeout is None or etag is None or
-            not self._check_etag(etag, tx.version)):
-            return self._get_tx_resp(request, tx)
-        elif (timeout is not None and etag is not None and
-              tx.session_uri is not None):
+        check_result = self.async_filter.check_cache()
+        if check_result is None:
+            err, check_result = await self._check_tx_async()
+            if err:
+                return err
+            if check_result is None:
+                return self.response(code=500, msg='check tx failed')
+        version, tx, is_local, other = check_result
+        if other is not None:
             return self.response(
-                code=307, headers=[
-                    ('location', urljoin(tx.session_uri,
-                                         make_tx_uri(self._tx_rest_id)))])
+                code=308, headers=[
+                    ('location', urljoin(other, request.url.path))])
+
+        fresh_etag = etag is not None and self._check_etag(etag, version)
+        if timeout is None or not is_local or not fresh_etag:
+            if fresh_etag:
+                return self.response(code=304, msg='unchanged',
+                                     headers=[('etag', self._etag(version))])
+            # do a full read every time with no etag
+            if tx is None or etag is None:
+                err, tx = await self._get_tx_async()
+                if err is not None:
+                    return err
+            return self._get_tx_resp(request, tx, version)
+
+        assert is_local
+        assert timeout is not None
+        assert etag is not None
+        assert fresh_etag
 
         deadline = Deadline(timeout)
 
-        wait_result = await self.async_filter.wait_async(
-            tx.version, deadline.deadline_left())
+        wait_result, tx = await self.async_filter.wait_async(
+            version, deadline.deadline_left())
+
         if not wait_result:
             return self.response(code=304, msg='unchanged',
-                                 headers=[('etag', self._etag(tx.version))])
-        err, tx = await self._get_tx_async(request)
-        if err is not None:
-            return err
-        resp = self._get_tx_resp(request, tx)
+                                 headers=[('etag', etag)])
+
+        if tx is None:
+            err, tx = await self._get_tx_async()
+            if err is not None:
+                return err
+        resp = self._get_tx_resp(request, tx, self.async_filter.version)
+        assert resp.headers['etag'] != etag
         logging.debug('get_tx_async done')
         return resp
 
@@ -361,6 +442,11 @@ class RestHandler(Handler):
             return self.response(
                 code=500,
                 msg='RestHandler.patch_tx timeout reading tx')
+        if tx.session_uri:
+            return self.response(
+                code=308, headers=[
+                    ('location', urljoin(tx.session_uri, request.url.path))])
+
         if req_json is None:  # heartbeat/ping
             pass
         elif not self.async_filter.incremental():
@@ -375,10 +461,11 @@ class RestHandler(Handler):
                 code=400, msg='RestHandler.patch_tx merge failed')
 
         # TODO should these 412s set the etag?
-        assert tx.version is not None
-        if req_etag != self._etag(tx.version):
+        version = self.async_filter.version
+        assert version is not None
+        if req_etag != self._etag(version):
             logging.debug('RestHandler.patch_tx conflict %s %s',
-                          req_etag, self._etag(tx.version))
+                          req_etag, self._etag(version))
             return self.response(code=412, msg='update conflict')
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
@@ -387,15 +474,16 @@ class RestHandler(Handler):
         if upstream_delta is None:
             return self.response(
                 code=400, msg='RestHandler.patch_tx bad request')
-
-        if (err := self._maybe_schedule_ping(
-                request, tx.session_uri, self._tx_rest_id)):
-            return err
+        # checked this earlier, should have gotten a version conflict
+        # if the tx changed
+        assert tx.session_uri is None
 
         tx.body = body
-        assert upstream_delta.version is not None
+        self._update_body_blob_uri(tx)
+        version = self.async_filter.version
+        assert version is not None
         return self.response(
-            etag=self._etag(upstream_delta.version),
+            etag=self._etag(version),
             resp_json=tx.to_json(WhichJson.REST_READ))
 
 
@@ -408,7 +496,8 @@ class RestHandler(Handler):
         range = werkzeug.http.parse_content_range_header(
             request.headers.get('content-range'))
         logging.info('put_blob content-range: %s', range)
-        if not range or range.units != 'bytes' or range.stop is None or range.start is None:
+        if (not range or range.units != 'bytes' or range.stop is None or
+            range.start is None):
             return self.response(400, 'bad range'), None
         # no idea if underlying stack enforces this
         assert(range.stop - range.start == content_length)
@@ -419,6 +508,22 @@ class RestHandler(Handler):
                          blob_rest_id : Optional[str] = None,
                          tx_body : bool = False
                          ) -> Optional[HttpResponse]:
+        assert self.async_filter is not None
+
+        cached = self.async_filter.check_cache()
+        if cached is None:
+            tx = self.async_filter.get()
+        else:
+            tx = cached[1]
+        if tx is None:
+            return self.response(code=404, msg='unknown transaction')
+
+        if tx.session_uri is not None:
+            return self.response(
+                code=308, headers=[
+                    ('location',
+                     urljoin(tx.session_uri, request.url.path))])
+
         if blob_rest_id is not None:
             self._blob_rest_id = blob_rest_id
         range = None
@@ -427,12 +532,13 @@ class RestHandler(Handler):
         if range_err:
             return range_err
         self.range = range
-        create = tx_body
-        create = create and (range is None or range.start == 0)
+        # cf create_tx() blobs are created with in the initial post
+        # for non-incremental/exploder but for incremental/exploder
+        # not until the client actually starts sending the body
+        create = tx_body and (range is None or range.start == 0)
 
         # this just returns the blob writer now if it already exists,
         # append will fail precondition/offset check downstream -> 416
-        assert self.async_filter is not None
         blob = self.async_filter.get_blob_writer(
             create = create, blob_rest_id=self._blob_rest_id, tx_body=tx_body)
 
@@ -451,7 +557,7 @@ class RestHandler(Handler):
             return self.response(code=404, msg='transaction not found')
 
         cfut = self.executor.submit(
-            lambda: self._get_blob_writer(request, blob_rest_id, tx_body), 0)
+            partial(self._get_blob_writer, request, blob_rest_id, tx_body), 0)
         if cfut is None:
             return self.response(code=500, msg='failed to schedule')
         fut = asyncio.wrap_future(cfut)
@@ -471,7 +577,8 @@ class RestHandler(Handler):
             try:
                 final_blob_length = int(finalize_blob_header)
             except:
-                return self.response(code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
+                return self.response(
+                    code=400, msg='invalid ' + FINALIZE_BLOB_HEADER)
             self.final_blob_length = final_blob_length
 
         async for chunk in request.stream():
@@ -497,9 +604,6 @@ class RestHandler(Handler):
         if resp.status_code != 200:
             return resp
         assert self.blob is not None
-        if (err := self._maybe_schedule_ping(
-                request, self.blob.session_uri(), self._tx_rest_id)):
-            return err
 
         return resp
 
@@ -546,6 +650,11 @@ class RestHandler(Handler):
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
+        if not appended and (uri := self.blob.session_uri()) is not None:
+            return self.response(
+                code=308,
+                headers=[('location', urljoin(uri, request.url.path))])
+
 
         headers : List[Tuple[str, Any]] = []
         headers.append(
@@ -589,8 +698,8 @@ class EndpointFactory(ABC):
 class RestHandlerFactory(HandlerFactory):
     executor : Executor
     endpoint_factory : EndpointFactory
-    session_uri : Optional[str] = None
-    service_uri : Optional[str] = None
+    session_url : Optional[str] = None
+    service_url : Optional[str] = None
     rest_id_factory : Callable[[], str]
     chunk_size : Optional[int] = None
     client : Client
@@ -598,14 +707,14 @@ class RestHandlerFactory(HandlerFactory):
     def __init__(self, executor,
                  endpoint_factory,
                  rest_id_factory : Callable[[], str],
-                 session_uri : Optional[str] = None,
-                 service_uri : Optional[str] = None,
+                 session_url : Optional[str] = None,
+                 service_url : Optional[str] = None,
                  chunk_size : Optional[int] = None):
         self.executor = executor
         self.endpoint_factory = endpoint_factory
         self.rest_id_factory = rest_id_factory
-        self.session_uri = session_uri
-        self.service_uri = service_uri
+        self.session_url = session_url
+        self.service_url = service_url
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
@@ -624,8 +733,8 @@ class RestHandlerFactory(HandlerFactory):
             http_host=http_host,
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
-            session_uri = self.session_uri,
-            service_uri = self.service_uri,
+            session_url = self.session_url,
+            service_url = self.service_url,
             client = self.client.get,
             **kwargs)
 
@@ -639,7 +748,7 @@ class RestHandlerFactory(HandlerFactory):
             async_filter=filter,
             tx_rest_id=tx_rest_id,
             rest_id_factory=self.rest_id_factory,
-            session_uri = self.session_uri,
-            service_uri = self.service_uri,
+            session_url = self.session_url,
+            service_url = self.service_url,
             client = self.client.get,
             **kwargs)

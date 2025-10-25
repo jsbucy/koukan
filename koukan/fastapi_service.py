@@ -44,7 +44,11 @@ def create_app(handler_factory : HandlerFactory):
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
         handler = handler_factory.get_tx(tx_rest_id)
-        return await handler.get_tx_async(request)
+        try:
+            return await handler.get_tx_async(request)
+        except Exception:
+            logging.exception('get_transaction')
+            return FastApiResponse(500)
 
     # body stream
     @app.put('/transactions/{tx_rest_id}/body')

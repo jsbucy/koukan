@@ -6,12 +6,17 @@ import os
 from io import IOBase
 import os
 
+from koukan.rest_schema import BlobUri
+
 class Blob(ABC):
     @abstractmethod
     def len(self) -> int:
         pass
 
     def rest_id(self) -> Optional[str]:
+        return None
+
+    def blob_uri(self) -> Optional[BlobUri]:
         return None
 
     def unref(self, Any) -> None:
@@ -32,7 +37,7 @@ class Blob(ABC):
 
     # returns True if rhs is a proper superset of self,
     # False if they are the same, else None
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         raise NotImplementedError()
 
 class WritableBlob(ABC):
@@ -102,6 +107,7 @@ class InlineBlob(Blob, WritableBlob):
     _content_length : Optional[int] = None
     _rest_id : Optional[str] = None
     _offset : int = 0
+    _blob_uri : Optional[BlobUri] = None
 
     def __init__(self, d : bytes,
                  content_length : Optional[int] = None,
@@ -112,7 +118,13 @@ class InlineBlob(Blob, WritableBlob):
         self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
 
-    def delta(self, rhs) -> Optional[bool]:
+    def blob_uri(self):
+        return self._blob_uri
+
+    def set_blob_uri(self, u):
+        self._blob_uri = u
+
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):
             return None
         # leading edge of self may have moved forward
@@ -200,7 +212,7 @@ class FileLikeBlob(Blob, WritableBlob):
     # this is currently only used in MessageBuilderFilter which writes
     # it to completion when it renders the message so upstream won't
     # see differing successive values.
-    def delta(self, rhs) -> Optional[bool]:
+    def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, FileLikeBlob):
             return None
         return False
@@ -322,7 +334,7 @@ class CompositeBlob(Blob):
     # same object between successive calls. cf TODO in
     # received_header_filter, if one wanted to trickle out the body,
     # this needs a real implementation.
-    def delta(self, rhs):
+    def delta(self, rhs, which_json):
         if not isinstance(rhs, CompositeBlob) or rhs is not self:
             return None
         return False

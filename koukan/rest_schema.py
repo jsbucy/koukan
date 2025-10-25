@@ -1,6 +1,23 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
+from enum import IntEnum
+
+from urllib.parse import urljoin, urlparse
+
+# TODO I'm starting to think maybe we should invert this and have a
+# field mask thing instead, many of these could live in their own module
+class WhichJson(IntEnum):
+    ALL = 0
+    REST_READ = 1
+    REST_CREATE = 2
+    REST_UPDATE = 3
+    DB = 4
+    DB_ATTEMPT = 5
+    EXPLODER_CREATE = 6
+    EXPLODER_UPDATE = 7
+    ADD_ROUTE = 8
+
 
 FINALIZE_BLOB_HEADER = 'x-finalize-blob-length'
 
@@ -8,10 +25,13 @@ def make_tx_uri(tx):
     return '/transactions/' + tx
 
 def make_blob_uri(tx, blob : Optional[str] = None,
-                  tx_body : Optional[bool] = None) -> str:
+                  tx_body : Optional[bool] = None,
+                  base_uri : Optional[str] = None) -> str:
     assert not (blob and tx_body)
     assert blob or tx_body
     uri = make_tx_uri(tx)
+    if base_uri is not None:
+        uri = urljoin(base_uri, uri)
     if blob:
         uri += ('/blob/' + blob)
     else:
@@ -22,8 +42,13 @@ class BlobUri:
     tx_id : str
     tx_body : bool = False
     blob : Optional[str] = None
+    base_uri : Optional[str] = None
+    parsed_uri : Optional[str] = None  # XXX original_uri
+
     def __init__(self, tx_id : str, tx_body : bool = False,
-                 blob : Optional[str] = None):
+                 blob : Optional[str] = None,
+                 base_uri : Optional[str] = None,
+                 parsed_uri : Optional[str] = None):
         assert tx_body or blob
         # TODO storage instantiates this with tx_body and __internal_tx_body
         # but if RestHandler instantiates with both, it's a bug
@@ -31,31 +56,73 @@ class BlobUri:
         self.tx_id = tx_id
         self.tx_body = tx_body
         self.blob = blob
+        self.base_uri = base_uri
+        self.parsed_uri = parsed_uri
+
+    def copy(self):
+        return BlobUri(self.tx_id, self.tx_body, self.blob, self.base_uri,
+                       self.parsed_uri)
+
     def __repr__(self):
         out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
         if self.blob:
             out += ' blob=' + self.blob
+        if self.parsed_uri:
+            out += ' parsed_uri=' + self.parsed_uri
+        if self.base_uri:
+            out += ' base_uri=' + str(self.base_uri)
         return out
+
     def __eq__(self, rhs):
         if not isinstance(rhs, BlobUri):
             return False
-        return self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and self.blob == rhs.blob
+        return (self.tx_id == rhs.tx_id and self.tx_body == rhs.tx_body and
+                self.blob == rhs.blob)
 
+    def to_uri(self) -> str:
+        if self.tx_body:
+            return make_blob_uri(self.tx_id, tx_body=True,
+                                 base_uri=self.base_uri)
+        else:
+            return make_blob_uri(self.tx_id, blob=self.blob,
+                                 base_uri=self.base_uri)
 
-def parse_blob_uri(uri) -> Optional[BlobUri]:
-    if not uri.startswith('/transactions/'):
+    def delta(self, rhs, which_json) -> Optional[bool]:
+        if not isinstance(rhs, BlobUri):
+            raise ValueError()
+        if self.tx_body != rhs.tx_body:
+            raise ValueError()
+        if self.blob != rhs.blob:
+            raise ValueError()
+
+        if self.parsed_uri != rhs.parsed_uri:
+            parsed = urlparse(self.parsed_uri)
+            parsed_rhs = urlparse(rhs.parsed_uri)
+            if parsed.path != parsed_rhs.path:
+                raise ValueError()
+            # ignore changes in netloc, this may happen in a
+            # multi-node setting e.g. after the tx finishes and the
+            # url host changes from individual node/replica to
+            # service-wide alias
+        return False
+
+def parse_blob_uri(uri : str) -> Optional[BlobUri]:
+    result = urlparse(uri)
+    if result is None:
         return None
-    u = uri.removeprefix('/transactions/')
+    if not result.path.startswith('/transactions/'):
+        return None
+    u = result.path.removeprefix('/transactions/')
     slash = u.find('/')
     if slash == -1:
         return None
     tx = u[0:slash]
     u = u[slash+1:]
     if u == 'body':
-        return BlobUri(tx_id=tx, tx_body=True)
+        return BlobUri(tx_id=tx, tx_body=True, parsed_uri=uri)
     if not u.startswith('blob/'):
         return None
     u = u.removeprefix('blob/')
     if not u:
         return None
-    return BlobUri(tx_id=tx, blob=u)
+    return BlobUri(tx_id=tx, blob=u, parsed_uri=uri)

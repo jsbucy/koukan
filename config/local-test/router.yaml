@@ -11,7 +11,7 @@ global:
   rest_id_entropy: 4
 
 rest_listener:
-  addr: ["::1", 8000]
+  addr: ["localhost", 8000]
   #cert: localhost.crt
   #key: localhost.key
 

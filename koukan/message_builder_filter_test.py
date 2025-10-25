@@ -36,10 +36,9 @@ class MessageBuilderFilterTest(unittest.TestCase):
                 "content_type": "text/html",
                 "content": {"create_id": "blob_rest_id"}
                 }]},
-            blobs = [InlineBlob(b'hello, world!', last=True,
-                                rest_id='blob_rest_id')]
+            blobs = {'blob_rest_id': InlineBlob(b'hello, world!', last=True,
+                                                rest_id='blob_rest_id')}
         )
-        delta.body.check_ids()
 
         tx.merge_from(delta)
         self.filter.on_update(delta)
@@ -79,9 +78,8 @@ class MessageBuilderFilterTest(unittest.TestCase):
                  "content": {"create_id": "blob_rest_id"}
              }]},
             # non-finalized blob to tickle early-reject path
-            blobs=[InlineBlob(b'hello, ', last=False,
-                              rest_id='blob_rest_id')])
-        delta.body.check_ids()
+            blobs={'blob_rest_id': InlineBlob(b'hello, ', last=False,
+                                              rest_id='blob_rest_id')})
 
         tx.merge_from(delta)
         filter_result = self.filter.on_update(delta)

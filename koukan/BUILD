@@ -4,11 +4,13 @@ py_library(name='deadline',
            srcs=['deadline.py'])
 
 py_library(name='blob',
-           srcs=['blob.py'])
+           srcs=['blob.py'],
+           deps=[':rest_schema'])
 
 py_test(name='blob_test',
         srcs=['blob_test.py'],
-        deps=[':blob'])
+        deps=[':blob',
+              ':filter'])
 
 py_library(name='response',
            srcs=['response.py'])
@@ -26,7 +28,10 @@ py_test(name='filter_test',
         deps=[':filter',
               ':blob',
               ':deadline',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              ':message_builder',
+              ':rest_schema',
+              ':storage_schema'])
 
 py_library(name='filter_chain',
            srcs=['filter_chain.py'],
@@ -473,6 +478,8 @@ py_test(name='router_service_test_fastapi',
               ':postgres_test_utils',
               ':sqlite_test_utils',
               ':hello_filter',
+              '//examples/send_message:send_message',
+              '@pypi//httpx',
               '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 
@@ -490,6 +497,8 @@ py_test(name='router_service_test_sqlite',
               ':postgres_test_utils',
               ':sqlite_test_utils',
               ':hello_filter',
+              '//examples/send_message:send_message',
+              '@pypi//httpx',
               '@pypi//werkzeug'],
         data=['//testdata:multipart.msg'])
 

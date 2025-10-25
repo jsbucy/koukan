@@ -104,7 +104,7 @@ class Service:
         success = True
         for executor in [e for e in [self.daemon_executor, self.rest_executor,
                                      self.output_executor] if e is not None]:
-            if not executor.shutdown(timeout=10):
+            if not executor.shutdown(timeout=4):
                 success = False
 
         assert self.storage is not None
@@ -153,7 +153,8 @@ class Service:
             self.storage=Storage.connect(
                 storage_yaml['url'], listener_yaml['session_uri'],
                 blob_tx_refresh_interval=
-                  storage_yaml.get('blob_tx_refresh_interval', 10))
+                  storage_yaml.get('blob_tx_refresh_interval', 10),
+                cache_ttl = storage_yaml.get('cache_ttl', 5))
 
         session_refresh_interval = storage_yaml.get(
             'session_refresh_interval', 30)
@@ -178,12 +179,13 @@ class Service:
         # top-level: http host -> endpoint
 
         self.endpoint_factory = StorageWriterFactory(self)
+        session_uri = listener_yaml.get('session_uri', None)
         self.rest_handler_factory = RestHandlerFactory(
             self.rest_executor,
             endpoint_factory = self.endpoint_factory,
             rest_id_factory = self.rest_id_factory,
-            session_uri=listener_yaml.get('session_uri', None),
-            service_uri=listener_yaml.get('service_uri', None),
+            session_url=session_uri,
+            service_url=listener_yaml.get('service_uri', session_uri),
             chunk_size=listener_yaml.get('chunk_size', None))
 
         with self.lock:
@@ -276,7 +278,7 @@ class Service:
             logging.info('RouterService._handle_new_tx writer %s, '
                          'rest_id is None, downstream error?', writer)
             return
-        tx_cursor.load(start_attempt=True)
+        tx_cursor.start_attempt()
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
@@ -327,7 +329,7 @@ class Service:
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
-                      storage_tx.id, storage_tx.rest_id)
+                      storage_tx.db_id, storage_tx.rest_id)
 
         self.handle_tx(storage_tx, chain, endpoint_yaml)
 

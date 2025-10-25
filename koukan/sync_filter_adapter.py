@@ -138,16 +138,17 @@ class SyncFilterAdapter(AsyncFilter):
                 return False
             return timedout
 
+    @property
     def version(self):
         return self.id_version.get()
 
-    def wait(self, version, timeout) -> bool:
+    def wait(self, version, timeout):
         return self.id_version.wait(
-            version=version, timeout=timeout)
+            version=version, timeout=timeout), None
 
-    async def wait_async(self, version, timeout) -> bool:
+    async def wait_async(self, version, timeout):
         return await self.id_version.wait_async(
-            version=version, timeout=timeout)
+            version=version, timeout=timeout), None
 
     def _update(self):
         with self.mu:
@@ -215,7 +216,7 @@ class SyncFilterAdapter(AsyncFilter):
         version = self.id_version.get()
         version += 1
         self.cv.notify_all()
-        self.id_version.update(version=version)
+        self.id_version.update(version=version, leased=True)
         self._last_update = time.monotonic()
         return True
 
@@ -233,9 +234,6 @@ class SyncFilterAdapter(AsyncFilter):
 
         with self.mu:
             version = self.id_version.get()
-            # xxx bootstrap
-            if version > 1 and tx.version != version:
-                raise VersionConflictException
 
             # try this non-destructively to see if the delta is valid...
             if self.tx.merge(tx_delta) is None:
@@ -248,7 +246,7 @@ class SyncFilterAdapter(AsyncFilter):
 
             version = self.id_version.get()
             version += 1
-            self.id_version.update(version)
+            self.id_version.update(version, leased=True)
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update(), 0)
@@ -257,17 +255,13 @@ class SyncFilterAdapter(AsyncFilter):
                 assert fut is not None
                 self.inflight = True
             # no longer waits for inflight
-            delta = TransactionMetadata(rest_id=self.rest_id)
-            delta.version = version
-            tx.merge_from(delta)
-            assert delta.version is not None
-            return delta
+            prev = tx.copy()
+            tx.rest_id = self.rest_id
+            return prev.delta(tx)
 
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:
-            tx = self.tx.copy()
-            tx.version = self.id_version.get()
-            return tx
+            return self.tx.copy()
 
     def get_blob_writer(self,
                         create : bool,
@@ -281,6 +275,7 @@ class SyncFilterAdapter(AsyncFilter):
                 assert self.body is None
                 assert self.blob_writer is None
                 self.body = InlineBlob(b'')
+                self.body.set_blob_uri(BlobUri(self.rest_id, tx_body=True))
                 self.tx.body = self.body
                 self.blob_writer = SyncFilterAdapter.BlobWriter(self)
         return self.blob_writer
@@ -295,3 +290,13 @@ class SyncFilterAdapter(AsyncFilter):
         # BlobWriter.q to self.body
         tx_delta = TransactionMetadata()
         self.update(tx, tx_delta)
+
+    def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
+        tx = self.get()
+        if tx is None:
+            return None
+        return self.version, tx, True, None
+
+
+    def check(self) -> Optional[AsyncFilter.CheckTxResult]:
+        raise NotImplementedError()
