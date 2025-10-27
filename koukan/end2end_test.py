@@ -11,6 +11,7 @@ import asyncio
 from dkim import dknewkey
 import tempfile
 import yaml
+from urllib.parse import urljoin
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
@@ -41,6 +42,10 @@ class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
     http_server : Optional[uvicorn_main.Server] = None
+    # gw -> router
+    gw_path = '/senders/gateway/transactions'
+    # router -> gw, receiver
+    router_path = '/senders/router/transactions'
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -51,15 +56,16 @@ class End2EndTest(unittest.TestCase):
         if (dest := policy.get('destination', None)) is None:
             return
         logging.debug(dest)
+
         endpoint = dest.get('endpoint', None)
-        if endpoint == 'http://localhost:8001':
-            dest['endpoint'] = self.gateway_base_url
+        if endpoint == 'http://localhost:8001/senders/router/transactions':
+            dest['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif endpoint == 'http://localhost:8000':
-            dest['endpoint'] = self.router_base_url
-        elif endpoint == 'http://localhost:8002':
-            dest['endpoint'] = self.receiver_base_url
+        elif endpoint == 'http://localhost:8000/senders/router/transactions':
+            dest['endpoint'] = urljoin(self.router_base_url, self.router_path)
+        elif endpoint == 'http://localhost:8002/senders/router/transactions':
+            dest['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
             dest['options']['receive_parsing'] = {
                 'max_inline': 8 }
 
@@ -92,10 +98,10 @@ class End2EndTest(unittest.TestCase):
         self.gateway_mx_port = self._find_free_port()
         self.gateway_msa_port = self._find_free_port()
         self.gateway_rest_port = self._find_free_port()
-        self.gateway_base_url = 'http://localhost:%d/' % self.gateway_rest_port
+        self.gateway_base_url = 'http://localhost:%d/' % self.gateway_rest_port + self.router_path
 
         self.receiver_rest_port = self._find_free_port()
-        self.receiver_base_url = 'http://localhost:%d' % self.receiver_rest_port
+        self.receiver_base_url = 'http://localhost:%d' % self.receiver_rest_port + self.router_path
 
         with open('config/local-test/gateway.yaml', 'r') as f:
             self.gateway_config_yaml =  yaml.load(f, Loader=yaml.CLoader)
@@ -132,7 +138,7 @@ class End2EndTest(unittest.TestCase):
         self.fake_smtpd_port = self._find_free_port()
 
         for endpoint in gateway_yaml['rest_output']:
-            endpoint['endpoint'] = self.router_base_url
+            endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_path)
             del endpoint['verify']
 
         for endpoint in router_yaml['endpoint']:
@@ -144,8 +150,8 @@ class End2EndTest(unittest.TestCase):
                     filter['static_hosts'] = [
                         {'host': '127.0.0.1', 'port': self.fake_smtpd_port}]
                 elif filter['filter'] == 'rest_output':
-                    if filter.get('static_endpoint', None) == 'http://localhost:8002':
-                        filter['static_endpoint'] = self.receiver_base_url
+                    if filter.get('static_endpoint', None) == 'http://localhost:8002/senders/router/transactions':
+                        filter['static_endpoint'] = urljoin(self.receiver_base_url, self.router_path)
                     if 'verify' in filter:
                         del filter['verify']
 

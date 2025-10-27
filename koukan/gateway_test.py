@@ -62,7 +62,7 @@ class GatewayTest(unittest.TestCase):
         self.service_thread = Thread(daemon=True, target=self.gw.main)
         self.service_thread.start()
 
-        self.gw_rest_url = 'http://localhost:%d' % rest_port
+        self.gw_rest_url = 'http://localhost:%d/senders/router/transactions' % rest_port
 
         for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')

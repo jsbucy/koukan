@@ -192,7 +192,7 @@ class RestEndpoint(Filter):
             self._set_request_timeout(req_headers, deadline_left)
             try:
                 rest_resp = self.client.post(
-                    urljoin(self.base_url, '/transactions'),
+                    self.base_url,
                     json=json,
                     headers=req_headers,
                     timeout=deadline_left)

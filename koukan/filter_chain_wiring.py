@@ -155,6 +155,7 @@ class FilterChainWiring:
         logging.info('Factory.rest_output %s', static_remote_host)
         rcpt_timeout = 30
         data_timeout = 300
+        # cache httpx.Client by params
         client_args = { 'verify': yaml.get('verify', True) }
         for c in self.rest_endpoint_clients:
             if c[0] == client_args:

@@ -26,8 +26,10 @@ def create_app(receiver = None, path = None):
             kwargs['dir'] = path
         receiver = Receiver(**kwargs)
 
-    @app.post('/transactions')
-    async def create_transaction(request : FastApiRequest) -> FastApiResponse:
+    @app.post('/senders/{sender}/transactions')
+    async def create_transaction(
+            sender : str,
+            request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
         tx_url, tx_json, etag = receiver.create_tx(
             req_json,

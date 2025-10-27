@@ -18,10 +18,12 @@ MAX_TIMEOUT=30
 def create_app(handler_factory : HandlerFactory):
     app = FastAPI()
 
-    @app.post('/transactions')
-    async def create_transaction(request : FastApiRequest) -> FastApiResponse:
+    @app.post('/senders/{sender}/transactions')
+    async def create_transaction(
+            sender : str,
+            request : FastApiRequest) -> FastApiResponse:
         req_json = await request.json()
-        handler = handler_factory.create_tx(request.headers['host'])
+        handler = handler_factory.create_tx(request.headers['host'], sender)
         return await handler.handle_async(
             request, partial(handler.create_tx, request, req_json=req_json))
 

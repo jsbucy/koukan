@@ -80,6 +80,7 @@ class RestHandler(Handler):
     service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
+    sender : Optional[str] = None
 
     def __init__(self,
                  executor : Executor,
@@ -92,7 +93,8 @@ class RestHandler(Handler):
                  endpoint_yaml : Optional[dict] = None,
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
-                 client : Optional[HTTP_CLIENT] = None):
+                 client : Optional[HTTP_CLIENT] = None,
+                 sender : Optional[str] = None):
         assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
@@ -109,6 +111,7 @@ class RestHandler(Handler):
         self.service_url = service_url
         if client is not None:
             self.client = client
+        self.sender = sender
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -718,7 +721,7 @@ class RestHandlerFactory(HandlerFactory):
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
-    def create_tx(self, http_host) -> RestHandler:
+    def create_tx(self, http_host, sender) -> RestHandler:
         res = self.endpoint_factory.create(http_host)
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
@@ -736,6 +739,7 @@ class RestHandlerFactory(HandlerFactory):
             session_url = self.session_url,
             service_url = self.service_url,
             client = self.client.get,
+            sender = sender,
             **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:

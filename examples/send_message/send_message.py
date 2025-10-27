@@ -55,13 +55,15 @@ class Sender:
     blob_cache : BlobCache
     tx_json : Optional[Dict[str, Any]] = None
     force_reuse = False
+    sender : str
 
     def __init__(self,
                  base_url : str,
                  host : str,
                  mail_from : str,
                  message_builder : Optional[dict] = None,
-                 body_filename : Optional[str] = None):
+                 body_filename : Optional[str] = None,
+                 sender = 'send_message'):
         self.session = requests.Session()
         # TODO this should install requests-cache to cache redirects
         # in cluster setups
@@ -82,6 +84,8 @@ class Sender:
             self.prep_message_builder_spec(message_builder)
         else:
             assert False
+
+        self.sender = sender
 
     def send_part(self,
                   url,
@@ -171,14 +175,15 @@ class Sender:
 
         tx_start = time.monotonic()
 
-        url = urljoin(self.base_url, '/transactions')
-        logging.debug('POST /transactions %s', url)
+        url = urljoin(
+            self.base_url, '/senders/' + self.sender + '/transactions')
+        logging.debug('POST %s', url)
         start = time.monotonic()
         rest_resp = self.session.post(
             url,
             headers={'host': self.host},
             json=tx_json)
-        logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
+        logging.debug('POST %s %s', url, rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
         # TODO tx creation POST hasn't waited on req_inflight for

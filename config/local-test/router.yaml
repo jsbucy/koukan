@@ -77,14 +77,14 @@ endpoint:
       - example.com
       - rest-application.example.com
       destination:
-        endpoint: http://localhost:8000
+        endpoint: http://localhost:8000/senders/router/transactions
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: http://localhost:8001
+        endpoint: http://localhost:8001/senders/router/transactions
         http_host: outbound
   - filter: router
     policy:
@@ -138,14 +138,14 @@ endpoint:
       - example.com
       - rest-application.example.com
       destination:
-        endpoint: http://localhost:8000
+        endpoint: http://localhost:8000/senders/router/transactions
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: http://localhost:8001
+        endpoint: http://localhost:8001/senders/router/transactions
         http_host: outbound
   - filter: router
     policy:
@@ -185,7 +185,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001
+        endpoint: http://localhost:8001/senders/router/transactions
         http_host: outbound
         host_list:
           - host: 'fake_smtpd'
@@ -200,7 +200,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002
+        endpoint: http://localhost:8002/senders/router/transactions
         options:
           receive_parsing:
   - filter: router
@@ -245,7 +245,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001
+        endpoint: http://localhost:8001/senders/router/transactions
         http_host: outbound
         host_list:
           - host: 'fake_smtpd'
@@ -259,7 +259,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002
+        endpoint: http://localhost:8002/senders/router/transactions
         options:
           receive_parsing:
   - filter: router
@@ -289,7 +289,7 @@ endpoint:
       name: address_list
       prefixes: []
       destination:
-        endpoint: http://localhost:8002
+        endpoint: http://localhost:8002/senders/router/transactions
         options:
           receive_parsing:
             max_inline: 0
@@ -297,7 +297,7 @@ endpoint:
   - filter: rest_output
     rcpt_timeout: 300
     data_timeout: 300
-    # static_endpoint: http://localhost:8002
+    # static_endpoint: http://localhost:8002/senders/router/transactions
     chunk_size: 1048576
 
 

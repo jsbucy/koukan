@@ -253,7 +253,7 @@ class RouterServiceTest(unittest.TestCase):
             self.port = s.server_address[1]
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         root_yaml['rest_listener']['session_uri'] = 'http://localhost:%d' % self.port
-        router_url = 'http://localhost:%d' % self.port
+        router_url = 'http://localhost:%d/senders/router_service_test/transactions' % self.port
         service = Service(root_yaml=root_yaml)
 
         service.start_main()
@@ -475,7 +475,7 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         post_resp = rest_endpoint.client.post(
-            rest_endpoint.base_url + '/transactions',
+            rest_endpoint.base_url,
             json = tx.to_json(WhichJson.REST_CREATE),
             headers={'host': 'submission'})
         self.assertEqual(201, post_resp.status_code)
