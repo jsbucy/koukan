@@ -32,8 +32,9 @@ class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
 
-    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
-        return self.service.create_storage_writer(http_host)
+    def create(self, http_host : str, sender : str
+               ) -> Optional[Tuple[AsyncFilter, dict]]:
+        return self.service.create_storage_writer(http_host, sender)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -232,6 +233,7 @@ class Service:
         return endp[0]
 
     def create_storage_writer(self, http_host : str,
+                              sender : str,
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert http_host is not None
