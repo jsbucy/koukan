@@ -151,10 +151,10 @@ class FilterChainWiring:
                 upstream_yaml['tag'] = tag
             add_route, unused_yaml = (
                 self.filter_chain_factory.build_filter_chain(
-                    'exploder_upstream', yaml['sender'], upstream_yaml))
+                    yaml['sender'], upstream_yaml))
         else:
             output = self.filter_chain_factory.build_filter_chain(
-                yaml['output_chain'], yaml['sender'], yaml.get('tag', None))
+                yaml['sender'], yaml.get('tag', None))
             if output is None:
                 return None
             add_route, output_yaml = output

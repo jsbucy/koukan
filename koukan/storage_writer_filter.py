@@ -35,7 +35,6 @@ class StorageWriterFilter(AsyncFilter):
     create_err : bool = False
     mu : Lock
     cv : Condition
-    http_host : Optional[str] = None
     endpoint_yaml : Optional[EndpointYamlProvider] = None
     sender : Optional[str] = None
     tag : Optional[str] = None
@@ -44,7 +43,6 @@ class StorageWriterFilter(AsyncFilter):
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
-                 http_host : Optional[str] = None,
                  sender : Optional[str] = None,
                  tag : Optional[str] = None,
                  endpoint_yaml : Optional[EndpointYamlProvider] = None):
@@ -54,7 +52,6 @@ class StorageWriterFilter(AsyncFilter):
         self.create_leased = create_leased
         self.mu = Lock()
         self.cv = Condition(self.mu)
-        self.http_host = http_host
         self.sender = sender
         self.tag = tag
         self.endpoint_yaml = endpoint_yaml
@@ -62,7 +59,7 @@ class StorageWriterFilter(AsyncFilter):
     def incremental(self):
         assert self.endpoint_yaml is not None
         logging.debug('%s %s', self.sender, self.tag)
-        yaml = self.endpoint_yaml(self.sender, self.tag)    #self.http_host)
+        yaml = self.endpoint_yaml(self.sender, self.tag)
         assert yaml is not None
         return yaml['chain'][-1]['filter'] == 'exploder'
 
@@ -126,7 +123,6 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata):
-        #assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         assert self.rest_id_factory is not None
         rest_id = self.rest_id_factory()
@@ -134,7 +130,6 @@ class StorageWriterFilter(AsyncFilter):
         for i in range(0,1):
             if self.endpoint_yaml is None:
                 break
-            #assert self.http_host is not None
             assert self.sender is not None
             if (endpoint_yaml := self.endpoint_yaml(self.sender, self.tag)) is None:
                 break
@@ -166,8 +161,6 @@ class StorageWriterFilter(AsyncFilter):
             tx = self.tx_cursor.load()
         if tx is None:  # 404 e.g. after GC
             return
-        if self.http_host is None:
-            self.http_host = tx.host
         if self.sender is None:
             self.sender = tx.sender
             self.tag = tx.tag

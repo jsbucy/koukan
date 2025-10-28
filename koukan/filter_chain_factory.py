@@ -89,7 +89,7 @@ class FilterChainFactory:
             assert isinstance(filter, BaseFilter)
         return filter
 
-    def build_filter_chain(self, host, sender : str,
+    def build_filter_chain(self, sender : str,
                            tag : Optional[str],
                            endpoint_yaml : Optional[dict] = None
                            ) -> Optional[Tuple[FilterChain, dict]]:

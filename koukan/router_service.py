@@ -240,7 +240,7 @@ class Service:
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert self.filter_chain_factory is not None
         if (endp := self.filter_chain_factory.build_filter_chain(
-                'http_host', sender, tag)) is None:
+                sender, tag)) is None:
             return None
         chain, endpoint_yaml = endp
 
@@ -338,7 +338,7 @@ class Service:
         assert self.filter_chain_factory is not None
         assert storage_tx.tx.sender is not None
         res = self.filter_chain_factory.build_filter_chain(
-            storage_tx.tx.host, storage_tx.tx.sender, storage_tx.tx.tag)
+            storage_tx.tx.sender, storage_tx.tx.tag)
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
