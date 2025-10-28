@@ -67,7 +67,6 @@ class RestHandler(Handler):
 
     _blob_rest_id : Optional[str] = None
     rest_id_factory : Optional[Callable[[], str]]
-    http_host : Optional[str] = None
 
     # _put_blob
     range : Optional[ContentRange] = None
@@ -88,7 +87,6 @@ class RestHandler(Handler):
                  tx_rest_id : Optional[str] = None,
                  blob_rest_id : Optional[str] = None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
-                 http_host : Optional[str] = None,
                  chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
                  session_url : Optional[str] = None,
@@ -101,7 +99,6 @@ class RestHandler(Handler):
         self._tx_rest_id = tx_rest_id
         self._blob_rest_id = blob_rest_id
         self.rest_id_factory = rest_id_factory
-        self.http_host = http_host
         self.chunk_size = chunk_size
         if endpoint_yaml:
             self.endpoint_yaml = endpoint_yaml
@@ -221,8 +218,6 @@ class RestHandler(Handler):
                 tx.body = BlobSpec(create_tx_body=True)
         elif err := self._validate_incremental_tx(tx):
             return err
-
-        tx.host = self.http_host
 
         upstream = self.async_filter.update(tx, tx.copy())
         cached = self.async_filter.check_cache()

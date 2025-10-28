@@ -177,7 +177,6 @@ class FilterChainWiring:
 
         return RestEndpoint(
             static_base_url = yaml.get('static_endpoint', None),
-            static_http_host = yaml.get('http_host', None),
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
             client_provider=client,

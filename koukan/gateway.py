@@ -99,7 +99,6 @@ class SmtpGateway(EndpointFactory):
 
         endpoint = RestEndpoint(
             static_base_url=yaml['endpoint'],
-            static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
             client_provider=client,

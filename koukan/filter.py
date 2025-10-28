@@ -415,7 +415,6 @@ _tx_fields = [
                                        WhichJson.EXPLODER_UPDATE,
                                        WhichJson.ADD_ROUTE])),
     TxField('rest_endpoint', validity=None),
-    TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
@@ -470,7 +469,6 @@ class TransactionMetadata:
     cancelled : Optional[bool] = None
 
     rest_endpoint : Optional[str] = None
-    upstream_http_host : Optional[str] = None
     options : Optional[dict] = None
 
     resolution : Optional[Resolution] = None

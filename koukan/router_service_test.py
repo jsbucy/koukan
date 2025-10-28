@@ -373,7 +373,6 @@ class RouterServiceTest(unittest.TestCase):
 
             rest_endpoint = self.create_endpoint(
                 static_base_url=self.router_url,
-                static_http_host='submission',
                 timeout_start=1, timeout_data=1)
             tx = rest_endpoint.downstream_tx
             delta = TransactionMetadata(
@@ -447,7 +446,7 @@ class RouterServiceTest(unittest.TestCase):
         prev_reads = self.service.storage._tx_reads
         logging.debug('RouterServiceTest.test_rest_smoke')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         tx = rest_endpoint.downstream_tx
         body = b'hello, world!'
@@ -513,7 +512,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_hanging_get(self):
         logging.debug('RouterServiceTest.test_rest_hanging_get')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
@@ -589,7 +588,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -645,7 +644,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body_http_retry(self):
         logging.debug('RouterServiceTest.test_rest_body_http_retry')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -705,7 +704,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body_chunked(self):
         logging.debug('RouterServiceTest.test_rest_body_chunked')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -780,7 +779,7 @@ class RouterServiceTest(unittest.TestCase):
     # downstream should complete uploading the body -> input_done -> reload
     def test_submission_retry(self):
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -959,7 +958,7 @@ class RouterServiceTest(unittest.TestCase):
         prev_reads = self.service.storage._tx_reads
         logging.info('RouterServiceTest.test_exploder_multi_rcpt')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_gw_url, static_http_host='smtp-msa',
+            static_base_url=self.router_gw_url,
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
@@ -1034,7 +1033,7 @@ class RouterServiceTest(unittest.TestCase):
     def _rest_smoke_micro(self):
         logging.debug('_rest_smoke_micro')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         def exp(tx, tx_delta):
             logging.debug(tx)
@@ -1104,7 +1103,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
 
         logging.info('_exploder_micro start tx')
@@ -1175,7 +1174,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_notification_retry_timeout(self):
         logging.info('RouterServiceTest.test_notification_retry_timeout')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_gw_url, static_http_host='smtp-msa')
+            static_base_url=self.router_gw_url)
 
         cancelled = False
 
@@ -1259,7 +1258,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_notification_fast_perm(self):
         logging.info('RouterServiceTest.test_notification_fast_perm')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_gw_url, static_http_host='smtp-msa')
+            static_base_url=self.router_gw_url)
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata()
@@ -1449,7 +1448,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_receive_parsing(self):
         logging.info('RouterServiceTest.test_receive_parsing')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_gw_url, static_http_host='smtp-in',
+            static_base_url=self.router_gw_url,
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
@@ -1500,7 +1499,7 @@ class RouterServiceTest(unittest.TestCase):
 
         # start a tx on self.service
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -1611,7 +1610,6 @@ class RouterServiceTest(unittest.TestCase):
             mail_code, rcpt_code, data_code):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission-sync-sor',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
@@ -1684,7 +1682,6 @@ class RouterServiceTest(unittest.TestCase):
     def test_add_route_sf_success(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission-sf-sor',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -1736,7 +1733,6 @@ class RouterServiceTest(unittest.TestCase):
     def test_output_handler_exception(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()

@@ -68,8 +68,7 @@ class GatewayTest(unittest.TestCase):
             logging.info('GatewayTest.setUp probe rest')
             try:
                 rest_endpoint = self.create_endpoint(
-                    static_base_url=self.gw_rest_url,
-                    static_http_host='outbound')
+                    static_base_url=self.gw_rest_url)
                 tx = TransactionMetadata()
                 rest_endpoint.wire_downstream(tx)
                 delta = TransactionMetadata(
@@ -106,7 +105,7 @@ class GatewayTest(unittest.TestCase):
     def test_rest_to_smtp_basic(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
-            static_http_host='outbound', timeout_start=10, timeout_data=10)
+            timeout_start=10, timeout_data=10)
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
@@ -134,8 +133,7 @@ class GatewayTest(unittest.TestCase):
 
     def test_rest_to_smtp_idle_gc(self):
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.gw_rest_url,
-            static_http_host='outbound')
+            static_base_url=self.gw_rest_url)
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
