@@ -109,7 +109,7 @@ endpoint:
       name: dest_domain
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
-        http_host: outbound
+        tag: outbound
   - filter: router
     policy:
       name: address_list
@@ -170,7 +170,7 @@ endpoint:
       name: dest_domain
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
-        http_host: outbound
+        tag: outbound
   - filter: router
     policy:
       name: address_list
@@ -210,7 +210,7 @@ endpoint:
       #- base: alice
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
-        http_host: outbound
+        tag: outbound
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -272,7 +272,7 @@ endpoint:
       #- base: alice
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
-        http_host: outbound
+        tag: outbound
         host_list:
           - host: 'fake_smtpd'
             port: 3025

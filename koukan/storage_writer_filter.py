@@ -22,6 +22,8 @@ from koukan.deadline import Deadline
 from koukan.rest_schema import BlobUri, parse_blob_uri
 from koukan.message_builder import MessageBuilderSpec
 
+EndpointYamlProvider = Callable[[str, Optional[str]], Optional[dict]]
+
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
@@ -34,14 +36,18 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
     http_host : Optional[str] = None
-    endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None
+    endpoint_yaml : Optional[EndpointYamlProvider] = None
+    sender : Optional[str] = None
+    tag : Optional[str] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
                  http_host : Optional[str] = None,
-                 endpoint_yaml : Optional[Callable[[str], Optional[dict]]] = None):
+                 sender : Optional[str] = None,
+                 tag : Optional[str] = None,
+                 endpoint_yaml : Optional[EndpointYamlProvider] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -49,11 +55,14 @@ class StorageWriterFilter(AsyncFilter):
         self.mu = Lock()
         self.cv = Condition(self.mu)
         self.http_host = http_host
+        self.sender = sender
+        self.tag = tag
         self.endpoint_yaml = endpoint_yaml
 
     def incremental(self):
         assert self.endpoint_yaml is not None
-        yaml = self.endpoint_yaml(self.http_host)
+        logging.debug('%s %s', self.sender, self.tag)
+        yaml = self.endpoint_yaml(self.sender, self.tag)    #self.http_host)
         assert yaml is not None
         return yaml['chain'][-1]['filter'] == 'exploder'
 
@@ -126,7 +135,8 @@ class StorageWriterFilter(AsyncFilter):
             if self.endpoint_yaml is None:
                 break
             assert self.http_host is not None
-            if (endpoint_yaml := self.endpoint_yaml(self.http_host)) is None:
+            assert self.sender is not None
+            if (endpoint_yaml := self.endpoint_yaml(self.sender, self.tag)) is None:
                 break
             if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
                 break
@@ -158,6 +168,10 @@ class StorageWriterFilter(AsyncFilter):
             return
         if self.http_host is None:
             self.http_host = tx.host
+        if self.sender is None:
+            self.sender = tx.sender
+            self.tag = tx.tag
+
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:

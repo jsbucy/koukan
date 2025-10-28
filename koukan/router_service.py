@@ -252,6 +252,8 @@ class Service:
             rest_id_factory=self.rest_id_factory,
             create_leased=True,
             http_host = http_host,
+            sender = sender,
+            tag = tag,
             endpoint_yaml = self.get_endpoint_yaml)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
@@ -262,9 +264,16 @@ class Service:
             return None
         return writer, endpoint_yaml
 
-    def get_endpoint_yaml(self, endpoint : str) -> Optional[dict]:
+    def get_endpoint_yaml(self, sender, tag) -> Optional[dict]:
         try:
             assert self.root_yaml is not None
+            sender_yaml = next(e for e in self.root_yaml['sender']
+                               if e['name'] == sender)
+            endpoint = sender_yaml.get('output_chain', None)
+            if tag is not None:
+                tag_yaml = sender_yaml.get('tag', [])
+                tag_yaml = next(e for e in tag_yaml if e['name'] == tag)
+                endpoint = tag_yaml.get('output_chain', endpoint)
             return next(e for e in self.root_yaml['endpoint']
                         if e['name'] == endpoint)
         except StopIteration:

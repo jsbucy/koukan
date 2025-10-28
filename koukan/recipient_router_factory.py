@@ -72,7 +72,7 @@ class RecipientRouterFactory:
             hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
         return Destination(
             rest_endpoint = dest.get('endpoint', None),
-            http_host = dest.get('http_host', None),
+            tag = dest.get('tag', None),
             options = dest.get('options', None),
             remote_host = hosts)
 

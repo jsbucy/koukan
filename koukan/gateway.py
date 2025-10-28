@@ -119,8 +119,9 @@ class SmtpGateway(EndpointFactory):
         assert self.config_yaml is not None
         assert self.rest_id_factory is not None
         rest_yaml = self.config_yaml['rest_listener']
-
-        if (factory := self.smtp_factory.get(host, None)) is None:
+        if tag is None:
+            return None
+        if (factory := self.smtp_factory.get(tag, None)) is None:
             return None
 
         # The ehlo_host comes from the yaml and not the request

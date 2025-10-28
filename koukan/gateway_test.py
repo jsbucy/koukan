@@ -73,6 +73,7 @@ class GatewayTest(unittest.TestCase):
                 tx = TransactionMetadata()
                 rest_endpoint.wire_downstream(tx)
                 delta = TransactionMetadata(
+                    tag='outbound',
                     remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
                     mail_from = Mailbox('probe-from%d' % i),
                     rcpt_to = [Mailbox('probe-to%d' % i)])
@@ -109,6 +110,7 @@ class GatewayTest(unittest.TestCase):
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
+            tag='outbound',
             remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
@@ -137,6 +139,7 @@ class GatewayTest(unittest.TestCase):
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
+            tag='outbound',
             remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
             mail_from = Mailbox('alice'))
         tx.merge_from(delta)

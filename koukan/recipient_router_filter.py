@@ -20,16 +20,16 @@ from koukan.filter_chain import ProxyFilter, FilterResult
 
 class Destination:
     rest_endpoint : Optional[str] = None
-    http_host : Optional[str] = None
+    tag : Optional[str] = None
     remote_host : Optional[List[HostPort]] = None
     options : dict
 
     def __init__(self, rest_endpoint : Optional[str] = None,
-                 http_host : Optional[str] = None,
+                 tag : Optional[str] = None,
                  remote_host : Optional[List[HostPort]] = None,
                  options : Optional[dict] = None):
         self.rest_endpoint = rest_endpoint
-        self.http_host = http_host
+        self.tag = tag
         self.remote_host = remote_host
         self.options = options if options else {}
 
@@ -92,9 +92,7 @@ class RecipientRouterFilter(ProxyFilter):
         assert up_res is None or up_res == res
         self.upstream_tx.resolution = res
 
-        hh = self.upstream_tx.upstream_http_host
-        assert hh is None or hh == dest.http_host
-        self.upstream_tx.upstream_http_host = dest.http_host
+        self.upstream_tx.tag = dest.tag
 
         opt = self.upstream_tx.options
         assert opt is None or opt == dest.options
@@ -104,6 +102,7 @@ class RecipientRouterFilter(ProxyFilter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
+        tx_delta.tag = None
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
         self.upstream_tx.merge_from(tx_delta)
@@ -118,7 +117,8 @@ class RecipientRouterFilter(ProxyFilter):
             resp = None
             if not rcpt.routed:
                 resp, rcpt.routed = self._route(rcpt)
+            else:
+                self.upstream_tx.tag = self.downstream_tx.tag
             assert resp is None or resp.err()
             self.downstream_tx.rcpt_response.append(resp)
-
         return FilterResult()
