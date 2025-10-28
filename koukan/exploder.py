@@ -60,9 +60,14 @@ class Recipient:
 
     def first_update(self,
                      tx : TransactionMetadata,
-                     output_chain : str, i : int):
+                     output_chain : str,
+                     sender : str,
+                     tag : Optional[str],
+                     i : int):
         self.tx = tx.copy_valid(WhichJson.EXPLODER_CREATE)
         self.tx.host = output_chain
+        self.tx.sender = sender
+        self.tx.tag = tag
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
         # TODO FilterChainWiring.exploder() passes block_upstream=True to
@@ -126,14 +131,20 @@ class Exploder(Filter):
     rcpt_ok = False
 
     recipients : List[Recipient]
+    sender : str
+    tag : Optional[str] = None
 
     def __init__(self,
                  output_chain : str,
+                 sender : str,
                  upstream_factory : FilterFactory,
+                 tag : Optional[str] = None,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
         self.output_chain = output_chain
+        self.sender = sender
+        self.tag = tag
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
@@ -181,7 +192,8 @@ class Exploder(Filter):
             if i >= len(self.recipients):
                 rcpt = Recipient(self.upstream_factory())
                 self.recipients.append(rcpt)
-                rcpt.first_update(tx, self.output_chain, i)
+                rcpt.first_update(
+                    tx, self.output_chain, self.sender, self.tag, i)
             else:
                 rcpt = self.recipients[i]
                 rcpt.update(tx_delta)

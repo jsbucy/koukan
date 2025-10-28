@@ -114,7 +114,8 @@ class SmtpGateway(EndpointFactory):
         return None
 
     # EndpointFactory
-    def create(self, host, sender) -> Optional[Tuple[AsyncFilter, dict]]:
+    def create(self, host, sender, tag : Optional[str]
+               ) -> Optional[Tuple[AsyncFilter, dict]]:
         assert self.config_yaml is not None
         assert self.rest_id_factory is not None
         rest_yaml = self.config_yaml['rest_listener']
@@ -246,7 +247,8 @@ class SmtpGateway(EndpointFactory):
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 timeout_data=service_yaml.get('data_timeout', data_timeout),
                 chunk_size=endpoint_yaml.get('chunk_size', 2**20),
-                refresh_interval=endpoint_yaml.get('refresh_interval', 30))
+                refresh_interval=endpoint_yaml.get('refresh_interval', 30),
+                tag=service_yaml['tag'])
 
             self.smtp_services.append(smtp_service(
                 hostname=addr[0], port=addr[1],

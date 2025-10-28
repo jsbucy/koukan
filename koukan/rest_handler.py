@@ -205,6 +205,7 @@ class RestHandler(Handler):
             req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(code=400, msg='invalid tx json')
+        tx.sender = self.sender
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
@@ -691,7 +692,7 @@ class RestHandler(Handler):
 class EndpointFactory(ABC):
     # dict : endpoint yaml
     @abstractmethod
-    def create(self, http_host : str, sender : str
+    def create(self, http_host : str, sender : str, tag : Optional[str]
                ) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
@@ -722,8 +723,8 @@ class RestHandlerFactory(HandlerFactory):
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
-    def create_tx(self, http_host, sender) -> RestHandler:
-        res = self.endpoint_factory.create(http_host, sender)
+    def create_tx(self, http_host, sender, tag) -> RestHandler:
+        res = self.endpoint_factory.create(http_host, sender, tag)
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
         assert res is not None

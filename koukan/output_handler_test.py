@@ -526,7 +526,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params = {'host': 'smtp-out'})
+            notification_params = {'host': 'smtp-out',
+                                   'sender': 'notification'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -613,7 +614,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params={'host': 'smtp-out'})
+            notification_params={'host': 'smtp-out',
+                                 'sender': 'notification'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -665,6 +667,7 @@ class OutputHandlerTest(unittest.TestCase):
             retry_params={'max_attempts': 1,
                           'mode': 'per_request'},
             notification_params={'host': 'notify-out',
+                                 'sender': 'notification',
                                  'mode': 'per_request'})
         handler.handle()
 
@@ -706,7 +709,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params={'host': 'notify-out'})
+            notification_params={'host': 'notify-out',
+                                 'sender': 'notification'})
 
         logging.debug('handle() for notification')
         handler.handle()

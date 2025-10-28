@@ -46,6 +46,8 @@ class End2EndTest(unittest.TestCase):
     gw_path = '/senders/gateway/transactions'
     # router -> gw, receiver
     router_path = '/senders/router/transactions'
+    # router -> router (egress -> ingress)
+    short_circuit_path = '/senders/short_circuit/transactions'
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -62,8 +64,8 @@ class End2EndTest(unittest.TestCase):
             dest['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif endpoint == 'http://localhost:8000/senders/router/transactions':
-            dest['endpoint'] = urljoin(self.router_base_url, self.router_path)
+        elif endpoint == 'http://localhost:8000/senders/short_circuit/transactions':
+            dest['endpoint'] = urljoin(self.router_base_url, self.short_circuit_path)
         elif endpoint == 'http://localhost:8002/senders/router/transactions':
             dest['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
             dest['options']['receive_parsing'] = {
@@ -121,6 +123,7 @@ class End2EndTest(unittest.TestCase):
 
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
+        self.router_submission_url = self.router_base_url + '/senders/submission/transactions'
         with open('config/local-test/router.yaml', 'r') as f:
             self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
 
@@ -320,7 +323,7 @@ class End2EndTest(unittest.TestCase):
     def test_submission_mime(self):
         self._configure_and_run()
 
-        sender = Sender(self.router_base_url,
+        sender = Sender(self.router_submission_url,
                         'submission',
                         'alice@example.com',
                         body_filename='testdata/trivial.msg')
@@ -370,7 +373,7 @@ class End2EndTest(unittest.TestCase):
              }]
         }
 
-        sender = Sender(self.router_base_url,
+        sender = Sender(self.router_submission_url,
                         'submission',
                         'alice@example.com',
                         message_builder=message_builder_spec)

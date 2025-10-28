@@ -22,10 +22,15 @@ def create_app(handler_factory : HandlerFactory):
     async def create_transaction(
             sender : str,
             request : FastApiRequest) -> FastApiResponse:
-        req_json = await request.json()
-        handler = handler_factory.create_tx(request.headers['host'], sender)
-        return await handler.handle_async(
-            request, partial(handler.create_tx, request, req_json=req_json))
+        try:
+            req_json = await request.json()
+            handler = handler_factory.create_tx(
+                request.headers['host'], sender, req_json.get('tag', None))
+            return await handler.handle_async(
+                request, partial(handler.create_tx, request, req_json=req_json))
+        except Exception as e:
+            logging.exception('create_transaction')
+            return FastApiResponse(status_code=500)
 
 
     @app.patch('/transactions/{tx_rest_id}')

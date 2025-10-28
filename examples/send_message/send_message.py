@@ -183,7 +183,7 @@ class Sender:
             url,
             headers={'host': self.host},
             json=tx_json)
-        logging.debug('POST %s %s', url, rest_resp, rest_resp.headers)
+        logging.debug('POST %s %s %s', url, rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
         # TODO tx creation POST hasn't waited on req_inflight for

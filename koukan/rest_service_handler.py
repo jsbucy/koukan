@@ -49,7 +49,8 @@ class Handler(ABC):
 # error, etc.
 class HandlerFactory(ABC):
     @abstractmethod
-    def create_tx(self, http_host : str, sender: str) -> Handler:
+    def create_tx(self, http_host : str, sender: str, tag : Optional[str]
+                  ) -> Handler:
         pass
 
     @abstractmethod

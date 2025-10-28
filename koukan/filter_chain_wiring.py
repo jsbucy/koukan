@@ -32,7 +32,7 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
 
-StorageWriterFactory = Callable[[str, bool],Optional[AsyncFilter]]
+StorageWriterFactory = Callable[[str, str, str, bool],Optional[AsyncFilter]]
 
 class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
@@ -72,6 +72,8 @@ class FilterChainWiring:
         factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
 
     def exploder_upstream(self, http_host : str,
+                          sender : str,
+                          tag : str,
                           rcpt_timeout : float,
                           data_timeout : float,
                           store_and_forward : bool,
@@ -80,7 +82,7 @@ class FilterChainWiring:
                           retry : bool):
         assert self.exploder_output_factory is not None
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            http_host, block_upstream)
+            http_host, sender, tag, block_upstream)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
@@ -102,15 +104,23 @@ class FilterChainWiring:
         # cf exploder.Recipient.first_update()
         return Exploder(
             yaml['output_chain'],
-            partial(self.exploder_upstream, yaml['output_chain'],
-                    rcpt_timeout, data_timeout, store_and_forward=msa,
-                    block_upstream=True, notify=True, retry=True),
+            yaml['sender'],
+            tag=yaml.get('tag', None),
+            upstream_factory=partial(
+                self.exploder_upstream,
+                yaml['output_chain'],
+                yaml['sender'],
+                yaml['tag'],
+                rcpt_timeout, data_timeout, store_and_forward=msa,
+                block_upstream=True, notify=True, retry=True),
             rcpt_timeout=yaml.get('rcpt_timeout', rcpt_timeout),
             data_timeout=yaml.get('data_timeout', data_timeout))
 
     def exploder_upstream_yaml(self, yaml):
         return self.exploder_upstream(
             yaml['http_host'],
+            yaml['sender'],
+            yaml.get('tag', None),
             yaml['rcpt_timeout'],
             yaml['data_timeout'],
             yaml['store_and_forward'],
@@ -137,10 +147,14 @@ class FilterChainWiring:
                     'retry': False
                 }]
             }
-            add_route, unused_yaml = self.filter_chain_factory.build_filter_chain('exploder_upstream', upstream_yaml)
+            if tag := yaml.get('tag', None):
+                upstream_yaml['tag'] = tag
+            add_route, unused_yaml = (
+                self.filter_chain_factory.build_filter_chain(
+                    'exploder_upstream', yaml['sender'], upstream_yaml))
         else:
             output = self.filter_chain_factory.build_filter_chain(
-                yaml['output_chain'])
+                yaml['output_chain'], yaml['sender'], yaml.get('tag', None))
             if output is None:
                 return None
             add_route, output_yaml = output

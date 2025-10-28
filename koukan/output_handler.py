@@ -438,6 +438,8 @@ class OutputHandler:
         # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
             host=self.notification_params['host'],
+            sender=self.notification_params['sender'],
+            tag=self.notification_params.get('tag', None),
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],

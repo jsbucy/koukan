@@ -33,6 +33,7 @@ class SmtpServiceTest(unittest.TestCase):
         handler_factory = lambda: SmtpHandler(
             chain_factory = lambda: self.chain,
             executor = Executor(inflight_limit=100, watchdog_timeout=3600),
+            tag = 'mx',
             chunk_size = 64
         )
         self.controller = service(

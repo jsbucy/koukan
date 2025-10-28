@@ -420,6 +420,12 @@ _tx_fields = [
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
     TxField('session_uri', validity=None),
+    TxField('sender', validity=set([ #WhichJson.REST_CREATE,
+                                    WhichJson.REST_READ,
+                                    WhichJson.DB])),
+    TxField('tag', validity=set([WhichJson.REST_CREATE,
+                                 WhichJson.REST_READ,
+                                 WhichJson.DB]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -470,6 +476,8 @@ class TransactionMetadata:
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
     session_uri : Optional[str] = None
+    sender : Optional[str] = None
+    tag : Optional[str] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -486,7 +494,9 @@ class TransactionMetadata:
                  smtp_meta : Optional[dict] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 sender : Optional[str] = None,
+                 tag : Optional[str] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -502,6 +512,8 @@ class TransactionMetadata:
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
+        self.sender = sender
+        self.tag = tag
 
     def __repr__(self):
         out = ''

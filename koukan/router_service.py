@@ -32,9 +32,9 @@ class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
 
-    def create(self, http_host : str, sender : str
+    def create(self, http_host : str, sender : str, tag : Optional[str]
                ) -> Optional[Tuple[AsyncFilter, dict]]:
-        return self.service.create_storage_writer(http_host, sender)
+        return self.service.create_storage_writer(http_host, sender, tag)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -225,21 +225,25 @@ class Service:
     def rest_id_factory(self):
         return secrets.token_urlsafe(self._rest_id_entropy)
 
-    def create_exploder_output(self, http_host : str, block_upstream
-                               ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(http_host, block_upstream)
+    def create_exploder_output(
+            self, http_host : str, sender : str, tag : str,
+            block_upstream : bool
+    ) -> Optional[StorageWriterFilter]:
+        if (endp := self.create_storage_writer(
+                http_host, sender, tag, block_upstream)
             ) is None:
             return None
         return endp[0]
 
     def create_storage_writer(self, http_host : str,
                               sender : str,
+                              tag : Optional[str],
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert http_host is not None
         assert self.filter_chain_factory is not None
-        if (endp := self.filter_chain_factory.build_filter_chain(http_host)
-            ) is None:
+        if (endp := self.filter_chain_factory.build_filter_chain(
+                http_host, sender, tag)) is None:
             return None
         chain, endpoint_yaml = endp
 
@@ -327,7 +331,9 @@ class Service:
             return False
         assert storage_tx.tx is not None
         assert self.filter_chain_factory is not None
-        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.host)
+        assert storage_tx.tx.sender is not None
+        res = self.filter_chain_factory.build_filter_chain(
+            storage_tx.tx.host, storage_tx.tx.sender, storage_tx.tx.tag)
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',

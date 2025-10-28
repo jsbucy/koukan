@@ -58,9 +58,11 @@ class SmtpHandler:
     refresh_interval : int
     last_refresh : float = 0
     chunk_size : int
+    tag : str
 
     def __init__(self, chain_factory : ChainFactory,
                  executor : Executor,
+                 tag : str,
                  timeout_mail=10,
                  timeout_rcpt=60,
                  timeout_data=330,
@@ -76,6 +78,7 @@ class SmtpHandler:
         self.cx_id = 'cx%d' % next_cx()
         self.refresh_interval = refresh_interval
         self.chunk_size = chunk_size
+        self.tag = tag
 
     def set_smtp(self, smtp):
         self.smtp = smtp
@@ -169,7 +172,7 @@ class SmtpHandler:
                           mail_from : str,
                           mail_esmtp : List[str]) -> str:
         self.chain = self.chain_factory()
-        self.chain.init(TransactionMetadata())
+        self.chain.init(TransactionMetadata(tag=self.tag))
         assert self.chain.tx is not None
         self.chain.tx.smtp_meta = {
             'ehlo_host': session.host_name,
