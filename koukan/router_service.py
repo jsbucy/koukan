@@ -226,8 +226,7 @@ class Service:
         return secrets.token_urlsafe(self._rest_id_entropy)
 
     def create_exploder_output(
-            self, http_host : str, sender : str, tag : str,
-            block_upstream : bool
+            self, sender : str, tag : str, block_upstream : bool
     ) -> Optional[StorageWriterFilter]:
         if (endp := self.create_storage_writer(sender, tag, block_upstream)
             ) is None:

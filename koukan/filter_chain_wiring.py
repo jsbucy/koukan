@@ -32,7 +32,7 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
 
-StorageWriterFactory = Callable[[str, str, str, bool],Optional[AsyncFilter]]
+StorageWriterFactory = Callable[[str, str, bool],Optional[AsyncFilter]]
 
 class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
@@ -71,8 +71,7 @@ class FilterChainWiring:
         factory.add_filter('message_builder', self.message_builder)
         factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
 
-    def exploder_upstream(self, http_host : str,
-                          sender : str,
+    def exploder_upstream(self, sender : str,
                           tag : str,
                           rcpt_timeout : float,
                           data_timeout : float,
@@ -82,7 +81,7 @@ class FilterChainWiring:
                           retry : bool):
         assert self.exploder_output_factory is not None
         upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            http_host, sender, tag, block_upstream)
+            sender, tag, block_upstream)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
@@ -108,7 +107,6 @@ class FilterChainWiring:
             tag=yaml.get('tag', None),
             upstream_factory=partial(
                 self.exploder_upstream,
-                yaml['output_chain'],
                 yaml['sender'],
                 yaml['tag'],
                 rcpt_timeout, data_timeout, store_and_forward=msa,
@@ -118,7 +116,6 @@ class FilterChainWiring:
 
     def exploder_upstream_yaml(self, yaml):
         return self.exploder_upstream(
-            yaml['http_host'],
             yaml['sender'],
             yaml.get('tag', None),
             yaml['rcpt_timeout'],
@@ -138,7 +135,6 @@ class FilterChainWiring:
             upstream_yaml = {
                 'chain': [{
                     'filter': 'exploder_upstream',
-                    'http_host': yaml['output_chain'],
                     'rcpt_timeout': 0,
                     'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
                     'store_and_forward': True,
