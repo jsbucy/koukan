@@ -114,7 +114,7 @@ class SmtpGateway(EndpointFactory):
         return None
 
     # EndpointFactory
-    def create(self, host, sender, tag : Optional[str]
+    def create(self, sender, tag : Optional[str]
                ) -> Optional[Tuple[AsyncFilter, dict]]:
         assert self.config_yaml is not None
         assert self.rest_id_factory is not None

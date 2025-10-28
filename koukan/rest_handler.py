@@ -692,7 +692,7 @@ class RestHandler(Handler):
 class EndpointFactory(ABC):
     # dict : endpoint yaml
     @abstractmethod
-    def create(self, http_host : str, sender : str, tag : Optional[str]
+    def create(self, sender : str, tag : Optional[str]
                ) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
@@ -723,8 +723,8 @@ class RestHandlerFactory(HandlerFactory):
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
-    def create_tx(self, http_host, sender, tag) -> RestHandler:
-        res = self.endpoint_factory.create(http_host, sender, tag)
+    def create_tx(self, sender, tag) -> RestHandler:
+        res = self.endpoint_factory.create(sender, tag)
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
         assert res is not None
@@ -735,7 +735,6 @@ class RestHandlerFactory(HandlerFactory):
         return RestHandler(
             executor=self.executor,
             async_filter=endpoint,
-            http_host=http_host,
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
             session_url = self.session_url,

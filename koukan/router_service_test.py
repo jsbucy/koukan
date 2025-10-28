@@ -1710,7 +1710,8 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_upstream(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('submission-sf-sor', tx.host)
+            self.assertEqual('router_service_test', tx.sender)
+            self.assertEqual('submission-sf-sor', tx.tag)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(203)],

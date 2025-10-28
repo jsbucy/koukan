@@ -25,7 +25,7 @@ def create_app(handler_factory : HandlerFactory):
         try:
             req_json = await request.json()
             handler = handler_factory.create_tx(
-                request.headers['host'], sender, req_json.get('tag', None))
+                sender, req_json.get('tag', None))
             return await handler.handle_async(
                 request, partial(handler.create_tx, request, req_json=req_json))
         except Exception as e:

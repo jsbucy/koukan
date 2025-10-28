@@ -126,7 +126,7 @@ class StorageWriterFilter(AsyncFilter):
         return self.tx_cursor.version
 
     def _create(self, tx : TransactionMetadata):
-        assert tx.host is not None
+        #assert tx.host is not None
         self.tx_cursor = self.storage.get_transaction_cursor()
         assert self.rest_id_factory is not None
         rest_id = self.rest_id_factory()
@@ -134,7 +134,7 @@ class StorageWriterFilter(AsyncFilter):
         for i in range(0,1):
             if self.endpoint_yaml is None:
                 break
-            assert self.http_host is not None
+            #assert self.http_host is not None
             assert self.sender is not None
             if (endpoint_yaml := self.endpoint_yaml(self.sender, self.tag)) is None:
                 break

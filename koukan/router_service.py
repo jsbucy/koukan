@@ -32,9 +32,9 @@ class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
 
-    def create(self, http_host : str, sender : str, tag : Optional[str]
+    def create(self, sender : str, tag : Optional[str]
                ) -> Optional[Tuple[AsyncFilter, dict]]:
-        return self.service.create_storage_writer(http_host, sender, tag)
+        return self.service.create_storage_writer(sender, tag)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -229,21 +229,18 @@ class Service:
             self, http_host : str, sender : str, tag : str,
             block_upstream : bool
     ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(
-                http_host, sender, tag, block_upstream)
+        if (endp := self.create_storage_writer(sender, tag, block_upstream)
             ) is None:
             return None
         return endp[0]
 
-    def create_storage_writer(self, http_host : str,
-                              sender : str,
+    def create_storage_writer(self, sender : str,
                               tag : Optional[str],
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
-        assert http_host is not None
         assert self.filter_chain_factory is not None
         if (endp := self.filter_chain_factory.build_filter_chain(
-                http_host, sender, tag)) is None:
+                'http_host', sender, tag)) is None:
             return None
         chain, endpoint_yaml = endp
 
@@ -251,7 +248,6 @@ class Service:
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=True,
-            http_host = http_host,
             sender = sender,
             tag = tag,
             endpoint_yaml = self.get_endpoint_yaml)
