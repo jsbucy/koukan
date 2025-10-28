@@ -319,9 +319,6 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
     raise ValueError()
 
 _tx_fields = [
-    # downstream http host
-    TxField('host',
-            validity = set([WhichJson.DB])),
     TxField('remote_host',
             # TODO these accept/emit criteria are more at the syntax
             # level, there also needs to be a policy level e.g. to
@@ -438,7 +435,6 @@ def _valid_list_offset(which_js : WhichJson):
 # "set field to None." In terms of json patch, it's a delta that
 # contains only "add" operations.
 class TransactionMetadata:
-    host : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
@@ -484,7 +480,6 @@ class TransactionMetadata:
                  mail_response : Optional[Response] = None,
                  rcpt_to : Optional[Sequence[Mailbox]] = None,
                  rcpt_response : Optional[Sequence[Response]] = None,
-                 host : Optional[str] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
@@ -501,7 +496,6 @@ class TransactionMetadata:
         self.mail_response = mail_response
         self.rcpt_to = list(rcpt_to) if rcpt_to else []
         self.rcpt_response = list(rcpt_response) if rcpt_response else []
-        self.host = host
         self.body = body
         self.data_response = data_response
         self.notification = notification

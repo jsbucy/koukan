@@ -437,7 +437,6 @@ class OutputHandler:
         # similar to rest submission: retries enabled, notifications disabled
         # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
-            host=self.notification_params['host'],
             sender=self.notification_params['sender'],
             tag=self.notification_params.get('tag', None),
             mail_from=Mailbox(''),

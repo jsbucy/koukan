@@ -30,11 +30,14 @@ def _err(r : Optional[Response]) -> Tuple[bool, Response]:
 # failing.
 class AddRouteFilter(Filter):
     add_route : FilterChain
-    host : str
+    sender : str
+    tag : Optional[str]
 
-    def __init__(self, add_route : FilterChain, host : str):
+    def __init__(self, add_route : FilterChain, sender,
+                 tag :Optional[str] = None):
         self.add_route = add_route
-        self.host = host
+        self.sender = sender
+        self.tag = tag
 
     def _resp_err(self):
         atx = self.add_route.tx
@@ -64,7 +67,8 @@ class AddRouteFilter(Filter):
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route.tx is None:
             self.add_route.init(TransactionMetadata())
-            add_route_delta.host = self.host
+            add_route_delta.sender = self.sender
+            add_route_delta.tag = self.tag
         assert self.add_route.tx is not None
         self.add_route.tx.merge_from(add_route_delta)
         self.add_route.update()

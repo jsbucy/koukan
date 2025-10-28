@@ -49,7 +49,7 @@ class StorageTestBase(unittest.TestCase):
         downstream.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host'),
+                remote_host=HostPort('remote_host', 2525)),
             create_leased=True)
 
         downstream.write_envelope(TransactionMetadata(
@@ -72,7 +72,6 @@ class StorageTestBase(unittest.TestCase):
         downstream.write_envelope(TransactionMetadata(
             rcpt_to=[Mailbox('bob')]))
         self.assertEqual(downstream.tx.remote_host.host, 'remote_host')
-        self.assertEqual(downstream.tx.host, 'host')
         self.assertEqual(downstream.tx.mail_from.mailbox, 'alice')
         self.assertEqual(downstream.tx.mail_response.code, 450)
         self.assertEqual(downstream.tx.rcpt_to[0].mailbox, 'bob')
@@ -166,7 +165,7 @@ class StorageTestBase(unittest.TestCase):
         cursor.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host'),
+                remote_host=HostPort('remote_host', 2525)),
             create_leased=True)
         with self.assertRaises(AssertionError):
             cursor.write_envelope(TransactionMetadata(
@@ -196,7 +195,7 @@ class StorageTestBase(unittest.TestCase):
     def test_body_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
+            remote_host=HostPort('remote_host', 2525)))
         tx_writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')]))
@@ -212,7 +211,7 @@ class StorageTestBase(unittest.TestCase):
         # this should fail
         tx_writer2 = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host',
+            remote_host=HostPort('remote_host', 2525),
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         # reusing body of non-existent tx should fail
@@ -259,7 +258,7 @@ class StorageTestBase(unittest.TestCase):
     def test_blob_reuse(self):
         tx_writer = self.s.get_transaction_cursor()
         tx_writer.create('tx_rest_id1', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
+            remote_host=HostPort('remote_host', 2525)))
         tx_writer.write_envelope(
             TransactionMetadata(
                 mail_from=Mailbox('alice'),
@@ -280,7 +279,7 @@ class StorageTestBase(unittest.TestCase):
 
         tx_writer2 = self.s.get_transaction_cursor()
         tx_writer2.create('tx_rest_id2', TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525), host='host'))
+            remote_host=HostPort('remote_host', 2525)))
         tx_writer2.write_envelope(
             TransactionMetadata(
                 mail_from=Mailbox('alice'),
@@ -310,8 +309,7 @@ class StorageTestBase(unittest.TestCase):
     def test_message_builder_no_blob(self):
         tx_writer = self.s.get_transaction_cursor()
         tx = TransactionMetadata(
-            remote_host=HostPort('remote_host', 2525),
-            host='host')
+            remote_host=HostPort('remote_host', 2525))
         tx.body = MessageBuilderSpec({
             "headers": [ ["subject", "hello"] ]})
         tx.body.parse_blob_specs()
@@ -372,7 +370,6 @@ class StorageTestBase(unittest.TestCase):
         writer.create('xyz', TransactionMetadata(
             local_host=HostPort('local_host', 25),
             remote_host=HostPort('remote_host', 2525),
-            host='host',
             retry={}))
         writer.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice'),
@@ -397,7 +394,6 @@ class StorageTestBase(unittest.TestCase):
         tx_writer.create(
             'xyz',
             TransactionMetadata(
-                host='host',
                 local_host=HostPort('local_host', 25),
                 remote_host=HostPort('remote_host', 2525),
                 retry={}))
@@ -449,8 +445,7 @@ class StorageTestBase(unittest.TestCase):
         writer = self.s.get_transaction_cursor()
         writer.create('xyz', TransactionMetadata(
             local_host=HostPort('local_host', 25),
-            remote_host=HostPort('remote_host', 2525),
-            host='host'))
+            remote_host=HostPort('remote_host', 2525)))
         reader = self.s.get_transaction_cursor()
         self.assertIsNotNone(reader.load(writer.db_id))
         self.assertIsNone(reader.tx.mail_from)
@@ -473,7 +468,6 @@ class StorageTestBase(unittest.TestCase):
     def test_waiting_inflight(self):
         tx_cursor = self.s.get_transaction_cursor()
         tx_cursor.create('xyz', TransactionMetadata(
-            host='outbound',
             retry={}))
 
         # needs to be inflight to wait
@@ -587,7 +581,7 @@ class StorageTestBase(unittest.TestCase):
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host'),
+                remote_host=HostPort('remote_host', 2525)),
             create_leased=True)
         self.assertIsNotNone(upstream.load(start_attempt=True))
 
@@ -660,7 +654,7 @@ class StorageTestBase(unittest.TestCase):
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host',
+                remote_host=HostPort('remote_host', 2525),
                 mail_from = Mailbox('alice'),
                 rcpt_to = [Mailbox('bob')]),
             create_leased=True)
@@ -699,7 +693,7 @@ class StorageTestBase(unittest.TestCase):
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host',
+                remote_host=HostPort('remote_host', 2525),
                 mail_from = Mailbox('alice'),
                 rcpt_to = [Mailbox('bob')],
                 body = BlobSpec(create_tx_body=True)),
@@ -775,7 +769,7 @@ class StorageTestBase(unittest.TestCase):
         upstream.create(
             'tx_rest_id',
             TransactionMetadata(
-                remote_host=HostPort('remote_host', 2525), host='host',
+                remote_host=HostPort('remote_host', 2525),
                 mail_from = Mailbox('alice'),
                 rcpt_to = [Mailbox('bob')],
                 body = message_builder),

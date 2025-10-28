@@ -1694,7 +1694,7 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_add_route(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('sor', tx.host)
+            self.assertEqual('sor', tx.sender)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(202),
                 rcpt_response=[Response(204)],

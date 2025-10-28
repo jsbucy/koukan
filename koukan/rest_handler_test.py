@@ -70,8 +70,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(resp.headers.get('etag', None))
 
 
-        endpoint.expect_get(
-            (TransactionMetadata(host='msa'), 1))
+        endpoint.expect_get((TransactionMetadata(), 1))
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             return TransactionMetadata(), 2
@@ -92,7 +91,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 200)
 
         tx2 = TransactionMetadata(
-            host='msa',
             mail_from=Mailbox('alice'))
         tx3 = tx2.copy()
         tx3.mail_response = Response(201)

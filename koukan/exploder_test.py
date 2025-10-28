@@ -159,8 +159,7 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, test : Test):
         logging.debug('_test_one()', stack_info=True)
-        exploder = Exploder('output-chain',
-                            'exploder',
+        exploder = Exploder('exploder',
                             partial(self.factory, msa),
                             rcpt_timeout=5)
         tx = TransactionMetadata()
@@ -519,8 +518,7 @@ class ExploderTest(unittest.TestCase):
             ))
 
     def test_upstream_busy(self):
-        exploder = Exploder('output-chain',
-                            'exploder',
+        exploder = Exploder('exploder',
                             lambda: None,
                             rcpt_timeout=5)
         tx = TransactionMetadata()
@@ -535,8 +533,7 @@ class ExploderTest(unittest.TestCase):
 
     def test_partial_body(self):
         upstream = MockAsyncFilter()
-        exploder = Exploder('output-chain',
-                            'exploder',
+        exploder = Exploder('exploder',
                             lambda: upstream,
                             rcpt_timeout=5)
         tx = TransactionMetadata()

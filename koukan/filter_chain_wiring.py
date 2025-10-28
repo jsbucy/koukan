@@ -102,7 +102,6 @@ class FilterChainWiring:
         # timeouts to 0 like add-route.
         # cf exploder.Recipient.first_update()
         return Exploder(
-            yaml['output_chain'],
             yaml['sender'],
             tag=yaml.get('tag', None),
             upstream_factory=partial(
@@ -154,7 +153,7 @@ class FilterChainWiring:
             if output is None:
                 return None
             add_route, output_yaml = output
-        return AddRouteFilter(add_route, yaml['output_chain'])
+        return AddRouteFilter(add_route, yaml['sender'], yaml.get('tag', None))
 
     def rest_output(self, yaml):
         logging.debug('Config.rest_output %s', yaml)
