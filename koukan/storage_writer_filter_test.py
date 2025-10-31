@@ -20,6 +20,7 @@ from koukan.storage_writer_filter import StorageWriterFilter
 import koukan.sqlite_test_utils as sqlite_test_utils
 
 from koukan.message_builder import MessageBuilderSpec
+from koukan.sender import Sender
 
 
 class StorageWriterFilterTest(unittest.TestCase):
@@ -107,7 +108,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id')
 
-        tx = TransactionMetadata(sender='gateway')
+        tx = TransactionMetadata(sender=Sender('gateway'))
         filter.update(tx, tx.copy())
         tx = TransactionMetadata(cancelled = True)
         filter.update(tx, tx.copy())
@@ -162,7 +163,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased=True)
-        tx = TransactionMetadata(sender='exploder')
+        tx = TransactionMetadata(sender=Sender('exploder'))
         filter.update(tx, tx.copy())
 
         upstream_cursor = filter.release_transaction_cursor()

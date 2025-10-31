@@ -8,6 +8,7 @@ from koukan.filter import (
     WhichJson )
 from koukan.filter_chain import FilterChain, FilterResult, Filter
 from koukan.response import Response
+from koukan.sender import Sender
 
 def _err(r : Optional[Response]) -> Tuple[bool, Response]:
     if r is None or r.ok():
@@ -34,7 +35,7 @@ class AddRouteFilter(Filter):
     tag : Optional[str]
 
     def __init__(self, add_route : FilterChain, sender,
-                 tag :Optional[str] = None):
+                 tag : Optional[str] = None):
         self.add_route = add_route
         self.sender = sender
         self.tag = tag
@@ -67,8 +68,7 @@ class AddRouteFilter(Filter):
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route.tx is None:
             self.add_route.init(TransactionMetadata())
-            add_route_delta.sender = self.sender
-            add_route_delta.tag = self.tag
+            add_route_delta.sender = Sender(self.sender, self.tag)
         assert self.add_route.tx is not None
         self.add_route.tx.merge_from(add_route_delta)
         self.add_route.update()

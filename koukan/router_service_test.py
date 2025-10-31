@@ -40,8 +40,9 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 from koukan.message_builder import MessageBuilderSpec
 
 from koukan.storage_schema import BlobSpec
+from koukan.sender import Sender
 
-from examples.send_message.send_message import Sender
+from examples.send_message.send_message import Sender as RestSender
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -224,7 +225,9 @@ root_yaml_template = {
                      'name': 'address_list',
                      'domains': ['example.com'],
                      #endpoint: https://localhost:8001
-                     'destination': {'options': { 'receive_parsing': {}}}
+                     'destination': {
+                         'sender': {'name': 'router'},
+                         'options': { 'receive_parsing': {}}}
                      }
                 },
                 {'filter': 'router',
@@ -627,7 +630,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIn('uri', tx_json['body']['blob_status'])
         del tx_json['body']['blob_status']['uri']
         self.assertEqual(tx_json, {
-            'sender': 'router_service_test',
+            'sender': {'name': 'router_service_test'},
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {'blob_status': {#'content_length': 13, 'length': 13,
@@ -758,7 +761,7 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
-                'sender': 'router_service_test',
+                'sender': {'name': 'router_service_test'},
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {'blob_status': {#'content_length': 13, 'length': 13,
@@ -860,7 +863,7 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
-                    'sender': 'router_service_test',
+                    'sender': {'name': 'router_service_test'},
                     'mail_from': {},
                     'rcpt_to': [{}],
                     'body': {'blob_status': {'finalized': True}},
@@ -887,11 +890,11 @@ class RouterServiceTest(unittest.TestCase):
         body_file.write(body_utf8)
         body_file.flush()
 
-        sender = Sender(self.router_url,
-                        'submission',
-                        'alice@example.com',
-                        body_filename=body_file.name,
-                        sender='router_service_test')
+        sender = RestSender(self.router_url,
+                            'submission',
+                            'alice@example.com',
+                            body_filename=body_file.name,
+                            sender='router_service_test')
 
         upstream_endpoint = FakeFilter()
         def exp_env(tx, tx_delta):
@@ -965,7 +968,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('testExploderMultiRcpt start tx')
         delta = TransactionMetadata(
-            tag='msa',
+            sender=Sender(name='gateway', tag='msa'),
             mail_from=Mailbox('alice@example.com'),
             remote_host=HostPort('1.2.3.4', 12345))
         tx.merge_from(delta)
@@ -1199,7 +1202,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
-            tag='msa',
+            sender=Sender(name='gateway', tag='msa'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(b'Hello, World!', last=True),
@@ -1264,7 +1267,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
-            tag='msa',
+            sender=Sender(name='gateway', tag='msa'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob1@example.com'),
                      Mailbox('bob2@example.com')],
@@ -1381,11 +1384,11 @@ class RouterServiceTest(unittest.TestCase):
         body_file.write(body_utf8)
         body_file.flush()
 
-        sender = Sender(self.router_url,
-                        'submission',
-                        'alice@example.com',
-                        sender='router_service_test',
-                        message_builder = {
+        sender = RestSender(self.router_url,
+                            'submission',
+                            'alice@example.com',
+                            sender='router_service_test',
+                            message_builder = {
             "headers": [
                 ["from", [{"display_name": "alice a",
                            "address": "alice@example.com"}]],
@@ -1455,7 +1458,7 @@ class RouterServiceTest(unittest.TestCase):
         with open('testdata/multipart.msg', 'rb') as f:
             body = f.read()
         delta = TransactionMetadata(
-            tag='mx',
+            sender=Sender(name='gateway', tag='mx'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1615,7 +1618,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.wire_downstream(tx)
         body = b'hello, world!'
         delta = TransactionMetadata(
-            tag='submission-sync-sor',
+            sender=Sender(name='router_service_test', tag='submission-sync-sor'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1687,14 +1690,14 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
-            tag='submission-sf-sor',
+            sender=Sender(name='router_service_test', tag='submission-sf-sor'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
         def exp_add_route(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('sor', tx.sender)
+            self.assertEqual('sor', tx.sender.name)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(202),
                 rcpt_response=[Response(204)],
@@ -1707,8 +1710,8 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_upstream(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('router_service_test', tx.sender)
-            self.assertEqual('submission-sf-sor', tx.tag)
+            self.assertEqual('router_service_test', tx.sender.name)
+            self.assertEqual('submission-sf-sor', tx.sender.tag)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(203)],

@@ -21,8 +21,9 @@ from koukan.deadline import Deadline
 
 from koukan.rest_schema import BlobUri, parse_blob_uri
 from koukan.message_builder import MessageBuilderSpec
+from koukan.sender import Sender
 
-EndpointYamlProvider = Callable[[str, Optional[str]], Optional[dict]]
+EndpointYamlProvider = Callable[[Sender], Optional[dict]]
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
@@ -36,15 +37,13 @@ class StorageWriterFilter(AsyncFilter):
     mu : Lock
     cv : Condition
     endpoint_yaml : Optional[EndpointYamlProvider] = None
-    sender : Optional[str] = None
-    tag : Optional[str] = None
+    sender : Optional[Sender] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
-                 sender : Optional[str] = None,
-                 tag : Optional[str] = None,
+                 sender : Optional[Sender] = None,
                  endpoint_yaml : Optional[EndpointYamlProvider] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
@@ -53,13 +52,11 @@ class StorageWriterFilter(AsyncFilter):
         self.mu = Lock()
         self.cv = Condition(self.mu)
         self.sender = sender
-        self.tag = tag
         self.endpoint_yaml = endpoint_yaml
 
     def incremental(self):
         assert self.endpoint_yaml is not None
-        logging.debug('%s %s', self.sender, self.tag)
-        yaml = self.endpoint_yaml(self.sender, self.tag)
+        yaml = self.endpoint_yaml(self.sender)
         assert yaml is not None
         return yaml['chain'][-1]['filter'] == 'exploder'
 
@@ -131,7 +128,7 @@ class StorageWriterFilter(AsyncFilter):
             if self.endpoint_yaml is None:
                 break
             assert self.sender is not None
-            if (endpoint_yaml := self.endpoint_yaml(self.sender, self.tag)) is None:
+            if (endpoint_yaml := self.endpoint_yaml(self.sender)) is None:
                 break
             if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
                 break
@@ -163,7 +160,6 @@ class StorageWriterFilter(AsyncFilter):
             return
         if self.sender is None:
             self.sender = tx.sender
-            self.tag = tx.tag
 
 
     # AsyncFilter

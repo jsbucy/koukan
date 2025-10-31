@@ -9,6 +9,7 @@ import asyncio
 
 from koukan.filter_chain import BaseFilter
 from koukan.filter_chain import FilterChain
+from koukan.sender import Sender
 
 class FilterSpec:
     builder : Callable[[Any], BaseFilter]
@@ -89,17 +90,16 @@ class FilterChainFactory:
             assert isinstance(filter, BaseFilter)
         return filter
 
-    def build_filter_chain(self, sender : str,
-                           tag : Optional[str],
+    def build_filter_chain(self, sender : Sender,
                            endpoint_yaml : Optional[dict] = None
                            ) -> Optional[Tuple[FilterChain, dict]]:
         assert self.sender_yaml is not None
-        sender_yaml = self.sender_yaml[sender]
+        sender_yaml = self.sender_yaml[sender.name]
         output_chain = sender_yaml.get('output_chain', None)
         tags = sender_yaml.get('tag', [])
-        if tags:
+        if tags and sender.tag:
             for tag_yaml in tags:
-                if tag_yaml['name'] == tag and (
+                if tag_yaml['name'] == sender.tag and (
                         toc := tag_yaml.get('output_chain', None)):
                     output_chain = toc
         assert output_chain is not None

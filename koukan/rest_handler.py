@@ -43,6 +43,7 @@ from koukan.filter import (
     AsyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.sender import Sender
 from koukan.executor import Executor
 
 from koukan.rest_schema import (
@@ -202,7 +203,9 @@ class RestHandler(Handler):
             req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(code=400, msg='invalid tx json')
-        tx.sender = self.sender
+        if tx.sender is None:
+            tx.sender = Sender()
+        tx.sender.name = self.sender
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
@@ -687,7 +690,7 @@ class RestHandler(Handler):
 class EndpointFactory(ABC):
     # dict : endpoint yaml
     @abstractmethod
-    def create(self, sender : str, tag : Optional[str]
+    def create(self, sender : Sender
                ) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
@@ -719,7 +722,7 @@ class RestHandlerFactory(HandlerFactory):
         self.client = Client(follow_redirects=True)
 
     def create_tx(self, sender, tag) -> RestHandler:
-        res = self.endpoint_factory.create(sender, tag)
+        res = self.endpoint_factory.create(Sender(sender, tag))
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
         assert res is not None

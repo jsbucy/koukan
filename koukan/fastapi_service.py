@@ -24,8 +24,11 @@ def create_app(handler_factory : HandlerFactory):
             request : FastApiRequest) -> FastApiResponse:
         try:
             req_json = await request.json()
-            handler = handler_factory.create_tx(
-                sender, req_json.get('tag', None))
+            tag = None
+            # xxx bootstrap Sender?
+            if (sender_js := req_json.get('sender', None)):
+                tag = sender_js.get('tag', None)
+            handler = handler_factory.create_tx(sender, tag)
             return await handler.handle_async(
                 request, partial(handler.create_tx, request, req_json=req_json))
         except Exception as e:

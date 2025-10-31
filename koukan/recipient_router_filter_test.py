@@ -11,6 +11,7 @@ from koukan.recipient_router_filter import (
     RoutingPolicy )
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
+from koukan.sender import Sender
 
 class Policy(RoutingPolicy):
     def endpoint_for_rcpt(
@@ -18,7 +19,7 @@ class Policy(RoutingPolicy):
     ) -> Tuple[Optional[Destination], Optional[Response]]:
         if rcpt == 'good':
             return Destination(
-                'http://localhost:8001', 'gateway',
+                'http://localhost:8001', Sender('router', 'gateway'),
                 [HostPort('example.com', 1234)]), None
 
         return None, Response(500, 'not found')
@@ -52,7 +53,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
         self.assertFalse(router.upstream_tx.rcpt_to)
         self.assertEqual(router.upstream_tx.rest_endpoint,
                          'http://localhost:8001')
-        self.assertEqual(router.upstream_tx.tag, 'gateway')
+        self.assertEqual(router.upstream_tx.sender.tag, 'gateway')
         self.assertEqual(router.upstream_tx.resolution.hosts,
                          [HostPort('example.com', 1234)])
 

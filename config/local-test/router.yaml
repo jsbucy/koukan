@@ -102,6 +102,7 @@ endpoint:
       - rest-application.example.com
       destination:
         endpoint: http://localhost:8000/senders/short_circuit/transactions
+        sender: short_circuit
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
@@ -109,6 +110,7 @@ endpoint:
       name: dest_domain
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
+        sender: router
         tag: outbound
   - filter: router
     policy:
@@ -163,6 +165,7 @@ endpoint:
       - rest-application.example.com
       destination:
         endpoint: http://localhost:8000/senders/short_circuit/transactions
+        sender: short_circuit
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
@@ -170,12 +173,13 @@ endpoint:
       name: dest_domain
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
+        sender: router
         tag: outbound
   - filter: router
     policy:
       name: address_list
       # no domains/dest -> reject all
-  - filter: dkim
+  - filter: dkim  # before received_header?
     # key: config/local-test/dkim.key
     domain: example.com
     selector: sel
@@ -210,6 +214,7 @@ endpoint:
       #- base: alice
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
+        sender: router
         tag: outbound
         host_list:
           - host: 'fake_smtpd'
@@ -225,6 +230,7 @@ endpoint:
       - bob
       destination:
         endpoint: http://localhost:8002/senders/router/transactions
+        sender: router
         options:
           receive_parsing:
   - filter: router
@@ -272,6 +278,7 @@ endpoint:
       #- base: alice
       destination:
         endpoint: http://localhost:8001/senders/router/transactions
+        sender: router
         tag: outbound
         host_list:
           - host: 'fake_smtpd'
@@ -286,6 +293,7 @@ endpoint:
       - bob
       destination:
         endpoint: http://localhost:8002/senders/router/transactions
+        sender: router
         options:
           receive_parsing:
   - filter: router
@@ -317,6 +325,7 @@ endpoint:
       prefixes: []
       destination:
         endpoint: http://localhost:8002/senders/router/transactions
+        sender: router
         options:
           receive_parsing:
             max_inline: 0

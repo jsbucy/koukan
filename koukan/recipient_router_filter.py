@@ -17,19 +17,20 @@ from koukan.filter import (
     Resolution,
     TransactionMetadata )
 from koukan.filter_chain import ProxyFilter, FilterResult
+from koukan.sender import Sender
 
 class Destination:
     rest_endpoint : Optional[str] = None
-    tag : Optional[str] = None
+    sender : Optional[Sender] = None
     remote_host : Optional[List[HostPort]] = None
     options : dict
 
     def __init__(self, rest_endpoint : Optional[str] = None,
-                 tag : Optional[str] = None,
+                 sender : Optional[Sender] = None,
                  remote_host : Optional[List[HostPort]] = None,
                  options : Optional[dict] = None):
         self.rest_endpoint = rest_endpoint
-        self.tag = tag
+        self.sender = sender
         self.remote_host = remote_host
         self.options = options if options else {}
 
@@ -92,7 +93,7 @@ class RecipientRouterFilter(ProxyFilter):
         assert up_res is None or up_res == res
         self.upstream_tx.resolution = res
 
-        self.upstream_tx.tag = dest.tag
+        self.upstream_tx.sender = dest.sender
 
         opt = self.upstream_tx.options
         assert opt is None or opt == dest.options
@@ -102,7 +103,8 @@ class RecipientRouterFilter(ProxyFilter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
-        tx_delta.tag = None
+        # preempt a conflict
+        tx_delta.sender = None
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
         self.upstream_tx.merge_from(tx_delta)
@@ -118,7 +120,11 @@ class RecipientRouterFilter(ProxyFilter):
             if not rcpt.routed:
                 resp, rcpt.routed = self._route(rcpt)
             else:
-                self.upstream_tx.tag = self.downstream_tx.tag
+                # if we no-op'd because a previous instance already
+                # routed, put back the sender which we previously cleared
+                if self.downstream_tx.sender is not None and self.upstream_tx.sender is None:
+
+                    self.upstream_tx.sender = self.downstream_tx.sender.copy()
             assert resp is None or resp.err()
             self.downstream_tx.rcpt_response.append(resp)
         return FilterResult()

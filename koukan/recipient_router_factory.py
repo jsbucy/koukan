@@ -15,6 +15,7 @@ from koukan.filter import (
     HostPort,
     Resolution )
 from koukan.filter_chain import ProxyFilter
+from koukan.sender import Sender
 
 class RecipientRouterFactory:
     router_policies : Dict[str, Callable[[dict], RoutingPolicy]]
@@ -72,7 +73,7 @@ class RecipientRouterFactory:
             hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
         return Destination(
             rest_endpoint = dest.get('endpoint', None),
-            tag = dest.get('tag', None),
+            sender = Sender(dest['sender'], dest.get('tag', None)),
             options = dest.get('options', None),
             remote_host = hosts)
 

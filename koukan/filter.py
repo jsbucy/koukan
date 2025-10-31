@@ -23,7 +23,7 @@ from koukan.rest_schema import BlobUri, WhichJson, make_blob_uri, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
-
+from koukan.sender import Sender
 
 class HostPort:
     host : str
@@ -416,12 +416,13 @@ _tx_fields = [
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
     TxField('session_uri', validity=None),
-    TxField('sender', validity=set([ #WhichJson.REST_CREATE,
+    TxField('sender', validity=set([WhichJson.REST_CREATE,
+                                    # xxx need this?
                                     WhichJson.REST_READ,
-                                    WhichJson.DB])),
-    TxField('tag', validity=set([WhichJson.REST_CREATE,
-                                 WhichJson.REST_READ,
-                                 WhichJson.DB]))
+                                    WhichJson.DB]),
+            to_json=Sender.to_json,
+            from_json=Sender.from_json,
+            copy=Sender.copy),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -470,8 +471,7 @@ class TransactionMetadata:
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
     session_uri : Optional[str] = None
-    sender : Optional[str] = None
-    tag : Optional[str] = None
+    sender : Optional[Sender] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -488,8 +488,8 @@ class TransactionMetadata:
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
                  rest_id : Optional[str] = None,
-                 sender : Optional[str] = None,
-                 tag : Optional[str] = None):
+                 sender : Optional[Sender] = None
+                 ):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -505,7 +505,6 @@ class TransactionMetadata:
         self.resolution = resolution
         self.rest_id = rest_id
         self.sender = sender
-        self.tag = tag
 
     def __repr__(self):
         out = ''
@@ -810,7 +809,7 @@ class TransactionMetadata:
                 raise ValueError()
             if not isinstance(old_v, list):
                 if old_v != new_v:
-                    logging.debug('tx.delta value change %s %s %s',
+                    logging.debug('tx.delta value change %s old=%s new=%s',
                                   f, old_v, new_v)
                     raise ValueError()
                 setattr(out, f, None)
@@ -857,12 +856,14 @@ class TransactionMetadata:
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
     def copy(self) -> 'TransactionMetadata':
-        # TODO probably this should use tx_json_fields?
+        # TODO should use tx_json_fields, custom copiers
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)
         if isinstance(self.body, MessageBuilderSpec):
             out.body = self.body.clone()
+        if self.sender is not None:
+            out.sender = self.sender.copy()
         return out
 
     def copy_valid(self, valid : WhichJson):

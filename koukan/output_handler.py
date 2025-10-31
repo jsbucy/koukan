@@ -21,6 +21,7 @@ from koukan.dsn import read_headers, generate_dsn
 from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
+from koukan.sender import Sender
 
 def default_notification_endpoint_factory():
     raise NotImplementedError()
@@ -437,8 +438,9 @@ class OutputHandler:
         # similar to rest submission: retries enabled, notifications disabled
         # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
-            sender=self.notification_params['sender'],
-            tag=self.notification_params.get('tag', None),
+            sender=Sender(
+                self.notification_params['sender'],
+                tag=self.notification_params.get('tag', None)),
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],

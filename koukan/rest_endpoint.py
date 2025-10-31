@@ -124,7 +124,6 @@ class RestEndpoint(Filter):
         resp_json = get_resp_json(rest_resp)
         if resp_json is None:
             return None
-
         upstream_tx = TransactionMetadata.from_json(
             resp_json, WhichJson.REST_READ)
         if upstream_tx is None:

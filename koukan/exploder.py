@@ -14,6 +14,7 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult, Filter
 from koukan.blob import Blob
 from koukan.response import Response
+from koukan.sender import Sender
 
 from koukan.storage_schema import VersionConflictException
 
@@ -64,8 +65,7 @@ class Recipient:
                      tag : Optional[str],
                      i : int):
         self.tx = tx.copy_valid(WhichJson.EXPLODER_CREATE)
-        self.tx.sender = sender
-        self.tx.tag = tag
+        self.tx.sender = Sender(sender, tag)
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
         # TODO FilterChainWiring.exploder() passes block_upstream=True to
