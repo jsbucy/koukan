@@ -91,6 +91,7 @@ root_yaml_template = {
         {
             'name': 'router_service_test',
             'output_chain': 'submission',
+            'retry': 'output_chain',
             'tag': [
                 {
                     'name': 'submission-sync-sor',
@@ -146,7 +147,6 @@ root_yaml_template = {
                 'downstream_timeout': 10,
                 'upstream_refresh': 10,
                 'retry_params': {
-                    'mode': 'per_request',
                     'max_attempts': 3,
                     'min_attempt_time': 1,
                     'max_attempt_time': 1,
@@ -155,7 +155,6 @@ root_yaml_template = {
                     'bug_retry': 1,
                 },
                 'notification': {
-                    'mode': 'per_request',
                     'host': 'submission',
                     'sender': 'notification'
                 }
@@ -211,10 +210,8 @@ root_yaml_template = {
                 'downstream_timeout': 1,
                 'upstream_refresh': 1,
                 'retry_params': {
-                    'mode': 'per_request'
                 },
                 'notification': {
-                    'mode': 'per_request',
                     'host': 'submission',
                     'sender': 'notification'
                 }
@@ -636,7 +633,6 @@ class RouterServiceTest(unittest.TestCase):
             'body': {'blob_status': {#'content_length': 13, 'length': 13,
                 'finalized': True}},
             'retry': {},
-            'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
@@ -767,7 +763,6 @@ class RouterServiceTest(unittest.TestCase):
                 'body': {'blob_status': {#'content_length': 13, 'length': 13,
                     'finalized': True}},
                 'retry': {},
-                'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
@@ -868,7 +863,6 @@ class RouterServiceTest(unittest.TestCase):
                     'rcpt_to': [{}],
                     'body': {'blob_status': {'finalized': True}},
                     'retry': {},
-                    'notification': {},
                     'mail_response': {'code': 201, 'message': 'ok'},
                     'rcpt_response': [{'code': 202, 'message': 'ok'}],
                     'data_response': {'code': 203, 'message': 'ok'},

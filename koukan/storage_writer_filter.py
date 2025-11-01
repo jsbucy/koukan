@@ -132,13 +132,12 @@ class StorageWriterFilter(AsyncFilter):
                 break
             if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
                 break
-            # xxx output_handler_yaml_schema.py ?
-            notify_yaml = output_yaml.get('notification', None)
-            if notify_yaml is not None and notify_yaml.get('mode', '') != 'per_request':
-                storage_tx.notification = {}
-            retry_yaml = output_yaml.get('retry_params', None)
-            if retry_yaml is not None and retry_yaml.get('mode', '') != 'per_request':
-                storage_tx.retry = {}
+            if self.sender.yaml:
+                if self.sender.yaml.get('retry', None) == 'output_chain':
+                    storage_tx.retry = {}
+                if self.sender.yaml.get('notification', None) == 'output_chain':
+                    storage_tx.notification = {}
+
         self.tx_cursor.create(rest_id, storage_tx,
                               create_leased=self.create_leased)
         with self.mu:

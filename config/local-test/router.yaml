@@ -31,6 +31,7 @@ sender:
     output_chain: outbound-gw
 - name: send_message
   output_chain: submission
+  retry: output_chain
 - name: exploder
   tag:
   - name: mx
@@ -73,14 +74,12 @@ endpoint:
     upstream_refresh: 1
 
     retry_params:
-      mode: per_request
       max_attempts: 3
       min_attempt_time: 2
       max_attempt_time: 5
       backoff_factor: 1.5
       deadline: 30
     notification:
-      mode: per_request
       host: submission
 
   chain:
@@ -255,14 +254,12 @@ endpoint:
     upstream_refresh: 1
 
     retry_params:
-      mode: per_request
       max_attempts: 3
       min_attempt_time: 2
       max_attempt_time: 5
       backoff_factor: 1.5
       deadline: 30
     notification:
-      mode: per_request
       host: submission
   chain:
   - filter: remote_host

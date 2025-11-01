@@ -306,8 +306,7 @@ class OutputHandler:
         # leave the existing value for final_attempt_reason
         if self.retry_params is None:
             return None, None
-        if (self.retry_params.get('mode', None) == 'per_request' and
-            self.cursor.tx.retry is None):
+        if self.cursor.tx.retry is None:
             return None, None
 
         max_attempts = self.retry_params.get('max_attempts', 30)
@@ -338,8 +337,7 @@ class OutputHandler:
         logging.debug('%s %s', self.notification_params, tx)
         if self.notification_params is None:
             return False
-        if (self.notification_params.get('mode', None) == 'per_request' and
-            tx.notification is None):
+        if tx.notification is None:
             return False
 
         resp : Optional[Response] = None

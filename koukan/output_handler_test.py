@@ -471,7 +471,9 @@ class OutputHandlerTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body=BlobSpec(create_tx_body=True))
+            body=BlobSpec(create_tx_body=True),
+            retry={},
+            notification={})
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
         blob_uri = BlobUri(tx_id='rest_tx_id', tx_body=True)
@@ -552,7 +554,9 @@ class OutputHandlerTest(unittest.TestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body = body )
+            body = body,
+            retry={},
+            notification={})
 
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
