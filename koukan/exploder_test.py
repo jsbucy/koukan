@@ -26,7 +26,7 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 
 from koukan.rest_schema import BlobUri
 from koukan.fake_endpoints import MockAsyncFilter
-
+from koukan.sender import Sender
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -159,7 +159,8 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, test : Test):
         logging.debug('_test_one()', stack_info=True)
-        exploder = Exploder('exploder',
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
                             partial(self.factory, msa),
                             rcpt_timeout=5)
         tx = TransactionMetadata()
@@ -518,7 +519,8 @@ class ExploderTest(unittest.TestCase):
             ))
 
     def test_upstream_busy(self):
-        exploder = Exploder('exploder',
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
                             lambda: None,
                             rcpt_timeout=5)
         tx = TransactionMetadata()
@@ -533,7 +535,8 @@ class ExploderTest(unittest.TestCase):
 
     def test_partial_body(self):
         upstream = MockAsyncFilter()
-        exploder = Exploder('exploder',
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
                             lambda: upstream,
                             rcpt_timeout=5)
         tx = TransactionMetadata()

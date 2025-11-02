@@ -12,7 +12,7 @@ from koukan.filter_chain import FilterChain
 from koukan.sender import Sender
 
 class FilterSpec:
-    builder : Callable[[Any], BaseFilter]
+    builder : Callable[[Dict[str, Any], Sender], BaseFilter]
     def __init__(self, builder):
         self.builder = builder
 
@@ -47,7 +47,7 @@ class FilterChainFactory:
         fn = self._load_user_module(name, mod)
         sig = inspect.signature(fn)
         param = list(sig.parameters)
-        assert len(param) == 1
+        assert len(param) == 2
         # assert sig.parameters[param[0]].annotation == dict  # yaml
         logging.debug(sig.return_annotation)
         assert issubclass(sig.return_annotation, BaseFilter)
@@ -81,10 +81,10 @@ class FilterChainFactory:
         if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
             self.load_user_modules(modules_yaml)
 
-    def _get_filter(self, filter_yaml) -> Optional[BaseFilter]:
+    def _get_filter(self, filter_yaml, sender : Sender) -> Optional[BaseFilter]:
         filter_name = filter_yaml['filter']
         spec = self.filters[filter_name]
-        filter = spec.builder(filter_yaml)
+        filter = spec.builder(filter_yaml, sender)
         logging.debug(filter)
         if filter is not None:
             assert isinstance(filter, BaseFilter)
@@ -122,6 +122,7 @@ class FilterChainFactory:
                 if tag_yaml['name'] == sender.tag and (
                         toc := tag_yaml.get('output_chain', None)):
                     output_chain = toc
+
         assert output_chain is not None
         if endpoint_yaml is None:
             assert self.endpoint_yaml is not None
@@ -131,7 +132,7 @@ class FilterChainFactory:
                 return None
         filters = []
         for filter_yaml in endpoint_yaml['chain']:
-            f = self._get_filter(filter_yaml)
+            f = self._get_filter(filter_yaml, sender)
             if f is not None:
                 filters.append(f)
             elif output_chain not in _log_disabled_filter:

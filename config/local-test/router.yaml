@@ -27,17 +27,17 @@ sender:
   tag:
   - name: mx
     output_chain: inbound-gw
+    upstream_tag: mx-upstream
+  - name: mx-upstream
+    output_chain: mx-out
   - name: msa
     output_chain: outbound-gw
+    upstream_tag: msa-upstream
+  - name: msa-upstream
+    output_chain: submission
 - name: send_message
   output_chain: submission
   retry: output_chain
-- name: exploder
-  tag:
-  - name: mx
-    output_chain: mx-out
-  - name: msa
-    output_chain: msa-output
 - name: short_circuit
   output_chain: mx-out
 - name: sor
@@ -65,71 +65,6 @@ endpoint:
     msa: true
     rcpt_timeout: 300
     data_timeout: 300
-
-- name: msa-output
-  rest_lro: true
-  msa: true
-  output_handler:
-    downstream_timeout: 5
-    upstream_refresh: 1
-
-    retry_params:
-      max_attempts: 3
-      min_attempt_time: 2
-      max_attempt_time: 5
-      backoff_factor: 1.5
-      deadline: 30
-    notification:
-      host: submission
-
-  chain:
-  - filter: remote_host  # xxx -> downstream exploder chain?
-  # message_builder must be chained before anything that wants to
-  # access/modify the message: received_header, dkim
-  - filter: message_builder
-  - filter: received_header
-    received_hostname: gargantua1    
-  - filter: router
-    policy:
-      name: hello
-  # send my own domains directly to my ingress
-  - filter: router
-    policy:
-      name: address_list
-      domains:
-      - example.com
-      - rest-application.example.com
-      destination:
-        endpoint: http://localhost:8000/senders/short_circuit/transactions
-        sender: short_circuit
-        http_host: mx-out
-  # send everything else to the rhs of the addr via the smtp gw
-  - filter: router
-    policy:
-      name: dest_domain
-      destination:
-        endpoint: http://localhost:8001/senders/router/transactions
-        sender: router
-        tag: outbound
-  - filter: router
-    policy:
-      name: address_list
-      # no domains/dest -> reject all
-  - filter: dkim
-    # key: config/local-test/dkim.key
-    domain: example.com
-    selector: sel
-  - filter: hello
-  - filter: dns_resolution
-    suffix: ''  # match everything
-    static_hosts:
-      - host: 127.0.0.1
-        port: 3025
-  - filter: rest_output
-    verify: localhost.crt
-    rcpt_timeout: 300
-    data_timeout: 300
-    chunk_size: 1048576
 
 - name: submission
   rest_lro: true

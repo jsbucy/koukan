@@ -238,12 +238,12 @@ class Service:
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
         assert self.filter_chain_factory is not None
-
+        self.filter_chain_factory.get_sender(sender)
         if (endp := self.filter_chain_factory.build_filter_chain(
                 sender)) is None:
             return None
         chain, endpoint_yaml = endp
-        self.filter_chain_factory.get_sender(sender)
+
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,

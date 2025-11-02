@@ -12,5 +12,5 @@ class HelloFilter(Filter):
         logging.debug('HelloFilter.on_update %s', self.downstream_tx)
         return FilterResult()
 
-def factory(yaml) -> Filter:
+def factory(yaml, sender) -> Filter:
     return HelloFilter()

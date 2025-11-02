@@ -81,12 +81,23 @@ root_yaml_template = {
             'tag': [
                 {
                     'name': 'mx',
-                    'output_chain': 'smtp-in'
+                    'output_chain': 'smtp-in',
+                    'upstream_tag': 'mx-upstream'
+                },
+                {
+                    'name': 'mx-upstream',
+                    'output_chain': 'inbound-gw',
                 },
                 {
                     'name': 'msa',
-                    'output_chain': 'smtp-msa'
-                }]
+                    'output_chain': 'smtp-msa',
+                    'upstream_tag': 'msa-upstream'
+                },
+                {
+                    'name': 'msa-upstream',
+                    'output_chain': 'submission',
+                }
+            ]
         },
         {
             'name': 'router_service_test',
@@ -101,19 +112,6 @@ root_yaml_template = {
                     'name': 'submission-sf-sor',
                     'output_chain': 'submission-sf-sor'
                 }]
-        },
-        {
-            'name': 'exploder',
-            'tag': [
-                {
-                    'name': 'msa-upstream',
-                    'output_chain': 'msa-upstream'
-                },
-                {
-                    'name': 'inbound-gw',
-                    'output_chain': 'inbound-gw'
-                }
-            ]
         },
         {
             'name': 'sor',
@@ -133,36 +131,10 @@ root_yaml_template = {
                 'upstream_refresh': 10,
             },
             'chain': [{'filter': 'exploder',
-                       'output_chain': 'msa-upstream',
-                       'sender': 'exploder',
-                       'tag': 'msa-upstream',
+                       'output_chain': 'submission',
                        'msa': True,
                        'rcpt_timeout': 10,
                        'data_timeout': 10}]
-        },
-        {
-            'name': 'msa-upstream',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 10,
-                'upstream_refresh': 10,
-                'retry_params': {
-                    'max_attempts': 3,
-                    'min_attempt_time': 1,
-                    'max_attempt_time': 1,
-                    'backoff_factor': 0,
-                    'deadline': 300,
-                    'bug_retry': 1,
-                },
-                'notification': {
-                    'host': 'submission',
-                    'sender': 'notification'
-                }
-            },
-            'chain': [
-                {'filter': 'message_builder'},
-                {'filter': 'sync'}
-            ],
         },
         {
             'name': 'submission',
@@ -197,8 +169,6 @@ root_yaml_template = {
             },
             'chain': [{'filter': 'exploder',
                        'output_chain': 'inbound-gw',
-                       'sender': 'exploder',
-                       'tag': 'inbound-gw',
                        'msa': False,
                        'rcpt_timeout': 10,
                        'data_timeout': 10 }]
@@ -289,7 +259,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.endpoints = []
 
-    def get_endpoint(self, yaml):
+    def get_endpoint(self, yaml, sender : Sender):
         logging.debug('RouterServiceTest.get_endpoint')
         with self.lock:
             self.cv.wait_for(lambda: bool(self.endpoints))

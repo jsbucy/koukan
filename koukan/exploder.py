@@ -36,9 +36,11 @@ from koukan.storage_schema import VersionConflictException
 class Recipient:
     filter : Optional[AsyncFilter] = None
     tx :  Optional[TransactionMetadata] = None
+    sender : Sender
 
-    def __init__(self, filter : Optional[AsyncFilter]):
+    def __init__(self, filter : Optional[AsyncFilter], sender : Sender):
         self.filter = filter
+        self.sender = sender
 
     # returns True if this Recipient failed due to not being able to
     # start the upstream tx
@@ -61,11 +63,9 @@ class Recipient:
 
     def first_update(self,
                      tx : TransactionMetadata,
-                     sender : str,
-                     tag : Optional[str],
                      i : int):
         self.tx = tx.copy_valid(WhichJson.EXPLODER_CREATE)
-        self.tx.sender = Sender(sender, tag)
+        self.tx.sender = self.sender
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
         # TODO FilterChainWiring.exploder() passes block_upstream=True to
@@ -128,18 +128,18 @@ class Exploder(Filter):
     rcpt_ok = False
 
     recipients : List[Recipient]
-    sender : str
-    tag : Optional[str] = None
+    sender : Sender
+    upstream_sender : Sender
 
     def __init__(self,
-                 sender : str,
+                 sender : Sender,
+                 upstream_sender : Sender,
                  upstream_factory : FilterFactory,
-                 tag : Optional[str] = None,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
         self.sender = sender
-        self.tag = tag
+        self.upstream_sender = upstream_sender
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
@@ -185,9 +185,9 @@ class Exploder(Filter):
 
         for i in range(0, len(tx.rcpt_to)):
             if i >= len(self.recipients):
-                rcpt = Recipient(self.upstream_factory())
+                rcpt = Recipient(self.upstream_factory(), self.upstream_sender)
                 self.recipients.append(rcpt)
-                rcpt.first_update(tx, self.sender, self.tag, i)
+                rcpt.first_update(tx, i)
             else:
                 rcpt = self.recipients[i]
                 rcpt.update(tx_delta)

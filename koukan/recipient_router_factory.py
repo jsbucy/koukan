@@ -84,7 +84,7 @@ class RecipientRouterFactory:
             policy_yaml.get('prefixes', []),
             self._route_destination(policy_yaml))
 
-    def build_router(self, yaml : dict) -> ProxyFilter:
+    def build_router(self, yaml : dict, sender : Sender) -> ProxyFilter:
         policy_yaml = yaml['policy']
         policy_name = policy_yaml['name']
         policy = self.router_policies[policy_name](policy_yaml)
