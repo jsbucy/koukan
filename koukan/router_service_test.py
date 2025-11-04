@@ -860,7 +860,6 @@ class RouterServiceTest(unittest.TestCase):
         body_file.flush()
 
         sender = RestSender(self.router_url,
-                            'submission',
                             'alice@example.com',
                             body_filename=body_file.name,
                             sender='router_service_test')
@@ -1354,7 +1353,6 @@ class RouterServiceTest(unittest.TestCase):
         body_file.flush()
 
         sender = RestSender(self.router_url,
-                            'submission',
                             'alice@example.com',
                             sender='router_service_test',
                             message_builder = {

@@ -28,15 +28,15 @@ smtp_listener:
   services:
     - addr: [localhost, 1025]
       endpoint: mx
-      sender: gateway
-      tag: mx
+      sender: ingress
+      tag: smtp-mx
       # these depend on our patches to aiosmtpd
       #chunk_size: 16384
       # enable_bdat: true
     - addr: [localhost, 1587]
       endpoint: msa
-      sender: gateway
-      tag: msa
+      sender: submission
+      tag: smtp-msa
       #chunk_size: 16384
       # auth_secrets: secrets.json
       # enable_bdat: true
@@ -44,8 +44,8 @@ smtp_listener:
       #key: localhost.key
     - addr: [localhost, 1465]
       endpoint: msa
-      sender: gateway
-      tag: msa
+      sender: submission
+      tag: smtp-msa
       smtps: true
       #chunk_size: 16384
       # auth_secrets: secrets.json
@@ -56,7 +56,7 @@ smtp_listener:
 rest_output:
   - name: mx
     host: inbound-gw
-    endpoint: http://localhost:8000/senders/gateway/transactions
+    endpoint: http://localhost:8000/senders/ingress/transactions
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300
@@ -65,7 +65,7 @@ rest_output:
 
   - name: msa
     host: outbound-gw
-    endpoint: http://localhost:8000/senders/gateway/transactions
+    endpoint: http://localhost:8000/senders/submission/transactions
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300

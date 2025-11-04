@@ -43,11 +43,12 @@ class End2EndTest(unittest.TestCase):
     receiver_tempdir = None
     http_server : Optional[uvicorn_main.Server] = None
     # gw -> router
-    gw_path = '/senders/gateway/transactions'
+    gw_msa_path = '/senders/submission/transactions'
+    gw_mx_path = '/senders/ingress/transactions'
     # router -> gw, receiver
     router_path = '/senders/router/transactions'
     # router -> router (egress -> ingress)
-    short_circuit_path = '/senders/short_circuit/transactions'
+    short_circuit_path = '/senders/ingress/transactions'
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -147,7 +148,11 @@ class End2EndTest(unittest.TestCase):
         self.fake_smtpd_port = self._find_free_port()
 
         for endpoint in gateway_yaml['rest_output']:
-            endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_path)
+            if endpoint['name'] == 'mx':
+                endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_mx_path)
+            elif endpoint['name'] == 'msa':
+                endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_msa_path)
+
             del endpoint['verify']
 
         self._update_rest_endpoint(router_yaml['rest_endpoint'])
@@ -332,9 +337,9 @@ class End2EndTest(unittest.TestCase):
         self._configure_and_run()
 
         sender = Sender(self.router_submission_url,
-                        'submission',
                         'alice@example.com',
-                        body_filename='testdata/trivial.msg')
+                        body_filename='testdata/trivial.msg',
+                        sender='submission')
         sender.send('bob@example.com')
         sender.force_reuse = True
         sender.send('bob2@example.com')
@@ -382,8 +387,8 @@ class End2EndTest(unittest.TestCase):
         }
 
         sender = Sender(self.router_submission_url,
-                        'submission',
                         'alice@example.com',
+                        sender='submission',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
         sender.force_reuse = True

@@ -48,7 +48,6 @@ class BlobCache:
 # for upstream status. Reuses blobs across recipients.
 class Sender:
     base_url : str
-    host : str
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
@@ -56,14 +55,15 @@ class Sender:
     tx_json : Optional[Dict[str, Any]] = None
     force_reuse = False
     sender : str
+    tag : Optional[str] = None
 
     def __init__(self,
                  base_url : str,
-                 host : str,
                  mail_from : str,
                  message_builder : Optional[dict] = None,
                  body_filename : Optional[str] = None,
-                 sender = 'send_message'):
+                 sender = 'send_message',
+                 tag : Optional[str] = None):
         self.session = requests.Session()
         # TODO this should install requests-cache to cache redirects
         # in cluster setups
@@ -75,7 +75,6 @@ class Sender:
         if self.message_builder:
             self.fixup_headers()
         self.base_url = base_url
-        self.host = host
         self.blob_cache = BlobCache()
 
         if body_filename:
@@ -86,6 +85,7 @@ class Sender:
             assert False
 
         self.sender = sender
+        self.tag = tag
 
     def send_part(self,
                   url,
@@ -165,8 +165,11 @@ class Sender:
         tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
+            'sender': {'name': self.sender}
         }
         assert tx_json is not None  # optional
+        if self.tag:
+            tx_json['sender']['tag'] = self.tag
         if self.message_builder:
             tx_json['body'] = {'message_builder': self.message_builder}
         self.reuse_blobs(tx_json)
@@ -179,10 +182,7 @@ class Sender:
             self.base_url, '/senders/' + self.sender + '/transactions')
         logging.debug('POST %s', url)
         start = time.monotonic()
-        rest_resp = self.session.post(
-            url,
-            headers={'host': self.host},
-            json=tx_json)
+        rest_resp = self.session.post(url, json=tx_json)
         logging.debug('POST %s %s %s', url, rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return

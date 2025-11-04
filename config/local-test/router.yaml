@@ -23,23 +23,22 @@ rest_listener:
   #service_uri: http://localhost:8000
 
 sender:
-- name: gateway
+- name: ingress
+  output_chain: mx-out
   tag:
-  - name: mx
+  - name: smtp-mx
     output_chain: inbound-gw
     upstream_tag: mx-upstream
   - name: mx-upstream
-    output_chain: mx-out
-  - name: msa
-    output_chain: outbound-gw
-    upstream_tag: msa-upstream
-  - name: msa-upstream
-    output_chain: submission
-- name: send_message
+  - name: short_circuit
+
+- name: submission
   output_chain: submission
-  retry: output_chain
-- name: short_circuit
-  output_chain: mx-out
+  tag:
+  - name: smtp-msa
+    output_chain: outbound-gw
+    upstream_tag: smtp-msa-upstream
+  - name: smtp-msa-upstream
 - name: sor
   output_chain: sink
 - name: notification
@@ -54,8 +53,9 @@ rest_endpoint:
   endpoint: http://localhost:8002/senders/router/transactions
   sender: router
 - name: short_circuit
-  endpoint: http://localhost:8000/senders/short_circuit/transactions
-  sender: short_circuit
+  endpoint: http://localhost:8000/senders/ingress/transactions
+  sender: ingress
+  tag: short_circuit
 
 endpoint:
 - name: outbound-gw
