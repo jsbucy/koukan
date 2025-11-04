@@ -45,6 +45,18 @@ sender:
 - name: notification
   output_chain: submission
 
+rest_endpoint:
+- name: gateway
+  endpoint: http://localhost:8001/senders/router/transactions
+  sender: router
+  tag: outbound
+- name: sink
+  endpoint: http://localhost:8002/senders/router/transactions
+  sender: router
+- name: short_circuit
+  endpoint: http://localhost:8000/senders/short_circuit/transactions
+  sender: short_circuit
+
 endpoint:
 - name: outbound-gw
   # equivalent to "chain ends with exploder/tx is always ephemeral"
@@ -60,8 +72,6 @@ endpoint:
   #  smtp_auth: true
   - filter: exploder
     output_chain: msa-output
-    sender: exploder 
-    tag: msa
     msa: true
     rcpt_timeout: 300
     data_timeout: 300
@@ -98,17 +108,14 @@ endpoint:
       - example.com
       - rest-application.example.com
       destination:
-        endpoint: http://localhost:8000/senders/short_circuit/transactions
-        sender: short_circuit
+        endpoint: short_circuit
         http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: http://localhost:8001/senders/router/transactions
-        sender: router
-        tag: outbound
+        endpoint: gateway
   - filter: router
     policy:
       name: address_list
@@ -147,9 +154,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001/senders/router/transactions
-        sender: router
-        tag: outbound
+        endpoint: gateway
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -163,8 +168,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002/senders/router/transactions
-        sender: router
+        endpoint: sink
         options:
           receive_parsing:
   - filter: router
@@ -176,8 +180,6 @@ endpoint:
   - filter: exploder
     msa: false
     output_chain: mx-out
-    sender: exploder 
-    tag: mx
     rcpt_timeout: 300
     data_timeout: 300
 
@@ -209,9 +211,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001/senders/router/transactions
-        sender: router
-        tag: outbound
+        endpoint: gateway
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -224,8 +224,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002/senders/router/transactions
-        sender: router
+        endpoint: sink
         options:
           receive_parsing:
   - filter: router
@@ -256,8 +255,7 @@ endpoint:
       name: address_list
       prefixes: []
       destination:
-        endpoint: http://localhost:8002/senders/router/transactions
-        sender: router
+        endpoint: sink
         options:
           receive_parsing:
             max_inline: 0

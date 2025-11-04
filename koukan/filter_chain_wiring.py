@@ -53,7 +53,7 @@ class FilterChainWiring:
 
     def wire(self, yaml, factory : FilterChainFactory):
         self.filter_chain_factory = factory
-        self.router_factory = RecipientRouterFactory()
+        self.router_factory = RecipientRouterFactory(factory.rest_endpoint_yaml)
         self.router_factory.load_policies(yaml)
 
         factory.add_filter('rest_output', self.rest_output)

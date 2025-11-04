@@ -337,6 +337,8 @@ class RestEndpoint(Filter):
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
             self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
+            if self.downstream_tx.rest_upstream_sender:
+                self.rest_upstream_tx.sender = self.downstream_tx.rest_upstream_sender
             # cf _update_message_builder(), this is probably moot
             # because downstream_body is None on the first update
 

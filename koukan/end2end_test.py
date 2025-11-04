@@ -53,6 +53,16 @@ class End2EndTest(unittest.TestCase):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             return s.server_address[1]
 
+    def _update_rest_endpoint(self, yaml):
+        for e in yaml:
+            if e['name'] == 'gateway':
+                e['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
+            elif e['name'] == 'short_circuit':
+                e['endpoint'] = urljoin(self.router_base_url, self.short_circuit_path)
+            elif e['name'] == 'sink':
+                e['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
+
+
     def _update_address_list(self, policy):
         logging.debug('_update_address_list %s', policy)
         if (dest := policy.get('destination', None)) is None:
@@ -60,14 +70,10 @@ class End2EndTest(unittest.TestCase):
         logging.debug(dest)
 
         endpoint = dest.get('endpoint', None)
-        if endpoint == 'http://localhost:8001/senders/router/transactions':
-            dest['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
+        if endpoint == 'gateway':
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif endpoint == 'http://localhost:8000/senders/short_circuit/transactions':
-            dest['endpoint'] = urljoin(self.router_base_url, self.short_circuit_path)
-        elif endpoint == 'http://localhost:8002/senders/router/transactions':
-            dest['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
+        elif endpoint == 'sink':
             dest['options']['receive_parsing'] = {
                 'max_inline': 8 }
 
@@ -143,6 +149,8 @@ class End2EndTest(unittest.TestCase):
         for endpoint in gateway_yaml['rest_output']:
             endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_path)
             del endpoint['verify']
+
+        self._update_rest_endpoint(router_yaml['rest_endpoint'])
 
         for endpoint in router_yaml['endpoint']:
             if endpoint['name'] in ['msa-output', 'submission']:

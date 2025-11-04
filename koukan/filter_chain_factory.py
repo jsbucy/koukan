@@ -23,6 +23,7 @@ class FilterChainFactory:
     filters : Dict[str, FilterSpec]
     root_yaml : dict
     sender_yaml : Optional[dict] = None
+    rest_endpoint_yaml : Optional[dict] = None
     loop : asyncio.AbstractEventLoop
 
     def __init__(self, root_yaml : dict):
@@ -80,6 +81,10 @@ class FilterChainFactory:
 
         if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
             self.load_user_modules(modules_yaml)
+
+        self.rest_endpoint_yaml = {}
+        for endpoint in self.root_yaml.get('rest_endpoint', []):
+            self.rest_endpoint_yaml[endpoint['name']] = endpoint
 
     def _get_filter(self, filter_yaml, sender : Sender) -> Optional[BaseFilter]:
         filter_name = filter_yaml['filter']

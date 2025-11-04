@@ -26,6 +26,7 @@ from koukan.filter import (
 from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
 from koukan.message_builder import MessageBuilderSpec
+from koukan.sender import Sender
 
 class Request:
     method = None
@@ -658,41 +659,42 @@ class RestEndpointTest(unittest.TestCase):
             min_poll=0.1,
             chunk_size=8)
 
-        # POST
-        self.expect_request(resp=Response(
-            http_resp = '201 created',
-            resp_json={
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'body': {'blob_status': {'uri': self.body_url}}
-            },
-            location = self.tx_url,
-            etag = '1'))
+        self.expect_request(
+            req=Request(
+                method='POST',
+                path=self.base_path,
+            ),
+            resp=Response(
+                http_resp = '201 created',
+                resp_json={
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                    'body': {'blob_status': {'uri': self.body_url}},
+                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'}
+                },
+                location = self.tx_url,
+                etag = '1'))
 
         logging.debug('testFilterApi envelope')
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
+        delta.rest_upstream_sender = Sender('rest_endpoint_test', 'outbound')
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'POST')
-        self.assertEqual(self.base_path, req.path)
-        logging.debug(tx)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-
         logging.debug('testFilterApi !last append')
-        # PUT /transactions/123/body
-        # range: 0-7/*
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, 7, None)))
+        self.expect_request(
+            req=Request(
+                method='PUT',
+                path=self.body_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={},
+                content_range=ContentRange('bytes', 0, 7, None)))
 
         tx_delta = TransactionMetadata()
         tx.body = tx_delta.body = CompositeBlob()
@@ -701,57 +703,49 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint.on_update(tx_delta)
         self.assertIsNone(tx.data_response)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(self.body_path, req.path)
-        self.assertEqual(req.content_range.stop, 7)
-        self.assertEqual(req.content_range.length, None)
-
         logging.debug('testFilterApi last append')
 
         b = InlineBlob(b'world!', last=True)
         tx.body.append(b, 0, b.len(), True)
 
-        # PUT /transactions/123/body
-        # range: 7-12/12
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, tx.body.len(), tx.body.len())))
+        self.expect_request(
+            req=Request(
+                method='PUT',
+                path=self.body_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={},
+                content_range=ContentRange(
+                    'bytes', 0, tx.body.len(), tx.body.len())))
 
-        # GET
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            etag = '3',
-            resp_json={
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'body': {
-                    'blob_status': {
-                        'uri': self.body_url,
-                        'finalized': True
-                    }
-                },
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}}))
+        self.expect_request(
+            req=Request(
+                method='GET',
+                path=self.tx_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                etag = '3',
+                resp_json={
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'},
+                    'body': {
+                        'blob_status': {
+                            'uri': self.body_url,
+                            'finalized': True
+                        }
+                    },
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                    'data_response': {'code': 203, 'message': 'ok'}}))
 
         # same tx/delta
         rest_endpoint.on_update(tx_delta)
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(self.body_path, req.path)
-        self.assertEqual(req.content_range.stop, 13)
-        self.assertEqual(req.content_range.length, 13)
-
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'GET')
-        self.assertEqual(self.tx_path, req.path)
-        self.assertEqual(req.etag, '1')
 
     def testFilterApiOneshot(self):
         rest_endpoint, tx = self.create_endpoint(

@@ -423,6 +423,8 @@ _tx_fields = [
             to_json=Sender.to_json,
             from_json=Sender.from_json,
             copy=Sender.copy),
+    # RecipientRouterFilter -> RestEndpoint
+    TxField('rest_upstream_sender', validity=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -472,6 +474,7 @@ class TransactionMetadata:
     final_attempt_reason : Optional[str] = None
     session_uri : Optional[str] = None
     sender : Optional[Sender] = None
+    rest_upstream_sender : Optional[Sender] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,

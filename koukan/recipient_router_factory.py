@@ -19,9 +19,11 @@ from koukan.sender import Sender
 
 class RecipientRouterFactory:
     router_policies : Dict[str, Callable[[dict], RoutingPolicy]]
+    rest_endpoints : Dict[str, Dict[str, Any]]
 
-    def __init__(self):
+    def __init__(self, rest_endpoints):
         self.router_policies = {}
+        self.rest_endpoints = rest_endpoints
         self.add_router_policy('dest_domain', self.router_policy_dest_domain)
         self.add_router_policy('address_list', self.router_policy_address_list)
 
@@ -68,12 +70,17 @@ class RecipientRouterFactory:
         dest = yaml.get('destination', None)
         if dest is None:
             return None
+        endpoint_yaml = None
+        if endpoint := dest.get('endpoint', None):
+            endpoint_yaml = self.rest_endpoints[endpoint]
+
         hosts = None
         if 'host_list' in dest:
             hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
         return Destination(
-            rest_endpoint = dest.get('endpoint', None),
-            sender = Sender(dest['sender'], dest.get('tag', None)),
+            rest_endpoint = endpoint_yaml.get('endpoint', None),
+            sender = Sender(endpoint_yaml['sender'],
+                            endpoint_yaml.get('tag', None)),
             options = dest.get('options', None),
             remote_host = hosts)
 

@@ -122,6 +122,12 @@ root_yaml_template = {
             'output_chain': 'submission'
         }
     ],
+    'rest_endpoint': [
+        {
+            'name': 'sink',
+            'sender': 'router',
+        }
+    ],
     'endpoint': [
         {
             'name': 'smtp-msa',
@@ -191,9 +197,8 @@ root_yaml_template = {
                  'policy': {
                      'name': 'address_list',
                      'domains': ['example.com'],
-                     #endpoint: https://localhost:8001
                      'destination': {
-                         'sender': {'name': 'router'},
+                         'endpoint': 'sink',
                          'options': { 'receive_parsing': {}}}
                      }
                 },

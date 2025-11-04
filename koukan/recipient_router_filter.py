@@ -93,7 +93,7 @@ class RecipientRouterFilter(ProxyFilter):
         assert up_res is None or up_res == res
         self.upstream_tx.resolution = res
 
-        self.upstream_tx.sender = dest.sender
+        self.upstream_tx.rest_upstream_sender = dest.sender
 
         opt = self.upstream_tx.options
         assert opt is None or opt == dest.options
