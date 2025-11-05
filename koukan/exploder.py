@@ -170,6 +170,8 @@ class Exploder(Filter):
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream_tx
         assert tx is not None
+        assert tx.retry is None
+        assert tx.notification is None
 
         # NOTE: OutputHandler may send but Storage currently does not
         # accept reusing !finalized blob. Exploder passes it through
