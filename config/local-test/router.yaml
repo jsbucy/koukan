@@ -24,25 +24,27 @@ rest_listener:
 
 sender:
 - name: ingress
-  output_chain: mx-out
+  output_chain: ingress
   tag:
   - name: smtp-mx
-    output_chain: inbound-gw
-    upstream_tag: mx-upstream
-  - name: mx-upstream
+    output_chain: ingress_exploder
+    upstream_tag: smtp-mx-upstream
+  - name: smtp-mx-upstream
   - name: short_circuit
 
 - name: submission
   output_chain: submission
+  retry: output_chain
   tag:
   - name: smtp-msa
-    output_chain: outbound-gw
+    output_chain: submission_exploder
     upstream_tag: smtp-msa-upstream
+    retry: null
   - name: smtp-msa-upstream
+    retry: null
+  - name: notification
 - name: sor
   output_chain: sink
-- name: notification
-  output_chain: submission
 
 rest_endpoint:
 - name: gateway
@@ -58,12 +60,11 @@ rest_endpoint:
   tag: short_circuit
 
 endpoint:
-- name: outbound-gw
+- name: submission_exploder
   # equivalent to "chain ends with exploder/tx is always ephemeral"
   # create returns uri qualified to ephemeral session rather than
   # canonical service host
   rest_lro: false
-  msa: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -78,11 +79,12 @@ endpoint:
 
 - name: submission
   rest_lro: true
-  msa: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
-
+    notification:
+      sender: submission
+      tag: notification
     retry_params:
       max_attempts: 3
       min_attempt_time: 2
@@ -137,9 +139,8 @@ endpoint:
     chunk_size: 1048576
 
 
-- name: inbound-gw
+- name: ingress_exploder
   rest_lro: false
-  msa: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -183,9 +184,8 @@ endpoint:
     rcpt_timeout: 300
     data_timeout: 300
 
-- name: mx-out
+- name: ingress
   rest_lro: true
-  msa: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -197,7 +197,8 @@ endpoint:
       backoff_factor: 1.5
       deadline: 30
     notification:
-      host: submission
+      sender: submission
+      tag: notification
   chain:
   - filter: remote_host
   - filter: received_header
@@ -232,10 +233,9 @@ endpoint:
       name: address_list
       # no domains: match everything
       # dest == None: reject
-  - filter: message_parser
   - filter: add_route
-    # output_chain: sink
     sender: sor
+  - filter: message_parser
   - filter: dns_resolution
     literal: 'fake_smtpd'
     static_hosts:

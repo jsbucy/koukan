@@ -181,6 +181,7 @@ class RestHandler(Handler):
     def _validate_incremental_tx(self, tx : TransactionMetadata
                                  ) -> Optional[HttpResponse]:
         if tx.retry is not None or tx.notification is not None:
+            logging.debug(tx)
             return self.response(
                 code=400, msg='incremental endpoint does not '
                 'accept retry/notification')
@@ -455,7 +456,7 @@ class RestHandler(Handler):
             return self.response(
                 code=400,
                 msg='endpoint does not accept incremental updates')
-        elif err := self._validate_incremental_tx(tx):
+        elif err := self._validate_incremental_tx(downstream_delta):
             return err
 
         if tx.merge_from(downstream_delta) is None:

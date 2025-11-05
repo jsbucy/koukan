@@ -55,8 +55,8 @@ smtp_listener:
 
 rest_output:
   - name: mx
-    host: inbound-gw
     endpoint: http://localhost:8000/senders/ingress/transactions
+    tag: smtp-mx
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300
@@ -64,8 +64,8 @@ rest_output:
     refresh_interval: 5
 
   - name: msa
-    host: outbound-gw
     endpoint: http://localhost:8000/senders/submission/transactions
+    tag: smtp-msa
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300

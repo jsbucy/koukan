@@ -249,7 +249,7 @@ class RestEndpoint(Filter):
             logging.debug(e)
             return None
         logging.info('RestEndpoint._update resp %s %s',
-                     rest_resp, rest_resp.http_version)
+                     rest_resp, rest_resp.content)
 
         if rest_resp.status_code != 200:
             return rest_resp

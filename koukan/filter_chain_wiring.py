@@ -137,7 +137,7 @@ class FilterChainWiring:
             yaml['retry'])
 
     def add_route(self, yaml, sender : Sender):
-        if 'output_chain' not in yaml:
+        if 'sender' not in yaml:
             return None
         assert self.filter_chain_factory is not None
         if yaml.get('store_and_forward', None):

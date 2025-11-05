@@ -417,7 +417,7 @@ class End2EndTest(unittest.TestCase):
 
     def _test_add_route(self, filter_yaml):
         self._configure()
-        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'mx-out')
+        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'ingress')
 
         add_route_yaml = next(
             y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route')

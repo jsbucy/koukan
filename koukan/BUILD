@@ -495,8 +495,10 @@ py_test(name='router_service_test_fastapi',
               ':hello_filter',
               '//examples/send_message:send_message',
               '@pypi//httpx',
+              '@pypi//pyyaml',
               '@pypi//werkzeug'],
-        data=['//testdata:multipart.msg'])
+        data=['//testdata:multipart.msg',
+              '//testdata:router_service_test-router.yaml'])
 
 py_test(name='router_service_test_sqlite',
         srcs=['router_service_test.py'],
@@ -514,8 +516,10 @@ py_test(name='router_service_test_sqlite',
               ':hello_filter',
               '//examples/send_message:send_message',
               '@pypi//httpx',
+              '@pypi//pyyaml',
               '@pypi//werkzeug'],
-        data=['//testdata:multipart.msg'])
+        data=['//testdata:multipart.msg',
+              '//testdata:router_service_test-router.yaml'])
 
 py_library(name='smtp_auth',
            srcs=['smtp_auth.py'],
