@@ -111,7 +111,6 @@ endpoint:
       - rest-application.example.com
       destination:
         endpoint: short_circuit
-        http_host: mx-out
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
