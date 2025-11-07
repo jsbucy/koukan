@@ -80,7 +80,7 @@ class RestHandler(Handler):
     service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
-    sender : Optional[str] = None
+    path_sender_name : Optional[str] = None
 
     def __init__(self,
                  executor : Executor,
@@ -93,7 +93,7 @@ class RestHandler(Handler):
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
                  client : Optional[HTTP_CLIENT] = None,
-                 sender : Optional[str] = None):
+                 path_sender_name : Optional[str] = None):
         assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
@@ -109,7 +109,7 @@ class RestHandler(Handler):
         self.service_url = service_url
         if client is not None:
             self.client = client
-        self.sender = sender
+        self.path_sender_name = path_sender_name
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -204,9 +204,14 @@ class RestHandler(Handler):
             req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(code=400, msg='invalid tx json')
+        # client might send json with either no sender or just the
+        # tag; propagate the one from the url path
         if tx.sender is None:
             tx.sender = Sender()
-        tx.sender.name = self.sender
+        if tx.sender.name is None:
+            tx.sender.name = self.path_sender_name
+        elif tx.sender.name != self.path_sender_name:
+            return self.response(code=400, msg='url path/json sender mismatch')
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
@@ -739,7 +744,7 @@ class RestHandlerFactory(HandlerFactory):
             session_url = self.session_url,
             service_url = self.service_url,
             client = self.client.get,
-            sender = sender,
+            path_sender_name = sender,
             **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:
