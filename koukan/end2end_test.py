@@ -130,7 +130,7 @@ class End2EndTest(unittest.TestCase):
 
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
-        self.router_submission_url = self.router_base_url + '/senders/submission/transactions'
+        self.router_submission_url = urljoin(self.router_base_url, '/senders/submission/transactions')
         with open('config/local-test/router.yaml', 'r') as f:
             self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
 
@@ -338,8 +338,7 @@ class End2EndTest(unittest.TestCase):
 
         sender = Sender(self.router_submission_url,
                         'alice@example.com',
-                        body_filename='testdata/trivial.msg',
-                        sender='submission')
+                        body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
         sender.force_reuse = True
         sender.send('bob2@example.com')
@@ -388,7 +387,6 @@ class End2EndTest(unittest.TestCase):
 
         sender = Sender(self.router_submission_url,
                         'alice@example.com',
-                        sender='submission',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
         sender.force_reuse = True

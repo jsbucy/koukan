@@ -6,7 +6,7 @@ global:
 
 # rest -> smtp
 rest_listener:
-  addr: ["::1", 8001]
+  addr: ["localhost", 8001]
   #cert: localhost.crt
   #key: localhost.key
 

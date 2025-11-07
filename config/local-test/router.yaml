@@ -121,7 +121,7 @@ endpoint:
     policy:
       name: address_list
       # no domains/dest -> reject all
-  - filter: dkim  # before received_header?
+  - filter: dkim
     # key: config/local-test/dkim.key
     domain: example.com
     selector: sel
@@ -262,7 +262,6 @@ endpoint:
   - filter: rest_output
     rcpt_timeout: 300
     data_timeout: 300
-    # static_endpoint: http://localhost:8002/senders/router/transactions
     chunk_size: 1048576
 
 
@@ -273,7 +272,7 @@ modules:
     hello: koukan.hello_policy
 
 storage:
-  url: postgresql+psycopg://bucy@/pykk?host=/var/run/postgresql
+  # url: postgresql+psycopg://my-username@/pykk?host=/var/run/postgresql
 
   gc_interval: 30
   gc_ttl: 3600

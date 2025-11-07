@@ -664,8 +664,7 @@ class RouterServiceTest(unittest.TestCase):
 
         sender = RestSender(self.router_url,
                             'alice@example.com',
-                            body_filename=body_file.name,
-                            sender='submission')
+                            body_filename=body_file.name)
 
         upstream_endpoint = FakeFilter()
         def exp_env(tx, tx_delta):
@@ -1158,7 +1157,6 @@ class RouterServiceTest(unittest.TestCase):
 
         sender = RestSender(self.router_url,
                             'alice@example.com',
-                            sender='submission',
                             message_builder = {
             "headers": [
                 ["from", [{"display_name": "alice a",

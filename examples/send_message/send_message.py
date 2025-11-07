@@ -54,7 +54,6 @@ class Sender:
     blob_cache : BlobCache
     tx_json : Optional[Dict[str, Any]] = None
     force_reuse = False
-    sender : str
     tag : Optional[str] = None
 
     def __init__(self,
@@ -62,7 +61,6 @@ class Sender:
                  mail_from : str,
                  message_builder : Optional[dict] = None,
                  body_filename : Optional[str] = None,
-                 sender = 'send_message',
                  tag : Optional[str] = None):
         self.session = requests.Session()
         # TODO this should install requests-cache to cache redirects
@@ -84,7 +82,6 @@ class Sender:
         else:
             assert False
 
-        self.sender = sender
         self.tag = tag
 
     def send_part(self,
@@ -165,11 +162,10 @@ class Sender:
         tx_json : Optional[Dict[str, Any]] = {
             'mail_from': {'m': self.mail_from},
             'rcpt_to': [{'m': rcpt_to}],
-            'sender': {'name': self.sender}
         }
         assert tx_json is not None  # optional
         if self.tag:
-            tx_json['sender']['tag'] = self.tag
+            tx_json['sender'] = {'tag': self.tag}
         if self.message_builder:
             tx_json['body'] = {'message_builder': self.message_builder}
         self.reuse_blobs(tx_json)
@@ -178,8 +174,7 @@ class Sender:
 
         tx_start = time.monotonic()
 
-        url = urljoin(
-            self.base_url, '/senders/' + self.sender + '/transactions')
+        url = self.base_url
         logging.debug('POST %s', url)
         start = time.monotonic()
         rest_resp = self.session.post(url, json=tx_json)
@@ -300,10 +295,12 @@ if __name__ == '__main__':
     parser.add_argument('--mail_from')
     parser.add_argument('--rfc822_filename')
     parser.add_argument('--message_builder_filename')
-    parser.add_argument('--base_url', default='http://localhost:8000')
-    parser.add_argument('--host', default='submission')
+    parser.add_argument(
+        '--base_url',
+        default='http://localhost:8000/senders/submission/transactions')
     parser.add_argument('--iters', default='1')
     parser.add_argument('--threads', default='1')
+    parser.add_argument('--tag', default=None)
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -321,10 +318,10 @@ if __name__ == '__main__':
     mu = threading.Lock()
     def send():
         sender = Sender(args.base_url,
-                        args.host,
                         args.mail_from,
                         message_builder=message_builder,
-                        body_filename=args.rfc822_filename)
+                        body_filename=args.rfc822_filename,
+                        tag=args.tag)
 
         for i in range(0, int(args.iters)):
             for rcpt in args.rcpt_to:
