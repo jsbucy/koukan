@@ -56,7 +56,6 @@ smtp_listener:
 rest_output:
   - name: mx
     endpoint: http://localhost:8000/senders/ingress/transactions
-    tag: smtp-mx
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300
@@ -65,7 +64,6 @@ rest_output:
 
   - name: msa
     endpoint: http://localhost:8000/senders/submission/transactions
-    tag: smtp-msa
     verify: localhost.crt
     rcpt_timeout: 300
     data_timeout: 300
