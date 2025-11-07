@@ -30,12 +30,13 @@ def create_app(receiver = None, path = None):
     async def create_transaction(
             sender : str,
             request : FastApiRequest) -> FastApiResponse:
-        req_json = await request.json()
-        tx_url, tx_json, etag = receiver.create_tx(
-            req_json,
-            lambda tx_id: str(request.url_for(
-                'get_transaction', tx_rest_id=tx_id)))
         try:
+            req_json = await request.json()
+            tx_url, tx_json, etag = receiver.create_tx(
+                sender,
+                req_json,
+                lambda tx_id: str(request.url_for(
+                    'get_transaction', tx_rest_id=tx_id)))
             return FastApiJsonResponse(
                 status_code=201,
                 headers={'location': tx_url, 'etag': etag},

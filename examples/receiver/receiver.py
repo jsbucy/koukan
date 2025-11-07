@@ -1,7 +1,15 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import AsyncGenerator, Callable, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    AsyncGenerator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple )
 import logging
 import json
 from io import IOBase, TextIOWrapper
@@ -14,6 +22,7 @@ import copy
 
 class Transaction:
     CHUNK_SIZE=1048576
+    sender : str
     tx_id : str
     tx_json : dict
     tx_json_path : Optional[str] = None
@@ -32,10 +41,12 @@ class Transaction:
     version = 1
     tx_url : str
 
-    def __init__(self, tx_id : str,
+    def __init__(self, sender : str,
+                 tx_id : str,
                  tx_json,
                  dir : str,
                  tx_url):
+        self.sender = sender
         self.blob_paths = {}
         self.tx_id = tx_id
         logging.debug('Tx.init %s', tx_json)
@@ -304,11 +315,13 @@ class Receiver:
             del self.transactions[tx_id]
         logging.debug('_gc %d live', len(self.transactions) - len(del_tx_id))
 
-    def create_tx(self, tx_json, create_tx_url : Callable[[str], str]
+    def create_tx(self, sender : str,
+                  tx_json : Dict[str, Any],
+                  create_tx_url : Callable[[str], str]
                   ) -> Tuple[str,dict,str]:
         tx_id = secrets.token_urlsafe()
         tx_url = create_tx_url(tx_id)
-        tx = Transaction(tx_id, tx_json, self.dir, tx_url)
+        tx = Transaction(sender, tx_id, tx_json, self.dir, tx_url)
         self.transactions[tx_id] = tx
         return tx_url, tx.get_json(), str(tx.version)
 
