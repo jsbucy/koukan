@@ -272,7 +272,7 @@ modules:
     hello: koukan.hello_policy
 
 storage:
-  # url: postgresql+psycopg://my-username@/pykk?host=/var/run/postgresql
+  # url: postgresql+psycopg://my-username@/my-database?host=/var/run/postgresql
 
   gc_interval: 30
   gc_ttl: 3600
