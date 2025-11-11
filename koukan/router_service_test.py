@@ -15,6 +15,7 @@ import cProfile
 from pstats import SortKey
 import gc
 import tempfile
+import yaml
 
 from httpx import Client
 from werkzeug.datastructures import ContentRange
@@ -40,8 +41,9 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 from koukan.message_builder import MessageBuilderSpec
 
 from koukan.storage_schema import BlobSpec
+from koukan.sender import Sender
 
-from examples.send_message.send_message import Sender
+from examples.send_message.send_message import Sender as RestSender
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -49,176 +51,6 @@ def setUpModule():
 def tearDownModule():
     postgres_test_utils.tearDownModule()
 
-root_yaml_template = {
-    'global': {
-        'tx_idle_timeout': 5,
-        'gc_interval': None,
-        # XXX only the notification tests still micromanage this, it
-        # should be enabled for the rest
-        'dequeue': False,
-        'mailer_daemon_mailbox': 'mailer-daemon@d',
-        'rest_id_entropy': 4,
-
-        'executor': {
-            'rest': {
-                'max_inflight': 100,
-                'watchdog_timeout': 3,
-                'testonly_debug_futures': True
-            },
-            'output': {
-                'max_inflight': 100,
-                'watchdog_timeout': 3,
-                'testonly_debug_futures': True
-            }
-        },
-    },
-    'rest_listener': {
-    },
-    'endpoint': [
-        {
-            'name': 'smtp-msa',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 10,
-                'upstream_refresh': 10,
-            },
-            'chain': [{'filter': 'exploder',
-                       'output_chain': 'msa-upstream',
-                       'msa': True,
-                       'rcpt_timeout': 10,
-                       'data_timeout': 10}]
-        },
-        {
-            'name': 'msa-upstream',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 10,
-                'upstream_refresh': 10,
-                'retry_params': {
-                    'mode': 'per_request',
-                    'max_attempts': 3,
-                    'min_attempt_time': 1,
-                    'max_attempt_time': 1,
-                    'backoff_factor': 0,
-                    'deadline': 300,
-                    'bug_retry': 1,
-                },
-                'notification': {
-                    'mode': 'per_request',
-                    'host': 'submission'
-                }
-            },
-            'chain': [
-                {'filter': 'message_builder'},
-                {'filter': 'sync'}
-            ],
-        },
-        {
-            'name': 'submission',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 10,
-                'upstream_refresh': 10,
-                'retry_params': {
-                    'max_attempts': 3,
-                    'min_attempt_time': 1,
-                    'max_attempt_time': 1,
-                    'backoff_factor': 0,
-                    'deadline': 300,
-                    'bug_retry': 1,
-                },
-                'notification': {
-                    'host': 'submission'
-                }
-            },
-            'chain': [
-                {'filter': 'message_builder'},
-                {'filter': 'sync'}
-            ],
-        },
-        {
-            'name': 'smtp-in',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 1,
-                'upstream_refresh': 1,
-            },
-            'chain': [{'filter': 'exploder',
-                       'output_chain': 'inbound-gw',
-                       'msa': False,
-                       'rcpt_timeout': 10,
-                       'data_timeout': 10 }]
-        },
-        {
-            'name': 'inbound-gw',
-            'msa': True,
-            'output_handler': {
-                'downstream_timeout': 1,
-                'upstream_refresh': 1,
-                'retry_params': {
-                    'mode': 'per_request'
-                },
-                'notification': {
-                    'mode': 'per_request',
-                    'host': 'submission'
-                }
-            },
-            'chain': [
-                {'filter': 'router',
-                 'policy': {
-                     'name': 'address_list',
-                     'domains': ['example.com'],
-                     #endpoint: https://localhost:8001
-                     'destination': {'options': { 'receive_parsing': {}}}
-                     }
-                },
-                {'filter': 'router',
-                 'policy': { 'name': 'address_list' }},
-                {'filter': 'message_parser'},
-                {'filter': 'sync'} ],
-        },
-        {
-            'name': 'submission-sync-sor',
-            'chain': [
-                {'filter': 'add_route',
-                 'output_chain': 'sor',
-                 # store_and_forward
-                },
-                {'filter': 'sync'}
-            ]
-        },
-        {
-            'name': 'submission-sf-sor',
-            'chain': [
-                {'filter': 'add_route',
-                 'output_chain': 'sor',
-                 'store_and_forward': True
-                },
-                {'filter': 'sync'}
-            ]
-        },
-        {
-            'name': 'sor',
-            'output_handler': {
-                'retry_params': {
-                },
-            },
-            'chain': [
-                {'filter': 'sync'}
-            ]
-        }
-    ],
-    'storage': {
-        'session_refresh_interval': 1,
-        'gc_ttl': 0,
-        'gc_interval': None,  # don't start, we'll invoke in the tests
-    },
-    'modules': {
-        'sync_filter': {
-            'hello': 'koukan.hello_filter'
-        }
-    }
-}
 
 class RouterServiceTest(unittest.TestCase):
     lock : Lock
@@ -232,7 +64,7 @@ class RouterServiceTest(unittest.TestCase):
 
         self.endpoints = []
 
-    def get_endpoint(self, yaml):
+    def get_endpoint(self, yaml, sender : Sender):
         logging.debug('RouterServiceTest.get_endpoint')
         with self.lock:
             self.cv.wait_for(lambda: bool(self.endpoints))
@@ -244,7 +76,9 @@ class RouterServiceTest(unittest.TestCase):
             self.cv.notify_all()
 
     def _setup_router(self):
-        self.root_yaml = root_yaml = copy.deepcopy(root_yaml_template)
+        with open('testdata/router_service_test-router.yaml', 'r') as yaml_file:
+            self.root_yaml = root_yaml = yaml.load(
+                yaml_file, Loader=yaml.CLoader)
         root_yaml['storage']['url'] = self.storage_url
         root_yaml['storage']['cache_ttl'] = 1
 
@@ -253,7 +87,7 @@ class RouterServiceTest(unittest.TestCase):
             self.port = s.server_address[1]
         root_yaml['rest_listener']['addr'] = ('127.0.0.1', self.port)
         root_yaml['rest_listener']['session_uri'] = 'http://localhost:%d' % self.port
-        router_url = 'http://localhost:%d' % self.port
+        router_url = 'http://localhost:%d/' % self.port
         service = Service(root_yaml=root_yaml)
 
         service.start_main()
@@ -285,7 +119,9 @@ class RouterServiceTest(unittest.TestCase):
             self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
 
         # find a free port
-        self.router_url, self.service = self._setup_router()
+        self.router_base_url, self.service = self._setup_router()
+        self.router_url = urljoin(self.router_base_url, '/senders/submission/transactions')
+        self.router_gw_url = urljoin(self.router_base_url, '/senders/ingress/transactions')
 
         self.client_provider = RestEndpointClientProvider()
 
@@ -314,12 +150,12 @@ class RouterServiceTest(unittest.TestCase):
 
             rest_endpoint = self.create_endpoint(
                 static_base_url=self.router_url,
-                static_http_host='submission',
                 timeout_start=1, timeout_data=1)
             tx = rest_endpoint.downstream_tx
             delta = TransactionMetadata(
                 mail_from = Mailbox('probe-from%d' % i),
-                rcpt_to = [Mailbox('probe-to%d' % i)])
+                rcpt_to = [Mailbox('probe-to%d' % i)],
+                sender=Sender('submission', 'probe'))
             tx.merge_from(delta)
             rest_endpoint.on_update(delta, 5)
             delta = TransactionMetadata(cancelled=True)
@@ -388,7 +224,7 @@ class RouterServiceTest(unittest.TestCase):
         prev_reads = self.service.storage._tx_reads
         logging.debug('RouterServiceTest.test_rest_smoke')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         tx = rest_endpoint.downstream_tx
         body = b'hello, world!'
@@ -454,7 +290,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_hanging_get(self):
         logging.debug('RouterServiceTest.test_rest_hanging_get')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = 'hello, world!'
         tx = TransactionMetadata(
@@ -475,7 +311,7 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         post_resp = rest_endpoint.client.post(
-            rest_endpoint.base_url + '/transactions',
+            rest_endpoint.base_url,
             json = tx.to_json(WhichJson.REST_CREATE),
             headers={'host': 'submission'})
         self.assertEqual(201, post_resp.status_code)
@@ -530,7 +366,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body(self):
         logging.debug('RouterServiceTest.test_rest_body')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -569,12 +405,12 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIn('uri', tx_json['body']['blob_status'])
         del tx_json['body']['blob_status']['uri']
         self.assertEqual(tx_json, {
+            'sender': {'name': 'submission'},
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {'blob_status': {#'content_length': 13, 'length': 13,
                 'finalized': True}},
             'retry': {},
-            'notification': {},
             'mail_response': {'code': 201, 'message': 'ok'},
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
@@ -585,7 +421,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body_http_retry(self):
         logging.debug('RouterServiceTest.test_rest_body_http_retry')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -645,7 +481,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_rest_body_chunked(self):
         logging.debug('RouterServiceTest.test_rest_body_chunked')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -699,12 +535,12 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
+                'sender': {'name': 'submission'},
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {'blob_status': {#'content_length': 13, 'length': 13,
                     'finalized': True}},
                 'retry': {},
-                'notification': {},
                 'mail_response': {'code': 201, 'message': 'ok'},
                 'rcpt_response': [{'code': 202, 'message': 'ok'}],
                 'data_response': {'code': 203, 'message': 'ok'},
@@ -719,7 +555,7 @@ class RouterServiceTest(unittest.TestCase):
     # downstream should complete uploading the body -> input_done -> reload
     def test_submission_retry(self):
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -800,12 +636,11 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
+                    'sender': {'name': 'submission'},
                     'mail_from': {},
                     'rcpt_to': [{}],
-                    'body': {'blob_status': {#'content_length': 15, 'length': 15,
-                        'finalized': True}},
+                    'body': {'blob_status': {'finalized': True}},
                     'retry': {},
-                    'notification': {},
                     'mail_response': {'code': 201, 'message': 'ok'},
                     'rcpt_response': [{'code': 202, 'message': 'ok'}],
                     'data_response': {'code': 203, 'message': 'ok'},
@@ -827,10 +662,9 @@ class RouterServiceTest(unittest.TestCase):
         body_file.write(body_utf8)
         body_file.flush()
 
-        sender = Sender(self.router_url,
-                        'submission',
-                        'alice@example.com',
-                        body_filename=body_file.name)
+        sender = RestSender(self.router_url,
+                            'alice@example.com',
+                            body_filename=body_file.name)
 
         upstream_endpoint = FakeFilter()
         def exp_env(tx, tx_delta):
@@ -897,13 +731,14 @@ class RouterServiceTest(unittest.TestCase):
         prev_reads = self.service.storage._tx_reads
         logging.info('RouterServiceTest.test_exploder_multi_rcpt')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
 
         logging.info('testExploderMultiRcpt start tx')
         delta = TransactionMetadata(
+            sender=Sender(name='submission', tag='smtp-msa'),
             mail_from=Mailbox('alice@example.com'),
             remote_host=HostPort('1.2.3.4', 12345))
         tx.merge_from(delta)
@@ -971,7 +806,7 @@ class RouterServiceTest(unittest.TestCase):
     def _rest_smoke_micro(self):
         logging.debug('_rest_smoke_micro')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         def exp(tx, tx_delta):
             logging.debug(tx)
@@ -1041,7 +876,7 @@ class RouterServiceTest(unittest.TestCase):
 
 
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
 
         logging.info('_exploder_micro start tx')
@@ -1112,7 +947,7 @@ class RouterServiceTest(unittest.TestCase):
     def test_notification_retry_timeout(self):
         logging.info('RouterServiceTest.test_notification_retry_timeout')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa')
+            static_base_url=self.router_url)
 
         cancelled = False
 
@@ -1137,6 +972,7 @@ class RouterServiceTest(unittest.TestCase):
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
+            sender=Sender(name='submission', tag='smtp-msa'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(b'Hello, World!', last=True),
@@ -1152,8 +988,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIn('RCPT ok (AsyncFilterWrapper store&forward)',
                       tx.rcpt_response[0].message)
 
-
-
         for i in range(0,2):
             logging.debug('test_notification upstream tx %d', i)
             upstream_endpoint = FakeFilter()
@@ -1163,17 +997,21 @@ class RouterServiceTest(unittest.TestCase):
                 self.assertEqual([m.mailbox for m in tx.rcpt_to],
                                  ['bob@example.com'])
                 prev = tx.copy()
-                tx.mail_response = Response(201),
+                tx.mail_response = Response(201)
                 tx.rcpt_response = [Response(402)]
                 return prev.delta(tx)
-            for i in range(0, 3):
+            for j in range(0, 3):
                 upstream_endpoint.add_expectation(exp)
 
+            logging.debug('dequeue attempt')
             self.add_endpoint(upstream_endpoint)
+            self._dequeue()
 
             if i == 1:
+                logging.debug('expect dsn')
                 dsn_endpoint = FakeFilter()
                 def exp_dsn(tx, tx_delta):
+                    logging.debug(tx)
                     self.assertEqual(tx.mail_from.mailbox, '')
                     self.assertEqual([m.mailbox for m in tx.rcpt_to],
                                      ['alice@example.com'])
@@ -1181,27 +1019,26 @@ class RouterServiceTest(unittest.TestCase):
                     logging.debug('test_notification %s', dsn)
                     self.assertIn(b'subject: Delivery Status Notification', dsn)
 
-                    upstream_delta = TransactionMetadata(
-                        mail_response = Response(203),
-                        rcpt_response = [Response(204)],
-                        data_response = Response(205))
-                    tx.merge_from(upstream_delta)
-                    return upstream_delta
+                    prev = tx.copy()
+                    tx.mail_response = Response(203)
+                    tx.rcpt_response = [Response(204)]
+                    tx.data_response = Response(205)
+                    return prev.delta(tx)
                 dsn_endpoint.add_expectation(exp_dsn)
-
+                logging.debug('dequeue dsn')
                 self.add_endpoint(dsn_endpoint)
                 self._dequeue()
-
 
     def test_notification_fast_perm(self):
         logging.info('RouterServiceTest.test_notification_fast_perm')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-msa')
+            static_base_url=self.router_url)
 
         logging.info('test_notification start tx')
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
+            sender=Sender(name='submission', tag='smtp-msa'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob1@example.com'),
                      Mailbox('bob2@example.com')],
@@ -1318,10 +1155,9 @@ class RouterServiceTest(unittest.TestCase):
         body_file.write(body_utf8)
         body_file.flush()
 
-        sender = Sender(self.router_url,
-                        'submission',
-                        'alice@example.com',
-                        message_builder = {
+        sender = RestSender(self.router_url,
+                            'alice@example.com',
+                            message_builder = {
             "headers": [
                 ["from", [{"display_name": "alice a",
                            "address": "alice@example.com"}]],
@@ -1384,13 +1220,14 @@ class RouterServiceTest(unittest.TestCase):
     def test_receive_parsing(self):
         logging.info('RouterServiceTest.test_receive_parsing')
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='smtp-in',
+            static_base_url=self.router_gw_url,
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         with open('testdata/multipart.msg', 'rb') as f:
             body = f.read()
         delta = TransactionMetadata(
+            sender=Sender(name='ingress', tag='smtp-mx'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1434,7 +1271,7 @@ class RouterServiceTest(unittest.TestCase):
 
         # start a tx on self.service
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url, static_http_host='submission',
+            static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
@@ -1545,12 +1382,12 @@ class RouterServiceTest(unittest.TestCase):
             mail_code, rcpt_code, data_code):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission-sync-sor',
             timeout_start=5, timeout_data=5)
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         body = b'hello, world!'
         delta = TransactionMetadata(
+            sender=Sender(name='submission', tag='submission-sync-sor'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
@@ -1617,19 +1454,19 @@ class RouterServiceTest(unittest.TestCase):
     def test_add_route_sf_success(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission-sf-sor',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta = TransactionMetadata(
+            sender=Sender(name='submission', tag='submission-sf-sor'),
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
         def exp_add_route(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('sor', tx.host)
+            self.assertEqual('sor', tx.sender.name)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(202),
                 rcpt_response=[Response(204)],
@@ -1642,7 +1479,8 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_upstream(tx, tx_delta):
             logging.debug(tx)
-            self.assertEqual('submission-sf-sor', tx.host)
+            self.assertEqual('submission', tx.sender.name)
+            self.assertEqual('submission-sf-sor', tx.sender.tag)
             upstream_delta=TransactionMetadata(
                 mail_response=Response(201),
                 rcpt_response=[Response(203)],
@@ -1667,7 +1505,6 @@ class RouterServiceTest(unittest.TestCase):
     def test_output_handler_exception(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
-            static_http_host='submission',
             timeout_start=5, timeout_data=5)
         body = b'hello, world!'
         tx = TransactionMetadata()

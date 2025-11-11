@@ -14,6 +14,7 @@ from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 
 from requests.exceptions import ConnectionError
+from koukan.sender import Sender
 
 root_yaml = {
     'global': {
@@ -62,17 +63,17 @@ class GatewayTest(unittest.TestCase):
         self.service_thread = Thread(daemon=True, target=self.gw.main)
         self.service_thread.start()
 
-        self.gw_rest_url = 'http://localhost:%d' % rest_port
+        self.gw_rest_url = 'http://localhost:%d/senders/router/transactions' % rest_port
 
         for i in range(0,5):
             logging.info('GatewayTest.setUp probe rest')
             try:
                 rest_endpoint = self.create_endpoint(
-                    static_base_url=self.gw_rest_url,
-                    static_http_host='outbound')
+                    static_base_url=self.gw_rest_url)
                 tx = TransactionMetadata()
                 rest_endpoint.wire_downstream(tx)
                 delta = TransactionMetadata(
+                    sender=Sender(name='router', tag='outbound'),
                     remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
                     mail_from = Mailbox('probe-from%d' % i),
                     rcpt_to = [Mailbox('probe-to%d' % i)])
@@ -105,10 +106,11 @@ class GatewayTest(unittest.TestCase):
     def test_rest_to_smtp_basic(self):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.gw_rest_url,
-            static_http_host='outbound', timeout_start=10, timeout_data=10)
+            timeout_start=10, timeout_data=10)
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
+            sender=Sender(name='router', tag='outbound'),
             remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
@@ -132,11 +134,11 @@ class GatewayTest(unittest.TestCase):
 
     def test_rest_to_smtp_idle_gc(self):
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.gw_rest_url,
-            static_http_host='outbound')
+            static_base_url=self.gw_rest_url)
         tx=TransactionMetadata()
         rest_endpoint.wire_downstream(tx)
         delta=TransactionMetadata(
+            sender=Sender(name='router', tag='outbound'),
             remote_host=HostPort('127.0.0.1', self.fake_smtpd_port),
             mail_from = Mailbox('alice'))
         tx.merge_from(delta)

@@ -26,6 +26,7 @@ from koukan.filter import (
 from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
 from koukan.message_builder import MessageBuilderSpec
+from koukan.sender import Sender
 
 class Request:
     method = None
@@ -119,20 +120,22 @@ class RestEndpointTest(unittest.TestCase):
         self.server_thread = Thread(
             target=lambda: self.wsgi_server.serve_forever(), daemon=True)
         self.server_thread.start()
-        self.static_base_url='http://localhost:%d/' % self.port
+        self.base_path = '/senders/rest_endpoint_test/transactions'
+        base_url = 'http://localhost:%d/' % self.port
+        self.static_base_url= urljoin(base_url, self.base_path)
         logging.info('RestEndpointTest server listening on %d', self.port)
 
         self.client_provider = RestEndpointClientProvider()
 
         self.tx_path = '/transactions/123'
-        self.tx_url = urljoin(self.static_base_url, self.tx_path)
+        self.tx_url = urljoin(base_url, self.tx_path)
         self.body_path = '/transactions/123/body'
-        self.body_url = urljoin(self.static_base_url, self.body_path)
+        self.body_url = urljoin(base_url, self.body_path)
         self.message_builder_path = '/transactions/123/message_builder'
         self.message_builder_url = urljoin(
-            self.static_base_url, self.message_builder_path)
+            base_url, self.message_builder_path)
         self.blob_path = '/transactions/123/blob/blob_rest_id'
-        self.blob_url = urljoin(self.static_base_url, self.blob_path)
+        self.blob_url = urljoin(base_url, self.blob_path)
 
     def tearDown(self):
         # i.e. all expected requests were sent
@@ -219,7 +222,7 @@ class RestEndpointTest(unittest.TestCase):
             resolution=None, tx=tx, deadline=Deadline())
         self.assertIsNotNone(upstream_delta)
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions')
+        self.assertEqual(self.base_path, req.path)
         self.assertEqual(req.body, b'{}')
         self.assertEqual(req.content_type, 'application/json')
 
@@ -511,7 +514,7 @@ class RestEndpointTest(unittest.TestCase):
 
         # POST /transactions
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions')
+        self.assertEqual(self.base_path, req.path)
 
         # PUT /transactions/123/body
         # range 0-8/*
@@ -567,7 +570,7 @@ class RestEndpointTest(unittest.TestCase):
 
         # POST /transactions
         req = self.requests.pop(0)
-        self.assertEqual(req.path, '/transactions')
+        self.assertEqual(self.base_path, req.path)
 
         # POST /transactions/123/body
         req = self.requests.pop(0)
@@ -656,41 +659,42 @@ class RestEndpointTest(unittest.TestCase):
             min_poll=0.1,
             chunk_size=8)
 
-        # POST
-        self.expect_request(resp=Response(
-            http_resp = '201 created',
-            resp_json={
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'body': {'blob_status': {'uri': self.body_url}}
-            },
-            location = self.tx_url,
-            etag = '1'))
+        self.expect_request(
+            req=Request(
+                method='POST',
+                path=self.base_path,
+            ),
+            resp=Response(
+                http_resp = '201 created',
+                resp_json={
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                    'body': {'blob_status': {'uri': self.body_url}},
+                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'}
+                },
+                location = self.tx_url,
+                etag = '1'))
 
         logging.debug('testFilterApi envelope')
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
+        delta.rest_upstream_sender = Sender('rest_endpoint_test', 'outbound')
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'POST')
-        self.assertEqual(req.path, '/transactions')
-        logging.debug(tx)
-        self.assertEqual(tx.mail_response.code, 201)
-        self.assertEqual([r.code for r in tx.rcpt_response], [202])
-
         logging.debug('testFilterApi !last append')
-        # PUT /transactions/123/body
-        # range: 0-7/*
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, 7, None)))
+        self.expect_request(
+            req=Request(
+                method='PUT',
+                path=self.body_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={},
+                content_range=ContentRange('bytes', 0, 7, None)))
 
         tx_delta = TransactionMetadata()
         tx.body = tx_delta.body = CompositeBlob()
@@ -699,57 +703,49 @@ class RestEndpointTest(unittest.TestCase):
         rest_endpoint.on_update(tx_delta)
         self.assertIsNone(tx.data_response)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(self.body_path, req.path)
-        self.assertEqual(req.content_range.stop, 7)
-        self.assertEqual(req.content_range.length, None)
-
         logging.debug('testFilterApi last append')
 
         b = InlineBlob(b'world!', last=True)
         tx.body.append(b, 0, b.len(), True)
 
-        # PUT /transactions/123/body
-        # range: 7-12/12
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={},
-            content_range=ContentRange(
-                'bytes', 0, tx.body.len(), tx.body.len())))
+        self.expect_request(
+            req=Request(
+                method='PUT',
+                path=self.body_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={},
+                content_range=ContentRange(
+                    'bytes', 0, tx.body.len(), tx.body.len())))
 
-        # GET
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            etag = '3',
-            resp_json={
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'body': {
-                    'blob_status': {
-                        'uri': self.body_url,
-                        'finalized': True
-                    }
-                },
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'ok'}],
-                'data_response': {'code': 203, 'message': 'ok'}}))
+        self.expect_request(
+            req=Request(
+                method='GET',
+                path=self.tx_path,
+            ),
+            resp=Response(
+                http_resp = '200 ok',
+                etag = '3',
+                resp_json={
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'},
+                    'body': {
+                        'blob_status': {
+                            'uri': self.body_url,
+                            'finalized': True
+                        }
+                    },
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'ok'}],
+                    'data_response': {'code': 203, 'message': 'ok'}}))
 
         # same tx/delta
         rest_endpoint.on_update(tx_delta)
         logging.debug('testFilterApi after patch body %s', tx)
         self.assertEqual(tx.data_response.code, 203)
 
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'PUT')
-        self.assertEqual(self.body_path, req.path)
-        self.assertEqual(req.content_range.stop, 13)
-        self.assertEqual(req.content_range.length, 13)
-
-        req = self.requests.pop(0)
-        self.assertEqual(req.method, 'GET')
-        self.assertEqual(self.tx_path, req.path)
-        self.assertEqual(req.etag, '1')
 
     def testFilterApiOneshot(self):
         rest_endpoint, tx = self.create_endpoint(
@@ -891,7 +887,7 @@ class RestEndpointTest(unittest.TestCase):
 
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'POST')
-        self.assertEqual(req.path, '/transactions')
+        self.assertEqual(self.base_path, req.path)
         req = self.requests.pop(0)
         self.assertEqual(req.method, 'PUT')
         self.assertEqual(self.body_path, req.path)
@@ -1019,7 +1015,7 @@ class RestEndpointTest(unittest.TestCase):
 
         self.expect_request(
             req=Request(method='POST',
-                        path='/transactions'),
+                        path=self.base_path),
             resp=Response(
                 http_resp = '201 created',
                 resp_json={
@@ -1330,7 +1326,7 @@ class RestEndpointTest(unittest.TestCase):
         self.expect_request(
             req=Request(
                 method='POST',
-                path='/transactions'
+                path=self.base_path
             ),
             resp=Response(
                 http_resp = '201 created',
@@ -1357,78 +1353,66 @@ class RestEndpointTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')],
             body=InlineBlob(body, last=True))
 
-        # POST /transactions
-        self.expect_request(resp=Response(
-            http_resp = '201 created',
-            resp_json={
-                'remote_host': ['mx.example.com', 25],
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'err'}],
-                'body': {'blob_status': {'uri': self.body_url}}
-            },
-            location = self.tx_url,
-            etag='1'))
-
-        # POST /transactions/123/body
-        self.expect_request(resp=Response(
-            http_resp = '200 created'))
-
-        # GET /transactions/123
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={
-                'remote_host': ['mx.example.com', 25],
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'err'}],
-                'body': {
-                    'blob_status': {'uri': self.body_url, 'finalized': True}
-                }},
-            etag='2'))
-
-        # GET /transactions/123
-        self.expect_request(resp=Response(
-            http_resp = '200 ok',
-            resp_json={
-                'remote_host': ['mx.example.com', 25],
-                'mail_from': {},
-                'rcpt_to': [{}],
-                'mail_response': {'code': 201, 'message': 'ok'},
-                'rcpt_response': [{'code': 202, 'message': 'err'}],
-                'body': {
-                    'blob_status': {
-                        'uri': self.body_url, 'finalized': True
-                    }
+        self.expect_request(
+            req=Request(
+                method='POST',
+                path=self.base_path
+            ),
+            resp=Response(
+                http_resp = '201 created',
+                resp_json={
+                    'remote_host': ['mx.example.com', 25],
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'err'}],
+                    'body': {'blob_status': {'uri': self.body_url}}
                 },
-                'data_response': {'code': 203, 'message': 'ok'}},
-            etag='3'))
+                location = self.tx_url,
+                etag='1'))
+
+        self.expect_request(
+            req=Request(method='PUT', path='/transactions/123/body'),
+            resp=Response(http_resp = '200 created'))
+
+        self.expect_request(
+            req=Request(method='GET', path='/transactions/123'),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={
+                    'remote_host': ['mx.example.com', 25],
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'err'}],
+                    'body': {
+                        'blob_status': {'uri': self.body_url, 'finalized': True}
+                    }},
+                etag='2'))
+
+        self.expect_request(
+            req=Request(method='GET', path='/transactions/123'),
+            resp=Response(
+                http_resp = '200 ok',
+                resp_json={
+                    'remote_host': ['mx.example.com', 25],
+                    'mail_from': {},
+                    'rcpt_to': [{}],
+                    'mail_response': {'code': 201, 'message': 'ok'},
+                    'rcpt_response': [{'code': 202, 'message': 'err'}],
+                    'body': {
+                        'blob_status': {
+                            'uri': self.body_url, 'finalized': True
+                        }
+                    },
+                    'data_response': {'code': 203, 'message': 'ok'}},
+                etag='3'))
 
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202], [r.code for r in tx.rcpt_response])
         self.assertEqual(203, tx.data_response.code)
-
-        req = self.requests.pop(0)
-        self.assertEqual('/transactions', req.path)
-        self.assertEqual('POST', req.method)
-
-        req = self.requests.pop(0)
-        self.assertEqual('/transactions/123/body', req.path)
-        self.assertEqual('PUT', req.method)
-
-        req = self.requests.pop(0)
-        self.assertEqual('/transactions/123', req.path)
-        self.assertEqual('GET', req.method)
-
-        req = self.requests.pop(0)
-        self.assertEqual('/transactions/123', req.path)
-        self.assertEqual('GET', req.method)
-
-        self.assertFalse(self.requests)
 
 
     def test_cancel(self):

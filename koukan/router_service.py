@@ -27,13 +27,15 @@ from koukan.filter import (
     TransactionMetadata )
 from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.deadline import Deadline
+from koukan.sender import Sender
 
 class StorageWriterFactory(EndpointFactory):
     def __init__(self, service : 'Service'):
         self.service = service
 
-    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
-        return self.service.create_storage_writer(http_host)
+    def create(self, sender : Sender
+               ) -> Optional[Tuple[AsyncFilter, dict]]:
+        return self.service.create_storage_writer(sender)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -224,20 +226,21 @@ class Service:
     def rest_id_factory(self):
         return secrets.token_urlsafe(self._rest_id_entropy)
 
-    def create_exploder_output(self, http_host : str, block_upstream
-                               ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(http_host, block_upstream)
+    def create_exploder_output(
+            self, sender : Sender, block_upstream : bool
+    ) -> Optional[StorageWriterFilter]:
+        if (endp := self.create_storage_writer(sender, block_upstream)
             ) is None:
             return None
         return endp[0]
 
-    def create_storage_writer(self, http_host : str,
+    def create_storage_writer(self, sender : Sender,
                               block_upstream : bool = True
                               ) -> Optional[Tuple[StorageWriterFilter, dict]]:
-        assert http_host is not None
         assert self.filter_chain_factory is not None
-        if (endp := self.filter_chain_factory.build_filter_chain(http_host)
-            ) is None:
+        self.filter_chain_factory.get_sender(sender)
+        if (endp := self.filter_chain_factory.build_filter_chain(
+                sender)) is None:
             return None
         chain, endpoint_yaml = endp
 
@@ -245,7 +248,7 @@ class Service:
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=True,
-            http_host = http_host,
+            sender = sender,
             endpoint_yaml = self.get_endpoint_yaml)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
@@ -256,9 +259,16 @@ class Service:
             return None
         return writer, endpoint_yaml
 
-    def get_endpoint_yaml(self, endpoint : str) -> Optional[dict]:
+    def get_endpoint_yaml(self, sender : Sender) -> Optional[dict]:
         try:
             assert self.root_yaml is not None
+            sender_yaml = next(e for e in self.root_yaml['sender']
+                               if e['name'] == sender.name)
+            endpoint = sender_yaml.get('output_chain', None)
+            if sender.tag is not None:
+                tag_yaml = sender_yaml.get('tag', [])
+                tag_yaml = next(e for e in tag_yaml if e['name'] == sender.tag)
+                endpoint = tag_yaml.get('output_chain', endpoint)
             return next(e for e in self.root_yaml['endpoint']
                         if e['name'] == endpoint)
         except StopIteration:
@@ -325,7 +335,8 @@ class Service:
             return False
         assert storage_tx.tx is not None
         assert self.filter_chain_factory is not None
-        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.host)
+        assert storage_tx.tx.sender is not None
+        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.sender)
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',

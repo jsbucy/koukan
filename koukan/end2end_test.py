@@ -11,6 +11,7 @@ import asyncio
 from dkim import dknewkey
 import tempfile
 import yaml
+from urllib.parse import urljoin
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
@@ -41,25 +42,39 @@ class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
     http_server : Optional[uvicorn_main.Server] = None
+    # gw -> router
+    gw_msa_path = '/senders/submission/transactions'
+    gw_mx_path = '/senders/ingress/transactions'
+    # router -> gw, receiver
+    router_path = '/senders/router/transactions'
+    # router -> router (egress -> ingress)
+    short_circuit_path = '/senders/ingress/transactions'
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
             return s.server_address[1]
+
+    def _update_rest_endpoint(self, yaml):
+        for e in yaml:
+            if e['name'] == 'gateway':
+                e['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
+            elif e['name'] == 'short_circuit':
+                e['endpoint'] = urljoin(self.router_base_url, self.short_circuit_path)
+            elif e['name'] == 'sink':
+                e['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
+
 
     def _update_address_list(self, policy):
         logging.debug('_update_address_list %s', policy)
         if (dest := policy.get('destination', None)) is None:
             return
         logging.debug(dest)
+
         endpoint = dest.get('endpoint', None)
-        if endpoint == 'http://localhost:8001':
-            dest['endpoint'] = self.gateway_base_url
+        if endpoint == 'gateway':
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif endpoint == 'http://localhost:8000':
-            dest['endpoint'] = self.router_base_url
-        elif endpoint == 'http://localhost:8002':
-            dest['endpoint'] = self.receiver_base_url
+        elif endpoint == 'sink':
             dest['options']['receive_parsing'] = {
                 'max_inline': 8 }
 
@@ -92,10 +107,10 @@ class End2EndTest(unittest.TestCase):
         self.gateway_mx_port = self._find_free_port()
         self.gateway_msa_port = self._find_free_port()
         self.gateway_rest_port = self._find_free_port()
-        self.gateway_base_url = 'http://localhost:%d/' % self.gateway_rest_port
+        self.gateway_base_url = 'http://localhost:%d/' % self.gateway_rest_port + self.router_path
 
         self.receiver_rest_port = self._find_free_port()
-        self.receiver_base_url = 'http://localhost:%d' % self.receiver_rest_port
+        self.receiver_base_url = 'http://localhost:%d' % self.receiver_rest_port + self.router_path
 
         with open('config/local-test/gateway.yaml', 'r') as f:
             self.gateway_config_yaml =  yaml.load(f, Loader=yaml.CLoader)
@@ -115,6 +130,7 @@ class End2EndTest(unittest.TestCase):
 
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
+        self.router_submission_url = urljoin(self.router_base_url, '/senders/submission/transactions')
         with open('config/local-test/router.yaml', 'r') as f:
             self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
 
@@ -132,8 +148,14 @@ class End2EndTest(unittest.TestCase):
         self.fake_smtpd_port = self._find_free_port()
 
         for endpoint in gateway_yaml['rest_output']:
-            endpoint['endpoint'] = self.router_base_url
+            if endpoint['name'] == 'mx':
+                endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_mx_path)
+            elif endpoint['name'] == 'msa':
+                endpoint['endpoint'] = urljoin(self.router_base_url, self.gw_msa_path)
+
             del endpoint['verify']
+
+        self._update_rest_endpoint(router_yaml['rest_endpoint'])
 
         for endpoint in router_yaml['endpoint']:
             if endpoint['name'] in ['msa-output', 'submission']:
@@ -144,8 +166,8 @@ class End2EndTest(unittest.TestCase):
                     filter['static_hosts'] = [
                         {'host': '127.0.0.1', 'port': self.fake_smtpd_port}]
                 elif filter['filter'] == 'rest_output':
-                    if filter.get('static_endpoint', None) == 'http://localhost:8002':
-                        filter['static_endpoint'] = self.receiver_base_url
+                    if filter.get('static_endpoint', None) == 'http://localhost:8002/senders/router/transactions':
+                        filter['static_endpoint'] = urljoin(self.receiver_base_url, self.router_path)
                     if 'verify' in filter:
                         del filter['verify']
 
@@ -314,8 +336,7 @@ class End2EndTest(unittest.TestCase):
     def test_submission_mime(self):
         self._configure_and_run()
 
-        sender = Sender(self.router_base_url,
-                        'submission',
+        sender = Sender(self.router_submission_url,
                         'alice@example.com',
                         body_filename='testdata/trivial.msg')
         sender.send('bob@example.com')
@@ -364,8 +385,7 @@ class End2EndTest(unittest.TestCase):
              }]
         }
 
-        sender = Sender(self.router_base_url,
-                        'submission',
+        sender = Sender(self.router_submission_url,
                         'alice@example.com',
                         message_builder=message_builder_spec)
         sender.send('bob@example.com')
@@ -395,7 +415,7 @@ class End2EndTest(unittest.TestCase):
 
     def _test_add_route(self, filter_yaml):
         self._configure()
-        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'mx-out')
+        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'ingress')
 
         add_route_yaml = next(
             y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route')

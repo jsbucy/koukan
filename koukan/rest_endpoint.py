@@ -88,9 +88,6 @@ class RestEndpoint(Filter):
 
     rest_upstream_tx : Optional[TransactionMetadata] = None
 
-    static_http_host : Optional[str] = None
-    http_host : Optional[str] = None
-
     blob_readers : Dict[Blob, BlobReader]
 
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
@@ -98,11 +95,10 @@ class RestEndpoint(Filter):
             # allow for propagation delay
             headers['request-timeout'] = str(int(timeout) - 1)
 
-    # pass base_url/http_host or transaction_url
+    # pass base_url or transaction_url
     def __init__(self,
                  client_provider : RestEndpointClientProvider,
                  static_base_url=None,
-                 static_http_host=None,
                  transaction_url=None,
                  timeout_start=TIMEOUT_START,
                  timeout_data=TIMEOUT_DATA,
@@ -110,7 +106,6 @@ class RestEndpoint(Filter):
                  max_inline=1024,
                  chunk_size : Optional[int] = None):
         self.base_url = static_base_url
-        self.static_http_host = static_http_host
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
         self.timeout_data = timeout_data
@@ -129,7 +124,6 @@ class RestEndpoint(Filter):
         resp_json = get_resp_json(rest_resp)
         if resp_json is None:
             return None
-
         upstream_tx = TransactionMetadata.from_json(
             resp_json, WhichJson.REST_READ)
         if upstream_tx is None:
@@ -186,13 +180,11 @@ class RestEndpoint(Filter):
                           self.base_url, remote_host, json)
 
             req_headers = {'content-type': 'application/json'}
-            if self.http_host:
-                req_headers['host'] = self.http_host
             deadline_left = deadline.deadline_left()
             self._set_request_timeout(req_headers, deadline_left)
             try:
                 rest_resp = self.client.post(
-                    urljoin(self.base_url, '/transactions'),
+                    self.base_url,
                     json=json,
                     headers=req_headers,
                     timeout=deadline_left)
@@ -236,9 +228,7 @@ class RestEndpoint(Filter):
                  http_method,
                  deadline : Deadline) -> Optional[HttpResponse]:
         logging.debug('RestEndpoint._post_tx %s', url)
-        req_headers = {}
-        if self.http_host:
-            req_headers['host'] = self.http_host
+        req_headers : Dict[str, str] = {}
         deadline_left = deadline.deadline_left()
         self._set_request_timeout(req_headers, deadline_left)
         assert self.etag
@@ -259,7 +249,7 @@ class RestEndpoint(Filter):
             logging.debug(e)
             return None
         logging.info('RestEndpoint._update resp %s %s',
-                     rest_resp, rest_resp.http_version)
+                     rest_resp, rest_resp.content)
 
         if rest_resp.status_code != 200:
             return rest_resp
@@ -344,15 +334,11 @@ class RestEndpoint(Filter):
         upstream_delta = None
 
         if not self.transaction_url:
-            if self.http_host is None:
-                if self.downstream_tx.upstream_http_host:
-                    self.http_host = self.downstream_tx.upstream_http_host
-                elif self.static_http_host:
-                    self.http_host = self.static_http_host
-
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
             self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
+            if self.downstream_tx.rest_upstream_sender:
+                self.rest_upstream_tx.sender = self.downstream_tx.rest_upstream_sender
             # cf _update_message_builder(), this is probably moot
             # because downstream_body is None on the first update
 
@@ -479,14 +465,9 @@ class RestEndpoint(Filter):
         assert blob.finalized()
         logging.debug('_put_blob_single %d %s',
                       blob.content_length(), blob_url)
-        headers = {}
-        if self.http_host:
-            headers['host'] = self.http_host
-
         rest_resp = None
         try:
-            rest_resp = self.client.put(
-                blob_url, headers=headers, content = BlobReader(blob))
+            rest_resp = self.client.put(blob_url, content = BlobReader(blob))
         except RequestError as e:
             logging.info('RestEndpoint._put_blob_single RequestError %s', e)
         if rest_resp is None or rest_resp.status_code != 200:
@@ -553,8 +534,6 @@ class RestEndpoint(Filter):
             headers['content-range'] = ContentRange(
                 'bytes', offset, offset + len(d),
                 offset + len(d) if last else None).to_header()
-        if self.http_host:
-            headers['host'] = self.http_host
         try:
             logging.info('RestEndpoint._put_blob_chunk() PUT %s %s',
                          blob_url, headers)
@@ -597,8 +576,6 @@ class RestEndpoint(Filter):
         assert self.transaction_url is not None
         try:
             req_headers = {}
-            if self.http_host:
-                req_headers['host'] = self.http_host
             if self.etag and not testonly_point_read:
                 req_headers['if-none-match'] = self.etag
             self._set_request_timeout(req_headers, timeout)

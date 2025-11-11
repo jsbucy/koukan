@@ -28,7 +28,7 @@ from koukan.rest_handler import (
 import koukan.uvicorn_main as uvicorn_main
 import yaml
 from koukan.executor import Executor
-
+from koukan.sender import Sender
 
 
 class SmtpGateway(EndpointFactory):
@@ -99,7 +99,6 @@ class SmtpGateway(EndpointFactory):
 
         endpoint = RestEndpoint(
             static_base_url=yaml['endpoint'],
-            static_http_host=yaml['host'],
             timeout_start=yaml.get('rcpt_timeout', 30),
             timeout_data=yaml.get('data_timeout', 60),
             client_provider=client,
@@ -114,12 +113,13 @@ class SmtpGateway(EndpointFactory):
         return None
 
     # EndpointFactory
-    def create(self, host) -> Optional[Tuple[AsyncFilter, dict]]:
+    def create(self, sender : Sender) -> Optional[Tuple[AsyncFilter, dict]]:
         assert self.config_yaml is not None
         assert self.rest_id_factory is not None
         rest_yaml = self.config_yaml['rest_listener']
-
-        if (factory := self.smtp_factory.get(host, None)) is None:
+        if sender.tag is None:
+            return None
+        if (factory := self.smtp_factory.get(sender.tag, None)) is None:
             return None
 
         # The ehlo_host comes from the yaml and not the request
@@ -246,7 +246,9 @@ class SmtpGateway(EndpointFactory):
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 timeout_data=service_yaml.get('data_timeout', data_timeout),
                 chunk_size=endpoint_yaml.get('chunk_size', 2**20),
-                refresh_interval=endpoint_yaml.get('refresh_interval', 30))
+                refresh_interval=endpoint_yaml.get('refresh_interval', 30),
+                sender=service_yaml['sender'],
+                tag=service_yaml['tag'])
 
             self.smtp_services.append(smtp_service(
                 hostname=addr[0], port=addr[1],

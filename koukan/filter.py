@@ -23,7 +23,7 @@ from koukan.rest_schema import BlobUri, WhichJson, make_blob_uri, parse_blob_uri
 from koukan.storage_schema import BlobSpec
 
 from koukan.message_builder import MessageBuilderSpec
-
+from koukan.sender import Sender
 
 class HostPort:
     host : str
@@ -319,9 +319,6 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
     raise ValueError()
 
 _tx_fields = [
-    # downstream http host
-    TxField('host',
-            validity = set([WhichJson.DB])),
     TxField('remote_host',
             # TODO these accept/emit criteria are more at the syntax
             # level, there also needs to be a policy level e.g. to
@@ -415,11 +412,19 @@ _tx_fields = [
                                        WhichJson.EXPLODER_UPDATE,
                                        WhichJson.ADD_ROUTE])),
     TxField('rest_endpoint', validity=None),
-    TxField('upstream_http_host', validity=None),
     TxField('options', validity=None),
     TxField('resolution', validity=None),
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
     TxField('session_uri', validity=None),
+    TxField('sender', validity=set([WhichJson.REST_CREATE,
+                                    # xxx need this?
+                                    WhichJson.REST_READ,
+                                    WhichJson.DB]),
+            to_json=Sender.to_json,
+            from_json=Sender.from_json,
+            copy=Sender.copy),
+    # RecipientRouterFilter -> RestEndpoint
+    TxField('rest_upstream_sender', validity=None)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -433,7 +438,6 @@ def _valid_list_offset(which_js : WhichJson):
 # "set field to None." In terms of json patch, it's a delta that
 # contains only "add" operations.
 class TransactionMetadata:
-    host : Optional[str] = None
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
 
@@ -464,12 +468,13 @@ class TransactionMetadata:
     cancelled : Optional[bool] = None
 
     rest_endpoint : Optional[str] = None
-    upstream_http_host : Optional[str] = None
     options : Optional[dict] = None
 
     resolution : Optional[Resolution] = None
     final_attempt_reason : Optional[str] = None
     session_uri : Optional[str] = None
+    sender : Optional[Sender] = None
+    rest_upstream_sender : Optional[Sender] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -478,7 +483,6 @@ class TransactionMetadata:
                  mail_response : Optional[Response] = None,
                  rcpt_to : Optional[Sequence[Mailbox]] = None,
                  rcpt_response : Optional[Sequence[Response]] = None,
-                 host : Optional[str] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
@@ -486,14 +490,15 @@ class TransactionMetadata:
                  smtp_meta : Optional[dict] = None,
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
-                 rest_id : Optional[str] = None):
+                 rest_id : Optional[str] = None,
+                 sender : Optional[Sender] = None
+                 ):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
         self.mail_response = mail_response
         self.rcpt_to = list(rcpt_to) if rcpt_to else []
         self.rcpt_response = list(rcpt_response) if rcpt_response else []
-        self.host = host
         self.body = body
         self.data_response = data_response
         self.notification = notification
@@ -502,6 +507,7 @@ class TransactionMetadata:
         self.cancelled = cancelled
         self.resolution = resolution
         self.rest_id = rest_id
+        self.sender = sender
 
     def __repr__(self):
         out = ''
@@ -806,7 +812,7 @@ class TransactionMetadata:
                 raise ValueError()
             if not isinstance(old_v, list):
                 if old_v != new_v:
-                    logging.debug('tx.delta value change %s %s %s',
+                    logging.debug('tx.delta value change %s old=%s new=%s',
                                   f, old_v, new_v)
                     raise ValueError()
                 setattr(out, f, None)
@@ -853,12 +859,14 @@ class TransactionMetadata:
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
     def copy(self) -> 'TransactionMetadata':
-        # TODO probably this should use tx_json_fields?
+        # TODO should use tx_json_fields, custom copiers
         out = copy.copy(self)
         out.rcpt_to = list(self.rcpt_to)
         out.rcpt_response = list(self.rcpt_response)
         if isinstance(self.body, MessageBuilderSpec):
             out.body = self.body.clone()
+        if self.sender is not None:
+            out.sender = self.sender.copy()
         return out
 
     def copy_valid(self, valid : WhichJson):

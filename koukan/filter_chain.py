@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Awaitable, Callable, Coroutine, List, Optional, Tuple
 from functools import partial
 import logging

@@ -1,11 +1,10 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Dict, Optional, Tuple
-
+import logging
 
 def ok_smtp_code(code):
     return code >= 200 and code <= 299
-
 
 class Esmtp:
     # from smtplib.SMTP.esmtp_features
@@ -23,9 +22,19 @@ class Response:
     def Internal(msg : str):
         return Response(Response.INTERNAL, msg)
 
-    def __init__(self, code=200, str="ok"):
+    def __init__(self, code=200, mess=None):
         self.code = code
-        self.message = str
+        if mess is None:
+            if self.ok():
+                mess = 'ok'
+            elif self.temp():
+                mess = 'temporary error'
+            elif self.perm():
+                mess = 'permanent error'
+            else:
+                logging.warning('%s', code, stack_info=True)
+                mess = 'internal error'
+        self.message = mess
 
     def __str__(self):
         return '%d %s' % (self.code, self.message)

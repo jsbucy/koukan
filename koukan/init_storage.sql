@@ -76,7 +76,6 @@ CREATE TABLE TransactionBlobRefs (
   PRIMARY KEY(transaction_id, blob_id)
 );
 
--- TODO add timestamps
 CREATE TABLE TransactionAttempts (
   transaction_id INTEGER,
   attempt_id INTEGER NOT NULL,

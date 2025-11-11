@@ -22,13 +22,49 @@ rest_listener:
   # qualified to this
   #service_uri: http://localhost:8000
 
+sender:
+- name: ingress
+  output_chain: ingress
+  tag:
+  - name: smtp-mx
+    output_chain: ingress_exploder
+    upstream_tag: smtp-mx-upstream
+  - name: smtp-mx-upstream
+  - name: short_circuit
+
+- name: submission
+  output_chain: submission
+  retry: output_chain
+  tag:
+  - name: smtp-msa
+    output_chain: submission_exploder
+    upstream_tag: smtp-msa-upstream
+    retry: null
+  - name: smtp-msa-upstream
+    retry: null
+  - name: notification
+- name: sor
+  output_chain: sink
+
+rest_endpoint:
+- name: gateway
+  endpoint: http://localhost:8001/senders/router/transactions
+  sender: router
+  tag: outbound
+- name: sink
+  endpoint: http://localhost:8002/senders/router/transactions
+  sender: router
+- name: short_circuit
+  endpoint: http://localhost:8000/senders/ingress/transactions
+  sender: ingress
+  tag: short_circuit
+
 endpoint:
-- name: outbound-gw
+- name: submission_exploder
   # equivalent to "chain ends with exploder/tx is always ephemeral"
   # create returns uri qualified to ephemeral session rather than
   # canonical service host
   rest_lro: false
-  msa: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -41,78 +77,14 @@ endpoint:
     rcpt_timeout: 300
     data_timeout: 300
 
-- name: msa-output
-  rest_lro: true
-  msa: true
-  output_handler:
-    downstream_timeout: 5
-    upstream_refresh: 1
-
-    retry_params:
-      mode: per_request
-      max_attempts: 3
-      min_attempt_time: 2
-      max_attempt_time: 5
-      backoff_factor: 1.5
-      deadline: 30
-    notification:
-      mode: per_request
-      host: submission
-
-  chain:
-  - filter: remote_host  # xxx -> downstream exploder chain?
-  # message_builder must be chained before anything that wants to
-  # access/modify the message: received_header, dkim
-  - filter: message_builder
-  - filter: received_header
-    received_hostname: gargantua1    
-  - filter: router
-    policy:
-      name: hello
-  # send my own domains directly to my ingress
-  - filter: router
-    policy:
-      name: address_list
-      domains:
-      - example.com
-      - rest-application.example.com
-      destination:
-        endpoint: http://localhost:8000
-        http_host: mx-out
-  # send everything else to the rhs of the addr via the smtp gw
-  - filter: router
-    policy:
-      name: dest_domain
-      destination:
-        endpoint: http://localhost:8001
-        http_host: outbound
-  - filter: router
-    policy:
-      name: address_list
-      # no domains/dest -> reject all
-  - filter: dkim
-    # key: config/local-test/dkim.key
-    domain: example.com
-    selector: sel
-  - filter: hello
-  - filter: dns_resolution
-    suffix: ''  # match everything
-    static_hosts:
-      - host: 127.0.0.1
-        port: 3025
-  - filter: rest_output
-    verify: localhost.crt
-    rcpt_timeout: 300
-    data_timeout: 300
-    chunk_size: 1048576
-
 - name: submission
   rest_lro: true
-  msa: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
-
+    notification:
+      sender: submission
+      tag: notification
     retry_params:
       max_attempts: 3
       min_attempt_time: 2
@@ -138,15 +110,13 @@ endpoint:
       - example.com
       - rest-application.example.com
       destination:
-        endpoint: http://localhost:8000
-        http_host: mx-out
+        endpoint: short_circuit
   # send everything else to the rhs of the addr via the smtp gw
   - filter: router
     policy:
       name: dest_domain
       destination:
-        endpoint: http://localhost:8001
-        http_host: outbound
+        endpoint: gateway
   - filter: router
     policy:
       name: address_list
@@ -168,9 +138,8 @@ endpoint:
     chunk_size: 1048576
 
 
-- name: inbound-gw
+- name: ingress_exploder
   rest_lro: false
-  msa: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -185,8 +154,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001
-        http_host: outbound
+        endpoint: gateway
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -200,7 +168,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002
+        endpoint: sink
         options:
           receive_parsing:
   - filter: router
@@ -215,23 +183,21 @@ endpoint:
     rcpt_timeout: 300
     data_timeout: 300
 
-- name: mx-out
+- name: ingress
   rest_lro: true
-  msa: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
 
     retry_params:
-      mode: per_request
       max_attempts: 3
       min_attempt_time: 2
       max_attempt_time: 5
       backoff_factor: 1.5
       deadline: 30
     notification:
-      mode: per_request
-      host: submission
+      sender: submission
+      tag: notification
   chain:
   - filter: remote_host
   - filter: received_header
@@ -245,8 +211,7 @@ endpoint:
       #prefixes:
       #- base: alice
       destination:
-        endpoint: http://localhost:8001
-        http_host: outbound
+        endpoint: gateway
         host_list:
           - host: 'fake_smtpd'
             port: 3025
@@ -259,7 +224,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: http://localhost:8002
+        endpoint: sink
         options:
           receive_parsing:
   - filter: router
@@ -267,9 +232,9 @@ endpoint:
       name: address_list
       # no domains: match everything
       # dest == None: reject
-  - filter: message_parser
   - filter: add_route
-  # output_chain: sink
+    sender: sor
+  - filter: message_parser
   - filter: dns_resolution
     literal: 'fake_smtpd'
     static_hosts:
@@ -289,7 +254,7 @@ endpoint:
       name: address_list
       prefixes: []
       destination:
-        endpoint: http://localhost:8002
+        endpoint: sink
         options:
           receive_parsing:
             max_inline: 0
@@ -297,7 +262,6 @@ endpoint:
   - filter: rest_output
     rcpt_timeout: 300
     data_timeout: 300
-    # static_endpoint: http://localhost:8002
     chunk_size: 1048576
 
 
@@ -308,7 +272,7 @@ modules:
     hello: koukan.hello_policy
 
 storage:
-  url: postgresql+psycopg://bucy@/pykk?host=/var/run/postgresql
+  # url: postgresql+psycopg://my-username@/my-database?host=/var/run/postgresql
 
   gc_interval: 30
   gc_ttl: 3600

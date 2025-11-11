@@ -42,13 +42,12 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata()
 
         def exp(tx, tx_delta):
-            self.assertIsNotNone(tx.host)
             prev = tx.copy()
             tx.rest_id='rest_id'
             return prev.delta(tx), 1
         endpoint.expect_update(exp)
 
-        handler = RestHandler(async_filter=endpoint, http_host='msa',
+        handler = RestHandler(async_filter=endpoint,
                               executor=self.executor,
                               service_url='http://localhost:12345')
         scope = {'type': 'http',
@@ -71,15 +70,13 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(resp.headers.get('etag', None))
 
 
-        endpoint.expect_get(
-            (TransactionMetadata(host='msa'), 1))
+        endpoint.expect_get((TransactionMetadata(), 1))
         def exp_mail(tx, tx_delta):
             self.assertIsNotNone(tx.mail_from)
             return TransactionMetadata(), 2
         endpoint.expect_update(exp_mail)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                              http_host='msa',
                               executor=self.executor,
                               service_url='http://localhost:12345')
         scope = {'type': 'http',
@@ -94,13 +91,11 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 200)
 
         tx2 = TransactionMetadata(
-            host='msa',
             mail_from=Mailbox('alice'))
         tx3 = tx2.copy()
         tx3.mail_response = Response(201)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                              http_host='msa',
                               executor=self.executor,
                               service_url='http://localhost:12345')
 
@@ -132,7 +127,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         endpoint.expect_update(exp_rcpt)
 
         handler = RestHandler(async_filter=endpoint, tx_rest_id='rest_id',
-                              http_host='msa',
                               executor=self.executor,
                               service_url='http://localhost:12345')
 
@@ -185,7 +179,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         endpoint.expect_update(exp_rcpt2)
 
         handler = RestHandler(
-            async_filter=endpoint, tx_rest_id='rest_id', http_host='msa',
+            async_filter=endpoint, tx_rest_id='rest_id',
             executor=self.executor,
             service_url='http://localhost:12345')
         scope = {'type': 'http',
@@ -243,7 +237,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         endpoint.body = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
-            http_host='msa',
             rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='rest_id',
             executor=self.executor,
@@ -328,7 +321,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
-            http_host='msa',
             #rest_id_factory = lambda: 'blob-rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -339,7 +331,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -369,7 +360,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -401,7 +391,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         blob = endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
-            http_host='msa',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
             service_url='http://localhost:12345')
@@ -411,7 +400,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -448,7 +436,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
         endpoint.blob['blob-rest-id'] = InlineBlob(b'')
         handler = RestHandler(
             async_filter=endpoint,
-            http_host='msa',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
             service_url='http://localhost:12345')
@@ -458,7 +445,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -534,7 +520,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         handler = RestHandler(
             async_filter=endpoint, blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             executor=self.executor,
@@ -622,7 +607,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             async_filter=endpoint,
             executor=self.executor,
             blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             session_url=session_url,
@@ -664,7 +648,6 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             async_filter=endpoint,
             executor=self.executor,
             blob_rest_id='blob-rest-id',
-            http_host='msa',
             rest_id_factory = lambda: 'rest-id',
             tx_rest_id='tx_rest_id',
             session_url='http://0.router',

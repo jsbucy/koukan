@@ -1,0 +1,143 @@
+global:
+  dequeue: false
+  executor:
+    output:
+      max_inflight: 100
+      testonly_debug_futures: true
+      watchdog_timeout: 3
+    rest:
+      max_inflight: 100
+      testonly_debug_futures: true
+      watchdog_timeout: 3
+  gc_interval: null
+  mailer_daemon_mailbox: mailer-daemon@d
+  rest_id_entropy: 4
+  tx_idle_timeout: 5
+
+storage:
+  gc_interval: null
+  gc_ttl: 0
+  session_refresh_interval: 1
+
+rest_listener: {}
+
+sender:
+- name: ingress
+  output_chain: ingress
+  tag:
+  - name: smtp-mx
+    output_chain: ingress_exploder
+    upstream_tag: smtp-mx-upstream
+  - name: smtp-mx-upstream
+- name: submission
+  output_chain: submission
+  retry: output_chain
+  tag:
+  - name: smtp-msa
+    output_chain: submission_exploder
+    upstream_tag: smtp-msa-upstream
+    retry: null
+  - name: smtp-msa-upstream
+    retry: null
+  - name: submission-sync-sor
+    output_chain: submission-sync-sor
+  - name: submission-sf-sor
+    output_chain: submission-sf-sor
+  - name: notification
+  - name: probe
+    retry: null
+- name: sor
+  output_chain: sor
+
+rest_endpoint:
+- name: sink
+  sender: router
+
+endpoint:
+- name: submission_exploder
+  output_handler:
+    downstream_timeout: 10
+    upstream_refresh: 10
+  chain:
+  - data_timeout: 10
+    filter: exploder
+    msa: true
+    rcpt_timeout: 10
+
+- name: submission
+  output_handler:
+    downstream_timeout: 10
+    notification:
+      sender: submission
+      tag: notification
+    retry_params:
+      backoff_factor: 0
+      bug_retry: 1
+      deadline: 300
+      max_attempt_time: 1
+      max_attempts: 3
+      min_attempt_time: 1
+    upstream_refresh: 10
+  chain:
+  - filter: message_builder
+  - filter: sync
+
+- name: ingress_exploder
+  output_handler:
+    downstream_timeout: 1
+    upstream_refresh: 1
+  chain:
+  - data_timeout: 10
+    filter: exploder
+    msa: false
+    rcpt_timeout: 10
+
+- name: ingress
+  output_handler:
+    downstream_timeout: 1
+    notification:
+      sender: submission
+      tag: notification
+    retry_params: {}
+    upstream_refresh: 1
+  chain:
+  - filter: router
+    policy:
+      destination:
+        endpoint: sink
+        options:
+          receive_parsing: {}
+      domains:
+      - example.com
+      name: address_list
+  - filter: router
+    policy:
+      name: address_list
+  - filter: message_parser
+  - filter: sync
+
+- name: submission-sync-sor
+  chain:
+  - filter: add_route
+    sender: sor
+  - filter: sync
+
+- name: submission-sf-sor
+  chain:
+  - filter: add_route
+    sender: sor
+    store_and_forward: true
+  - filter: sync
+  
+- name: sor
+  output_handler:
+    retry_params: {}
+  chain:
+  - filter: sync
+
+modules:
+  sync_filter:
+    hello: koukan.hello_filter
+
+
+

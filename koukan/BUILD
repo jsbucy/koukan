@@ -15,10 +15,15 @@ py_test(name='blob_test',
 py_library(name='response',
            srcs=['response.py'])
 
+py_library(name='sender',
+           srcs=['sender.py'],
+           deps=[':rest_schema'])
+
 py_library(name='filter',
            srcs=['filter.py'],
            deps=[':blob',
                  ':deadline',
+                 ':sender',
                  ':message_builder',
                  ':response',
                  ':rest_schema'])
@@ -153,15 +158,15 @@ py_test(name='dsn_test',
 py_library(name='output_handler',
            srcs=['output_handler.py'],
            deps=[':backoff',
-                 ':rest_service_handler',
+                 ':dsn',
                  ':filter',
                  ':filter_chain',
-                 ':response',
-                 ':storage',
-                 ':storage_schema',
                  ':message_builder',
-                 ':dsn',
-                 ':rest_schema'])
+                 ':response',
+                 ':rest_schema',
+                 ':sender',
+                 ':storage',
+                 ':storage_schema'])
 
 py_test(name='output_handler_test',
         srcs=['output_handler_test.py'],
@@ -243,15 +248,17 @@ py_library(name='address',
 
 py_library(name='recipient_router_filter',
            srcs=['recipient_router_filter.py'],
-           deps=[':filter',
+           deps=[':blob',
+                 ':filter',
                  ':filter_chain',
                  ':response',
-                 ':blob'])
+                 ':sender'])
 
 py_test(name='recipient_router_filter_test',
         srcs=['recipient_router_filter_test.py'],
         deps=[':recipient_router_filter',
-              ':fake_endpoints'])
+              ':fake_endpoints',
+              ':sender'])
 
 py_library(name='address_list_policy',
            srcs=['address_list_policy.py'],
@@ -311,12 +318,13 @@ py_library(name='storage_writer_filter',
            deps=[':backoff',
                  ':blob',
                  ':deadline',
-                 ':message_builder',
-                 ':storage',
-                 ':storage_schema',
                  ':filter',
+                 ':message_builder',
                  ':response',
-                 ':rest_schema'])
+                 ':rest_schema',
+                 ':sender',
+                 ':storage',
+                 ':storage_schema'])
 
 py_test(name='storage_writer_filter_test',
         srcs=['storage_writer_filter_test.py'],
@@ -326,6 +334,7 @@ py_test(name='storage_writer_filter_test',
               ':fake_endpoints',
               ':response',
               ':rest_schema',
+              ':sender',
               ':sqlite_test_utils',
               ':storage'])
 
@@ -337,6 +346,7 @@ py_library(name='exploder',
                ':filter',
                ':filter_chain',
                ':response',
+               ':sender'
            ])
 
 py_test(name='exploder_test',
@@ -354,7 +364,8 @@ py_test(name='exploder_test',
 py_library(name='add_route_filter',
            srcs=['add_route_filter.py'],
            deps=[':filter',
-                 ':filter_chain'])
+                 ':filter_chain',
+                 ':sender'])
 
 py_test(name='add_route_filter_test',
         srcs=['add_route_filter_test.py'],
@@ -400,7 +411,8 @@ py_test(name='relay_auth_filter_test',
 py_library(name='filter_chain_factory',
            srcs=['filter_chain_factory.py'],
            deps=[':filter',
-                 ':filter_chain'])
+                 ':filter_chain',
+                 ':sender'])
 
 py_library(name='recipient_router_factory',
            srcs=['recipient_router_factory.py'],
@@ -408,7 +420,8 @@ py_library(name='recipient_router_factory',
                  ':filter_chain',
                  ':address_list_policy',
                  ':dest_domain_policy',
-                 ':recipient_router_filter'])
+                 ':recipient_router_filter',
+                 ':sender'])
 
 py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
@@ -425,7 +438,8 @@ py_library(name='filter_chain_wiring',
                  ':recipient_router_factory',
                  ':relay_auth_filter',
                  ':remote_host_filter',
-                 ':rest_endpoint'])
+                 ':rest_endpoint',
+                 ':sender'])
 
 py_library(name='executor',
            srcs=['executor.py'])
@@ -460,6 +474,7 @@ py_library(name='router_service',
                  ':uvicorn_main',
                  ':output_handler',
                  ':rest_handler',
+                 ':sender',
                  ':storage_writer_filter',
                  ':storage',
                  '@pypi//pyyaml'])
@@ -480,8 +495,10 @@ py_test(name='router_service_test_fastapi',
               ':hello_filter',
               '//examples/send_message:send_message',
               '@pypi//httpx',
+              '@pypi//pyyaml',
               '@pypi//werkzeug'],
-        data=['//testdata:multipart.msg'])
+        data=['//testdata:multipart.msg',
+              '//testdata:router_service_test-router.yaml'])
 
 py_test(name='router_service_test_sqlite',
         srcs=['router_service_test.py'],
@@ -499,8 +516,10 @@ py_test(name='router_service_test_sqlite',
               ':hello_filter',
               '//examples/send_message:send_message',
               '@pypi//httpx',
+              '@pypi//pyyaml',
               '@pypi//werkzeug'],
-        data=['//testdata:multipart.msg'])
+        data=['//testdata:multipart.msg',
+              '//testdata:router_service_test-router.yaml'])
 
 py_library(name='smtp_auth',
            srcs=['smtp_auth.py'],
@@ -509,11 +528,12 @@ py_library(name='smtp_auth',
 py_library(name='smtp_service',
            srcs=['smtp_service.py'],
            deps=[':blob',
-                 ':smtp_auth',
-                 ':response',
+                 ':executor',
                  ':filter',
                  ':filter_chain',
-                 ':executor',
+                 ':response',
+                 ':sender',
+                 ':smtp_auth',
                  '@pypi//aiosmtpd'])
 
 py_test(name='smtp_service_test',
@@ -535,6 +555,7 @@ py_library(name='rest_handler',
                  ':response',
                  ':rest_schema',
                  ':rest_service_handler',
+                 ':sender',
                  ':version_cache',
                  '@pypi//fastapi',
                  '@pypi//flask',
@@ -594,6 +615,7 @@ py_library(name='gateway_lib',
                  ':rest_endpoint',
                  ':smtp_endpoint',
                  ':smtp_service',
+                 ':sender',
                  ':sync_filter_adapter',
                  ':rest_handler',
                  '@pypi//pyyaml'])
@@ -618,9 +640,10 @@ py_library(name='ssmtp',
 py_test(name='gateway_test',
         srcs=['gateway_test.py'],
         deps=[':gateway_lib',
-              ':rest_endpoint',
-              ':fake_smtpd',
               ':blob',
+              ':fake_smtpd',
+              ':rest_endpoint',
+              ':sender',
               '@pypi//parameterized',
               '@pypi//requests'])
 

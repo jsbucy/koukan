@@ -43,6 +43,7 @@ from koukan.filter import (
     AsyncFilter,
     TransactionMetadata,
     WhichJson )
+from koukan.sender import Sender
 from koukan.executor import Executor
 
 from koukan.rest_schema import (
@@ -67,7 +68,6 @@ class RestHandler(Handler):
 
     _blob_rest_id : Optional[str] = None
     rest_id_factory : Optional[Callable[[], str]]
-    http_host : Optional[str] = None
 
     # _put_blob
     range : Optional[ContentRange] = None
@@ -80,6 +80,7 @@ class RestHandler(Handler):
     service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
+    path_sender_name : Optional[str] = None
 
     def __init__(self,
                  executor : Executor,
@@ -87,19 +88,18 @@ class RestHandler(Handler):
                  tx_rest_id : Optional[str] = None,
                  blob_rest_id : Optional[str] = None,
                  rest_id_factory : Optional[Callable[[], str]] = None,
-                 http_host : Optional[str] = None,
                  chunk_size : int = 2**20,
                  endpoint_yaml : Optional[dict] = None,
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
-                 client : Optional[HTTP_CLIENT] = None):
+                 client : Optional[HTTP_CLIENT] = None,
+                 path_sender_name : Optional[str] = None):
         assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
         self._tx_rest_id = tx_rest_id
         self._blob_rest_id = blob_rest_id
         self.rest_id_factory = rest_id_factory
-        self.http_host = http_host
         self.chunk_size = chunk_size
         if endpoint_yaml:
             self.endpoint_yaml = endpoint_yaml
@@ -109,6 +109,7 @@ class RestHandler(Handler):
         self.service_url = service_url
         if client is not None:
             self.client = client
+        self.path_sender_name = path_sender_name
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -180,6 +181,7 @@ class RestHandler(Handler):
     def _validate_incremental_tx(self, tx : TransactionMetadata
                                  ) -> Optional[HttpResponse]:
         if tx.retry is not None or tx.notification is not None:
+            logging.debug(tx)
             return self.response(
                 code=400, msg='incremental endpoint does not '
                 'accept retry/notification')
@@ -202,6 +204,14 @@ class RestHandler(Handler):
             req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(code=400, msg='invalid tx json')
+        # client might send json with either no sender or just the
+        # tag; propagate the one from the url path
+        if tx.sender is None:
+            tx.sender = Sender()
+        if tx.sender.name is None:
+            tx.sender.name = self.path_sender_name
+        elif tx.sender.name != self.path_sender_name:
+            return self.response(code=400, msg='url path/json sender mismatch')
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
@@ -217,8 +227,6 @@ class RestHandler(Handler):
                 tx.body = BlobSpec(create_tx_body=True)
         elif err := self._validate_incremental_tx(tx):
             return err
-
-        tx.host = self.http_host
 
         upstream = self.async_filter.update(tx, tx.copy())
         cached = self.async_filter.check_cache()
@@ -453,7 +461,7 @@ class RestHandler(Handler):
             return self.response(
                 code=400,
                 msg='endpoint does not accept incremental updates')
-        elif err := self._validate_incremental_tx(tx):
+        elif err := self._validate_incremental_tx(downstream_delta):
             return err
 
         if tx.merge_from(downstream_delta) is None:
@@ -688,7 +696,8 @@ class RestHandler(Handler):
 class EndpointFactory(ABC):
     # dict : endpoint yaml
     @abstractmethod
-    def create(self, http_host : str) -> Optional[Tuple[AsyncFilter, dict]]:
+    def create(self, sender : Sender
+               ) -> Optional[Tuple[AsyncFilter, dict]]:
         pass
 
     @abstractmethod
@@ -718,8 +727,8 @@ class RestHandlerFactory(HandlerFactory):
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
-    def create_tx(self, http_host) -> RestHandler:
-        res = self.endpoint_factory.create(http_host)
+    def create_tx(self, sender, tag) -> RestHandler:
+        res = self.endpoint_factory.create(Sender(sender, tag))
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
         assert res is not None
@@ -730,12 +739,12 @@ class RestHandlerFactory(HandlerFactory):
         return RestHandler(
             executor=self.executor,
             async_filter=endpoint,
-            http_host=http_host,
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = yaml,
             session_url = self.session_url,
             service_url = self.service_url,
             client = self.client.get,
+            path_sender_name = sender,
             **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:

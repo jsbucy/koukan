@@ -48,20 +48,20 @@ class BlobCache:
 # for upstream status. Reuses blobs across recipients.
 class Sender:
     base_url : str
-    host : str
     mail_from : str
 
     message_builder : Optional[Dict[str, Any]]
     blob_cache : BlobCache
     tx_json : Optional[Dict[str, Any]] = None
     force_reuse = False
+    tag : Optional[str] = None
 
     def __init__(self,
                  base_url : str,
-                 host : str,
                  mail_from : str,
                  message_builder : Optional[dict] = None,
-                 body_filename : Optional[str] = None):
+                 body_filename : Optional[str] = None,
+                 tag : Optional[str] = None):
         self.session = requests.Session()
         # TODO this should install requests-cache to cache redirects
         # in cluster setups
@@ -73,7 +73,6 @@ class Sender:
         if self.message_builder:
             self.fixup_headers()
         self.base_url = base_url
-        self.host = host
         self.blob_cache = BlobCache()
 
         if body_filename:
@@ -82,6 +81,8 @@ class Sender:
             self.prep_message_builder_spec(message_builder)
         else:
             assert False
+
+        self.tag = tag
 
     def send_part(self,
                   url,
@@ -163,6 +164,8 @@ class Sender:
             'rcpt_to': [{'m': rcpt_to}],
         }
         assert tx_json is not None  # optional
+        if self.tag:
+            tx_json['sender'] = {'tag': self.tag}
         if self.message_builder:
             tx_json['body'] = {'message_builder': self.message_builder}
         self.reuse_blobs(tx_json)
@@ -171,14 +174,11 @@ class Sender:
 
         tx_start = time.monotonic()
 
-        url = urljoin(self.base_url, '/transactions')
-        logging.debug('POST /transactions %s', url)
+        url = self.base_url
+        logging.debug('POST %s', url)
         start = time.monotonic()
-        rest_resp = self.session.post(
-            url,
-            headers={'host': self.host},
-            json=tx_json)
-        logging.debug('POST /transactions %s %s', rest_resp, rest_resp.headers)
+        rest_resp = self.session.post(url, json=tx_json)
+        logging.debug('POST %s %s %s', url, rest_resp, rest_resp.headers)
         if rest_resp.status_code != 201:
             return
         # TODO tx creation POST hasn't waited on req_inflight for
@@ -295,10 +295,12 @@ if __name__ == '__main__':
     parser.add_argument('--mail_from')
     parser.add_argument('--rfc822_filename')
     parser.add_argument('--message_builder_filename')
-    parser.add_argument('--base_url', default='http://localhost:8000')
-    parser.add_argument('--host', default='submission')
+    parser.add_argument(
+        '--base_url',
+        default='http://localhost:8000/senders/submission/transactions')
     parser.add_argument('--iters', default='1')
     parser.add_argument('--threads', default='1')
+    parser.add_argument('--tag', default=None)
     parser.add_argument('rcpt_to', nargs='*')
 
     args = parser.parse_args()
@@ -316,10 +318,10 @@ if __name__ == '__main__':
     mu = threading.Lock()
     def send():
         sender = Sender(args.base_url,
-                        args.host,
                         args.mail_from,
                         message_builder=message_builder,
-                        body_filename=args.rfc822_filename)
+                        body_filename=args.rfc822_filename,
+                        tag=args.tag)
 
         for i in range(0, int(args.iters)):
             for rcpt in args.rcpt_to:

@@ -9,9 +9,10 @@ import asyncio
 
 from koukan.filter_chain import BaseFilter
 from koukan.filter_chain import FilterChain
+from koukan.sender import Sender
 
 class FilterSpec:
-    builder : Callable[[Any], BaseFilter]
+    builder : Callable[[Dict[str, Any], Sender], BaseFilter]
     def __init__(self, builder):
         self.builder = builder
 
@@ -21,6 +22,8 @@ class FilterChainFactory:
     endpoint_yaml : Optional[dict] = None
     filters : Dict[str, FilterSpec]
     root_yaml : dict
+    sender_yaml : Optional[dict] = None
+    rest_endpoint_yaml : Optional[dict] = None
     loop : asyncio.AbstractEventLoop
 
     def __init__(self, root_yaml : dict):
@@ -45,7 +48,7 @@ class FilterChainFactory:
         fn = self._load_user_module(name, mod)
         sig = inspect.signature(fn)
         param = list(sig.parameters)
-        assert len(param) == 1
+        assert len(param) == 2
         # assert sig.parameters[param[0]].annotation == dict  # yaml
         logging.debug(sig.return_annotation)
         assert issubclass(sig.return_annotation, BaseFilter)
@@ -72,36 +75,77 @@ class FilterChainFactory:
         for endpoint_yaml in self.root_yaml.get('endpoint', []):
             self.endpoint_yaml[endpoint_yaml['name']] = endpoint_yaml
 
+        self.sender_yaml = {}
+        for sender_yaml in self.root_yaml.get('sender', []):
+            self.sender_yaml[sender_yaml['name']] = sender_yaml
+
         if (modules_yaml := self.root_yaml.get('modules', None)) is not None:
             self.load_user_modules(modules_yaml)
 
-    def _get_filter(self, filter_yaml) -> Optional[BaseFilter]:
+        self.rest_endpoint_yaml = {}
+        for endpoint in self.root_yaml.get('rest_endpoint', []):
+            self.rest_endpoint_yaml[endpoint['name']] = endpoint
+
+    def _get_filter(self, filter_yaml, sender : Sender) -> Optional[BaseFilter]:
         filter_name = filter_yaml['filter']
         spec = self.filters[filter_name]
-        filter = spec.builder(filter_yaml)
+        filter = spec.builder(filter_yaml, sender)
         logging.debug(filter)
         if filter is not None:
             assert isinstance(filter, BaseFilter)
         return filter
 
-    def build_filter_chain(self, host, endpoint_yaml : Optional[dict] = None
+    # populates sender.yaml with sender yaml with per-tag (if any) merged
+    def get_sender(self, sender : Sender):
+        assert self.sender_yaml is not None
+        if (sender_yaml := self.sender_yaml.get(sender.name, None)) is None:
+            return
+        tags = sender_yaml.get('tag', None)
+        tag_yaml = None
+        if tags and sender.tag:
+            for ty in tags:
+                if ty['name'] == sender.tag:
+                    tag_yaml = ty
+                    break
+        sender.yaml = dict(sender_yaml)
+        if tags is not None:
+            del sender.yaml['tag']
+        if tag_yaml is None:
+            return
+        for k,v in tag_yaml.items():
+            sender.yaml[k] = v
+
+    def build_filter_chain(self, sender : Sender,
+                           endpoint_yaml : Optional[dict] = None
                            ) -> Optional[Tuple[FilterChain, dict]]:
+        assert self.sender_yaml is not None
+        sender_yaml = self.sender_yaml[sender.name]
+        output_chain = sender_yaml.get('output_chain', None)
+        tags = sender_yaml.get('tag', [])
+        if tags and sender.tag:
+            for tag_yaml in tags:
+                if tag_yaml['name'] == sender.tag and (
+                        toc := tag_yaml.get('output_chain', None)):
+                    output_chain = toc
+
+        assert output_chain is not None
         if endpoint_yaml is None:
             assert self.endpoint_yaml is not None
-            endpoint_yaml = self.endpoint_yaml.get(host, None)
-            if endpoint_yaml is None:
+            if ((endpoint_yaml := self.endpoint_yaml.get(output_chain, None))
+                is None):
+                logging.warning(output_chain)
                 return None
         filters = []
         for filter_yaml in endpoint_yaml['chain']:
-            f = self._get_filter(filter_yaml)
+            f = self._get_filter(filter_yaml, sender)
             if f is not None:
                 filters.append(f)
-            elif host not in _log_disabled_filter:
+            elif output_chain not in _log_disabled_filter:
                 # It can be convenient to leave disabled filters in
                 # the yaml e.g. in the examples, dkim is disabled by
                 # default (no key) but left as a placeholder for the
                 # end2end test setup. Log this the first time only.
                 logging.warning('filter disabled chain=%s filter=%s %s',
-                                host, filter_yaml['filter'], filter_yaml)
-        _log_disabled_filter[host] = True
+                                output_chain, filter_yaml['filter'], filter_yaml)
+        _log_disabled_filter[output_chain] = True
         return FilterChain(filters, self.loop), endpoint_yaml

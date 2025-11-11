@@ -1,3 +1,5 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
 import logging
 
@@ -97,6 +99,11 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 upstream_tx = t
                 upstream_tx.merge_from(tx_delta)
         assert upstream_delta is not None
+        # this is an invalid config
+        # upstream sender/tag should have retry/notify unset, may need to
+        # override parent
+        assert upstream_delta.retry is None
+        assert upstream_delta.notification is None
         return upstream_tx, upstream_delta
 
     def update(self, downstream_tx : TransactionMetadata,
@@ -205,7 +212,8 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                     250, 'DATA ok (AsyncFilterWrapper store&forward)')
 
         if (data_last and self.do_store_and_forward
-            and tx.retry is None and (self.retry or self.notify)):
+            and ((tx.retry is None and self.retry) or
+                 (tx.notification is None and self.notify))):
             retry_delta = TransactionMetadata()
             if self.retry:
                 retry_delta.retry = {}

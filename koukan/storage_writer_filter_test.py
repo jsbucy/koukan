@@ -20,6 +20,7 @@ from koukan.storage_writer_filter import StorageWriterFilter
 import koukan.sqlite_test_utils as sqlite_test_utils
 
 from koukan.message_builder import MessageBuilderSpec
+from koukan.sender import Sender
 
 
 class StorageWriterFilterTest(unittest.TestCase):
@@ -70,7 +71,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True)
         tx = TransactionMetadata(
-            host='submission',
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
         cursor = filter.release_transaction_cursor()
@@ -83,7 +83,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True)
         tx = TransactionMetadata(
-            host='submission',
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         upstream_filter.update(tx, tx.copy())
 
@@ -109,7 +108,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id')
 
-        tx = TransactionMetadata(host = 'outbound-gw')
+        tx = TransactionMetadata(sender=Sender('gateway'))
         filter.update(tx, tx.copy())
         tx = TransactionMetadata(cancelled = True)
         filter.update(tx, tx.copy())
@@ -121,7 +120,6 @@ class StorageWriterFilterTest(unittest.TestCase):
     def test_cancel_noop(self):
         orig_tx_cursor = self.storage.get_transaction_cursor()
         orig_tx = TransactionMetadata(
-            host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
         orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
@@ -147,7 +145,6 @@ class StorageWriterFilterTest(unittest.TestCase):
     # representative of Exploder which writes body_blob=BlobReader
     def test_body_blob_reader(self):
         orig_tx = TransactionMetadata(
-            host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
 
@@ -166,7 +163,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased=True)
-        tx = TransactionMetadata(host = 'outbound-gw')
+        tx = TransactionMetadata(sender=Sender('exploder'))
         filter.update(tx, tx.copy())
 
         upstream_cursor = filter.release_transaction_cursor()
@@ -266,7 +263,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         orig_filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'test_message_builder')
-        orig_tx = TransactionMetadata(host = 'outbound-gw')
+        orig_tx = TransactionMetadata()
         orig_tx.body = MessageBuilderSpec(message_builder_json)
         orig_tx.body.parse_blob_specs()
         orig_filter.update(orig_tx, orig_tx.copy())
@@ -287,7 +284,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'test_message_builder_reuse')
         message_builder_json['text_body'][0]['content'] = {'reuse_uri': '/transactions/test_message_builder/blob/test_message_builder_blob'}
         tx = TransactionMetadata(
-            host = 'outbound-gw',
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')],
             body = MessageBuilderSpec(message_builder_json))
@@ -306,7 +302,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: str(time.time()))
-        filter._create(TransactionMetadata(host = 'outbound-gw'))
+        filter._create(TransactionMetadata())
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
         t = self.start_update(filter, tx, tx)
@@ -317,7 +313,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: str(time.time()))
-        filter._create(TransactionMetadata(host = 'outbound-gw'))
+        filter._create(TransactionMetadata())
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
                                  rcpt_to = [Mailbox('bob')])
@@ -342,7 +338,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'inline')
         b = b'hello, world!'
         tx = TransactionMetadata(
-            host = 'outbound-gw',
             body = InlineBlob(b, last=True))
         # create w/ tx.inline_body
         filter.update(tx, tx.copy())
@@ -353,7 +348,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'reuse')
         tx2 = TransactionMetadata(
-                host = 'outbound-gw',
                 body = BlobSpec(reuse_uri=BlobUri('inline', tx_body=True)))
         # create w/ body blob uri
         filter2.update(tx2, tx2.copy())
@@ -370,7 +364,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             create_leased=True)
 
         tx = TransactionMetadata(
-            host = 'outbound-gw',
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
 

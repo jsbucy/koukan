@@ -18,12 +18,22 @@ MAX_TIMEOUT=30
 def create_app(handler_factory : HandlerFactory):
     app = FastAPI()
 
-    @app.post('/transactions')
-    async def create_transaction(request : FastApiRequest) -> FastApiResponse:
-        req_json = await request.json()
-        handler = handler_factory.create_tx(request.headers['host'])
-        return await handler.handle_async(
-            request, partial(handler.create_tx, request, req_json=req_json))
+    @app.post('/senders/{sender}/transactions')
+    async def create_transaction(
+            sender : str,
+            request : FastApiRequest) -> FastApiResponse:
+        try:
+            req_json = await request.json()
+            tag = None
+            # xxx bootstrap Sender?
+            if (sender_js := req_json.get('sender', None)):
+                tag = sender_js.get('tag', None)
+            handler = handler_factory.create_tx(sender, tag)
+            return await handler.handle_async(
+                request, partial(handler.create_tx, request, req_json=req_json))
+        except Exception as e:
+            logging.exception('create_transaction')
+            return FastApiResponse(status_code=500)
 
 
     @app.patch('/transactions/{tx_rest_id}')

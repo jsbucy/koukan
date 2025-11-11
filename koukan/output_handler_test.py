@@ -46,7 +46,7 @@ class OutputHandlerTest(unittest.TestCase):
     # ~rest
     def test_oneshot(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx_cursor.create('rest_tx_id', TransactionMetadata())
 
         tx_meta = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')],
@@ -97,8 +97,7 @@ class OutputHandlerTest(unittest.TestCase):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create(
             'rest_tx_id',
-            TransactionMetadata(host='outbound',
-                                mail_from=Mailbox('alice')),
+            TransactionMetadata(mail_from=Mailbox('alice')),
             create_leased=True)
         tx_id = tx_cursor.db_id
 
@@ -237,7 +236,7 @@ class OutputHandlerTest(unittest.TestCase):
 
     def test_no_valid_rcpt(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx_cursor.create('rest_tx_id', TransactionMetadata())
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob1')],
             retry={})
@@ -330,7 +329,7 @@ class OutputHandlerTest(unittest.TestCase):
     # incomplete transactions i.e. downstream timeout shouldn't be retried
     def test_downstream_timeout(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx_cursor.create('rest_tx_id', TransactionMetadata())
         tx_meta = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         tx_cursor.write_envelope(tx_meta)
@@ -371,7 +370,7 @@ class OutputHandlerTest(unittest.TestCase):
 
     def test_downstream_cancel(self):
         tx_cursor = self.storage.get_transaction_cursor()
-        tx_cursor.create('rest_tx_id', TransactionMetadata(host='outbound'))
+        tx_cursor.create('rest_tx_id', TransactionMetadata())
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'))
         tx_cursor.write_envelope(tx)
@@ -419,7 +418,6 @@ class OutputHandlerTest(unittest.TestCase):
     def test_next_attempt_time(self):
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', TransactionMetadata(
-            host='outbound',
             notification = {'host': 'smtp-out'},
             retry={}))
 
@@ -471,10 +469,11 @@ class OutputHandlerTest(unittest.TestCase):
     # 1: handle w/notification request set that permfails
     def test_notification(self):
         tx = TransactionMetadata(
-            host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body=BlobSpec(create_tx_body=True))
+            body=BlobSpec(create_tx_body=True),
+            retry={},
+            notification={})
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
         blob_uri = BlobUri(tx_id='rest_tx_id', tx_body=True)
@@ -526,7 +525,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params = {'host': 'smtp-out'})
+            notification_params = {'host': 'smtp-out',
+                                   'sender': 'notification'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -552,10 +552,11 @@ class OutputHandlerTest(unittest.TestCase):
         body.parse_blob_specs()
 
         tx = TransactionMetadata(
-            host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
-            body = body )
+            body = body,
+            retry={},
+            notification={})
 
         tx_cursor = self.storage.get_transaction_cursor()
         tx_cursor.create('rest_tx_id', tx)
@@ -613,7 +614,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params={'host': 'smtp-out'})
+            notification_params={'host': 'smtp-out',
+                                 'sender': 'notification'})
 
         handler.handle()
         self.assertFalse(notification_endpoint.update_expectation)
@@ -627,7 +629,6 @@ class OutputHandlerTest(unittest.TestCase):
     # recover, handle -> dsn
     def test_notification_post_facto(self):
         tx = TransactionMetadata(
-            host='outbound',
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')],
             body=BlobSpec(create_tx_body=True))
@@ -665,6 +666,7 @@ class OutputHandlerTest(unittest.TestCase):
             retry_params={'max_attempts': 1,
                           'mode': 'per_request'},
             notification_params={'host': 'notify-out',
+                                 'sender': 'notification',
                                  'mode': 'per_request'})
         handler.handle()
 
@@ -706,7 +708,8 @@ class OutputHandlerTest(unittest.TestCase):
             downstream_timeout=2,
             upstream_refresh=1,
             retry_params={'max_attempts': 1},
-            notification_params={'host': 'notify-out'})
+            notification_params={'host': 'notify-out',
+                                 'sender': 'notification'})
 
         logging.debug('handle() for notification')
         handler.handle()

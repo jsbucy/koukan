@@ -21,6 +21,7 @@ from koukan.dsn import read_headers, generate_dsn
 from koukan.blob import Blob, InlineBlob
 from koukan.rest_schema import BlobUri
 from koukan.message_builder import MessageBuilder, MessageBuilderSpec
+from koukan.sender import Sender
 
 def default_notification_endpoint_factory():
     raise NotImplementedError()
@@ -305,8 +306,7 @@ class OutputHandler:
         # leave the existing value for final_attempt_reason
         if self.retry_params is None:
             return None, None
-        if (self.retry_params.get('mode', None) == 'per_request' and
-            self.cursor.tx.retry is None):
+        if self.cursor.tx.retry is None:
             return None, None
 
         max_attempts = self.retry_params.get('max_attempts', 30)
@@ -337,8 +337,7 @@ class OutputHandler:
         logging.debug('%s %s', self.notification_params, tx)
         if self.notification_params is None:
             return False
-        if (self.notification_params.get('mode', None) == 'per_request' and
-            tx.notification is None):
+        if tx.notification is None:
             return False
 
         resp : Optional[Response] = None
@@ -437,7 +436,9 @@ class OutputHandler:
         # similar to rest submission: retries enabled, notifications disabled
         # cf FilterChainWiring.add_route()
         notification_tx = TransactionMetadata(
-            host=self.notification_params['host'],
+            sender=Sender(
+                self.notification_params['sender'],
+                tag=self.notification_params.get('tag', None)),
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],

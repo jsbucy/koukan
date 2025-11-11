@@ -26,6 +26,7 @@ from koukan.filter import (
     TransactionMetadata )
 from koukan.filter_chain import FilterChain
 from koukan.executor import Executor
+from koukan.sender import Sender
 
 _next_cx = 0
 _next_cx_mu = Lock()
@@ -58,9 +59,13 @@ class SmtpHandler:
     refresh_interval : int
     last_refresh : float = 0
     chunk_size : int
+    sender : str
+    tag : str
 
     def __init__(self, chain_factory : ChainFactory,
                  executor : Executor,
+                 sender : str,
+                 tag : str,
                  timeout_mail=10,
                  timeout_rcpt=60,
                  timeout_data=330,
@@ -76,6 +81,8 @@ class SmtpHandler:
         self.cx_id = 'cx%d' % next_cx()
         self.refresh_interval = refresh_interval
         self.chunk_size = chunk_size
+        self.sender = sender
+        self.tag = tag
 
     def set_smtp(self, smtp):
         self.smtp = smtp
@@ -169,7 +176,8 @@ class SmtpHandler:
                           mail_from : str,
                           mail_esmtp : List[str]) -> str:
         self.chain = self.chain_factory()
-        self.chain.init(TransactionMetadata())
+        self.chain.init(TransactionMetadata(
+            sender=Sender(name=self.sender, tag=self.tag)))
         assert self.chain.tx is not None
         self.chain.tx.smtp_meta = {
             'ehlo_host': session.host_name,

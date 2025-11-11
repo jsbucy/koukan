@@ -14,6 +14,7 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult, Filter
 from koukan.blob import Blob
 from koukan.response import Response
+from koukan.sender import Sender
 
 from koukan.storage_schema import VersionConflictException
 
@@ -35,9 +36,11 @@ from koukan.storage_schema import VersionConflictException
 class Recipient:
     filter : Optional[AsyncFilter] = None
     tx :  Optional[TransactionMetadata] = None
+    sender : Sender
 
-    def __init__(self, filter : Optional[AsyncFilter]):
+    def __init__(self, filter : Optional[AsyncFilter], sender : Sender):
         self.filter = filter
+        self.sender = sender
 
     # returns True if this Recipient failed due to not being able to
     # start the upstream tx
@@ -60,9 +63,9 @@ class Recipient:
 
     def first_update(self,
                      tx : TransactionMetadata,
-                     output_chain : str, i : int):
+                     i : int):
         self.tx = tx.copy_valid(WhichJson.EXPLODER_CREATE)
-        self.tx.host = output_chain
+        self.tx.sender = self.sender
         self.tx.rcpt_to = [tx.rcpt_to[i]]
         self.tx.rcpt_response = []
         # TODO FilterChainWiring.exploder() passes block_upstream=True to
@@ -118,7 +121,6 @@ FilterFactory = Callable[[], Optional[AsyncFilter]]
 
 class Exploder(Filter):
     upstream_factory : FilterFactory
-    output_chain : str
     # TODO these timeouts move to AsyncFilterWrapper
     rcpt_timeout : Optional[float] = None
     data_timeout : Optional[float] = None
@@ -126,14 +128,18 @@ class Exploder(Filter):
     rcpt_ok = False
 
     recipients : List[Recipient]
+    sender : Sender
+    upstream_sender : Sender
 
     def __init__(self,
-                 output_chain : str,
+                 sender : Sender,
+                 upstream_sender : Sender,
                  upstream_factory : FilterFactory,
                  rcpt_timeout : Optional[float] = None,
                  data_timeout : Optional[float] = None):
         self.upstream_factory = upstream_factory
-        self.output_chain = output_chain
+        self.sender = sender
+        self.upstream_sender = upstream_sender
         self.rcpt_timeout = rcpt_timeout
         self.data_timeout = data_timeout
         self.recipients = []
@@ -164,6 +170,8 @@ class Exploder(Filter):
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx = self.downstream_tx
         assert tx is not None
+        assert tx.retry is None
+        assert tx.notification is None
 
         # NOTE: OutputHandler may send but Storage currently does not
         # accept reusing !finalized blob. Exploder passes it through
@@ -179,9 +187,9 @@ class Exploder(Filter):
 
         for i in range(0, len(tx.rcpt_to)):
             if i >= len(self.recipients):
-                rcpt = Recipient(self.upstream_factory())
+                rcpt = Recipient(self.upstream_factory(), self.upstream_sender)
                 self.recipients.append(rcpt)
-                rcpt.first_update(tx, self.output_chain, i)
+                rcpt.first_update(tx, i)
             else:
                 rcpt = self.recipients[i]
                 rcpt.update(tx_delta)

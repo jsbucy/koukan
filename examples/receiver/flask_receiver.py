@@ -4,7 +4,7 @@
 # this keeps the inflight transaction state in-process so it's not
 # compatible with multiple workers
 # gunicorn3 -b localhost:8002 --access-logfile - -w1 --log-level debug
-#   'examples.receiver.flask_receiver:create_app(path='/tmp/my_messages')'
+#   'examples.receiver.flask_receiver:create_app(path="/tmp/my_messages")'
 
 import logging
 
@@ -31,9 +31,10 @@ def create_app(receiver = None, path = None):
                         format='%(asctime)s [%(thread)d] '
                         '%(filename)s:%(lineno)d %(message)s')
 
-    @app.route('/transactions', methods=['POST'])
-    def create_transaction():
+    @app.route('/senders/<sender>/transactions', methods=['POST'])
+    def create_transaction(sender : str):
         tx_url, tx_json, etag = receiver.create_tx(
+            sender,
             request.json,
             lambda tx_id: str(url_for(
                 'get_transaction', tx_rest_id=tx_id, _external=True))
