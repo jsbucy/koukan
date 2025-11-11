@@ -5,6 +5,21 @@ Koukan Implementation
 Overview
 ========
 
+Koukan is designed around the premise that in 2025, network
+availability is pretty good most of the time. So in the common case,
+we should be able to get a final upstream response quickly and can
+return that to the sender immediately. This is known as cut-through
+delivery; contrast with the classical store&forward model where you
+spool to disk and deal with output "later," sometimes much
+later. Cut-through delivery precludes having to send a bounce
+message which may never get back to the sender.
+
+Koukan consists of two components: the router and the SMTP
+gateway. The router implements the rest api, durable storage, stateful
+retries, etc. The SMTP gateway is a stateless adapter to proxy
+SMTP client and server connections with the rest api.
+
+
 Koukan has 2 main components:
 
 * SMTP gateway
@@ -57,8 +72,8 @@ to propagate the transaction through the sequence of filters.
 
 The chain is always terminated by a filter that sends the transaction
 "somewhere else". This is typically either
-  - RestEndpoint to send it over http
-  - Exploder to write it to a new upstream transaction via StorageWriterFilter.
+* RestEndpoint to send it over http
+* Exploder to write it to a new upstream transaction via StorageWriterFilter.
 
 
 Storage
