@@ -9,7 +9,11 @@ global: executor/thread limits
 
 rest_listener: host/port/certs
 
+sender:
+
 endpoint: output chains, cf below
+
+rest_endpoint:
 
 modules: user plugins: output chain filters, recipient routing policies
 
@@ -71,17 +75,19 @@ dkim: signing
 dns_resolution: replaces tx.resolution containing a hostname with one
 containing a list of IP addresses for the gateway to attempt in order
 
-router: RecipientRouterFilter populates tx.upstream_http_host controls
+router: RecipientRouterFilter populates tx.rest_upstream_sender which controls
 where RestEndpoint sends it and if that is the gateway, tx.resolution
 controls where the gateway sends it
 
 relay_auth: fails the tx if it doesn't contain smtp auth info in
 smtp_meta or remote_host in allowlist
 
-exploder: Exploder
+exploder: Exploder, output_chain configures the upstream chain, ``msa:
+true`` allows store&forward in a few more situations that clients
+expect vs ingress where there is a previous hop to retry.
 
-rest_output: RestEndpoint
-
+rest_output: RestEndpoint actually sends the message somewhere via
+http/rest
 
 
 You will typically have 1 endpoint for each smtp vip + port e.g. mx and msa.

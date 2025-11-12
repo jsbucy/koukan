@@ -72,7 +72,7 @@ endpoint:
   - filter: relay_auth
   #  smtp_auth: true
   - filter: exploder
-    output_chain: msa-output
+    output_chain: submission
     msa: true
     rcpt_timeout: 300
     data_timeout: 300
@@ -179,7 +179,7 @@ endpoint:
       # dest == None: reject
   - filter: exploder
     msa: false
-    output_chain: mx-out
+    output_chain: ingress
     rcpt_timeout: 300
     data_timeout: 300
 

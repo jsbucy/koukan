@@ -6,9 +6,10 @@ Koukan is an Cloud-Native email transport stack. Koukan provides a
 rich http/json rest api for new-build applications to send and receive
 email. The rest api includes rfc822/MIME message formatting, DKIM
 signing, etc. The rest api also reports many errors immediately rather
-than having to handle bounce/NDR messages after the fact.  Koukan is a
-clean-sheet full SMTP Mail Transfer Agent (MTA) for high-fidelity
-interoperability with as-built internet email and applications.
+than your application having to receive and handle bounce/NDR messages
+after the fact.  Koukan is a clean-sheet full SMTP Mail Transfer Agent
+(MTA) for high-fidelity interoperability with as-built internet email
+and applications.
 
 For scaling and availability, Koukan supports clustering multiple
 instances sharing the same underlying storage via a cluster scheduler
@@ -23,9 +24,9 @@ Koukan's rest api has a single type of resource: a transaction, a
 request to send an email message to one recipient. A transaction is a
 long-running operation (LRO) that tracks the delivery status of the
 message until it has been delivered or permanently fails. This way, a
-RestMTP sender application only needs to save the transaction id to
-reliably obtain failure/diagnostic information rather than having to
-route bounce messages back to the application.
+RestMTP sender application can reliably obtain failure/diagnostic
+information by watching the LRO rather than having to route bounce
+messages back to the application.
 
 The message contents can be specified as an abstract json "message
 builder" representation or pre-serialized rfc822. File attachments in
@@ -36,24 +37,34 @@ previous transactions.
 Senders
 -------
 
-A sender is the unit of configuration and access control. For example
-you might have a sender for each sending application plus a few
-"system" senders such as "ingress" for incoming messages from the
-public internet. Message processing is configured on a sender basis in
-particular which output flow/filter chain to use.
+Senders are principals/roles for sending messages and the unit of
+configuration and access control. For example you might have a sender
+for each sending application plus a few "system" senders such as
+"ingress" for incoming messages from the public internet. Message
+processing is configured on a sender basis in particular which output
+flow/filter chain to use.
+
+Koukan does not have any built-in client authentication. However the
+sender is part of the url path so you can use a front proxy to control
+access to senders by filtering by path prefix like any other rest api.
+
 
 Output Flows/Filter Chains
 --------------------------
 
 Koukan is configured with one or more output flows which determines
-how a message is processed.
+how a message is processed. Most of the action in the output flow
+happens in the filter chain. The filter chain is a sequence of filter
+invocations that are applied to each transaction. The filters are
+actions such as "add received header". User-provided filter plugins
+can be loaded in the ``modules.sync_filter`` stanza.
 
 Koukan Components
 -----------------
 
 Koukan consists of two components: the router and the SMTP
 gateway. The router implements the rest api, durable storage, stateful
-retries, etc. The SMTP gateway is a stateless adapter to interconnect
+retries, etc. The SMTP gateway is a stateless protocol proxy to bridge
 SMTP client and server connections with the rest api.
 
 Message Flows
@@ -109,61 +120,79 @@ where the Exploder fans out a separate upstream transaction for reach
 rcpt of the downstream transaction and fans the upstream responses
 back in.
 
-Basic Config
-------------
+Config Walkthrough
+------------------
 
-minimal gateway config::
+Let's walk through the example configs. **add link**
 
-  smtp_listener:
-    services:
-      - addr: [0.0.0.0, 25]
-        endpoint: mx
-      - addr: [0.0.0.0, 587]
-        endpoint: msa
+Terminology:
 
-  rest_output:
-    - name: mx
-      host: smtp-mx
-      endpoint: http://router.local/
+* ingress: receiving messages that originated "somewhere else"
+* submission: sending messages "for the first time" that originated
+  within your site/organization. Commonly referred to as msa for
+  Mail/Message Submission Agent.
+* downstream: the direction of the client
+* upstream: the direction of the server
 
-    - name: msa
-      host: smtp-msa
-      endpoint: http://router.local/
+Starting with the gateway, we need to configure 2 flows: smtp →
+router/rest and vice versa.
 
+smtp_listener configures the gateway to listen on separate tcp ports for
+smtp ingress (port 25) and submission (port 587). The endpoint selects
+from the following rest_output stanza and sender/tag control the rest
+requests sent to the router. The rest_output stanza contains the
+urls/endpoints for each sender on the router.
 
-So a minimal router configuration might consist of the following endpoints::
+In the opposite direction, rest_listener sets up a port to receive
+rest/http from the router. **update** the gateway currently accepts
+any rest sender and uses the tag to select the smtp_output stanza.
 
-  endpoint:
-  - name: smtp-mx
-    chain:
-    - filter: router
-      # routing policy to accept local addresses and reject everything else
-    - filter: exploder
-      output_chain: smtp-mx-output
+There is a little more going on in the router.
 
-  - name: smtp-mx-output
-    chain:
-    - filter: router
-      # routing policy:
-      # route some addresses to internal rest endpoints
-      # route other addresses via gateway with smtp/lmtp
-    - filter: message_parser  # parse rfc822 → json for rest receivers
-    - filter: rest_output
+As before, rest_listener sets up a port to receive rest/http from the
+gateway and first-class rest senders.
 
-  - name: smtp-msa
-    chain:
-    - filter: exploder
-      msa: true  # enable store&forward where clients expect it
-      output_chain: smtp-msa-output
+At a minimum, you will have a sender for ingress and submission. Depending
+on your environment, you will probably create a separate sender for
+each rest sending application. The sender/tag selects the output_chain
+which is the key into the following endpoint stanza.
 
-  - name: smtp-msa-output
-    chain:
-    - router:
-      # policy that may special-case internal domains and send everything else to rhs of the address via the smtp gw
-    - filter: rest_output
+The output flow (endpoint stanza) configures the set of steps to
+process a message. Transactions originating as smtp must be handled by
+a chain that ends with exploder to fan-out multiple smtp
+recipients. This in turn selects another (single-recipient) output
+flow that ends with rest_output to send rest/http to the gateway or
+other receiving application.
 
-  - name: rest-submission
-    # similar to smtp-msa-output
-    chain:
-    - filter: message_builder  # serialize json to rfc822
-    - filter: rest_output
+A common operation is to route messages by recipient address. This is
+done by RecipientRouterFilter called simply router in the output chain
+yaml. Ultimately, this is going to mutate the TransactionMetadata to
+influence where rest_output sends the transaction.
+
+RecipientRouterFilter takes plug-in RoutingPolicies. There are 2
+basic policies. AddressList selects a set of addresses to send to a
+particular destination and will typically be used in the ingress
+chain. DestDomain sends all messages to the rhs of the destination
+address and is typically used in the submission chain.
+
+Like Filters, user-provided RoutingPolicies can be loaded in the
+``modules.recipient_router_policy`` stanza.
+
+Multiple instances of recipient router may be chained. The first
+filter to match the message determines the destination and subsequent
+filters no-op.
+
+A few other things to point out in the example config:
+
+In the ingress chains, there is a final "fallthrough" recipient router
+to reject addresses that didn't match any previous filter. There is a
+second instance of the recipient router filters in the
+ingress_exploder chain with ``dry_run: true``. This is to reject
+addresses prior to starting the upstream chain.
+
+In the submission chain, the first recipient router filter matches our
+own domains to short-circuit directly to our ingress so we have
+router → router instead of router → gateway 🠊 gateway → router.
+
+Finally, recipient router filter yaml destination selects within the
+rest_endpoint stanza.

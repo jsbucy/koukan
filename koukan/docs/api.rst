@@ -57,7 +57,7 @@ message: string
 In the simplest case of a message containing
 only text, we can send a message with a single POST::
 
-    POST /transactions HTTP/1.1
+    POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
     {"mail_from": {"m": "alice@example.com"},
      "rcpt_to": {"m": "bob@example.com"},
@@ -104,7 +104,7 @@ If you need to send a large or binary attachment, that is done by
 specifying an id within the message_builder spec and then PUTting the blob
 to that id::
 
-    POST /transactions  HTTP/1.1
+    POST /senders/submission/transactions  HTTP/1.1
     Content-type: application/json
 
     {"mail_from": {"m": "alice@example.com"},
@@ -127,7 +127,7 @@ TODO: the api doesn't really expose whether all attachments have been received?
 
 A transaction can reuse an attachment from a previous transaction::
 
-    POST /transactions HTTP/1.1
+    POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
 
     {"mail_from": {"m": "alice@example.com"},
@@ -144,7 +144,7 @@ If you already have a serialized rfc822 payload you want
 to send, simply PUT that to /transactions/xyz/body. Similarly, you
 can reuse an rfc822 body from a previous transaction::
 
-    POST /transactions HTTP/1.1
+    POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
 
     {"mail_from": {"m": "alice@example.com"},
@@ -169,7 +169,7 @@ cf examples/receiver
 
 Your application must expose the following routes/endpoints::
 
-    POST /transactions HTTP/1.1
+    POST /senders/router/transactions HTTP/1.1
 
     201 created
     Location: /transactions/123
