@@ -24,9 +24,9 @@ Koukan's rest api has a single type of resource: a transaction, a
 request to send an email message to one recipient. A transaction is a
 long-running operation (LRO) that tracks the delivery status of the
 message until it has been delivered or permanently fails. This way, a
-RestMTP sender application can reliably obtain failure/diagnostic
-information by watching the LRO rather than having to route bounce
-messages back to the application.
+sender application can reliably obtain failure/diagnostic information
+by watching the LRO rather than having to route bounce messages back
+to the application.
 
 The message contents can be specified as an abstract json "message
 builder" representation or pre-serialized rfc822. File attachments in
@@ -166,14 +166,15 @@ other receiving application.
 
 A common operation is to route messages by recipient address. This is
 done by RecipientRouterFilter called simply router in the output chain
-yaml. Ultimately, this is going to mutate the TransactionMetadata to
-influence where rest_output sends the transaction.
+yaml. Ultimately, this is going to mutate the in-process transaction
+state to influence where rest_output sends the transaction.
 
-RecipientRouterFilter takes plug-in RoutingPolicies. There are 2
-basic policies. AddressList selects a set of addresses to send to a
-particular destination and will typically be used in the ingress
-chain. DestDomain sends all messages to the rhs of the destination
-address and is typically used in the submission chain.
+Each instance of RecipientRouterFilter is configured with a
+RoutingPolicy. There are 2 basic policies. AddressList selects a set
+of addresses to send to a particular destination and will typically be
+used in the ingress chain. DestDomain sends all messages to the rhs of
+the destination address in conjunction with dns/mx resolution and is
+typically used in the submission chain.
 
 Like Filters, user-provided RoutingPolicies can be loaded in the
 ``modules.recipient_router_policy`` stanza.
