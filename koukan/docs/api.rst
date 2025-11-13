@@ -7,10 +7,12 @@ Sending
 
 Koukan provides a rich http/json rest api to send and receive email.
 
-RestMTP has 1 type of resource: the transaction, a request to send one
+The api has 1 type of resource: the transaction, a request to send one
 message to one recipient. The transaction object contains fields
 corresponding to smtp parameters.
 
+Transaction fields
+------------------
 mail_from: Mailbox
 
 mail_response: Response
@@ -22,40 +24,71 @@ rcpt_response: Array[Response]
 first-class rest api users will only use 1
 rcpt_to/rcpt_response. (only the smtp gateway uses multiple)
 
-body: MessageBuilder request
-
 data_response: Response
 
-remote_host: HostPort
+Transaction ``body:`` field
+---------------------------
 
-local_host: HostPort
+In creation requests:
 
-HostPort:
+- inline rfc822 ``{"inline": "Subject: hello\r\n\r\n"}``
+- a request to reuse a blob ``{"reuse_uri": "/transactions/xyz/body"}``
+- a message builder specification  **add link to message_builder.json**
+  ::
 
+    {"message_builder": {
+       "headers": [["subject", "hello"]],
+           "text_body": [{
+             "content_type": "text/plain",
+             "content": {"inline": "hello, world!"}}],
+    }}
+
+Returned from GET
+
+- blob status::
+
+    {"blob_status": {"finalized": true}}
+
+- blob url to PUT::
+
+    {"blob_status": {"uri": "http://router.local/transactions/xyz/body"}}
+
+- either of the above for each blob in MessageBuilder Spec::
+
+    {"message_builder": {"blob_status": {
+     "my_plain_body": {"finalized": true},
+     "my_html_body": {"uri": "http://router.local/transactions/xyz/blob/my_html_body"}}}}
+
+
+HostPort
+--------
 host: string
 
 port: int
 
-Mailbox:
-
+Mailbox
+-------
 m: rfc5321 mailbox without <>
 
 e: Array[EsmtpParam]
 
-EsmtpParam:
-
+EsmtpParam
+----------
 keyword: string
 
 value: string (optional)
 
-Response:
-
+Response
+--------
 code: int
 
 message: string
 
-In the simplest case of a message containing
-only text, we can send a message with a single POST::
+Simplest case
+-------------
+
+If the message only contains a moderate amount of plain text, we can
+send a message with a single POST::
 
     POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
@@ -64,7 +97,8 @@ only text, we can send a message with a single POST::
      "body": {"message_builder": {
          "headers": [["subject", "hello"]],
          "text_body": [{
-           "content_type": "text/plain", "content": {"inline": "hello, world!"}}],
+           "content_type": "text/plain",
+           "content": {"inline": "hello, world!"}}],
     }}}
 
     201 created
@@ -100,9 +134,11 @@ indicates that Koukan is done with this transaction. Completed
 transactions are garbage-collected after a configured interval
 (e.g. 1h) from the time they were completed.
 
-If you need to send a large or binary attachment, that is done by
-specifying an id within the message_builder spec and then PUTting the blob
-to that id::
+Large/Binary Attachments
+------------------------
+
+If the body is not suitable to inline in JSON, specify an id within
+the message_builder spec. Koukan returns a url to PUT the blob to::
 
     POST /senders/submission/transactions  HTTP/1.1
     Content-type: application/json
@@ -118,14 +154,25 @@ to that id::
 
     201 created
     Location: /transactions/xyz
+    
+    {"body": {"message_builder": { "blob_status": {
+     "my_body": { "uri": "http://router.local/transactions/xyz/blob/my_body"}}}}}
 
     PUT /transactions/xyz/blob/my_body  HTTP/1.1
-    content-type: text/html
     content-length: 12345678
 
-TODO: the api doesn't really expose whether all attachments have been received?
+    200 ok
 
-A transaction can reuse an attachment from a previous transaction::
+    GET /transactions/xyz  HTTP/1.1
+    
+    200 ok
+    {"body": {"message_builder": { "blob_status": {
+     "my_body": { "finalized": true}}}}}
+
+Blob Reuse
+----------
+
+A transaction can reuse an attachment from a previous transaction. If the reuse succeeded, this will be reflected in ``blob_status``. XXX verify id::
 
     POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
@@ -140,9 +187,48 @@ A transaction can reuse an attachment from a previous transaction::
          }]
     }}}
 
-If you already have a serialized rfc822 payload you want
-to send, simply PUT that to /transactions/xyz/body. Similarly, you
-can reuse an rfc822 body from a previous transaction::
+    201 created
+    Location: /transactions/xyz
+
+    {"mail_from": {},
+     "rcpt_to": {},
+     "body": {"message_builder": { "blob_status": {
+     "my_body": {"finalized": true}}}}}
+
+Pre-serialized message
+----------------------
+
+If you already have a serialized rfc822/mime message you want to send,
+create the transaction without the ``body`` field. Similar to above,
+Koukan will return a URL to PUT the blob to::
+
+    POST /senders/submission/transactions HTTP/1.1
+    Content-type: application/json
+    {"mail_from": {"m": "alice@example.com"},
+     "rcpt_to": {"m": "bob@example.com"}}}}
+
+    201 created
+    Location: /transactions/xyz
+    Content-type: application/json
+
+    {"mail_from": {}, "rcpt_to": {}, "body": {"blob_status": {
+     "uri": "http://router.local/transactions/xyz/body"}}}
+
+    PUT /transactions/xyz/body HTTP/1.1
+
+    200 ok
+
+    GET /transactions/xyz HTTP/1.1
+
+    200 ok
+
+    {"mail_from": {}, "rcpt_to": {}, "body": {"blob_status": {
+     "finalized": "true"}}}
+
+Body reuse
+----------
+
+Similarly, you can reuse an rfc822 body from a previous transaction::
 
     POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
@@ -151,6 +237,14 @@ can reuse an rfc822 body from a previous transaction::
      "rcpt_to": {"m": "bob@example.com"},
      "body": {"reuse_uri": "/transactions/xyz/body"}
     }
+
+    GET /transactions/xyz HTTP/1.1
+
+    200 ok
+
+    {"mail_from": {}, "rcpt_to": {}, "body": {"blob_status": {
+     "finalized": "true"}}}
+
 
 To abort an inflight transaction, simply::
 

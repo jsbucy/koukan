@@ -24,9 +24,9 @@ Koukan's rest api has a single type of resource: a transaction, a
 request to send an email message to one recipient. A transaction is a
 long-running operation (LRO) that tracks the delivery status of the
 message until it has been delivered or permanently fails. This way, a
-sender application can reliably obtain failure/diagnostic information
-by watching the LRO rather than having to route bounce messages back
-to the application.
+sender application can reliably obtain common-case failure/diagnostic
+information by watching the LRO rather than having to route bounce
+messages back to the application.
 
 The message contents can be specified as an abstract json "message
 builder" representation or pre-serialized rfc822. File attachments in
@@ -59,13 +59,23 @@ invocations that are applied to each transaction. The filters are
 actions such as "add received header". User-provided filter plugins
 can be loaded in the ``modules.sync_filter`` stanza.
 
-Koukan Components
------------------
+Koukan Software Stack
+---------------------
 
 Koukan consists of two components: the router and the SMTP
 gateway. The router implements the rest api, durable storage, stateful
 retries, etc. The SMTP gateway is a stateless protocol proxy to bridge
 SMTP client and server connections with the rest api.
+
+The router and gateway are self-contained, long-running/non-forking
+python3 programs that embed uvicorn and aiosmtpd to receive smtp and
+http, respectively. The router stores durable data in a database
+accessed via SQLAlchemy2 Core. Koukan uses vanilla SQL and does not
+depend on non-portable features such as change
+notifications. PostgreSQL and SQLite are actively tested, others
+should be straightforward to add. The router buffers some data through the
+local filesystem but this does not need to be durable.
+
 
 Message Flows
 -------------
@@ -75,18 +85,22 @@ Message Flows
 🠊 denotes smtp
 
 Rest Sender Application
+=======================
 
 application → router → smtp gw 🠊 internet
 
 Rest Receiver Application
+=========================
 
 internet 🠊 smtp gw → router → application
 
 SMTP Sender Application
+=======================
 
 application 🠊 smtp gw → router → smtp gw 🠊 internet
 
 SMTP Receiver Application
+=========================
 
 internet 🠊 smtp gw → router → smtp gw 🠊 application
 
@@ -95,16 +109,18 @@ Drilling down into the Router
 
 within the router, there are 2 flows:
 
-input/downstream
+Input/Downstream
+================
 
 fastapi route → RestHandler → StorageWriterFilter → Storage (sqlalchemy)
 
-output/upstream
+Output/Upstream
+===============
 
 Storage → OutputHandler → FilterChain → ... → http/json rest output (RestEndpoint)
 
 Exploder
---------
+========
 
 However we need to accomodate multi-rcpt transactions from the smtp
 gateway so we add an internal hop through the Exploder to fan these
@@ -125,7 +141,8 @@ Config Walkthrough
 
 Let's walk through the example configs. **add link**
 
-Terminology:
+Terminology
+===========
 
 * ingress: receiving messages that originated "somewhere else"
 * submission: sending messages "for the first time" that originated
@@ -134,47 +151,53 @@ Terminology:
 * downstream: the direction of the client
 * upstream: the direction of the server
 
+Gateway
+=======
+
 Starting with the gateway, we need to configure 2 flows: smtp →
 router/rest and vice versa.
 
-smtp_listener configures the gateway to listen on separate tcp ports for
+``smtp_listener`` configures the gateway to listen on separate tcp ports for
 smtp ingress (port 25) and submission (port 587). The endpoint selects
 from the following rest_output stanza and sender/tag control the rest
-requests sent to the router. The rest_output stanza contains the
+requests sent to the router. The ``rest_output`` stanza contains the
 urls/endpoints for each sender on the router.
 
-In the opposite direction, rest_listener sets up a port to receive
+In the opposite direction, ``rest_listener`` sets up a port to receive
 rest/http from the router. **update** the gateway currently accepts
 any rest sender and uses the tag to select the smtp_output stanza.
 
+Router
+======
+
 There is a little more going on in the router.
 
-As before, rest_listener sets up a port to receive rest/http from the
+As before, ``rest_listener`` sets up a port to receive rest/http from the
 gateway and first-class rest senders.
 
-At a minimum, you will have a sender for ingress and submission. Depending
+At a minimum, you will have a ``sender`` for ingress and submission. Depending
 on your environment, you will probably create a separate sender for
 each rest sending application. The sender/tag selects the output_chain
 which is the key into the following endpoint stanza.
 
-The output flow (endpoint stanza) configures the set of steps to
+The output flow (``endpoint`` stanza) configures the set of steps to
 process a message. Transactions originating as smtp must be handled by
-a chain that ends with exploder to fan-out multiple smtp
+a chain that ends with ``exploder`` to fan-out multiple smtp
 recipients. This in turn selects another (single-recipient) output
-flow that ends with rest_output to send rest/http to the gateway or
+flow that ends with ``rest_output`` to send rest/http to the gateway or
 other receiving application.
 
 A common operation is to route messages by recipient address. This is
-done by RecipientRouterFilter called simply router in the output chain
+done by RecipientRouterFilter called simply ``router`` in the output chain
 yaml. Ultimately, this is going to mutate the in-process transaction
 state to influence where rest_output sends the transaction.
 
 Each instance of RecipientRouterFilter is configured with a
-RoutingPolicy. There are 2 basic policies. AddressList selects a set
-of addresses to send to a particular destination and will typically be
-used in the ingress chain. DestDomain sends all messages to the rhs of
-the destination address in conjunction with dns/mx resolution and is
-typically used in the submission chain.
+RoutingPolicy. There are 2 basic policies. ``address_list`` selects a
+set of addresses to send to a particular destination and will
+typically be used in the ingress chain. ``dest_domain`` sends all
+messages to the domain part of the destination address in conjunction
+with dns/mx resolution and is typically used in the submission chain.
 
 Like Filters, user-provided RoutingPolicies can be loaded in the
 ``modules.recipient_router_policy`` stanza.
@@ -195,5 +218,5 @@ In the submission chain, the first recipient router filter matches our
 own domains to short-circuit directly to our ingress so we have
 router → router instead of router → gateway 🠊 gateway → router.
 
-Finally, recipient router filter yaml destination selects within the
-rest_endpoint stanza.
+Finally, recipient router filter yaml ``destination`` selects within the
+``rest_endpoint`` stanza.

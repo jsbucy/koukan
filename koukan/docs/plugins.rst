@@ -41,6 +41,7 @@ that. So we don't actually have a use case for this currently.
 
 CoroutineProxyFilter: ProxyFilter + CoroutineFilter
 
+Example: **add link to hello_filter**
 
 RecipientRouterFilter Policies
 ==============================
@@ -52,3 +53,5 @@ Implement  ``recipient_router_filter.RoutingPolicy``
 which controls where RestEndpoint sends it or a Response which is
 returned downstream in ``TransactionMetadata.rcpt_response`` if the
 address does not exist.
+
+Example: **add link to hello_policy**
