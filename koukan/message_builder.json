@@ -12,11 +12,11 @@
   "text_body": [
     {
       "content_type": "text/html",
-      "content": "<b>hello</b>"
+      "content": {"inline": "<b>hello</b>"}
     },
     {
       "content_type": "text/plain",
-      "content": "hello"
+      "content": {"inline": "hello"}
     }
   ],
 
@@ -24,7 +24,7 @@
     {
       "content_type": "image/png",
       "content_id": "xyz123",
-      "content": "related image contents"
+      "content": {"inline": "related image contents"}
     }
   ],
 
@@ -32,7 +32,7 @@
       {
           "content_type": "image/png",
           "filename": "hipstercat.png",
-          "content": "attachment contents"
+          "content": {"inline": "attachment contents"}
       }
   ]
 }

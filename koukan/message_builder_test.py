@@ -3,6 +3,7 @@
 import unittest
 import logging
 import json
+import base64
 from tempfile import TemporaryFile
 
 from koukan.rest_schema import WhichJson
@@ -58,6 +59,10 @@ class MessageBuilderTest(unittest.TestCase):
             self.assertIn(b'in-reply-to: <abd@xyz>', headers)
             self.assertIn(b'references: <abd@xyz> <abe@xyz>', headers)
 
+            self.assertIn(base64.b64encode(b'<b>hello</b>'), msg)
+            self.assertIn(base64.b64encode(b'hello'), msg)
+            self.assertIn(base64.b64encode(b'related image contents'), msg)
+            self.assertIn(base64.b64encode(b'attachment contents'), msg)
 
     def test_get_blobs(self):
         json = { 'text_body': [ { 'content': {
