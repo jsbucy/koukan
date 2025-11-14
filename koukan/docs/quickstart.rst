@@ -11,17 +11,6 @@ Any `actively-supported version <https://devguide.python.org/versions/#versions>
 a supported database: `sqlite3 <https://www.sqlite.org/>`__ or
 `PostgreSQL <https://www.postgresql.org/>`__
 
-We are in the process of making some scalability improvements to
-aiosmtpd and cpython smtplib. Unless you are handling a lot of large
-messages, this isn’t critical. Koukan will take advantage of both if
-available but remains compatible with mainline.
-
-Our fork of aiosmtpd is at
-`github <https://github.com/jsbucy/aiosmtpd/tree/data_chunk3>`__. For
-the time being, we are maintaining smtplib in a fork of the cpython tree
-at `github <https://github.com/jsbucy/cpython/tree/smtplib_bdat>`__.
-However we are shipping a copy of our fork of smtplib in the Koukan tree
-and use this by default.
 
 Caveats
 =======
@@ -223,3 +212,18 @@ configure ``rest_listener.service_uri`` to the router service dns alias. Set
 ``endpoint.rest_lro`` to false for endpoints that the gateway injects into
 and true to endpoints that native rest clients use.
 
+
+aiosmtpd and smtplib
+====================
+
+We are in the process of making some scalability improvements to
+aiosmtpd and cpython smtplib. Unless you are handling a lot of large
+messages, this isn’t critical. Koukan will take advantage of both if
+available but remains compatible with mainline.
+
+Our fork of aiosmtpd is at
+`github <https://github.com/jsbucy/aiosmtpd/tree/data_chunk3>`__. For
+the time being, we are maintaining smtplib in a fork of the cpython tree
+at `github <https://github.com/jsbucy/cpython/tree/smtplib_bdat>`__.
+However we are shipping a copy of our fork of smtplib in the Koukan tree
+and use this by default.

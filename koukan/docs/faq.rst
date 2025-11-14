@@ -61,10 +61,10 @@ email.message for rfc822/mime.
 How does Koukan relate to Unix mailers like Exim and Postfix?
 -------------------------------------------------------------
 
-To use an analogy, if Exim and Postfix are Apache, Koukan is Envoy.
-Exim and Postfix both started life in the 1990s as replacements for
-Sendmail for handling email for interactive users of unix timesharing
-systems.
+To use an analogy, if Exim and Postfix are Apache httpd, Koukan is
+Envoy.  Exim and Postfix both started life in the 1990s as
+replacements for Sendmail for handling email for interactive users of
+unix timesharing systems.
 
 Koukan does not deliver messages by spawning other programs or writing
 to files in the filesystem, it only connects to a socket. So you need
@@ -76,13 +76,14 @@ Implementation
 Why did you use Python?
 -----------------------
 
-* Python has a number of high-quality implementations of core email
-  standards, in particular the rfc822/MIME codec, SMTP and domainkeys
-  that saved a ton of time not to write from scratch.
+* Python has the most complete and up-to-date suite of mature
+  implementations of core email standards, in particular the
+  rfc822/MIME codec, SMTP and domainkeys that saved a ton of time not
+  to write from scratch.
 * It remains to be seen if the (perceived) performance limitations of
   Python will be a factor in practice for use cases that are a good fit
   for Koukan. It is possible by being smart about memory and forking and
-  with the possibility of auto-scaling on k8s that the current Python
+  with horizontal scaling on k8s that the current Python
   implementation can be “scalable enough” for many use cases.
 
 Why don’t you use <my favorite framework/middleware/…>?
@@ -91,9 +92,9 @@ Why don’t you use <my favorite framework/middleware/…>?
 * We see Koukan as existing near the bottom of the cluster tech
   stack. Koukan/email "is a" stateful middleware thing rather than an
   application built on top of something like Kafka or Pulsar. Email
-  has fairly specific semantics and I'm simply not familar enough with
+  has fairly specific semantics and I'm simply not familiar enough with
   any of those technologies to be confident that they're a good
-  fit. You might be using Koukan to send production monitoring
+  fit. You might want to use Koukan to send production monitoring
   alerts and having a bunch of backend dependencies undercuts this.
 
 * We have designed Koukan to be extensible so many of these
@@ -106,17 +107,16 @@ Why don’t you use <my favorite framework/middleware/…>?
 Deployment
 ==========
 
-Can I run Koukan on Kubernetes k8s or other multi-node/cluster environment?
----------------------------------------------------------------------------
+Can I run Koukan on Kubernetes or other multi-node/cluster environment?
+-----------------------------------------------------------------------
 
-YES! Basic support for this was added in ccff073f
+YES!
 
-All replicas share the same underlying database.
-
-The current implementation buffers data through the local filesystem but
-this does not need to be durable across restarts; ``emptyDir`` is fine. This
-is local to each router process; the router and gateway do not share
-data through the filesystem.
+All replicas share the same underlying database. The current
+implementation buffers data through the local filesystem but this does
+not need to be durable across restarts; ``emptyDir`` is fine. This is
+local to each router process; the router and gateway do not share data
+through the filesystem.
 
 Koukan may return http redirects in response to requests to endpoints
 with rest_lro enabled; native rest clients must be prepared to follow

@@ -2,31 +2,14 @@
 Configuration
 =============
 
-Router
-======
-
-global: executor/thread limits
-
-rest_listener: host/port/certs
-
-sender:
-
-endpoint: output chains, cf below
-
-rest_endpoint:
-
-modules: user plugins: output chain filters, recipient routing policies
-
-storage: sqlalchemy db url
-
-logging: ``logging.dictConfig`` 
-
 Gateway
 =======
 
-global: cf router
+Example: `gateway.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/gateway.yaml>`__
 
-rest_listener: cf router
+global: executor/thread limits
+
+rest_listener: host/port/certs for http
 
 rest_output: http endpoint of router and host for output chain
 
@@ -36,12 +19,47 @@ smtp_listener: host/port/certs, specify which rest_output host to use
 
 logging: ``logging.dictConfig`` 
 
+Router
+======
+
+Example: `router.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/router.yaml>`__
+
+global: executor/thread limits
+
+rest_listener: host/port/certs for http
+
+sender: principals/roles for sending messages, cf below
+
+endpoint: output chains, cf below
+
+rest_endpoint: referenced from recipient routing destination
+
+modules: user plugins: output chain filters, recipient routing policies
+
+storage: sqlalchemy db url
+
+logging: ``logging.dictConfig`` 
+
+Senders
+-------
+
+name: rest url path ``/senders/<name>/transactions``
+
+output_chain: how to handle messages for this sender
+
+retry: ``output_chain`` to use the parameters from the output chain or ``null`` to disable
+
+notification: cf retry
+
+upstream_sender/upstream_tag: exploder rewrites sender/tag to this
+
+tag: per-tag parameter overrides
 
 
-Router Endpoints/Output Chains
-==============================
+Output Chains
+-------------
 
-name: client selects this in http host: header
+name: referenced by senders
 
 rest_lro: false if this ends with exploder
 
@@ -51,20 +69,39 @@ circumstances, further details in internals/exploder
 
 output_handler:
   retry_params:
-    mode: per_request if exploder
-  notification:
-    mode: per_request if exploder
 
-    host: endpoint to inject dsn/bounce messages into
+    max_attempts: maximum number of retries
+
+    min_attempt_time: minimum time from completion of previous attempt to start of next attempt, seconds
+
+    max_attempt_time: maximum time from completion of previous attempt to start of next attempt, seconds
+
+    backoff_factor: exponential backoff factor
+
+    deadline: maximum wall clock time to retry message
+
+  notification:
+    sender/tag to inject notifications/DSNs
 
 chain: list of filters
+
+The output chain is linear. ``recipient_router_filter`` routes on
+recipient by setting fields in the transaction to influence the http
+endpoint that ``rest_output`` sends to and if that is the smtp
+gateway, what destination the gateway sends to after that.
+
+A typical ingress config would accept local domains and reject
+everything else. Whereas an egress config might short-circuit local
+domains back to ingress and then send everything else to the RHS of
+the address.
 
 Output Chain Filters
 --------------------
 
 remote_host: resolves tx.remote_host ip to name
 
-message_builder: renders/serializes tx.body message builder request json to rfc822 (for sending)
+message_builder: renders/serializes tx.body message builder request
+json to rfc822 (for sending)
 
 message_parser: parses rfc822 tx.body to message builder json (for receiving)
 
@@ -90,52 +127,7 @@ rest_output: RestEndpoint actually sends the message somewhere via
 http/rest
 
 
-You will typically have 1 endpoint for each smtp vip + port e.g. mx and msa.
-Any endpoint that terminates smtp will end with the exploder.
-There will be an accompanying "exploder upstream" endpoint/chain
-with "per_request" retry/notify settings.
-There will also be an endpoint for direct rest clients.
-So a simple config might consist of::
-
-    endpoint:
-    - name: smtp-mx
-      chain:
-      # ...
-      - filter: exploder
-        msa: false
-        output-chain: smtp-mx-upstream
-    - name: smtp-mx-upstream
-      output_handler:
-        notification:
-          host: submission
-        retry_params:
-      chain:
-      # ...
-      - filter: rest_output
-
-msa is similar to mx but enables store&forward on the exploder in more
-cases with ``msa: true``
-
-rest clients that take full advantage of RestMTP LROs don't need notifications::
-
-    - name: submission
-      output_handler:
-        retry_params:
-      chain:
-      # ...
-      - filter: rest_output
-
-
-Note that the output chain is linear. ``recipient_router_filter``
-routes on recipient by setting fields in the transaction to influence
-the http endpoint that ``rest_output`` sends to and if that is the smtp
-gateway, what destination the gateway sends to after that. A typical
-ingress config would route known domains and reject everything
-else. Whereas an egress config might special-case internal domains and
-then send everything else to the RHS of the address.
-
-
-cluster/k8s
+Cluster/k8s
 ===========
 
 All replicas share the same underlying database.
@@ -149,8 +141,8 @@ Koukan may return http redirects in response to requests to endpoints
 with rest_lro enabled; native rest clients must be prepared to follow
 these.
 
-For both router and gateway, configure rest_listener.session_uri to
+For both router and gateway, configure ``rest_listener.session_uri`` to
 point to the dns alias or ip of the individual pod/replica. For
-router, configure rest_listener.service_uri to the router service dns
-alias. Set endpoint.rest_lro to false for endpoints that the gateway
+router, configure ``rest_listener.service_uri`` to the router service dns
+alias. Set ``endpoint.rest_lro`` to false for endpoints that the gateway
 injects into and true to endpoints that native rest clients use.

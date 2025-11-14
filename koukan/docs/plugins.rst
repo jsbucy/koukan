@@ -41,7 +41,7 @@ that. So we don't actually have a use case for this currently.
 
 CoroutineProxyFilter: ProxyFilter + CoroutineFilter
 
-Example: **add link to hello_filter**
+Example: `hello_filter.py <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/koukan/hello_filter.py>`__
 
 RecipientRouterFilter Policies
 ==============================
@@ -54,4 +54,4 @@ which controls where RestEndpoint sends it or a Response which is
 returned downstream in ``TransactionMetadata.rcpt_response`` if the
 address does not exist.
 
-Example: **add link to hello_policy**
+Example: `hello_policy.py <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/koukan/hello_policy.py>`__

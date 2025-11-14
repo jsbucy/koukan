@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Koukan'
-copyright = '2025, John Bucy'
-author = 'John Bucy'
+copyright = 'The Koukan Authors'
+author = 'The Koukan Authors'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

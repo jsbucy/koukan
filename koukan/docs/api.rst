@@ -33,7 +33,7 @@ In creation requests:
 
 - inline rfc822 ``{"inline": "Subject: hello\r\n\r\n"}``
 - a request to reuse a blob ``{"reuse_uri": "/transactions/xyz/body"}``
-- a message builder specification  **add link to message_builder.json**
+- a message builder specification `message_builder.json <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/koukan/message_builder.json>`__
   ::
 
     {"message_builder": {
@@ -107,10 +107,10 @@ send a message with a single POST::
 
     {"mail_from": {}, "rcpt_to": {}, "body": {}}
 
-RestMTP transactions are write-once; the ``{}`` is a placeholder
-indicating the field is populated. RestMTP transactions are
-long-running operations (lro) that track the status of the message
-delivery. With a request-timeout header, Koukan will do a hanging GET::
+Koukan transactions are write-once; the ``{}`` is a placeholder
+indicating the field is populated. Transactions are long-running
+operations (lro) that track the status of the message delivery. With a
+request-timeout header, Koukan will do a hanging GET::
 
     GET /transactions/xyz  HTTP/1.1
     request-timeout: 10
@@ -172,7 +172,10 @@ the message_builder spec. Koukan returns a url to PUT the blob to::
 Blob Reuse
 ----------
 
-A transaction can reuse an attachment from a previous transaction. If the reuse succeeded, this will be reflected in ``blob_status``. XXX verify id::
+A transaction can reuse an attachment from a previous transaction. If
+the reuse succeeded, this will be reflected in ``blob_status``. Note:
+the id returned in blob_status will be the same as from the reused blob.
+::
 
     POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
@@ -195,8 +198,8 @@ A transaction can reuse an attachment from a previous transaction. If the reuse 
      "body": {"message_builder": { "blob_status": {
      "my_body": {"finalized": true}}}}}
 
-Pre-serialized message
-----------------------
+Pre-serialized rfc822/mime message
+----------------------------------
 
 If you already have a serialized rfc822/mime message you want to send,
 create the transaction without the ``body`` field. Similar to above,
@@ -245,13 +248,18 @@ Similarly, you can reuse an rfc822 body from a previous transaction::
     {"mail_from": {}, "rcpt_to": {}, "body": {"blob_status": {
      "finalized": "true"}}}
 
+Cancellation
+------------
 
-To abort an inflight transaction, simply::
+To cancel a transaction, simply::
 
     POST /transactions/123/cancel HTTP/1.1
 
-with an empty entity. This will manifest as ``cancelled`` in the
-transaction json.
+with an empty entity. This is a no-op if the transaction already has
+``final_attempt_reason``. This will manifest as ``cancelled: true`` in
+the transaction json. Note: cancellation will not abort an inflight
+OutputHandler that is waiting on the upstream but will abort on the
+next iteration of ``OutputHandler.handle()``.
 
 Receiving
 =========

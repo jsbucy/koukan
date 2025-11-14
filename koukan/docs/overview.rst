@@ -11,11 +11,15 @@ after the fact.  Koukan is a clean-sheet full SMTP Mail Transfer Agent
 (MTA) for high-fidelity interoperability with as-built internet email
 and applications.
 
+Koukan processes messages through a filter chain inspired by `Envoy
+<https://envoyproxy.io>`__. Koukan is extensible via a plugin api to
+load custom filters. Koukan tries to contain opinionated business
+logic within filter modules that can be easily swapped out.
+
 For scaling and availability, Koukan supports clustering multiple
 instances sharing the same underlying storage via a cluster scheduler
-such as Kubernetes (k8s). In particular Koukan stores all durable
-data in a database and does not assume a durable/strongly consistent
-posix filesystem.
+such as Kubernetes (k8s).
+
 
 Rest API
 --------
@@ -23,16 +27,14 @@ Rest API
 Koukan's rest api has a single type of resource: a transaction, a
 request to send an email message to one recipient. A transaction is a
 long-running operation (LRO) that tracks the delivery status of the
-message until it has been delivered or permanently fails. This way, a
-sender application can reliably obtain common-case failure/diagnostic
+message until it has been delivered or permanently fails. A sender
+application can reliably obtain common-case failure/diagnostic
 information by watching the LRO rather than having to route bounce
 messages back to the application.
 
 The message contents can be specified as an abstract json "message
-builder" representation or pre-serialized rfc822. File attachments in
-the message builder specification and rfc822 messages are treated as
-blobs. Transaction creation requests can reuse blobs by referencing
-previous transactions.
+builder" representation or pre-serialized rfc822. Transactions
+can reference previous transactions to reuse file attachments.
 
 Senders
 -------
@@ -43,6 +45,9 @@ for each sending application plus a few "system" senders such as
 "ingress" for incoming messages from the public internet. Message
 processing is configured on a sender basis in particular which output
 flow/filter chain to use.
+
+There is an additional per-sender tag to customize parameters for
+different message flows within an application.
 
 Koukan does not have any built-in client authentication. However the
 sender is part of the url path so you can use a front proxy to control
@@ -73,9 +78,12 @@ http, respectively. The router stores durable data in a database
 accessed via SQLAlchemy2 Core. Koukan uses vanilla SQL and does not
 depend on non-portable features such as change
 notifications. PostgreSQL and SQLite are actively tested, others
-should be straightforward to add. The router buffers some data through the
-local filesystem but this does not need to be durable.
+should be straightforward to add. The router buffers some data through
+the local filesystem but this does not need to be durable.
 
+There is no intrinsic connection between the smtp server and client
+sides of the gateway; you can run separate instances for each function
+for isolation, etc.
 
 Message Flows
 -------------
@@ -122,7 +130,7 @@ Storage → OutputHandler → FilterChain → ... → http/json rest output (Res
 Exploder
 ========
 
-However we need to accomodate multi-rcpt transactions from the smtp
+However we need to accommodate multi-rcpt transactions from the smtp
 gateway so we add an internal hop through the Exploder to fan these
 out:
 
@@ -139,7 +147,7 @@ back in.
 Config Walkthrough
 ------------------
 
-Let's walk through the example configs. **add link**
+Let's walk through the example configs.
 
 Terminology
 ===========
@@ -153,6 +161,8 @@ Terminology
 
 Gateway
 =======
+
+`gateway.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/gateway.yaml>`__
 
 Starting with the gateway, we need to configure 2 flows: smtp →
 router/rest and vice versa.
@@ -169,6 +179,8 @@ any rest sender and uses the tag to select the smtp_output stanza.
 
 Router
 ======
+
+`router.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/router.yaml>`__
 
 There is a little more going on in the router.
 
