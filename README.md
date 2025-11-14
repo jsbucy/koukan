@@ -1,4 +1,4 @@
-# Koukan Email Gateway
+# Koukan: Cloud-Native Email Transport
 
 Koukan is an Cloud-Native email transport stack.
 
