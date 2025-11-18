@@ -45,7 +45,7 @@ class RoutingPolicy(ABC):
     # the chain to emit "501 5.1.3 Bad destination system address" in
     # that case.
     @abstractmethod
-    def endpoint_for_rcpt(self, rcpt) -> Tuple[
+    def endpoint_for_rcpt(self, rcpt : Mailbox) -> Tuple[
             Optional[Destination], Optional[Response]]:
         raise NotImplementedError
 
