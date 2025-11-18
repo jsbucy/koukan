@@ -137,7 +137,7 @@ class SmtpGateway(EndpointFactory):
             executor = SyncFilterAdapter(self.executor, chain, rest_id)
             self.inflight[rest_id] = executor
 
-            return executor, {'rest_lro': False}
+            return executor, {}
 
     # EndpointFactory
     def get(self, rest_id):

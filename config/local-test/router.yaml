@@ -16,10 +16,8 @@ rest_listener:
   #key: localhost.key
 
   # base uri of this instance/replica to redirect clients for multi-node
-  # endpoints with rest_lro: false will be qualified to this
   session_uri: http://localhost:8000
-  # e.g. k8s service alias, endpoints with rest_lro: true will be
-  # qualified to this
+  # e.g. k8s service alias
   #service_uri: http://localhost:8000
 
 sender:
@@ -64,7 +62,6 @@ endpoint:
   # equivalent to "chain ends with exploder/tx is always ephemeral"
   # create returns uri qualified to ephemeral session rather than
   # canonical service host
-  rest_lro: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -78,7 +75,6 @@ endpoint:
     data_timeout: 300
 
 - name: submission
-  rest_lro: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -139,7 +135,6 @@ endpoint:
 
 
 - name: ingress_exploder
-  rest_lro: false
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -184,7 +179,6 @@ endpoint:
     data_timeout: 300
 
 - name: ingress
-  rest_lro: true
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1

@@ -599,8 +599,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def _test_uri_qualification(
             self,
-            session_url : Optional[str], service_url : Optional[str],
-            rest_lro : bool):
+            session_url : Optional[str], service_url : Optional[str]):
         endpoint = MockAsyncFilter(incremental=True)
 
         handler = RestHandler(
@@ -611,7 +610,7 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
             tx_rest_id='tx_rest_id',
             session_url=session_url,
             service_url=service_url,
-            endpoint_yaml={'rest_lro': rest_lro})
+            endpoint_yaml={})
 
         scope = {'type': 'http',
                  'headers': self._headers([])}
@@ -633,10 +632,10 @@ class RestHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_uri_qualification(self):
         location = await self._test_uri_qualification(
-            'http://0.router', 'http://router', rest_lro=True)
+            'http://0.router', 'http://router')
         self.assertTrue(location.startswith('http://0.router'))
         location = await self._test_uri_qualification(
-            'http://0.router', 'http://router', rest_lro=False)
+            'http://0.router', 'http://router')
         self.assertTrue(location.startswith('http://0.router'))
 
 
