@@ -61,8 +61,6 @@ Output Chains
 
 name: referenced by senders
 
-rest_lro: false if this ends with exploder
-
 msa: true if this is terminating smtp msa port 587 from clients
 injecting messages for the first time, enables store&forward in more
 circumstances, further details in internals/exploder
@@ -137,12 +135,11 @@ filesystem but this does not need to be durable across restarts;
 emptyDir is fine. This is local to each router process; the router and
 gateway do not share data through the filesystem.
 
-Koukan may return http redirects in response to requests to endpoints
-with rest_lro enabled; native rest clients must be prepared to follow
+Koukan may return http redirects if the transaction is leased/active
+on a different replica; native rest clients must be prepared to follow
 these.
 
 For both router and gateway, configure ``rest_listener.session_uri`` to
 point to the dns alias or ip of the individual pod/replica. For
 router, configure ``rest_listener.service_uri`` to the router service dns
-alias. Set ``endpoint.rest_lro`` to false for endpoints that the gateway
-injects into and true to endpoints that native rest clients use.
+alias.

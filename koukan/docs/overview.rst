@@ -162,7 +162,7 @@ Terminology
 Gateway
 =======
 
-`gateway.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/gateway.yaml>`__
+`gateway.yaml <https://github.com/jsbucy/koukan/blob/63138439e666dc6cd12e6dcb6c2497bc29bc2112/config/local-test/gateway.yaml>`__
 
 Starting with the gateway, we need to configure 2 flows: smtp →
 router/rest and vice versa.
@@ -180,7 +180,7 @@ any rest sender and uses the tag to select the smtp_output stanza.
 Router
 ======
 
-`router.yaml <https://github.com/jsbucy/koukan/blob/a9e58dfee15a4bf26e723f97dc5d7a6052b15fe6/config/local-test/router.yaml>`__
+`router.yaml <https://github.com/jsbucy/koukan/blob/63138439e666dc6cd12e6dcb6c2497bc29bc2112/config/local-test/router.yaml>`__
 
 There is a little more going on in the router.
 

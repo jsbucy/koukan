@@ -118,8 +118,8 @@ not need to be durable across restarts; ``emptyDir`` is fine. This is
 local to each router process; the router and gateway do not share data
 through the filesystem.
 
-Koukan may return http redirects in response to requests to endpoints
-with rest_lro enabled; native rest clients must be prepared to follow
+Koukan may return http redirects if the transaction is leased/active
+on a different replica; native rest clients must be prepared to follow
 these.
 
 Can I use Envoy as a front proxy for the Koukan SMTP Gateway?

@@ -208,9 +208,7 @@ Cluster/k8s/multi-node
 
 For both router and gateway, configure ``rest_listener.session_uri`` to
 point to the dns alias or ip of the individual pod/replica. For router,
-configure ``rest_listener.service_uri`` to the router service dns alias. Set
-``endpoint.rest_lro`` to false for endpoints that the gateway injects into
-and true to endpoints that native rest clients use.
+configure ``rest_listener.service_uri`` to the router service dns alias.
 
 
 aiosmtpd and smtplib
