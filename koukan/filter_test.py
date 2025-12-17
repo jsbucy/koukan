@@ -397,6 +397,50 @@ class FilterTest(unittest.TestCase):
         self.assertEqual('/transactions/123/blob/blob1',
                          body.blobs['blob1'].reuse_uri.parsed_uri)
 
+
+    def test_dict(self):
+        prev = TransactionMetadata()
+        prev.add_filter_output('x', 'xx')
+
+        next = TransactionMetadata()
+        with self.assertRaises(ValueError):
+            prev.delta(next)
+
+        next.filter_output = dict(prev.filter_output)
+        next.filter_output['x'] = 'xxx'
+        with self.assertRaises(ValueError):
+            prev.delta(next)
+
+        next.filter_output = dict(prev.filter_output)
+        delta = prev.delta(next)
+        self.assertEqual({}, delta.filter_output)
+
+        next.filter_output['y'] = 'yy'
+        delta = prev.delta(next)
+        self.assertEqual({'y': 'yy'}, delta.filter_output)
+
+        prev.merge_from(delta)
+        self.assertEqual({'x': 'xx', 'y': 'yy'}, prev.filter_output)
+
+    def test_copy_list_offset(self):
+        prev = TransactionMetadata(
+            rcpt_to=[Mailbox('alice')])
+        next = TransactionMetadata(
+            rcpt_to=[Mailbox('alice'), Mailbox('bob')])
+        delta = prev.delta(next)
+        self.assertEqual(1, delta.rcpt_to_list_offset)
+
+        d2 = delta.copy()
+        self.assertEqual(1, d2.rcpt_to_list_offset)
+
+        prev.merge_from(d2)
+        self.assertEqual(['alice', 'bob'], [m.mailbox for m in prev.rcpt_to])
+
+    def test_copy_body(self):
+        tx = TransactionMetadata(body = MessageBuilderSpec({}))
+        tx2 = tx.copy()
+        self.assertIsNot(tx.body, tx2.body)
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.DEBUG,

@@ -172,6 +172,7 @@ class TxField:
     from_json : Optional[FromJson] = None
     to_json : Optional[ToJson] = None
     is_list : bool = False
+    is_dict : bool = False
     copy : Optional[Copy] = None
 
     def __init__(self,
@@ -181,6 +182,7 @@ class TxField:
                  to_json : Optional[ToJson] = None,
                  rest_placeholder : bool = False,
                  is_list : bool = False,
+                 is_dict : bool = False,
                  copy : Optional[Copy] = None):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
@@ -191,6 +193,7 @@ class TxField:
         self.to_json = to_json
         self.rest_placeholder = rest_placeholder
         self.is_list = is_list
+        self.is_dict = is_dict
         self.copy = copy
 
     def valid(self, which_json : WhichJson):
@@ -318,6 +321,12 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
         return None
     raise ValueError()
 
+def _copy_body(b, which_js):
+    if isinstance(b, MessageBuilderSpec):
+        return b.clone()
+    else:
+        return b
+
 _tx_fields = [
     TxField('remote_host',
             # TODO these accept/emit criteria are more at the syntax
@@ -387,7 +396,8 @@ _tx_fields = [
                           WhichJson.EXPLODER_UPDATE,
                           WhichJson.ADD_ROUTE]),
             to_json=body_to_json,
-            from_json=body_from_json),
+            from_json=body_from_json,
+            copy=_copy_body),
     TxField('notification',
             validity=set([WhichJson.REST_READ,
                           WhichJson.DB,
@@ -424,12 +434,14 @@ _tx_fields = [
             from_json=Sender.from_json,
             copy=Sender.copy),
     # RecipientRouterFilter -> RestEndpoint
-    TxField('rest_upstream_sender', validity=None)
+    TxField('rest_upstream_sender', validity=None),
+    TxField('filter_output', validity=None, is_dict=True),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
 def _valid_list_offset(which_js : WhichJson):
-    return which_js in [WhichJson.REST_UPDATE,
+    return which_js in [WhichJson.ALL,
+                        WhichJson.REST_UPDATE,
                         WhichJson.DB,
                         WhichJson.DB_ATTEMPT]
 
@@ -475,6 +487,10 @@ class TransactionMetadata:
     session_uri : Optional[str] = None
     sender : Optional[Sender] = None
     rest_upstream_sender : Optional[Sender] = None
+    # key is fully-qualified filter class name:
+    # koukan.remote_host_filter.RemoteHostFilter
+    # value is impl-specific type mutually known by producer and consumer
+    filter_output : Optional[Dict[str, Any]] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -529,7 +545,10 @@ class TransactionMetadata:
                 continue
             if (v:= getattr(self, name)) is None:
                 continue
-            if field.is_list:
+            if field.is_dict:
+                if bool(v):
+                    return False
+            elif field.is_list:
                 if bool(v):
                     return False
             else:
@@ -703,13 +722,12 @@ class TransactionMetadata:
             self._field_to_json(name, field, which_js, json)
         return json
 
-    # self + delta -> out or new tx obj if out is None
-    def merge(self, delta : "TransactionMetadata",
-              out : Optional["TransactionMetadata"] = None
-              ) -> Optional["TransactionMetadata"]:
+    def merge_from(self, delta : Optional["TransactionMetadata"],
+                   out : Optional["TransactionMetadata"] = None
+                   ) -> Optional["TransactionMetadata"]:
         assert delta is not None
         if out is None:
-            out = TransactionMetadata()
+            out = self
 
         for f,field in tx_json_fields.items():
             old_v = getattr(self, f, None)
@@ -723,11 +741,6 @@ class TransactionMetadata:
                 setattr(out, f, old_v)
                 continue
 
-            # XXX TxField.is_list?
-            if isinstance(old_v, list) != isinstance(new_v, list):
-                logging.debug('list-ness mismatch')
-                return None  # invalid
-
             # cd6c8bd2 double-check that body didn't change in some
             # unexpected way
             # TODO I'm not sure why this is necessary/the check in
@@ -735,16 +748,26 @@ class TransactionMetadata:
             if f == 'body' and old_v is not None and new_v is not None:
                 body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
                 if body_delta is None:
-                    return None
+                    raise ValueError()
                 if body_delta:
                     setattr(out, f, new_v)
                 continue
 
-            if not isinstance(old_v, list):
+            if field.is_dict and old_v is not None and new_v is not None:
+                oo = dict(old_v)
+                for kk in new_v.keys() - old_v.keys():
+                    vv = new_v[kk]
+                    if kk in old_v and old_v[kk] != vv:
+                        raise ValueError()
+                    oo[kk] = vv
+                setattr(out, f, oo)
+                continue
+            elif not field.is_list:
                 # use the old value, assume the new one is the same
                 # TODO could verify that old_v == new_v
                 setattr(out, f, old_v)
                 continue
+            assert isinstance(old_v, list)
             if not(new_v):
                 setattr(out, f, old_v)
                 continue
@@ -755,7 +778,7 @@ class TransactionMetadata:
                 logging.debug(
                     'list offset mismatch %s old len %d new offset %s',
                     f, len(old_v), offset)
-                return None
+                raise ValueError()
             l = []
             l.extend(old_v)
             l.extend(new_v)
@@ -763,14 +786,14 @@ class TransactionMetadata:
 
         return out
 
-    # merge delta into self
-    def maybe_merge_from(self, delta):
-        return self.merge(delta, self)
-
-    def merge_from(self, delta):
-        if (out := self.merge(delta, self)) is None:
-            raise ValueError()
-        return out
+    # merges into self
+    def merge(self, delta, out : Optional["TransactionMetadata"] = None):
+        if out is None:
+            out = TransactionMetadata()
+        try:
+            return self.merge_from(delta, out)
+        except ValueError:
+            return None
 
     # compute a delta from self to successor
     def delta(self, successor : "TransactionMetadata",
@@ -806,11 +829,18 @@ class TransactionMetadata:
                     setattr(out, f, new_v)
                 continue
 
-            # XXX TxField.is_list?
-            if isinstance(old_v, list) != isinstance(new_v, list):
-                logging.debug('tx.delta is-list != is-list %s', f)
-                raise ValueError()
-            if not isinstance(old_v, list):
+            if json_field.is_dict and old_v is not None and new_v is not None:
+                if new_v.keys() < old_v.keys():
+                    raise ValueError()
+                for kk,vv in old_v.items():
+                    if new_v[kk] != vv:
+                        raise ValueError()
+                oo = {}
+                for kk in new_v.keys() - old_v.keys():
+                    oo[kk] = new_v[kk]
+                setattr(out, f, oo)
+                continue
+            elif not json_field.is_list:  #not isinstance(old_v, list):
                 if old_v != new_v:
                     logging.debug('tx.delta value change %s old=%s new=%s',
                                   f, old_v, new_v)
@@ -826,8 +856,6 @@ class TransactionMetadata:
                 if len(new_v) < len(old_v):
                     logging.debug('list shrink placeholder')
                     raise ValueError()
-                # XXX need this??
-                # setattr(out, json_field.list_offset(), len(old_v))
                 continue
 
             old_len = len(old_v)
@@ -859,14 +887,8 @@ class TransactionMetadata:
     # but not the underlying Mailbox/Response objects which shouldn't
     # be mutated.
     def copy(self) -> 'TransactionMetadata':
-        # TODO should use tx_json_fields, custom copiers
-        out = copy.copy(self)
-        out.rcpt_to = list(self.rcpt_to)
-        out.rcpt_response = list(self.rcpt_response)
-        if isinstance(self.body, MessageBuilderSpec):
-            out.body = self.body.clone()
-        if self.sender is not None:
-            out.sender = self.sender.copy()
+        out = TransactionMetadata()
+        out.copy_valid_from(WhichJson.ALL, self)
         return out
 
     def copy_valid(self, valid : WhichJson):
@@ -881,7 +903,11 @@ class TransactionMetadata:
             v = getattr(src, name, None)
             if v is None:
                 continue
-            if field.is_list:
+            if field.is_dict:
+                # TODO need the values to implement a Copyable abc?
+                # These will typically not be mutated?
+                v = dict(v)
+            elif field.is_list:
                 if field.copy is not None:
                     v = [field.copy(vv, valid) for vv in v]
                 else:
@@ -903,6 +929,11 @@ class TransactionMetadata:
         if self.body is None:
             return None
         return self.body_blob()
+
+    def add_filter_output(self, f, v):
+        if self.filter_output is None:
+            self.filter_output = {}
+        self.filter_output[f] = v
 
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not
