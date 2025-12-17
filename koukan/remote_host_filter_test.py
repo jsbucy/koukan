@@ -133,6 +133,10 @@ class RemoteHostFilterTest(unittest.TestCase):
             self.assertIsNone(tx.mail_response)
         self.assertEqual(tx.remote_hostname, exp_hostname)
         self.assertEqual(tx.fcrdns, exp_fcrdns)
+        assert tx.filter_output is not None
+        self.assertIsNotNone(
+            out := tx.filter_output[RemoteHostFilter.fullname()])
+        self.assertEqual(exp_fcrdns, out.fcrdns)
 
     def test_success_ipv4(self):
         self._test(

@@ -408,6 +408,12 @@ py_test(name='relay_auth_filter_test',
         deps=[':relay_auth_filter',
               ':fake_endpoints'])
 
+py_library(name='policy_filter',
+           srcs=['policy_filter.py'],
+           deps=[':filter',
+                 ':filter_chain',
+                 ':remote_host_filter'])
+
 py_library(name='filter_chain_factory',
            srcs=['filter_chain_factory.py'],
            deps=[':filter',
@@ -434,6 +440,7 @@ py_library(name='filter_chain_wiring',
                  ':message_builder_filter',
                  ':message_parser_filter',
                  ':mx_resolution',
+                 ':policy_filter',
                  ':received_header_filter',
                  ':recipient_router_factory',
                  ':relay_auth_filter',

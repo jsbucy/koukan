@@ -226,7 +226,7 @@ class End2EndTest(unittest.TestCase):
     def test_smoke(self):
         self._configure_and_run()
         rcpt_resp, final_resp = send_smtp(
-            'localhost', self.gateway_mx_port, 'end2end_test',
+            'localhost', self.gateway_mx_port, 'localhost',
             'alice@example.com', ['bob@nowhere.com', 'bob@example.com'],
             'hello, world!')
         self.assertEqual(550, rcpt_resp[0][0])
@@ -256,7 +256,7 @@ class End2EndTest(unittest.TestCase):
         with open('testdata/multipart.msg', 'rb') as f:
             msg = f.read()
 
-        send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
+        send_smtp('localhost', self.gateway_mx_port, 'localhost',
                   'alice@example.com', ['bob@rest-application.example.com'],
                   raw=msg)
         for tx_id,tx in self.receiver.transactions.items():
@@ -424,7 +424,7 @@ class End2EndTest(unittest.TestCase):
         self._run()
         time.sleep(1)
 
-        send_smtp('localhost', self.gateway_mx_port, 'end2end_test',
+        send_smtp('localhost', self.gateway_mx_port, 'localhost',
                   'alice@example.com', ['bob@example.com'],
                   'hello, world!')
 
