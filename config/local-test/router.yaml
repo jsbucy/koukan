@@ -172,6 +172,8 @@ endpoint:
       name: address_list
       # no domains: match everything
       # dest == None: reject
+  - filter: remote_host
+  - filter: ingress_policy
   - filter: exploder
     msa: false
     output_chain: ingress

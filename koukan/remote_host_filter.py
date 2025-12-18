@@ -1,6 +1,8 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
+from enum import IntEnum
+
 import dns.resolver
 import logging
 
@@ -9,6 +11,23 @@ from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response
 
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
+
+class RemoteHostFilterResult:
+    class Status(IntEnum):
+        OK = 0
+        DNS_TEMP = 1
+        NOT_FOUND = 2
+
+    status : Status
+    remote_hostname : Optional[str] = None
+    fcrdns : Optional[bool] = None
+
+    def __init__(self, status : Status,
+                 remote_hostname : Optional[str] = None,
+                 fcrdns : Optional[bool] = None):
+        self.status = status
+        self.remote_hostname = remote_hostname
+        self.fcrdns = fcrdns
 
 class RemoteHostFilter(Filter):
     def __init__(self, resolver : Optional[Resolver] = None):
@@ -31,11 +50,16 @@ class RemoteHostFilter(Filter):
         try:
             ans = self.resolver.resolve_address(tx.remote_host.host)
         except ServFailExceptions:
+            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
+                RemoteHostFilterResult.Status.DNS_TEMP))
             return Response(450, 'RemoteHostFilter ptr err')
         except NotFoundExceptions:
             pass
 
         if not(ans) or not ans[0].target:
+            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
+                RemoteHostFilterResult.Status.NOT_FOUND,
+                fcrdns = False))
             tx.remote_hostname = ''
             tx.fcrdns = False
             return None
@@ -67,7 +91,14 @@ class RemoteHostFilter(Filter):
             tx.fcrdns = False
 
         if all_failed:
+            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
+                RemoteHostFilterResult.Status.DNS_TEMP, tx.remote_hostname,
+                False))
             return Response(450, 'RemoteHostFilter fwd err')
+
+        tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
+            RemoteHostFilterResult.Status.OK, tx.remote_hostname, tx.fcrdns))
+
 
         logging.debug('RemoteHostFilter._resolve() '
                       'remote_hostname=%s fcrdns=%s',

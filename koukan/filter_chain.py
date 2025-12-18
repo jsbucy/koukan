@@ -26,6 +26,10 @@ class BaseFilter:
     def __init__(self):
         pass
 
+    @classmethod
+    def fullname(cls):
+        return '.'.join([cls.__module__, cls.__qualname__])
+
     def wire_downstream(self, tx : TransactionMetadata):
         self.downstream_tx = self.upstream_tx = tx
         self._prev_downstream_tx = TransactionMetadata()

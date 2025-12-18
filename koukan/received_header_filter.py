@@ -77,6 +77,7 @@ class ReceivedHeaderFilter(ProxyFilter):
                 ehlo = received_host_literal
             with_protocol = 'with X-RESTMTP'
 
+        # TODO yaml option to skip the whole 'from' stanza for submission
         if ehlo and received_host:
             clauses.append('from ' + ehlo + ' (' + received_host + ')')
 
