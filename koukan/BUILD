@@ -411,8 +411,10 @@ py_test(name='relay_auth_filter_test',
 
 py_library(name='policy_filter',
            srcs=['policy_filter.py'],
-           deps=[':filter',
+           deps=[':blob',
+                 ':filter',
                  ':filter_chain',
+                 ':received_header_filter',
                  ':remote_host_filter'])
 
 py_test(name='policy_filter_test',

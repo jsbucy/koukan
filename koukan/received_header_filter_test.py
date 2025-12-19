@@ -120,8 +120,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
     def test_max_received_headers(self):
         filter = ReceivedHeaderFilter(
             received_hostname = 'gargantua1',
-            inject_time = datetime.fromtimestamp(1234567890, timezone.utc),
-            max_received_headers = 1)
+            inject_time = datetime.fromtimestamp(1234567890, timezone.utc))
         tx = TransactionMetadata()
         filter.wire_downstream(tx)
         filter.wire_upstream(TransactionMetadata())
@@ -143,8 +142,10 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         tx.merge_from(delta)
         result = filter.on_update(delta)
-        self.assertEqual(result.downstream_delta.data_response.code, 550)
-        self.assertTrue(result.downstream_delta.data_response.message.startswith('5.4.6'))
+        self.assertIsNotNone(
+            out := filter.upstream_tx.get_filter_output(
+                ReceivedHeaderFilter.fullname()))
+        self.assertEqual(2, out.received_header_count)
 
 if __name__ == '__main__':
     #unittest.util._MAX_LENGTH = 1024

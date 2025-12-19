@@ -173,6 +173,7 @@ endpoint:
       # no domains: match everything
       # dest == None: reject
   - filter: remote_host
+  - filter: received_header
   - filter: ingress_policy
   - filter: exploder
     msa: false

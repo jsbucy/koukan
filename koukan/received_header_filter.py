@@ -19,17 +19,20 @@ from koukan.response import Response
 
 from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
 
+class ReceivedHeaderFilterResult:
+    # none if grossly invalid headers?
+    received_header_count : Optional[int] = None
+    def __init__(self, received_header_count):
+        self.received_header_count = received_header_count
+
 class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None  # from yaml
-    max_received_headers : int
 
     def __init__(self, received_hostname : Optional[str] = None,
-                 inject_time = None,
-                 max_received_headers = 30):
+                 inject_time = None):
         self.inject_time = inject_time
         self.received_hostname = received_hostname
-        self.max_received_headers = max_received_headers
 
 # Received: from a48-180.smtp-out.amazonses.com
 #  (a48-180.smtp-out.amazonses.com. [54.240.48.180])
@@ -111,17 +114,17 @@ class ReceivedHeaderFilter(ProxyFilter):
             email.utils.format_datetime(datetime))
         return received
 
-    def _check_max_received_headers(self, body : Blob):
+    def _check_preexisting_received_headers(self, tx, body : Blob):
         b = body.pread(0, 65536)
+        # TODO get this from message_parser_filter?
         parser = BytesHeaderParser(policy=policy.SMTP)
         parsed = parser.parsebytes(b)
         received_count = 0
         for (k,v) in parsed.items():
             if k.lower() == 'received':
                 received_count += 1
-                if received_count > self.max_received_headers:
-                    return Response(550, '5.4.6 message has too many received: '
-                                    'headers and is likely looping')
+        tx.add_filter_output(
+            self.fullname(), ReceivedHeaderFilterResult(received_count))
         return None
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
@@ -146,19 +149,12 @@ class ReceivedHeaderFilter(ProxyFilter):
         # effectively buffering it all like this. However something
         # else in the chain is likely to do that anyway so it's
         # probably moot.
-        data_err = self._check_max_received_headers(body)
-        # don't return data_err immediately in case e.g. we don't
-        # already have rcpt_response to get an authoritative
-        # result from upstream
+        self._check_preexisting_received_headers(self.upstream_tx, body)
 
-        if data_err is None:
-            upstream_body = CompositeBlob()
-            received = InlineBlob(self._format_received().encode('ascii'))
-            upstream_body.append(received, 0, received.len())
-            upstream_body.append(body, 0, body.len(), True)
-            self.upstream_tx.body = upstream_body
+        upstream_body = CompositeBlob()
+        received = InlineBlob(self._format_received().encode('ascii'))
+        upstream_body.append(received, 0, received.len())
+        upstream_body.append(body, 0, body.len(), True)
+        self.upstream_tx.body = upstream_body
 
-        delta = None
-        if data_err is not None:
-            delta = TransactionMetadata(data_response = data_err)
-        return FilterResult(delta)
+        return FilterResult()
