@@ -125,18 +125,18 @@ class RemoteHostFilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob')])
         tx.merge_from(delta)
         filter.on_update(delta)
-        logging.info('%s %s', tx.remote_hostname, tx.fcrdns)
+        assert tx.filter_output is not None
+        self.assertIsNotNone(
+            rh := tx.filter_output[RemoteHostFilter.fullname()])
+
+        logging.info('%s %s', rh.remote_hostname, rh.fcrdns)
         if exp_err:
             assert tx.mail_response is not None
             self.assertEqual(450, tx.mail_response.code)
         else:
             self.assertIsNone(tx.mail_response)
-        self.assertEqual(tx.remote_hostname, exp_hostname)
-        self.assertEqual(tx.fcrdns, exp_fcrdns)
-        assert tx.filter_output is not None
-        self.assertIsNotNone(
-            out := tx.filter_output[RemoteHostFilter.fullname()])
-        self.assertEqual(exp_fcrdns, out.fcrdns)
+        self.assertEqual(exp_hostname, rh.remote_hostname)
+        self.assertEqual(exp_fcrdns, rh.fcrdns)
 
     def test_success_ipv4(self):
         self._test(

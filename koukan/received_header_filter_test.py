@@ -14,6 +14,8 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult
 from koukan.received_header_filter import ReceivedHeaderFilter
 
+from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
+
 class ReceivedHeaderFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
@@ -25,8 +27,11 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         delta = TransactionMetadata(
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice'))
-        delta.remote_hostname = 'gargantua1'
-        delta.fcrdns = True
+        delta.add_filter_output(
+            RemoteHostFilter.fullname(), RemoteHostFilterResult(
+                status = RemoteHostFilterResult.Status.OK,
+                remote_hostname = 'gargantua1',
+                fcrdns = True ))
 
         delta.smtp_meta = {
             'ehlo_host': 'gargantua1',
@@ -68,7 +73,6 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         tx.body = tx_delta.body = InlineBlob(body, len(body))
         result = filter.on_update(tx_delta)
         self.assertEqual(
-            filter.upstream_tx.body.pread(0),
             b'Received: from gargantua1 (gargantua1 [1.2.3.4])\r\n'
             b'\tby gargantua1\r\n'
             b'\twith ESMTPS\r\n'
@@ -79,7 +83,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             b'Received: from somewhere-else.example.com with ESMTP;\r\n'
             b'\tFri, 13 Feb 2009 23:31:29 +0000\r\n'
             b'\r\n'
-            b'hello\r\n')
+            b'hello\r\n',
+            filter.upstream_tx.body.pread(0))
 
         self.assertIsNone(result.downstream_delta)
         # self.assertEqual(tx.mail_response.code, 201)
@@ -94,8 +99,11 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             mail_from=Mailbox('alice', [EsmtpParam('smtputf8')]),
             body=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n',
                                  last=True))
-        tx.remote_hostname = 'gargantua1'
-        tx.fcrdns = True
+        tx.add_filter_output(
+            RemoteHostFilter.fullname(), RemoteHostFilterResult(
+                status = RemoteHostFilterResult.Status.OK,
+                remote_hostname = 'gargantua1',
+                fcrdns = True ))
         tx.smtp_meta = {
             'ehlo_host': 'gargantua1',
             'esmtp': True,
@@ -139,5 +147,5 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         self.assertTrue(result.downstream_delta.data_response.message.startswith('5.4.6'))
 
 if __name__ == '__main__':
-    # unittest.util._MAX_LENGTH = 1024
+    #unittest.util._MAX_LENGTH = 1024
     unittest.main()

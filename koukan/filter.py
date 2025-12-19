@@ -414,8 +414,6 @@ _tx_fields = [
                           WhichJson.EXPLODER_CREATE,
                           WhichJson.ADD_ROUTE])),
     TxField('rest_id', validity=None),
-    TxField('remote_hostname', validity=None),
-    TxField('fcrdns', validity=None),
     TxField('cancelled', validity=set([WhichJson.REST_READ,
                                        WhichJson.DB,
                                        WhichJson.EXPLODER_CREATE,
@@ -474,8 +472,6 @@ class TransactionMetadata:
 
     smtp_meta: Optional[dict] = None
 
-    remote_hostname : Optional[str] = None
-    fcrdns : Optional[bool] = None
     rest_id : Optional[str] = None
     cancelled : Optional[bool] = None
 
@@ -934,6 +930,11 @@ class TransactionMetadata:
         if self.filter_output is None:
             self.filter_output = {}
         self.filter_output[f] = v
+
+    def get_filter_output(self, f) -> Any:
+        if self.filter_output is None:
+            return None
+        return self.filter_output.get(f, None)
 
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not

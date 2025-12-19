@@ -17,9 +17,11 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
+from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
+
 class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
-    received_hostname : Optional[str] = None
+    received_hostname : Optional[str] = None  # from yaml
     max_received_headers : int
 
     def __init__(self, received_hostname : Optional[str] = None,
@@ -41,11 +43,18 @@ class ReceivedHeaderFilter(ProxyFilter):
         assert tx is not None
         received_host = None
         received_host_literal = None
+
+        rh = tx.get_filter_output(RemoteHostFilter.fullname())
+        remote_hostname = fcrdns = None
+        if (rh is not None) and (isinstance(rh, RemoteHostFilterResult)):
+            fcrdns = rh.fcrdns
+            remote_hostname = rh.remote_hostname
+        logging.debug('%s %s', fcrdns, remote_hostname)
+
         if tx.remote_host and tx.remote_host.host:
             received_host_literal = '[' + tx.remote_host.host + ']'
-
-            if tx.remote_hostname and tx.fcrdns:
-                received_host = (tx.remote_hostname + ' ' +
+            if remote_hostname and fcrdns:
+                received_host = (remote_hostname + ' ' +
                                  received_host_literal)
             else:
                 received_host = received_host_literal
@@ -71,8 +80,8 @@ class ReceivedHeaderFilter(ProxyFilter):
         else:
             # TODO other paths besides rest end up here
             # i.e. internally generated messages/notification/dsn
-            if tx.remote_hostname and tx.fcrdns:
-                ehlo = tx.remote_hostname
+            if remote_hostname and fcrdns:
+                ehlo = remote_hostname
             elif received_host_literal:
                 ehlo = received_host_literal
             with_protocol = 'with X-RESTMTP'

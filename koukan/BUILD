@@ -391,7 +391,8 @@ py_test(name='remote_host_filter_test',
 py_library(name='received_header_filter',
            srcs=['received_header_filter.py'],
            deps=[':filter',
-                 ':filter_chain'])
+                 ':filter_chain',
+                 ':remote_host_filter'])
 
 py_test(name='received_header_filter_test',
         srcs=['received_header_filter_test.py'],

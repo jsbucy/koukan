@@ -56,21 +56,22 @@ class RemoteHostFilter(Filter):
         except NotFoundExceptions:
             pass
 
+        remote_hostname = None
+        fcrdns = False
         if not(ans) or not ans[0].target:
+            remote_hostname = ''
+            fcrdns = False
             tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
                 RemoteHostFilterResult.Status.NOT_FOUND,
-                fcrdns = False))
-            tx.remote_hostname = ''
-            tx.fcrdns = False
+                remote_hostname, fcrdns))
             return None
-        tx.remote_hostname = str(ans[0].target)
+        remote_hostname = str(ans[0].target)
 
         all_failed = True
         for rrtype in ['a', 'aaaa']:
             ans = None
             try:
-                ans = self.resolver.resolve(
-                    tx.remote_hostname, rrtype)
+                ans = self.resolver.resolve(remote_hostname, rrtype)
                 all_failed = False
             except ServFailExceptions:
                 pass
@@ -83,25 +84,24 @@ class RemoteHostFilter(Filter):
                 logging.debug('RemoteHostFilter._resolve %s %s %s',
                               rrtype, str(a), tx.remote_host.host)
                 if str(a) == tx.remote_host.host:
-                    tx.fcrdns = True
+                    fcrdns = True
                     break
-            if tx.fcrdns:
+            if fcrdns:
                 break
         else:
-            tx.fcrdns = False
+            fcrdns = False
 
         if all_failed:
             tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-                RemoteHostFilterResult.Status.DNS_TEMP, tx.remote_hostname,
-                False))
+                RemoteHostFilterResult.Status.DNS_TEMP, remote_hostname,
+                fcrdns))
             return Response(450, 'RemoteHostFilter fwd err')
 
         tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-            RemoteHostFilterResult.Status.OK, tx.remote_hostname, tx.fcrdns))
-
+            RemoteHostFilterResult.Status.OK, remote_hostname, fcrdns))
 
         logging.debug('RemoteHostFilter._resolve() '
                       'remote_hostname=%s fcrdns=%s',
-                      tx.remote_hostname, tx.fcrdns)
+                      remote_hostname, fcrdns)
 
         return None
