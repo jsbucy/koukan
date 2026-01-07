@@ -142,10 +142,6 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
 
         tx.merge_from(delta)
         result = filter.on_update(delta)
-        self.assertIsNotNone(
-            out := filter.upstream_tx.get_filter_output(
-                ReceivedHeaderFilter.fullname()))
-        self.assertEqual(2, out.received_header_count)
 
 if __name__ == '__main__':
     #unittest.util._MAX_LENGTH = 1024

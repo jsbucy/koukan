@@ -1,3 +1,6 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import logging
 import unittest
 
@@ -6,7 +9,7 @@ from koukan.policy_filter import IngressPolicy
 from koukan.blob import InlineBlob
 
 from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
-from koukan.received_header_filter import ReceivedHeaderFilter, ReceivedHeaderFilterResult
+from koukan.message_validation_filter import MessageValidationFilter, MessageValidationFilterResult
 
 class PolicyFilterTest(unittest.TestCase):
     def setUp(self):
@@ -32,7 +35,9 @@ class PolicyFilterTest(unittest.TestCase):
             RemoteHostFilterResult.Status.OK, 'example.com', True)
 
         tx.add_filter_output(RemoteHostFilter.fullname(), rh)
-        tx.add_filter_output(ReceivedHeaderFilter.fullname(), ReceivedHeaderFilterResult(1))
+        tx.add_filter_output(
+            MessageValidationFilter.fullname(),
+            MessageValidationFilterResult())
 
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
@@ -48,8 +53,9 @@ class PolicyFilterTest(unittest.TestCase):
             RemoteHostFilterResult.Status.OK, 'example.com', True)
 
         tx.add_filter_output(RemoteHostFilter.fullname(), rh)
-        tx.add_filter_output(ReceivedHeaderFilter.fullname(),
-                             ReceivedHeaderFilterResult(50))
+        tx.add_filter_output(
+            MessageValidationFilter.fullname(),
+            MessageValidationFilterResult(received_header_count = 50))
 
         prev = tx.copy()
         tx.body = InlineBlob(b'hello', last=True)

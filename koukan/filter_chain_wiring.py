@@ -33,6 +33,7 @@ from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.sender import Sender
 from koukan.policy_filter import IngressPolicy
+from koukan.message_validation_filter import MessageValidationFilter
 
 StorageWriterFactory = Callable[[Sender, bool],Optional[AsyncFilter]]
 
@@ -73,6 +74,7 @@ class FilterChainWiring:
         factory.add_filter('message_builder', self.message_builder)
         factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
         factory.add_filter('ingress_policy', self.ingress_policy)
+        factory.add_filter('message_validation', self.message_validation)
 
     def exploder_upstream(self, sender : Sender,
                           rcpt_timeout : float,
@@ -232,4 +234,8 @@ class FilterChainWiring:
         return MessageBuilderFilter()
 
     def ingress_policy(self, yaml, sender : Sender):
-        return IngressPolicy()
+        return IngressPolicy(
+            min_validity=yaml.get('min_validity', None))
+
+    def message_validation(self, yaml, sender : Sender):
+        return MessageValidationFilter()

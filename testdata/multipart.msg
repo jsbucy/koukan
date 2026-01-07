@@ -12,9 +12,11 @@ content-type: multipart/alternative; boundary=zzz
 
 --zzz
 content-type: text/plain
+
 hello
 --zzz
 content-type: text/html
+
 <b>hello</b>
 --zzz--
 --yyy
@@ -23,7 +25,7 @@ content-id: xyz
 content-transfer-encoding: base64
 
 eW9sb2NhdA==
---yyy---
+--yyy--
 --xxx
 content-type: image/png
 content-disposition: attachment; filename="funny cats.png"

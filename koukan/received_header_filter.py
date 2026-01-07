@@ -19,12 +19,6 @@ from koukan.response import Response
 
 from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
 
-class ReceivedHeaderFilterResult:
-    # none if grossly invalid headers?
-    received_header_count : Optional[int] = None
-    def __init__(self, received_header_count):
-        self.received_header_count = received_header_count
-
 class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
     received_hostname : Optional[str] = None  # from yaml
@@ -114,19 +108,6 @@ class ReceivedHeaderFilter(ProxyFilter):
             email.utils.format_datetime(datetime))
         return received
 
-    def _check_preexisting_received_headers(self, tx, body : Blob):
-        b = body.pread(0, 65536)
-        # TODO get this from message_parser_filter?
-        parser = BytesHeaderParser(policy=policy.SMTP)
-        parsed = parser.parsebytes(b)
-        received_count = 0
-        for (k,v) in parsed.items():
-            if k.lower() == 'received':
-                received_count += 1
-        tx.add_filter_output(
-            self.fullname(), ReceivedHeaderFilterResult(received_count))
-        return None
-
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
@@ -149,7 +130,6 @@ class ReceivedHeaderFilter(ProxyFilter):
         # effectively buffering it all like this. However something
         # else in the chain is likely to do that anyway so it's
         # probably moot.
-        self._check_preexisting_received_headers(self.upstream_tx, body)
 
         upstream_body = CompositeBlob()
         received = InlineBlob(self._format_received().encode('ascii'))

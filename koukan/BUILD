@@ -409,12 +409,30 @@ py_test(name='relay_auth_filter_test',
         deps=[':relay_auth_filter',
               ':fake_endpoints'])
 
+py_library(name='message_validation_filter',
+           srcs=['message_validation_filter.py'],
+           deps=[':blob',
+                 ':filter',
+                 ':filter_chain',
+                 ':remote_host_filter'])
+
+py_test(name='message_validation_filter_test',
+        srcs=['message_validation_filter_test.py'],
+        deps=[':message_validation_filter',
+              ':filter'],
+        data=['//testdata:bad_date.msg',
+              '//testdata:bad_headers.msg',
+              '//testdata:bad_multipart.msg',
+              '//testdata:missing_headers.msg',
+              '//testdata:multipart.msg',
+              '//testdata:trivial.msg'])
+
 py_library(name='policy_filter',
            srcs=['policy_filter.py'],
            deps=[':blob',
                  ':filter',
                  ':filter_chain',
-                 ':received_header_filter',
+                 ':message_validation_filter',
                  ':remote_host_filter'])
 
 py_test(name='policy_filter_test',
