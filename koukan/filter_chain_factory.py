@@ -95,11 +95,13 @@ class FilterChainFactory:
             assert isinstance(filter, BaseFilter)
         return filter
 
-    # populates sender.yaml with sender yaml with per-tag (if any) merged
-    def get_sender(self, sender : Sender):
+    # Returns a fully-populated Sender corresponding to sender.name
+    # and sender.tag if any, else None
+    def get_sender(self, sender : Sender) -> Optional[Sender]:
+        assert sender.name is not None
         assert self.sender_yaml is not None
         if (sender_yaml := self.sender_yaml.get(sender.name, None)) is None:
-            return
+            return None
         tags = sender_yaml.get('tag', None)
         tag_yaml = None
         if tags and sender.tag:
@@ -107,13 +109,16 @@ class FilterChainFactory:
                 if ty['name'] == sender.tag:
                     tag_yaml = ty
                     break
-        sender.yaml = dict(sender_yaml)
+            else:
+                return None
+        result_sender = Sender(sender.name, sender.tag)
+        result_sender.yaml = dict(sender_yaml)
         if tags is not None:
-            del sender.yaml['tag']
-        if tag_yaml is None:
-            return
-        for k,v in tag_yaml.items():
-            sender.yaml[k] = v
+            del result_sender.yaml['tag']
+        if tag_yaml is not None:
+            for k,v in tag_yaml.items():
+                result_sender.yaml[k] = v
+        return result_sender
 
     def build_filter_chain(self, sender : Sender,
                            endpoint_yaml : Optional[dict] = None

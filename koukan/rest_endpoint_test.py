@@ -672,7 +672,7 @@ class RestEndpointTest(unittest.TestCase):
                     'mail_response': {'code': 201, 'message': 'ok'},
                     'rcpt_response': [{'code': 202, 'message': 'ok'}],
                     'body': {'blob_status': {'uri': self.body_url}},
-                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'}
+                    'sender': {}
                 },
                 location = self.tx_url,
                 etag = '1'))
@@ -730,7 +730,7 @@ class RestEndpointTest(unittest.TestCase):
                 resp_json={
                     'mail_from': {},
                     'rcpt_to': [{}],
-                    'sender': {'name': 'rest_endpoint_test', 'tag': 'outbound'},
+                    'sender': {},
                     'body': {
                         'blob_status': {
                             'uri': self.body_url,

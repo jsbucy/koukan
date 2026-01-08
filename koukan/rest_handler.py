@@ -80,7 +80,7 @@ class RestHandler(Handler):
     service_url : Optional[str] = None
     HTTP_CLIENT = Callable[[str], HttpxResponse]
     client : HTTP_CLIENT
-    path_sender_name : Optional[str] = None
+    sender : Optional[Sender] = None
 
     def __init__(self,
                  executor : Executor,
@@ -93,7 +93,7 @@ class RestHandler(Handler):
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
                  client : Optional[HTTP_CLIENT] = None,
-                 path_sender_name : Optional[str] = None):
+                 sender : Optional[Sender] = None):
         assert service_url is not None
         self.executor = executor
         self.async_filter = async_filter
@@ -109,7 +109,7 @@ class RestHandler(Handler):
         self.service_url = service_url
         if client is not None:
             self.client = client
-        self.path_sender_name = path_sender_name
+        self.sender = sender
 
     def blob_rest_id(self):
         return self._blob_rest_id
@@ -200,18 +200,18 @@ class RestHandler(Handler):
         if self.async_filter is None:
             return self.response(
                 code=500, msg='internal error creating transaction')
-        tx = TransactionMetadata.from_json(
-            req_json, WhichJson.REST_CREATE)
+        tx = TransactionMetadata.from_json(req_json, WhichJson.REST_CREATE)
         if tx is None:
             return self.response(code=400, msg='invalid tx json')
-        # client might send json with either no sender or just the
-        # tag; propagate the one from the url path
-        if tx.sender is None:
-            tx.sender = Sender()
-        if tx.sender.name is None:
-            tx.sender.name = self.path_sender_name
-        elif tx.sender.name != self.path_sender_name:
-            return self.response(code=400, msg='url path/json sender mismatch')
+        # self.sender was constructed in
+        # RestHandlerFactory.create_tx() with the upcall to the router
+        # (endpoint factory) to get_sender() to populate
+        # just replace any sender in the json with the one we constructed
+        sender_json = req_json.get('sender', None)
+        if sender_json and (sender_json.keys() - {'name', 'tag'}):
+            return self.response(
+                code=400, msg='tx json sender may only contain name,tag')
+        tx.sender = self.sender
 
         if not self.async_filter.incremental():
             if tx.mail_from is None or len(tx.rcpt_to) != 1:
@@ -697,7 +697,7 @@ class EndpointFactory(ABC):
     # dict : endpoint yaml
     @abstractmethod
     def create(self, sender : Sender
-               ) -> Optional[Tuple[AsyncFilter, dict]]:
+               ) -> Optional[Tuple[AsyncFilter, dict, Sender]]:
         pass
 
     @abstractmethod
@@ -727,12 +727,12 @@ class RestHandlerFactory(HandlerFactory):
         self.chunk_size = chunk_size
         self.client = Client(follow_redirects=True)
 
-    def create_tx(self, sender, tag) -> RestHandler:
-        res = self.endpoint_factory.create(Sender(sender, tag))
+    def create_tx(self, path_sender_name, tag) -> RestHandler:
+        res = self.endpoint_factory.create(Sender(path_sender_name, tag))
         # TODO possibly HandlerFactory should be able to return an
         # error response directly here?
         assert res is not None
-        endpoint, yaml = res
+        endpoint, yaml, sender = res
         kwargs : Dict[str, Any] = {}
         if self.chunk_size:
             kwargs['chunk_size'] = self.chunk_size
@@ -744,7 +744,7 @@ class RestHandlerFactory(HandlerFactory):
             session_url = self.session_url,
             service_url = self.service_url,
             client = self.client.get,
-            path_sender_name = sender,
+            sender = sender,
             **kwargs)
 
     def get_tx(self, tx_rest_id) -> RestHandler:

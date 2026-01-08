@@ -45,6 +45,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
             b'To: <bob>\r\n'
             b'\r\n'
             b'hello\r\n')
+        tx.sender = Sender('ingress', 'smtp-mx')
         delta = prev.delta(tx)
 
         router.on_update(delta)
@@ -53,6 +54,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
         self.assertFalse(router.upstream_tx.rcpt_to)
         self.assertEqual(router.upstream_tx.rest_endpoint,
                          'http://localhost:8001')
+        self.assertEqual(router.downstream_tx.sender, router.upstream_tx.sender)
         self.assertEqual(router.upstream_tx.rest_upstream_sender.tag, 'gateway')
         self.assertEqual(router.upstream_tx.resolution.hosts,
                          [HostPort('example.com', 1234)])

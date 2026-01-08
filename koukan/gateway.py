@@ -113,7 +113,8 @@ class SmtpGateway(EndpointFactory):
         return None
 
     # EndpointFactory
-    def create(self, sender : Sender) -> Optional[Tuple[AsyncFilter, dict]]:
+    def create(self, sender : Sender
+               ) -> Optional[Tuple[AsyncFilter, dict, Sender]]:
         assert self.config_yaml is not None
         assert self.rest_id_factory is not None
         rest_yaml = self.config_yaml['rest_listener']
@@ -137,7 +138,7 @@ class SmtpGateway(EndpointFactory):
             executor = SyncFilterAdapter(self.executor, chain, rest_id)
             self.inflight[rest_id] = executor
 
-            return executor, {}
+            return executor, {}, sender
 
     # EndpointFactory
     def get(self, rest_id):

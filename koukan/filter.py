@@ -116,6 +116,8 @@ def get_esmtp_param(params : List[EsmtpParam], param : str
 class Mailbox:
     mailbox : str  # i.e. rfc5321 4.1.2
     esmtp : List[EsmtpParam]
+    # for recipient_router_filter to no-op if a previously-chained
+    # instance already handled it
     routed = False
 
     def __init__(self, mailbox : str, esmtp : List[EsmtpParam] = []):
@@ -417,9 +419,9 @@ _tx_fields = [
     TxField('final_attempt_reason', validity=set([WhichJson.REST_READ])),
     TxField('session_uri', validity=None),
     TxField('sender', validity=set([WhichJson.REST_CREATE,
-                                    # xxx need this?
                                     WhichJson.REST_READ,
                                     WhichJson.DB]),
+            rest_placeholder=True,
             to_json=Sender.to_json,
             from_json=Sender.from_json,
             copy=Sender.copy),

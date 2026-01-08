@@ -110,9 +110,9 @@ class FilterChainWiring:
             us = sender.name
         if not (ut := sender.yaml.get('upstream_tag', None)):
             ut = sender.tag
-        upstream_sender = Sender(us, ut, {})
-        self.filter_chain_factory.get_sender(upstream_sender)
-
+        upstream_sender = self.filter_chain_factory.get_sender(Sender(us, ut))
+        if upstream_sender is None:
+            return None
         assert upstream_sender.yaml is not None
         assert upstream_sender.yaml.get('output_chain', None) is not None
         return Exploder(

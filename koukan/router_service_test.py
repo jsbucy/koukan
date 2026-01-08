@@ -404,8 +404,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIn('blob_status', tx_json['body'])
         self.assertIn('uri', tx_json['body']['blob_status'])
         del tx_json['body']['blob_status']['uri']
-        self.assertEqual(tx_json, {
-            'sender': {'name': 'submission'},
+        self.assertEqual({
+            'sender': {},
             'mail_from': {},
             'rcpt_to': [{}],
             'body': {'blob_status': {#'content_length': 13, 'length': 13,
@@ -415,7 +415,7 @@ class RouterServiceTest(unittest.TestCase):
             'rcpt_response': [{'code': 202, 'message': 'ok'}],
             'data_response': {'code': 203, 'message': 'ok'},
             'final_attempt_reason': 'upstream response success'
-        })
+        }, tx_json)
 
 
     def test_rest_body_http_retry(self):
@@ -535,7 +535,7 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
-                'sender': {'name': 'submission'},
+                'sender': {},
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'body': {'blob_status': {#'content_length': 13, 'length': 13,
@@ -636,7 +636,7 @@ class RouterServiceTest(unittest.TestCase):
             del tx_json['body']['blob_status']['uri']
 
             if tx_json == {
-                    'sender': {'name': 'submission'},
+                    'sender': {},
                     'mail_from': {},
                     'rcpt_to': [{}],
                     'body': {'blob_status': {'finalized': True}},
