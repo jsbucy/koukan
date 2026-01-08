@@ -34,7 +34,9 @@ class Sender:
                       dict(self.yaml) if self.yaml is not None else None)
 
     def __repr__(self):
-        return '%s %s' % (self.name, self.tag)
+        return '%s %s %s' % (self.name, self.tag, self.yaml)
 
     def __eq__(self, rhs):
+        if not isinstance(rhs, Sender):
+            return False
         return self.name == rhs.name and self.tag == rhs.tag

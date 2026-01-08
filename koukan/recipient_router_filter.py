@@ -103,8 +103,6 @@ class RecipientRouterFilter(ProxyFilter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         tx_delta.rcpt_to = []
-        # preempt a conflict
-        tx_delta.sender = None
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
         self.upstream_tx.merge_from(tx_delta)
@@ -119,12 +117,6 @@ class RecipientRouterFilter(ProxyFilter):
             resp = None
             if not rcpt.routed:
                 resp, rcpt.routed = self._route(rcpt)
-            else:
-                # if we no-op'd because a previous instance already
-                # routed, put back the sender which we previously cleared
-                if self.downstream_tx.sender is not None and self.upstream_tx.sender is None:
-
-                    self.upstream_tx.sender = self.downstream_tx.sender.copy()
             assert resp is None or resp.err()
             self.downstream_tx.rcpt_response.append(resp)
         return FilterResult()

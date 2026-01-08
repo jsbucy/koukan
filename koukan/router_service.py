@@ -34,7 +34,7 @@ class StorageWriterFactory(EndpointFactory):
         self.service = service
 
     def create(self, sender : Sender
-               ) -> Optional[Tuple[AsyncFilter, dict]]:
+               ) -> Optional[Tuple[AsyncFilter, dict, Sender]]:
         return self.service.create_storage_writer(sender)
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
@@ -234,11 +234,14 @@ class Service:
             return None
         return endp[0]
 
-    def create_storage_writer(self, sender : Sender,
-                              block_upstream : bool = True
-                              ) -> Optional[Tuple[StorageWriterFilter, dict]]:
+    def create_storage_writer(
+            self, sender : Sender,
+            block_upstream : bool = True
+    ) -> Optional[Tuple[StorageWriterFilter, dict, Sender]]:
         assert self.filter_chain_factory is not None
-        self.filter_chain_factory.get_sender(sender)
+        if (s := self.filter_chain_factory.get_sender(sender)) is None:
+            return None
+        sender = s
         if (endp := self.filter_chain_factory.build_filter_chain(
                 sender)) is None:
             return None
@@ -257,7 +260,7 @@ class Service:
         if block_upstream and fut is None:
             # XXX leaves db tx leased?
             return None
-        return writer, endpoint_yaml
+        return writer, endpoint_yaml, sender
 
     def get_endpoint_yaml(self, sender : Sender) -> Optional[dict]:
         try:

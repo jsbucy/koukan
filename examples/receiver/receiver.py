@@ -69,6 +69,8 @@ class Transaction:
             json_out['mail_from'] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
+        if 'sender' in json_out:
+            json_out['sender'] = {}
 
         json_out['body'] = {}
         json_out['body']['blob_status'] = {
