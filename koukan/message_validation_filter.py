@@ -57,6 +57,8 @@ class MessageValidationFilterResult:
         assert False, 'err not populated'
 
 class MessageValidationFilter(Filter):
+    max_header_bytes : int
+    max_mime_tree_depth : int
 
     def __init__(self, max_header_bytes = 1048576,
                  max_mime_tree_depth = 20):
@@ -79,12 +81,17 @@ class MessageValidationFilter(Filter):
         return False
 
     def on_update(self, tx_delta : TransactionMetadata):
-        assert self.downstream_tx is not None
+        tx = self.downstream_tx
+        assert tx is not None
+        # TODO maybe don't need to do this e.g. in the upstream chain
+        # if we already did it in the downstream chain. OTOH maybe we
+        # screwed up adding a received: header and this might catch
+        # that.
         if not isinstance(tx_delta.body, Blob) or not tx_delta.body.finalized():
             return FilterResult()
 
         result = self._check(tx_delta.body)
-        self.downstream_tx.add_filter_output(self.fullname(), result)
+        tx.add_filter_output(self.fullname(), result)
         return FilterResult()
 
     def _check(self, body_blob : Blob) -> MessageValidationFilterResult:
@@ -95,7 +102,7 @@ class MessageValidationFilter(Filter):
             # If we can't find the end of the headers in the first 1M,
             # the message is probably garbage. Don't risk some cpu/mem
             # complexity blowup trying to parse it.
-            if b.find(b'\r\n\r\n', 0, self.max_header_bytes) == -1:
+            if (end_of_headers := b.find(b'\r\n\r\n', 0, self.max_header_bytes)) == -1:
                 result.add_error(
                     MessageValidationFilterResult.Status.BASIC,
                     'grossly excessive/malformed headers')
@@ -103,8 +110,16 @@ class MessageValidationFilter(Filter):
             file.write(b)
             file.flush()
             file.seek(0)
+            # TODO policy.SMTPUTF8 per tx.mail_from.esmtp
+            # TODO BytesParser uses
+            # TextIOWrapper(fp, encoding='ascii', errors='surrogateescape')
+            # under the hood, this needs to use Parser at least for smtputf8?
             parser = BytesParser(policy=email.policy.SMTP)
             parsed = parser.parse(file)
+
+        # TODO parser seems to ignore non-printing ascii (< 0x20 other
+        # than 0xd/CR 0xa/LF) in unstructured headers. Should we?
+        # note: string.printable includes 0xb/VTAB and 0xc/FF
 
         for d in parsed.defects:
             if isinstance(d, MissingHeaderBodySeparatorDefect):
@@ -123,7 +138,7 @@ class MessageValidationFilter(Filter):
                     if header in headers or v.defects:
                         result.add_error(
                             MessageValidationFilterResult.Status.MEDIUM,
-                            'invalid ' + header)
+                            'invalid ' + header + str(v.defects))
                         return result
                     else:
                         headers.add(header)
@@ -136,6 +151,7 @@ class MessageValidationFilter(Filter):
                         'missing ' + header)
                     return result
 
+        # TODO lower max_header_bytes for HIGH?
         if result.status >= MessageValidationFilterResult.Status.HIGH:
             if self._check_mime_tree_defects(parsed, 0):
                 result.add_error(

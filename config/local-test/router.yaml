@@ -58,22 +58,25 @@ rest_endpoint:
   tag: short_circuit
 
 endpoint:
+# smtp downstream
 - name: submission_exploder
-  # equivalent to "chain ends with exploder/tx is always ephemeral"
-  # create returns uri qualified to ephemeral session rather than
-  # canonical service host
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
   - filter: relay_auth
   #  smtp_auth: true
+  - filter: message_validation
+  - filter: policy
+    mode: SUBMISSION
+    min_validity: HIGH
   - filter: exploder
     output_chain: submission
     msa: true
     rcpt_timeout: 300
     data_timeout: 300
 
+# first-class rest or smtp/exploder upstream
 - name: submission
   output_handler:
     downstream_timeout: 5
@@ -89,10 +92,18 @@ endpoint:
       deadline: 30
 
   chain:
-  - filter: remote_host
+  # chain before message_builder to not parse its output which we
+  # assume is good.
+  - filter: message_validation
+  - filter: policy
+    mode: SUBMISSION
+    min_validity: HIGH
+   
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
   - filter: message_builder
+  # TODO: option/default disable remote_host/from stanza in received header
+  # for submission?
   - filter: received_header
     received_hostname: gargantua1    
   - filter: router
@@ -174,7 +185,8 @@ endpoint:
       # dest == None: reject
   - filter: remote_host
   - filter: message_validation
-  - filter: ingress_policy
+  - filter: policy
+    mode: INGRESS
   - filter: exploder
     msa: false
     output_chain: ingress
@@ -229,6 +241,10 @@ endpoint:
       name: address_list
       # no domains: match everything
       # dest == None: reject
+  # todo need to set remote host for short_circuit for this to work
+  # - filter: message_validation
+  # - filter: policy
+  #   mode: INGRESS
   - filter: add_route
     sender: sor
   - filter: message_parser

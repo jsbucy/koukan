@@ -43,8 +43,7 @@ class RemoteHostFilter(Filter):
     def _resolve(self) -> Optional[Response]:
         tx = self.downstream_tx
         assert tx is not None
-        if (tx.remote_host is None or
-            not tx.remote_host.host):
+        if tx.remote_host is None or not tx.remote_host.host:
             return None
         ans = None
         try:

@@ -43,6 +43,7 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
                 filter.on_update(delta)
                 self.assertIsNotNone(
                     out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
+                logging.debug(out.err)
                 self.assertEqual(status, out.status)
                 self.assertEqual(count, out.received_header_count)
         except:

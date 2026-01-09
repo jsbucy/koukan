@@ -5,8 +5,9 @@ import logging
 import unittest
 
 from koukan.filter import Mailbox, TransactionMetadata
-from koukan.policy_filter import IngressPolicy
+from koukan.policy_filter import PolicyFilter
 from koukan.blob import InlineBlob
+from koukan.sender import Sender
 
 from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
 from koukan.message_validation_filter import MessageValidationFilter, MessageValidationFilterResult
@@ -17,9 +18,10 @@ class PolicyFilterTest(unittest.TestCase):
                             format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
 
     def test_remote_host_smoke(self):
-        filter = IngressPolicy()
+        filter = PolicyFilter()
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
+        tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
@@ -27,10 +29,11 @@ class PolicyFilterTest(unittest.TestCase):
         self.assertEqual(450, tx.mail_response.code)
 
     def test_remote_host_ok(self):
-        filter = IngressPolicy()
+        filter = PolicyFilter()
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.smtp_meta = {'ehlo_host': 'example.com'}
+        tx.sender = Sender('ingress', 'smtp-mx')
         rh = RemoteHostFilterResult(
             RemoteHostFilterResult.Status.OK, 'example.com', True)
 
@@ -45,7 +48,7 @@ class PolicyFilterTest(unittest.TestCase):
         self.assertIsNone(tx.mail_response)
 
     def test_hop_count_fail(self):
-        filter = IngressPolicy()
+        filter = PolicyFilter()
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.smtp_meta = {'ehlo_host': 'example.com'}

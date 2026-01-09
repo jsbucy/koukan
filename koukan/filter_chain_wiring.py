@@ -32,7 +32,7 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.sender import Sender
-from koukan.policy_filter import IngressPolicy
+from koukan.policy_filter import PolicyFilter
 from koukan.message_validation_filter import MessageValidationFilter
 
 StorageWriterFactory = Callable[[Sender, bool],Optional[AsyncFilter]]
@@ -73,7 +73,7 @@ class FilterChainWiring:
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
         factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
-        factory.add_filter('ingress_policy', self.ingress_policy)
+        factory.add_filter('policy', self.policy)
         factory.add_filter('message_validation', self.message_validation)
 
     def exploder_upstream(self, sender : Sender,
@@ -117,6 +117,7 @@ class FilterChainWiring:
         upstream_sender = self.filter_chain_factory.get_sender(Sender(us, ut))
         if upstream_sender is None:
             return None
+
         assert upstream_sender.yaml is not None
         assert upstream_sender.yaml.get('output_chain', None) is not None
         return Exploder(
@@ -233,9 +234,10 @@ class FilterChainWiring:
     def message_builder(self, yaml, sender : Sender):
         return MessageBuilderFilter()
 
-    def ingress_policy(self, yaml, sender : Sender):
-        return IngressPolicy(
-            min_validity=yaml.get('min_validity', None))
+    def policy(self, yaml, sender : Sender):
+        return PolicyFilter(
+            min_validity=yaml.get('min_validity', None),
+            mode=yaml.get('mode', None))
 
     def message_validation(self, yaml, sender : Sender):
         return MessageValidationFilter()
