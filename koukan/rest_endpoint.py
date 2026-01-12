@@ -35,6 +35,7 @@ from koukan.blob import Blob, BlobReader
 from koukan.message_builder import MessageBuilderSpec
 from koukan.storage_schema import BlobSpec
 from koukan.rest_schema import FINALIZE_BLOB_HEADER, BlobUri
+from koukan.sender import Sender
 
 # these are artificially low for testing
 TIMEOUT_START=5
@@ -336,9 +337,16 @@ class RestEndpoint(Filter):
         if not self.transaction_url:
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
-            self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
+            upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
             if self.downstream_tx.rest_upstream_sender:
-                self.rest_upstream_tx.sender = self.downstream_tx.rest_upstream_sender
+                sender = self.downstream_tx.rest_upstream_sender
+                self.rest_upstream_tx.sender = Sender(sender.name, sender.tag)
+                if sender.yaml:
+                    if rh := sender.yaml.get('remote_host', None):
+                        # xxx port is probably unused?
+                        upstream_tx.remote_host = HostPort(rh, 8000)
+                    if sm := sender.yaml.get('smtp_meta', None):
+                        upstream_tx.smtp_meta = sm
             # cf _update_message_builder(), this is probably moot
             # because downstream_body is None on the first update
 

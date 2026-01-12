@@ -672,7 +672,8 @@ class RestEndpointTest(unittest.TestCase):
                     'mail_response': {'code': 201, 'message': 'ok'},
                     'rcpt_response': [{'code': 202, 'message': 'ok'}],
                     'body': {'blob_status': {'uri': self.body_url}},
-                    'sender': {}
+                    'sender': {},
+                    'remote_host': ['1.2.3.4', 8000],
                 },
                 location = self.tx_url,
                 etag = '1'))
@@ -681,7 +682,10 @@ class RestEndpointTest(unittest.TestCase):
         delta = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to=[Mailbox('bob')])
-        delta.rest_upstream_sender = Sender('rest_endpoint_test', 'outbound')
+        delta.rest_upstream_sender = Sender(
+            'rest_endpoint_test', 'outbound',
+            yaml={'remote_host': '1.2.3.4',
+                  'smtp_meta': {'ehlo_host': 'short_circuit.local'}})
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
 
@@ -731,6 +735,7 @@ class RestEndpointTest(unittest.TestCase):
                     'mail_from': {},
                     'rcpt_to': [{}],
                     'sender': {},
+                    'remote_host': ['1.2.3.4', 8000],
                     'body': {
                         'blob_status': {
                             'uri': self.body_url,

@@ -29,6 +29,8 @@ sender:
     upstream_tag: smtp-mx-upstream
   - name: smtp-mx-upstream
   - name: short_circuit
+    remote_host: 127.0.0.1
+    smtp_meta: {'ehlo_host': 'localhost'}
 
 - name: submission
   output_chain: submission
@@ -241,10 +243,9 @@ endpoint:
       name: address_list
       # no domains: match everything
       # dest == None: reject
-  # todo need to set remote host for short_circuit for this to work
-  # - filter: message_validation
-  # - filter: policy
-  #   mode: INGRESS
+  - filter: message_validation
+  - filter: policy
+    mode: INGRESS
   - filter: add_route
     sender: sor
   - filter: message_parser

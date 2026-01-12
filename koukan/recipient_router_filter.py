@@ -21,16 +21,16 @@ from koukan.sender import Sender
 
 class Destination:
     rest_endpoint : Optional[str] = None
-    sender : Optional[Sender] = None
+    rest_upstream_sender : Optional[Sender] = None
     remote_host : Optional[List[HostPort]] = None
     options : dict
 
     def __init__(self, rest_endpoint : Optional[str] = None,
-                 sender : Optional[Sender] = None,
+                 rest_upstream_sender : Optional[Sender] = None,
                  remote_host : Optional[List[HostPort]] = None,
                  options : Optional[dict] = None):
         self.rest_endpoint = rest_endpoint
-        self.sender = sender
+        self.rest_upstream_sender = rest_upstream_sender
         self.remote_host = remote_host
         self.options = options if options else {}
 
@@ -93,7 +93,7 @@ class RecipientRouterFilter(ProxyFilter):
         assert up_res is None or up_res == res
         self.upstream_tx.resolution = res
 
-        self.upstream_tx.rest_upstream_sender = dest.sender
+        self.upstream_tx.rest_upstream_sender = dest.rest_upstream_sender
 
         opt = self.upstream_tx.options
         assert opt is None or opt == dest.options

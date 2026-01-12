@@ -20,12 +20,14 @@ from koukan.sender import Sender
 class RecipientRouterFactory:
     router_policies : Dict[str, Callable[[dict], RoutingPolicy]]
     rest_endpoints : Dict[str, Dict[str, Any]]
+    sender_factory : Callable[[Sender], Optional[Sender]]
 
-    def __init__(self, rest_endpoints):
+    def __init__(self, rest_endpoints, sender_factory):
         self.router_policies = {}
         self.rest_endpoints = rest_endpoints
-        self.add_router_policy('dest_domain', self.router_policy_dest_domain)
-        self.add_router_policy('address_list', self.router_policy_address_list)
+        self.sender_factory = sender_factory
+        self.add_router_policy('dest_domain', self._policy_dest_domain)
+        self.add_router_policy('address_list', self._policy_address_list)
 
     def _load_user_module(self, name, mod):
         colon = mod.find(':')
@@ -62,7 +64,7 @@ class RecipientRouterFactory:
             logging.debug('%s %s', name, mod)
             self._load_router_policy(name, mod)
 
-    def router_policy_dest_domain(self, policy_yaml):
+    def _policy_dest_domain(self, policy_yaml):
         return DestDomainPolicy(self._route_destination(policy_yaml),
                                 policy_yaml.get('dest_port', 25))
 
@@ -70,21 +72,32 @@ class RecipientRouterFactory:
         dest = yaml.get('destination', None)
         if dest is None:
             return None
-        endpoint_yaml = None
-        if endpoint := dest.get('endpoint', None):
-            endpoint_yaml = self.rest_endpoints[endpoint]
+        rest_endpoint_yaml = None
+        if (endpoint := dest.get('endpoint', None)) is None:
+            return None
+        if (rest_endpoint_yaml := self.rest_endpoints.get(endpoint, None)
+            ) is None:
+            return None
 
         hosts = None
         if 'host_list' in dest:
             hosts = [HostPort.from_yaml(h) for h in dest['host_list']]
+
+        if (sender_name := rest_endpoint_yaml.get('sender', None)) is None:
+            return None
+        rest_upstream_sender = Sender(
+            sender_name, rest_endpoint_yaml.get('tag', None))
+        # NOTE router -> gw uses sender 'router' which isn't defined in
+        # the router yaml
+        if (s := self.sender_factory(rest_upstream_sender)) is not None:
+            rest_upstream_sender = s
         return Destination(
-            rest_endpoint = endpoint_yaml.get('endpoint', None),
-            sender = Sender(endpoint_yaml['sender'],
-                            endpoint_yaml.get('tag', None)),
+            rest_endpoint = rest_endpoint_yaml.get('endpoint', None),
+            rest_upstream_sender = rest_upstream_sender,
             options = dest.get('options', None),
             remote_host = hosts)
 
-    def router_policy_address_list(self, policy_yaml):
+    def _policy_address_list(self, policy_yaml):
         return AddressListPolicy(
             policy_yaml.get('domains', []),
             policy_yaml.get('delimiter', None),
