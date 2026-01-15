@@ -1,18 +1,24 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
+from typing import List, Optional, Type
 import logging
 from enum import IntEnum
+import string
 
 from tempfile import TemporaryFile
-from email.parser import BytesParser
+from email.parser import BytesParser, Parser
 import email.policy
+from email.contentmanager import ContentManager, get_non_text_content
 from email.errors import (
-    MissingHeaderBodySeparatorDefect )
+    MessageDefect,
+    MissingHeaderBodySeparatorDefect,
+    NonASCIILocalPartDefect,
+    NonPrintableDefect,
+    UndecodableBytesDefect )
 
 from koukan.blob import Blob
-from koukan.filter import TransactionMetadata
+from koukan.filter import TransactionMetadata, get_esmtp_param
 from koukan.filter_chain import Filter, FilterResult
 
 class MessageValidationFilterResult:
@@ -21,15 +27,15 @@ class MessageValidationFilterResult:
     class Status(IntEnum):
         # major problem with headers e.g. MissingHeaderBodySeparatorDefect
         NONE = 0
-        # headers minimally well-formed
+        # all headers can be parsed rfc5322 optional-field
+        # https://www.rfc-editor.org/rfc/rfc5322#section-3.6.8
         BASIC = 1
         # exactly 1 well-formed From, Date, Message-ID
+        # headers do not contain non-printing ascii, utf8 <=> SMTPUTF8
         # suggested default for ingress
         MEDIUM = 2
         # no defects reported by email parser
         # suggested default for submission
-        # we may relax specific defects that are found to be pedantic
-        # in practice
         HIGH = 3
     status : Status
 
@@ -56,28 +62,83 @@ class MessageValidationFilterResult:
             return self.err
         assert False, 'err not populated'
 
+# returns true if d contains an instance of any class in dc
+def _has_defect(defects : List[MessageDefect], defect_classes : List[Type]):
+    for defect in defects:
+        for defect_class in defect_classes:
+            if isinstance(defect, defect_class):
+                return True
+    return False
+
+# returns true if any element of d is not an instance of any class in dc
+def _has_other_defect(defects : List[MessageDefect],
+                      defect_classes : List[Type]):
+    for defect in defects:
+        for defect_class in defect_classes:
+            if isinstance(defect, defect_class):
+                break
+        else:
+            return True
+    return False
+
+def _get_all(message, header_name):
+    headers = message.get_all(header_name)
+    if not headers:
+        return []
+    return headers
+
 class MessageValidationFilter(Filter):
+    """classifies message format (rfc822/mime) problems
+
+    This filter parses rfc822/mime from tx.body and classifies the
+    message into a small number of "validity level" buckets which it
+    populates in tx.filter_output for consumption by an upstream
+    policy filter.
+
+    The underlying python email.parser decorates components of the
+    message with _defects_. This is a bit of an experiment to see if
+    it is feasible to enumerate known false positive defects from the
+    python parser (i.e. incorrectly reporting a defect on a valid message) and
+    fail-closed.
+    """
     max_header_bytes : int
     max_mime_tree_depth : int
+    content_manager : ContentManager
 
     def __init__(self, max_header_bytes = 1048576,
                  max_mime_tree_depth = 20):
         self.max_header_bytes = max_header_bytes
         self.max_mime_tree_depth = max_mime_tree_depth
 
-    def _check_mime_tree_defects(self, part, depth):
+        # use custom content manager with catchall so get_content()
+        # doesn't throw on unknown mime type
+        self.content_manager = ContentManager()
+        self.content_manager.add_get_handler('', get_non_text_content)
+
+    # returns true if any element of the mime tree rooted at part
+    # contains defects
+    def _check_mime_tree_defects(self, part, accepted_header_defects, depth):
+        for k,v in part.items():
+            if _has_other_defect(v.defects, accepted_header_defects):
+                logging.debug(v.defects)
+                return True
+
+        if not part.is_multipart():
+            c = part.get_content(content_manager=self.content_manager)
+
+        # email.parser doesn't decode cte until you call get_content()
+        # so if e.g. there are invalid chars in the base64, you won't
+        # get the defect until after get_content()
         if part.defects:
             return True
-
-        for k,v in part.items():
-            if v.defects:
-                return True
+        if part.is_multipart() and (depth + 1) > self.max_mime_tree_depth:
+            return True
 
         for subpart in part.iter_parts():
-            if (depth + 1) > self.max_mime_tree_depth:
+            if self._check_mime_tree_defects(
+                    subpart, accepted_header_defects, depth + 1):
                 return True
-            if self._check_mime_tree_defects(subpart, depth + 1):
-                return True
+
         return False
 
     def on_update(self, tx_delta : TransactionMetadata):
@@ -95,65 +156,88 @@ class MessageValidationFilter(Filter):
         return FilterResult()
 
     def _check(self, body_blob : Blob) -> MessageValidationFilterResult:
+        assert self.downstream_tx is not None
+        assert self.downstream_tx.mail_from is not None
+
         result = MessageValidationFilterResult()
+        smtputf8 = get_esmtp_param(
+            self.downstream_tx.mail_from.esmtp, 'smtputf8') is not None
+        logging.debug(smtputf8)
+
         with TemporaryFile('w+b') as file:
             b = body_blob.pread(0)
             assert b is not None
             # If we can't find the end of the headers in the first 1M,
             # the message is probably garbage. Don't risk some cpu/mem
             # complexity blowup trying to parse it.
-            if (end_of_headers := b.find(b'\r\n\r\n', 0, self.max_header_bytes)) == -1:
+            end_of_headers = b.find(b'\r\n\r\n', 0, self.max_header_bytes)
+            if end_of_headers == -1:
                 result.add_error(
                     MessageValidationFilterResult.Status.BASIC,
-                    'grossly excessive/malformed headers')
+                    'couldn\'t find end of rfc822 headers in %d' %
+                    self.max_header_bytes)
                 return result
             file.write(b)
             file.flush()
             file.seek(0)
-            # TODO policy.SMTPUTF8 per tx.mail_from.esmtp
-            # TODO BytesParser uses
+
+            # NOTE BytesParser uses
             # TextIOWrapper(fp, encoding='ascii', errors='surrogateescape')
-            # under the hood, this needs to use Parser at least for smtputf8?
-            parser = BytesParser(policy=email.policy.SMTP)
+            # under the hood. Using a text file seems to somehow end up with
+            # unicode escapes \u4e16\u754c in the content of 8bit text parts?
+            policy=email.policy.SMTPUTF8 if smtputf8 else email.policy.SMTP
+            parser = BytesParser(policy=policy)
             parsed = parser.parse(file)
 
-        # TODO parser seems to ignore non-printing ascii (< 0x20 other
-        # than 0xd/CR 0xa/LF) in unstructured headers. Should we?
-        # note: string.printable includes 0xb/VTAB and 0xc/FF
+            full_headers = b[0:end_of_headers + 4]
 
-        for d in parsed.defects:
-            if isinstance(d, MissingHeaderBodySeparatorDefect):
-                result.add_error(MessageValidationFilterResult.Status.BASIC,
-                                 'MissingHeaderBodySeparatorDefect')
-                return result
+        if _has_defect(parsed.defects, [MissingHeaderBodySeparatorDefect]):
+            result.add_error(MessageValidationFilterResult.Status.BASIC,
+                             'MissingHeaderBodySeparatorDefect')
+            return result
 
-        for k,v in parsed.items():
-            if k.lower() == 'received':
-                result.received_header_count += 1
+        result.received_header_count = len(_get_all(parsed, 'received'))
 
-        headers = set()
-        for k,v in parsed.items():
-            for header in ['from', 'date', 'message-id']:
-                if k.lower() == header:
-                    if header in headers or v.defects:
-                        result.add_error(
-                            MessageValidationFilterResult.Status.MEDIUM,
-                            'invalid ' + header + str(v.defects))
-                        return result
-                    else:
-                        headers.add(header)
+        # email.parser seems to accept any octet value outside of
+        # structured headers. Rank the message BASIC if the overall
+        # headers aren't valid utf8 or printable ascii per the
+        # smtputf8 esmtp capability. I don't know how prevalent this
+        # still is in the wild. It may be that some users want a "lax
+        # utf8" mode that accepts utf8 in most places in the headers.
+        try:
+            decoded = full_headers.decode(
+                'utf-8' if smtputf8 else 'ascii', errors='strict')
+            for ch in decoded:
+                if ord(ch) < 0x20 and ch not in string.printable:
+                    raise NonPrintableDefect
+        except Exception as ex:
+            result.add_error(MessageValidationFilterResult.Status.MEDIUM,
+                             'invalid text encoding in headers')
+            return result
 
+        # parser emits defects for some valid smtputf8 cases
+        # e.g. address headers
+        # https://github.com/python/cpython/issues/81074
+        accepted_defects = [NonASCIILocalPartDefect,
+                            UndecodableBytesDefect] if smtputf8 else []
         if result.status >= MessageValidationFilterResult.Status.MEDIUM:
-            for header in ['from', 'date', 'message-id']:
-                if header not in headers:
+            for header_name in ['from', 'date', 'message-id']:
+                headers = _get_all(parsed, header_name)
+                if len(headers) != 1:
                     result.add_error(
                         MessageValidationFilterResult.Status.MEDIUM,
-                        'missing ' + header)
-                    return result
+                        'missing/multiple ' + header_name)
+                    break
+                else:
+                    header = headers[0]
+                    if _has_other_defect(header.defects, accepted_defects):
+                        result.add_error(
+                            MessageValidationFilterResult.Status.MEDIUM,
+                            'invalid ' + header_name + str(header.defects))
+                        break
 
-        # TODO lower max_header_bytes for HIGH?
         if result.status >= MessageValidationFilterResult.Status.HIGH:
-            if self._check_mime_tree_defects(parsed, 0):
+            if self._check_mime_tree_defects(parsed, accepted_defects, 0):
                 result.add_error(
                     MessageValidationFilterResult.Status.HIGH, 'mime tree')
                 return result

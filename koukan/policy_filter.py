@@ -66,6 +66,11 @@ class PolicyFilter(Filter):
 
     def _check_body(self, tx, tx_delta, out):
         valid = tx.get_filter_output(MessageValidationFilter.fullname())
+        # xxx validation filter early returns if the body is not blob
+        # (ie message builder in submission chains)
+        # this shouldn't silently fail open, don't know if it's
+        # missing because it was not enabled in yaml or because of a
+        # bug in the filter
         if valid is None:
             return True
         if not isinstance(valid, MessageValidationFilterResult):

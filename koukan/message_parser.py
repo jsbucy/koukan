@@ -3,6 +3,7 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import logging
 
+from email.contentmanager import ContentManager, get_non_text_content
 from email.message import EmailMessage, MIMEPart
 from email.parser import BytesParser
 from email.headerregistry import (
@@ -38,6 +39,7 @@ class MessageParser:
     blob_factory : BlobFactory
     max_inline : int
     max_depth : int
+    content_manager : ContentManager
 
     def __init__(self, blob_factory : BlobFactory,
                  max_inline=1048576,
@@ -68,6 +70,11 @@ class MessageParser:
         }
 
         self.out = ParsedMessage()
+
+        # use custom content manager with catchall so get_content()
+        # doesn't throw on unknown mime type
+        self.content_manager = ContentManager()
+        self.content_manager.add_get_handler('', get_non_text_content)
 
     def _parse_address_header(self, header : BaseHeader):
         assert isinstance(header, AddressHeader)
@@ -141,7 +148,7 @@ class MessageParser:
             content_str = part.get_content()
             content = content_str.encode('utf-8')
         else:
-            content = part.get_content()
+            content = part.get_content(content_manager=self.content_manager)
 
         blob.append_data(0, content, len(content))
         out['content'] = { 'create_id': blob.rest_id() }

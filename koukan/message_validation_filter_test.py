@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from koukan.blob import InlineBlob
 from koukan.filter import (
+    EsmtpParam,
+    Mailbox,
     TransactionMetadata )
 from koukan.filter_chain import FilterResult
 
@@ -15,7 +17,7 @@ from koukan.message_validation_filter import (
 
 Status = MessageValidationFilterResult.Status
 
-class ReceivedHeaderFilterTest(unittest.TestCase):
+class MessageValidationFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(
             level=logging.DEBUG,
@@ -23,27 +25,58 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             '%(message)s')
 
     def test_vec(self):
-        inputs : List[Tuple[str, Status, int]] = [
-            ('testdata/trivial.msg', Status.HIGH, 1),
-            ('testdata/multipart.msg', Status.HIGH, 0),
-            ('testdata/bad_date.msg', Status.BASIC, 0),
-            ('testdata/bad_headers.msg', Status.NONE, 0),
-            ('testdata/bad_multipart.msg', Status.MEDIUM, 0),
-            ('testdata/missing_headers.msg', Status.BASIC, 1),
+        # filename, expected status, expected received header count,
+        # SMTPUTF8 esmtp capability
+        inputs : List[Tuple[str, Status, int, bool]] = [
+            # problems with overall headers
+            # MissingHeaderBodySeparatorDefect
+            ('testdata/bad_headers.msg', Status.NONE, 0, False),
+            # ascii control chars
+            ('testdata/ascii_ctl_headers.msg', Status.BASIC, 1, False),
+            ('testdata/ascii_ctl_headers.msg', Status.BASIC, 1, True),
+            # high-bit chars that are not valid utf8
+            ('testdata/8bit_headers.msg', Status.BASIC, 1, False),
+            ('testdata/8bit_headers.msg', Status.BASIC, 1, True),
+            # valid utf8 with/without SMTPUTF8
+            ('testdata/utf8_headers.msg', Status.BASIC, 1, False),
+            ('testdata/utf8_headers.msg', Status.HIGH, 1, True),
+            ('testdata/utf8_local_part.msg', Status.BASIC, 1, False),
+            ('testdata/utf8_local_part.msg', Status.HIGH, 1, True),
+
+            # problems with required headers: from/date/message-id
+            ('testdata/bad_from.msg', Status.BASIC, 1, False),
+            ('testdata/bad_date.msg', Status.BASIC, 0, False),
+            ('testdata/missing_headers.msg', Status.BASIC, 1, False),
+
+            # problems with mime tree
+            ('testdata/bad_cc.msg', Status.MEDIUM, 1, False),
+            ('testdata/bad_multipart.msg', Status.MEDIUM, 0, False),
+            #
+            ('testdata/unknown_content_type.msg', Status.HIGH, 0, False),
+
+            # valid
+            ('testdata/trivial.msg', Status.HIGH, 1, False),
+            ('testdata/multipart.msg', Status.HIGH, 0, False),
         ]
 
         try:
-            for filename,status,count in inputs:
+            for filename,status,count,smtputf8 in inputs:
+                logging.debug(filename)
                 with open(filename, 'rb') as f:
                     b = f.read()
-                delta = TransactionMetadata(body = InlineBlob(b, last=True))
+                esmtp = [EsmtpParam('SMTPUTF8')] if smtputf8 else []
+                delta = TransactionMetadata(
+                    mail_from = Mailbox('alice@example.com', esmtp=esmtp),
+                    body = InlineBlob(b, last=True))
                 filter = MessageValidationFilter()
                 filter.wire_downstream(TransactionMetadata())
+                filter.downstream_tx.merge_from(delta)
 
                 filter.on_update(delta)
                 self.assertIsNotNone(
-                    out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
-                logging.debug(out.err)
+                    out := filter.downstream_tx.filter_output.get(
+                        filter.fullname(), None))
+                logging.debug('%s %s', out.status, out.err)
                 self.assertEqual(status, out.status)
                 self.assertEqual(count, out.received_header_count)
         except:
@@ -53,43 +86,57 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
     def test_max_headers(self):
          with open('testdata/multipart.msg', 'rb') as f:
              b = f.read()
-         delta = TransactionMetadata(body = InlineBlob(b, last=True))
+         delta = TransactionMetadata(
+             mail_from = Mailbox('alice@example.com'),
+             body = InlineBlob(b, last=True))
 
          filter = MessageValidationFilter(max_header_bytes=20)
          filter.wire_downstream(TransactionMetadata())
+         filter.downstream_tx.merge_from(delta)
          filter.on_update(delta)
          self.assertIsNotNone(
-             out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
+             out := filter.downstream_tx.filter_output.get(
+                 filter.fullname(), None))
          self.assertEqual(Status.NONE, out.status)
          self.assertEqual(
-             'grossly excessive/malformed headers',
+             'couldn\'t find end of rfc822 headers in 20',
              out.check_validity(Status.BASIC))
 
 
          filter = MessageValidationFilter(max_header_bytes=200)
-         filter.wire_downstream(TransactionMetadata())
+         filter.wire_downstream(TransactionMetadata(
+             mail_from = Mailbox('alice@example.com')))
+         filter.downstream_tx.merge_from(delta)
          filter.on_update(delta)
          self.assertIsNotNone(
-             out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
+             out := filter.downstream_tx.filter_output.get(
+                 filter.fullname(), None))
          self.assertIsNone(out.check_validity(Status.HIGH))
 
     def test_max_nesting(self):
          with open('testdata/multipart.msg', 'rb') as f:
              b = f.read()
-         delta = TransactionMetadata(body = InlineBlob(b, last=True))
+         delta = TransactionMetadata(
+             mail_from = Mailbox('alice@example.com'),
+             body = InlineBlob(b, last=True))
 
          filter = MessageValidationFilter(max_mime_tree_depth=1)
          filter.wire_downstream(TransactionMetadata())
+         filter.downstream_tx.merge_from(delta)
          filter.on_update(delta)
          self.assertIsNotNone(
-             out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
+             out := filter.downstream_tx.filter_output.get(
+                 filter.fullname(), None))
          self.assertEqual('mime tree', out.check_validity(Status.HIGH))
 
          filter = MessageValidationFilter(max_mime_tree_depth=5)
-         filter.wire_downstream(TransactionMetadata())
+         filter.wire_downstream(TransactionMetadata(
+             mail_from = Mailbox('alice@example.com')))
+         filter.downstream_tx.merge_from(delta)
          filter.on_update(delta)
          self.assertIsNotNone(
-             out := filter.downstream_tx.filter_output.get(filter.fullname(), None))
+             out := filter.downstream_tx.filter_output.get(
+                 filter.fullname(), None))
          self.assertIsNone(out.check_validity(Status.HIGH))
 
 

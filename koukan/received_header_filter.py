@@ -62,6 +62,7 @@ class ReceivedHeaderFilter(ProxyFilter):
         if tx.smtp_meta is not None:
             ehlo = tx.smtp_meta.get('ehlo_host', None)
             assert tx.mail_from is not None
+            # https://www.iana.org/assignments/smtp/smtp.xhtml#smtp-mail-transmission-types
             if tx.mail_from.esmtp and get_esmtp_param(
                     tx.mail_from.esmtp, 'smtputf8') is not None:
                 with_protocol = 'UTF8SMTP'
