@@ -21,13 +21,25 @@ class RemoteHostFilterResult:
     status : Status
     remote_hostname : Optional[str] = None
     fcrdns : Optional[bool] = None
+    ehlo_alignment : bool
 
     def __init__(self, status : Status,
                  remote_hostname : Optional[str] = None,
-                 fcrdns : Optional[bool] = None):
+                 fcrdns : Optional[bool] = None,
+                 ehlo_alignment = False):
         self.status = status
         self.remote_hostname = remote_hostname
         self.fcrdns = fcrdns
+        self.ehlo_alignment = ehlo_alignment
+
+    def match(self, yaml : dict):
+        if (f := yaml.get('fcrdns', None)) is not None:
+            if bool(self.fcrdns) == f:
+                return True
+        if (e := yaml.get('ehlo_alignment', None)) is not None:
+            if self.ehlo_alignment == e:
+                return True
+        return False
 
 class RemoteHostFilter(Filter):
     def __init__(self, resolver : Optional[Resolver] = None):
@@ -96,8 +108,17 @@ class RemoteHostFilter(Filter):
                 fcrdns))
             return Response(450, 'RemoteHostFilter fwd err')
 
+        ehlo_alignment = False
+        if fcrdns:
+            if (tx.smtp_meta is not None and
+                ((ehlo := tx.smtp_meta.get('ehlo_host', None)) is not None) and
+                # XXX should this drop trailing dot from remote_hostname?
+                ehlo == remote_hostname.rstrip('.')):
+                ehlo_alignment = True
+
         tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-            RemoteHostFilterResult.Status.OK, remote_hostname, fcrdns))
+            RemoteHostFilterResult.Status.OK, remote_hostname, fcrdns,
+            ehlo_alignment))
 
         logging.debug('RemoteHostFilter._resolve() '
                       'remote_hostname=%s fcrdns=%s',

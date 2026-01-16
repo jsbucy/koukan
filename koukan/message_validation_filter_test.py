@@ -79,6 +79,15 @@ class MessageValidationFilterTest(unittest.TestCase):
                 logging.debug('%s %s', out.status, out.err)
                 self.assertEqual(status, out.status)
                 self.assertEqual(count, out.received_header_count)
+                if status < Status.HIGH:
+                    threshold = Status(status+1)
+                    self.assertTrue(out.match({'validity_threshold': threshold.name}))
+                else:
+                    self.assertFalse(out.match({'validity_threshold': status.name}))
+                self.assertTrue(out.match({
+                    'max_received_headers': count-1}))
+
+
         except:
             logging.debug(filename)
             raise

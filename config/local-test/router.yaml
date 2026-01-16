@@ -69,9 +69,12 @@ endpoint:
   - filter: relay_auth
   #  smtp_auth: true
   - filter: message_validation
-  - filter: policy
-    mode: SUBMISSION
-    min_validity: HIGH
+  - filter: policy_action
+    match:
+      - filter_name: koukan.message_validation_filter.MessageValidationFilter
+        min_validity: HIGH
+    action: REJECT
+    tag: message_validation
   - filter: exploder
     output_chain: submission
     msa: true
@@ -97,9 +100,12 @@ endpoint:
   # chain before message_builder to not parse its output which we
   # assume is good.
   - filter: message_validation
-  - filter: policy
-    mode: SUBMISSION
-    min_validity: HIGH
+  - filter: policy_action
+    match:
+      - filter_name: koukan.message_validation_filter.MessageValidationFilter.MessageValidationFilter
+        min_validity: HIGH
+    action: REJECT
+    tag: message_validation
    
   # message_builder must be chained before anything that wants to
   # access/modify the message: received_header, dkim
@@ -187,8 +193,20 @@ endpoint:
       # dest == None: reject
   - filter: remote_host
   - filter: message_validation
-  - filter: policy
-    mode: INGRESS
+  - filter: policy_action
+    match:
+      - filter_name: koukan.remote_host_filter.RemoteHostFilter
+      # xxx are these conditions and? or? filter-dependent?
+      - fcrdns: false
+      - ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
+  - filter: policy_action
+    match:
+      - filter_name: koukan.message_validation_filter.MessageValidationFilter
+        min_validity: MEDIUM
+    action: REJECT
+    tag: message_validation
   - filter: exploder
     msa: false
     output_chain: ingress
@@ -244,8 +262,22 @@ endpoint:
       # no domains: match everything
       # dest == None: reject
   - filter: message_validation
-  - filter: policy
-    mode: INGRESS
+
+  - filter: policy_action
+    match:
+      - filter_name: koukan.remote_host_filter.RemoteHostFilter
+      # xxx are these conditions and? or? filter-dependent?
+      - fcrdns: false
+      - ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
+  - filter: policy_action
+    match:
+      - filter_name: koukan.message_validation_filter.MessageValidationFilter
+        validity_threshold: MEDIUM
+    action: REJECT
+    tag: message_validation
+
   - filter: add_route
     sender: sor
   - filter: message_parser

@@ -458,6 +458,29 @@ class End2EndTest(unittest.TestCase):
         return self._test_add_route({'output_chain': 'sink',
                                      'store_and_forard': True})
 
+    def test_message_rejection_submission(self):
+        self._configure_and_run()
+
+        sender = Sender(self.router_submission_url,
+                        'alice@example.com',
+                        body_filename='testdata/8bit_headers.msg')
+        self.assertEqual('failure', sender.send('bob@example.com'))
+
+    def test_message_rejection_ingress(self):
+        with open('testdata/8bit_headers.msg', 'rb') as f:
+            raw = f.read()
+        self._configure_and_run()
+
+        rcpt_resp, data_resp = send_smtp(
+            'localhost', self.gateway_mx_port, 'localhost',
+            'alice@example.com', ['bob@example.com'], raw=raw)
+        self.assertEqual(250, rcpt_resp[0][0])
+        self.assertEqual(550, data_resp[0])
+        self.assertEqual(
+            b'5.6.0 message rejected message_validation', data_resp[1])
+
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')

@@ -62,6 +62,15 @@ class MessageValidationFilterResult:
             return self.err
         assert False, 'err not populated'
 
+    def match(self, yaml : dict):
+        if (r := yaml.get('max_received_headers', None)) is not None:
+            if self.received_header_count > r:
+                return True
+        if (v := yaml.get('validity_threshold', None)) is not None:
+            if self.status < MessageValidationFilterResult.Status[v]:
+                return True
+        return False
+
 # returns true if d contains an instance of any class in dc
 def _has_defect(defects : List[MessageDefect], defect_classes : List[Type]):
     for defect in defects:
@@ -143,6 +152,7 @@ class MessageValidationFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream_tx
+
         assert tx is not None
         # TODO maybe don't need to do this e.g. in the upstream chain
         # if we already did it in the downstream chain. OTOH maybe we
@@ -162,7 +172,6 @@ class MessageValidationFilter(Filter):
         result = MessageValidationFilterResult()
         smtputf8 = get_esmtp_param(
             self.downstream_tx.mail_from.esmtp, 'smtputf8') is not None
-        logging.debug(smtputf8)
 
         with TemporaryFile('w+b') as file:
             b = body_blob.pread(0)

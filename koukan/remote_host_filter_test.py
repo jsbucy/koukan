@@ -28,7 +28,7 @@ flags QR AA RD
 ;QUESTION
 4.3.2.1.in-addr.arpa. IN PTR
 ;ANSWER
-4.3.2.1.in-addr.arpa. 1 IN PTR tachygraph.gloop.org.
+4.3.2.1.in-addr.arpa. 1 IN PTR example.com.
 ;AUTHORITY
 ;ADDITIONAL
 """
@@ -50,16 +50,16 @@ opcode QUERY
 rcode NOERROR
 flags QR AA RD
 ;QUESTION
-tachygraph.gloop.org. IN A
+example.com. IN A
 ;ANSWER
-tachygraph.gloop.org. 1 IN A 1.2.3.4
+example.com. 1 IN A 1.2.3.4
 ;AUTHORITY
 ;ADDITIONAL
 """
 
 a_message = dns.message.from_text(a_message_text)
 a_answer = Answer(
-    dns.name.from_text('sandbox.gloop.org.'),
+    dns.name.from_text('example.com.'),
     RdataType.A,
     RdataClass.IN,
     a_message)  # type: ignore[arg-type]
@@ -72,7 +72,7 @@ flags QR AA RD
 ;QUESTION
 f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.ip6.arpa. IN PTR
 ;ANSWER
-f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.ip6.arpa. IN PTR tachygraph.gloop.org.
+f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.f.e.d.c.b.a.9.8.7.6.5.4.3.2.1.0.ip6.arpa. IN PTR example.com.
 ;AUTHORITY
 ;ADDITIONAL
 """
@@ -89,16 +89,16 @@ opcode QUERY
 rcode NOERROR
 flags QR AA RD
 ;QUESTION
-tachygraph.gloop.org. IN AAAA
+example.com. IN AAAA
 ;ANSWER
-tachygraph.gloop.org. 1 IN AAAA 0123:4567:89ab:cdef:0123:4567:89ab:cdef
+example.com. 1 IN AAAA 0123:4567:89ab:cdef:0123:4567:89ab:cdef
 ;AUTHORITY
 ;ADDITIONAL
 """
 
 aaaa_message = dns.message.from_text(aaaa_message_text)
 aaaa_answer = Answer(
-    dns.name.from_text('sandbox.gloop.org.'),
+    dns.name.from_text('example.com.'),
     RdataType.AAAA,
     RdataClass.IN,
     aaaa_message)  # type: ignore[arg-type]
@@ -113,22 +113,26 @@ class RemoteHostFilterTest(unittest.TestCase):
 
     def _test(self, addr,
               answers : List[Union[Answer, Exception]],
-              exp_hostname, exp_fcrdns, exp_err=False):
+              exp_hostname, exp_fcrdns, exp_err=False,
+              exp_ehlo_alignment=False):
         resolver = FakeResolver(answers)
         filter = RemoteHostFilter(resolver)
         tx = TransactionMetadata()
         filter.wire_downstream(tx)
 
-        delta = TransactionMetadata(
-            remote_host=HostPort(addr, 12345),
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')])
-        tx.merge_from(delta)
-        filter.on_update(delta)
+        prev = tx.copy()
+        tx.smtp_meta = {'ehlo_host': 'example.com'}
+        tx.remote_host = HostPort(addr, 12345)
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        filter.on_update(prev.delta(tx))
         assert tx.filter_output is not None
         self.assertIsNotNone(
             rh := tx.filter_output[RemoteHostFilter.fullname()])
-
+        self.assertTrue(
+            rh.match({'fcrdns': exp_fcrdns is True}))
+        self.assertTrue(
+            rh.match({'ehlo_alignment': exp_ehlo_alignment}))
         logging.info('%s %s', rh.remote_hostname, rh.fcrdns)
         if exp_err:
             assert tx.mail_response is not None
@@ -142,13 +146,13 @@ class RemoteHostFilterTest(unittest.TestCase):
         self._test(
             '1.2.3.4',
             [ptr_answer, a_answer],
-            'tachygraph.gloop.org.', True)
+            'example.com.', True, exp_ehlo_alignment=True)
 
     def test_success_ipv6(self):
         self._test(
             '0123:4567:89ab:cdef:0123:4567:89ab:cdef',
             [ptr6_answer, aaaa_answer],
-            'tachygraph.gloop.org.', True)
+            'example.com.', True, exp_ehlo_alignment=True)
 
     def test_nx_ptr(self):
         self._test('1.2.3.4',
@@ -160,7 +164,7 @@ class RemoteHostFilterTest(unittest.TestCase):
                    [ptr_answer,
                     dns.resolver.NXDOMAIN(),   # A
                     dns.resolver.NXDOMAIN()],  # AAAA
-                   'tachygraph.gloop.org.', False)
+                   'example.com.', False)
 
     def test_servfail_ptr(self):
         self._test('1.2.3.4',
@@ -173,7 +177,7 @@ class RemoteHostFilterTest(unittest.TestCase):
                    [ptr_answer,
                     dns.resolver.NoNameservers(),   # A
                     dns.resolver.NoNameservers()],  # AAAA
-                   'tachygraph.gloop.org.', False,
+                   'example.com.', False,
                    exp_err=True)
 
 
