@@ -72,7 +72,7 @@ endpoint:
   - filter: policy_action
     match:
       - filter_name: koukan.message_validation_filter.MessageValidationFilter
-        min_validity: HIGH
+        validity_threshold: HIGH
     action: REJECT
     tag: message_validation
   - filter: exploder
@@ -103,7 +103,7 @@ endpoint:
   - filter: policy_action
     match:
       - filter_name: koukan.message_validation_filter.MessageValidationFilter.MessageValidationFilter
-        min_validity: HIGH
+        validity_threshold: HIGH
     action: REJECT
     tag: message_validation
    
@@ -204,7 +204,7 @@ endpoint:
   - filter: policy_action
     match:
       - filter_name: koukan.message_validation_filter.MessageValidationFilter
-        min_validity: MEDIUM
+        validity_threshold: MEDIUM
     action: REJECT
     tag: message_validation
   - filter: exploder
