@@ -436,6 +436,8 @@ _tx_fields = [
     # RecipientRouterFilter -> RestEndpoint
     TxField('rest_upstream_sender', validity=None),
     TxField('filter_output', validity=None, is_dict=True),
+    # cleared after each OutputHandler/FilterChain cycle
+    TxField('ephemeral_filter_output', validity=None, is_dict=True),
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -489,6 +491,7 @@ class TransactionMetadata:
     # koukan.remote_host_filter.RemoteHostFilter
     # value is impl-specific type mutually known by producer and consumer
     filter_output : Optional[Dict[str, Any]] = None
+    ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
     def __init__(self, 
                  local_host : Optional[HostPort] = None,
@@ -932,11 +935,24 @@ class TransactionMetadata:
         if self.filter_output is None:
             self.filter_output = {}
         self.filter_output[f] = v
+        return v
 
     def get_filter_output(self, f) -> Any:
         if self.filter_output is None:
             return None
         return self.filter_output.get(f, None)
+
+    def add_ephemeral_filter_output(self, f, v):
+        if self.ephemeral_filter_output is None:
+            self.ephemeral_filter_output = {}
+        self.ephemeral_filter_output[f] = v
+        return v
+
+    def get_ephemeral_filter_output(self, f) -> Any:
+        if self.ephemeral_filter_output is None:
+            return None
+        return self.ephemeral_filter_output.get(f, None)
+
 
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not

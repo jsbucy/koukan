@@ -32,16 +32,20 @@ from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.sender import Sender
-from koukan.policy_action_filter import PolicyActionFilter
 from koukan.message_validation_filter import MessageValidationFilter
+
+from koukan.policy_factory import PolicyFactory
 
 StorageWriterFactory = Callable[[Sender, bool],Optional[AsyncFilter]]
 
+# really registry/factory for Filter impls that don't have a
+# specialized factory implementation
 class FilterChainWiring:
     exploder_output_factory : Optional[StorageWriterFactory] = None
     router_factory : Optional[RecipientRouterFactory] = None
     filter_chain_factory : Optional[FilterChainFactory] = None
     rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
+    policy_factory : Optional[PolicyFactory] = None
 
     def __init__(
             self,
@@ -58,6 +62,8 @@ class FilterChainWiring:
         self.router_factory = RecipientRouterFactory(
             factory.rest_endpoint_yaml, factory.get_sender)
         self.router_factory.load_policies(yaml)
+        self.policy_factory = PolicyFactory()
+        self.policy_factory.load_matchers(yaml)
 
         factory.add_filter('rest_output', self.rest_output)
         factory.add_filter('dkim', self.dkim)
@@ -74,7 +80,8 @@ class FilterChainWiring:
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
         factory.add_filter('exploder_upstream', self.exploder_upstream_yaml)
-        factory.add_filter('policy_action', self.policy_action)
+        factory.add_filter(
+            'policy_action', self.policy_factory.build_policy_action)
         factory.add_filter('message_validation', self.message_validation)
 
     def exploder_upstream(self, sender : Sender,
@@ -234,9 +241,6 @@ class FilterChainWiring:
 
     def message_builder(self, yaml, sender : Sender):
         return MessageBuilderFilter()
-
-    def policy_action(self, yaml, sender : Sender):
-        return PolicyActionFilter(yaml)
 
     def message_validation(self, yaml, sender : Sender):
         return MessageValidationFilter()

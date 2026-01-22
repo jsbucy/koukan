@@ -15,6 +15,8 @@ from koukan.message_validation_filter import (
     MessageValidationFilter,
     MessageValidationFilterResult )
 
+from koukan.matcher_result import MatcherResult
+
 Status = MessageValidationFilterResult.Status
 
 class MessageValidationFilterTest(unittest.TestCase):
@@ -78,14 +80,15 @@ class MessageValidationFilterTest(unittest.TestCase):
                         filter.fullname(), None))
                 logging.debug('%s %s', out.status, out.err)
                 self.assertEqual(status, out.status)
-                self.assertEqual(count, out.received_header_count)
+                if status > Status.NONE:
+                    self.assertEqual(count, out.received_header_count)
+                    self.assertEqual(MatcherResult.MATCH, out.match({
+                        'max_received_headers': count-1}))
                 if status < Status.HIGH:
                     threshold = Status(status+1)
-                    self.assertTrue(out.match({'validity_threshold': threshold.name}))
+                    self.assertEqual(MatcherResult.MATCH, out.match({'validity_threshold': threshold.name}))
                 else:
-                    self.assertFalse(out.match({'validity_threshold': status.name}))
-                self.assertTrue(out.match({
-                    'max_received_headers': count-1}))
+                    self.assertEqual(MatcherResult.NO_MATCH, out.match({'validity_threshold': status.name}))
 
 
         except:
@@ -148,6 +151,22 @@ class MessageValidationFilterTest(unittest.TestCase):
                  filter.fullname(), None))
          self.assertIsNone(out.check_validity(Status.HIGH))
 
+    def test_smoke(self):
+        with open('testdata/trivial.msg', 'rb') as f:
+            b = f.read()
+        delta = TransactionMetadata(
+            mail_from = Mailbox('alice@example.com'),
+            body = InlineBlob(b, last=True))
+        filter = MessageValidationFilter()
+        filter.wire_downstream(TransactionMetadata())
+        filter.downstream_tx.merge_from(delta)
+
+        filter.on_update(delta)
+        self.assertIsNotNone(
+            out := filter.downstream_tx.filter_output.get(
+                filter.fullname(), None))
+        self.assertEqual(Status.HIGH, out.status)
+        self.assertEqual('alice@example.com', out.parsed_header_from.addr_spec)
 
 if __name__ == '__main__':
     #unittest.util._MAX_LENGTH = 1024

@@ -10,6 +10,8 @@ from koukan.filter import TransactionMetadata
 from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response
 
+from koukan.matcher_result import MatcherResult
+
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 
 class RemoteHostFilterResult:
@@ -20,12 +22,15 @@ class RemoteHostFilterResult:
 
     status : Status
     remote_hostname : Optional[str] = None
-    fcrdns : Optional[bool] = None
+    # if tx.remote_host is None, the filter won't populate
+    # RemoteHostFilterResult at all (PRECONDITION_MISSING), any dns
+    # error -> fcrdns == False
+    fcrdns : bool
     ehlo_alignment : bool
 
     def __init__(self, status : Status,
                  remote_hostname : Optional[str] = None,
-                 fcrdns : Optional[bool] = None,
+                 fcrdns : bool = False,
                  ehlo_alignment = False):
         self.status = status
         self.remote_hostname = remote_hostname
@@ -33,13 +38,16 @@ class RemoteHostFilterResult:
         self.ehlo_alignment = ehlo_alignment
 
     def match(self, yaml : dict):
-        if (f := yaml.get('fcrdns', None)) is not None:
-            if bool(self.fcrdns) == f:
-                return True
-        if (e := yaml.get('ehlo_alignment', None)) is not None:
-            if self.ehlo_alignment == e:
-                return True
-        return False
+        if (expected_fcrdns := yaml.get('fcrdns', None)) is not None:
+            if self.fcrdns is None:
+                return MatcherResult.PRECONDITION_UNMET
+            if bool(self.fcrdns) != expected_fcrdns:
+                return MatcherResult.NO_MATCH
+        if (expected_ehlo_alignment :=
+            yaml.get('ehlo_alignment', None)) is not None:
+            if self.ehlo_alignment != expected_ehlo_alignment:
+                return MatcherResult.NO_MATCH
+        return MatcherResult.MATCH
 
 class RemoteHostFilter(Filter):
     def __init__(self, resolver : Optional[Resolver] = None):

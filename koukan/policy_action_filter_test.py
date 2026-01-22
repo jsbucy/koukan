@@ -7,29 +7,28 @@ import unittest
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.policy_action_filter import (
     PolicyActionFilter,
-    PolicyActionFilterOutput )
+    PolicyActionFilterOutput,
+    TransactionMatcher )
 from koukan.blob import InlineBlob
 from koukan.sender import Sender
 
-# matches if yaml['match'] true
+from koukan.matcher_result import MatcherResult
+
 class FilterOutput:
     expect_call = True
-    def __init__(self, yaml) :
-        self.yaml = yaml
-    def match(self, yaml : dict) -> bool:
+    match_result = MatcherResult.NO_MATCH
+    def __init__(self):
+        pass
+    def match(self, yaml : dict) -> MatcherResult:
         assert self.expect_call
-        return self.yaml.get('match', False)
+        return self.match_result
 
 class PolicyActionFilterTest(unittest.TestCase):
-    def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
-
     def test_smoke(self):
-        match_yaml = {'filter_name': 'my_filter',
-                      'match': False}
-        filter = PolicyActionFilter({'tag': 'test_smoke',
-                                     'match': [match_yaml]})
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'match': {'matcher': 'my_filter'}},
+            matchers={})
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
@@ -37,13 +36,13 @@ class PolicyActionFilterTest(unittest.TestCase):
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
 
-        filter_output = FilterOutput(match_yaml)
+        filter_output = FilterOutput()
         tx.add_filter_output('my_filter', filter_output)
         filter.on_update(prev.delta(tx))
         self.assertIsNone(out := tx.get_filter_output(filter.fullname()))
         # self.assertNotIn('test_smoke', out.matched_tags)
 
-        match_yaml['match'] = True
+        filter_output.match_result = MatcherResult.MATCH
         filter.on_update(prev.delta(tx))
         self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
         self.assertIn('test_smoke', out.matched_tags)
@@ -52,10 +51,10 @@ class PolicyActionFilterTest(unittest.TestCase):
         filter.on_update(prev.delta(tx))
 
     def test_missing_input(self):
-        match_yaml = {'filter_name': 'my_filter',
-                      'match': False}
-        filter = PolicyActionFilter({'tag': 'test_smoke',
-                                     'match': [match_yaml]})
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'match': {'matcher': 'my_filter'}},
+            matchers={})
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
@@ -67,11 +66,11 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertIsNone(out := tx.get_filter_output(filter.fullname()))
 
     def test_reject(self):
-        match_yaml = {'filter_name': 'my_filter',
-                      'match': True}
-        filter = PolicyActionFilter({'tag': 'test_smoke',
-                                     'match': [match_yaml],
-                                     'action': 'REJECT'})
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'match': {'matcher': 'my_filter'},
+             'action': 'REJECT'},
+            matchers={})
         filter.wire_downstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
@@ -79,12 +78,145 @@ class PolicyActionFilterTest(unittest.TestCase):
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
 
-        filter_output = FilterOutput(match_yaml)
+        filter_output = FilterOutput()
+        filter_output.match_result = MatcherResult.MATCH
         tx.add_filter_output('my_filter', filter_output)
         filter.on_update(prev.delta(tx))
         self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
         self.assertIn('test_smoke', out.matched_tags)
         self.assertEqual(550, tx.mail_response.code)
 
+    def test_matcher(self):
+        class TestMatcher:  #(TransactionMatcher):
+            m = True
+            def match(self, yaml, tx : TransactionMetadata) -> bool:
+                return self.m
+
+        matcher = TestMatcher()
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'match': {'matcher': 'test_matcher'},
+             'action': 'REJECT'},
+            matchers={'test_matcher': matcher.match})
+
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.sender = Sender('ingress', 'smtp-mx')
+        tx.filter_output = {}
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+
+        filter_output = FilterOutput()
+        tx.add_filter_output('test_matcher', filter_output)
+        filter.on_update(prev.delta(tx))
+        self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
+        self.assertIn('test_smoke', out.matched_tags)
+        self.assertEqual(550, tx.mail_response.code)
+
+    def test_preconditions(self):
+        def fail(yaml, tx):
+            assert False
+        matchers = {
+            'unmet': lambda yaml,tx: MatcherResult.PRECONDITION_UNMET,
+            'assert': lambda yaml,tx: fail
+        }
+
+        f1 = PolicyActionFilter(
+            {'tag': 'my_tag',
+             'match': {'matcher': 'unmet'}},
+            matchers=matchers)
+        f2 = PolicyActionFilter(
+            {'tag': 'my_tag',
+             'match': {'matcher': 'assert'}},
+            matchers=matchers)
+
+        tx = TransactionMetadata()
+        f1.wire_downstream(tx)
+        f2.wire_downstream(tx)
+
+        prev = tx.copy()
+        tx.sender = Sender('ingress', 'smtp-mx')
+        tx.filter_output = {}
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+
+        delta = prev.delta(tx)
+        f1.on_update(delta)
+        self.assertIsNotNone(
+            eout := tx.get_ephemeral_filter_output(f1.fullname()))
+        self.assertIsNone(
+            out := tx.get_filter_output(f1.fullname()))
+        self.assertIn('my_tag', eout.unmet_precondition_tags)
+        f2.on_update(delta)
+        self.assertIsNone(
+            out := tx.get_filter_output(f1.fullname()))
+
+    def test_expr(self):
+        matchers = {
+            'match': lambda tx, yaml: MatcherResult.MATCH,
+            'nomatch': lambda tx, yaml: MatcherResult.NO_MATCH,
+            'precond': lambda tx, yaml: MatcherResult.PRECONDITION_UNMET }
+
+        yaml = {'all': [
+            {'matcher': 'match'},
+            {'matcher': 'match'}
+        ]}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
+
+        yaml = {'all': [
+            {'matcher': 'match'},
+            {'matcher': 'nomatch'}
+            ]}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+
+        yaml = {'any': [
+            {'matcher': 'match'},
+            {'matcher': 'nomatch'}
+            ]}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
+
+        yaml = {'any': [
+            {'matcher': 'nomatch'},
+            {'matcher': 'nomatch'}
+            ]}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+
+        yaml = {'not': {'matcher': 'match'}}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+
+        yaml = {'not': {'matcher': 'nomatch'}}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
+
+        yaml = {'not': {'matcher': 'precond'}}
+        f = PolicyActionFilter(
+            yaml = yaml,
+            matchers = matchers)
+        self.assertEqual(MatcherResult.PRECONDITION_UNMET,
+                         f._match_rec(None, yaml))
+
+
+
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
+
     unittest.main()

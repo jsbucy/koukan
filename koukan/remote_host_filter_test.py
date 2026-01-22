@@ -21,6 +21,8 @@ from koukan.remote_host_filter import (
     Resolver )
 from koukan.fake_dns_wrapper import FakeResolver
 
+from koukan.matcher_result import MatcherResult
+
 ptr_message_text = """id 1234
 opcode QUERY
 rcode NOERROR
@@ -113,8 +115,10 @@ class RemoteHostFilterTest(unittest.TestCase):
 
     def _test(self, addr,
               answers : List[Union[Answer, Exception]],
-              exp_hostname, exp_fcrdns, exp_err=False,
-              exp_ehlo_alignment=False):
+              exp_hostname,
+              exp_fcrdns : MatcherResult,
+              exp_mail_response_err : bool,
+              exp_ehlo_alignment : MatcherResult):
         resolver = FakeResolver(answers)
         filter = RemoteHostFilter(resolver)
         tx = TransactionMetadata()
@@ -129,56 +133,73 @@ class RemoteHostFilterTest(unittest.TestCase):
         assert tx.filter_output is not None
         self.assertIsNotNone(
             rh := tx.filter_output[RemoteHostFilter.fullname()])
-        self.assertTrue(
-            rh.match({'fcrdns': exp_fcrdns is True}))
-        self.assertTrue(
-            rh.match({'ehlo_alignment': exp_ehlo_alignment}))
+        self.assertEqual(
+            exp_fcrdns, rh.match({'fcrdns': True}))
+        self.assertEqual(
+            exp_ehlo_alignment,
+            rh.match({'ehlo_alignment': True}))
         logging.info('%s %s', rh.remote_hostname, rh.fcrdns)
-        if exp_err:
+        if exp_mail_response_err:
             assert tx.mail_response is not None
             self.assertEqual(450, tx.mail_response.code)
         else:
             self.assertIsNone(tx.mail_response)
         self.assertEqual(exp_hostname, rh.remote_hostname)
-        self.assertEqual(exp_fcrdns, rh.fcrdns)
+        #self.assertEqual(exp_fcrdns, rh.fcrdns)
 
     def test_success_ipv4(self):
         self._test(
             '1.2.3.4',
             [ptr_answer, a_answer],
-            'example.com.', True, exp_ehlo_alignment=True)
+            'example.com.',
+            exp_fcrdns=MatcherResult.MATCH,
+            exp_mail_response_err=False,
+            exp_ehlo_alignment=MatcherResult.MATCH)
 
     def test_success_ipv6(self):
         self._test(
             '0123:4567:89ab:cdef:0123:4567:89ab:cdef',
             [ptr6_answer, aaaa_answer],
-            'example.com.', True, exp_ehlo_alignment=True)
+            'example.com.',
+            exp_fcrdns=MatcherResult.MATCH,
+            exp_mail_response_err=False,
+            exp_ehlo_alignment=True)
 
     def test_nx_ptr(self):
         self._test('1.2.3.4',
                    [dns.resolver.NXDOMAIN()],
-                   '', False)
+                   '',
+                   exp_fcrdns=MatcherResult.NO_MATCH,
+                   exp_mail_response_err=False,
+                   exp_ehlo_alignment=MatcherResult.NO_MATCH)
 
     def test_nx_fwd(self):
         self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NXDOMAIN(),   # A
                     dns.resolver.NXDOMAIN()],  # AAAA
-                   'example.com.', False)
+                   'example.com.',
+                   exp_fcrdns = MatcherResult.NO_MATCH,
+                   exp_mail_response_err = False,
+                   exp_ehlo_alignment=MatcherResult.NO_MATCH)
 
     def test_servfail_ptr(self):
         self._test('1.2.3.4',
                    [dns.resolver.NoNameservers()],
-                   None, None,
-                   exp_err=True)
+                   exp_hostname=None,
+                   exp_fcrdns = MatcherResult.NO_MATCH,
+                   exp_mail_response_err=True,
+                   exp_ehlo_alignment=MatcherResult.NO_MATCH)
 
     def test_servfail_fwd(self):
         self._test('1.2.3.4',
                    [ptr_answer,
                     dns.resolver.NoNameservers(),   # A
                     dns.resolver.NoNameservers()],  # AAAA
-                   'example.com.', False,
-                   exp_err=True)
+                   'example.com.',
+                   exp_fcrdns = MatcherResult.NO_MATCH,
+                   exp_mail_response_err=True,
+                   exp_ehlo_alignment=MatcherResult.NO_MATCH)
 
 
 if __name__ == '__main__':

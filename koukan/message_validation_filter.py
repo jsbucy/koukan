@@ -16,13 +16,20 @@ from email.errors import (
     NonASCIILocalPartDefect,
     NonPrintableDefect,
     UndecodableBytesDefect )
+from email.headerregistry import Address, AddressHeader
 
 from koukan.blob import Blob
 from koukan.filter import TransactionMetadata, get_esmtp_param
 from koukan.filter_chain import Filter, FilterResult
+from koukan.matcher_result import MatcherResult
+
 
 class MessageValidationFilterResult:
-    received_header_count = 0
+    received_header_count = None
+    # NOTE Address parses addr_spec in __init__ and Address.addr_spec
+    # reserializes from parsed so parsed_header_from.addr_spec may not
+    # be identical to the original?
+    parsed_header_from : Optional[Address] = None
 
     class Status(IntEnum):
         # major problem with headers e.g. MissingHeaderBodySeparatorDefect
@@ -64,12 +71,28 @@ class MessageValidationFilterResult:
 
     def match(self, yaml : dict):
         if (r := yaml.get('max_received_headers', None)) is not None:
+            if self.received_header_count is None:
+                return MatcherResult.PRECONDITION_UNMET
             if self.received_header_count > r:
-                return True
+                return MatcherResult.MATCH
         if (v := yaml.get('validity_threshold', None)) is not None:
+            if self.status is None:
+                return MatcherResult.PRECONDITION_UNMET
             if self.status < MessageValidationFilterResult.Status[v]:
-                return True
-        return False
+                return MatcherResult.MATCH
+        return MatcherResult.NO_MATCH
+
+    def _maybe_set_from(self, header : AddressHeader):
+        # parser reports header from in a group too
+        # for the time being, only report the address if there was
+        # exactly 1, the other cases are uncommon
+        if len(header.groups) > 1:
+            return
+        if len(header.groups) == 1 and len(header.groups[0].addresses) > 1:
+            return
+        if len(header.addresses) != 1:
+            return
+        self.parsed_header_from = header.addresses[0]
 
 # returns true if d contains an instance of any class in dc
 def _has_defect(defects : List[MessageDefect], defect_classes : List[Type]):
@@ -239,6 +262,8 @@ class MessageValidationFilter(Filter):
                     break
                 else:
                     header = headers[0]
+                    if header_name == 'from':
+                        result._maybe_set_from(header)
                     if _has_other_defect(header.defects, accepted_defects):
                         result.add_error(
                             MessageValidationFilterResult.Status.MEDIUM,

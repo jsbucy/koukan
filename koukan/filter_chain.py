@@ -238,4 +238,9 @@ class FilterChain:
             entries.append(f.__class__.__name__)
         logging.debug(', '.join(entries))
 
-        return prev.delta(self.filters[0].downstream_tx)
+        for f in self.filters:
+            f._prev_downstream_tx.ephemeral_filter_output = f.downstream_tx.ephemeral_filter_output = None
+            if f.upstream_tx is not f.downstream_tx:
+                f._prev_upstream_tx.ephemeral_filter_output = f.upstream_tx.ephemeral_filter_output = None
+
+        return prev.delta(self.tx)

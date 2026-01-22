@@ -1,4 +1,6 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 
 py_library(name='deadline',
            srcs=['deadline.py'])
@@ -264,11 +266,15 @@ py_library(name='address_list_policy',
            srcs=['address_list_policy.py'],
            deps=[':recipient_router_filter',
                  ':address',
+                 ':matcher_result',
+                 ':policy_action_filter',
                  ':response'])
 
 py_test(name='address_list_policy_test',
         srcs=['address_list_policy_test.py'],
-        deps=[':address_list_policy'])
+        deps=[':address_list_policy',
+              ':filter',
+              ':message_validation_filter'])
 
 py_library(name='dest_domain_policy',
            srcs=['dest_domain_policy.py'],
@@ -380,6 +386,7 @@ py_library(name='remote_host_filter',
            deps=[':filter',
                  ':filter_chain',
                  ':dns_wrapper',
+                 ':matcher_result',
                  '@pypi//dnspython'])
 
 py_test(name='remote_host_filter_test',
@@ -414,6 +421,7 @@ py_library(name='message_validation_filter',
            deps=[':blob',
                  ':filter',
                  ':filter_chain',
+                 ':matcher_result',
                  ':remote_host_filter'])
 
 py_test(name='message_validation_filter_test',
@@ -436,11 +444,15 @@ py_test(name='message_validation_filter_test',
             '//testdata:utf8_local_part.msg',
         ])
 
+py_library(name='matcher_result',
+           srcs=['matcher_result.py'])
+
 py_library(name='policy_action_filter',
            srcs=['policy_action_filter.py'],
            deps=[':blob',
                  ':filter',
-                 ':filter_chain'])
+                 ':filter_chain',
+                 ':matcher_result'])
 
 py_test(name='policy_action_filter_test',
         srcs=['policy_action_filter_test.py'],
@@ -462,6 +474,33 @@ py_library(name='recipient_router_factory',
                  ':recipient_router_filter',
                  ':sender'])
 
+py_library(name='transaction_matchers',
+           srcs=['transaction_matchers.py'],
+           deps=[':filter',
+                 ':matcher_result'])
+
+py_test(name='transaction_matchers_test',
+        srcs=['transaction_matchers_test.py'],
+        deps=[':filter',
+              ':matcher_result',
+              ':transaction_matchers'])
+
+py_library(name='policy_factory',
+           srcs=['policy_factory.py'],
+           deps=[':address_list_policy',
+                 ':policy_action_filter',
+                 ':transaction_matchers'])
+
+py_library(name='hello_matcher',
+           srcs=['hello_matcher.py'],
+           deps=[':filter'])
+
+py_test(name='policy_factory_test',
+        srcs=['policy_factory_test.py'],
+        deps=[':address_list_policy',
+              ':hello_matcher',
+              ':policy_factory'])
+
 py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
            deps=[':add_route_filter',
@@ -474,13 +513,14 @@ py_library(name='filter_chain_wiring',
                  ':message_parser_filter',
                  ':message_validation_filter',
                  ':mx_resolution',
-                 ':policy_action_filter',
+                 ':policy_factory',
                  ':received_header_filter',
                  ':recipient_router_factory',
                  ':relay_auth_filter',
                  ':remote_host_filter',
                  ':rest_endpoint',
-                 ':sender'])
+                 ':sender',
+                 ':transaction_matchers'])
 
 py_library(name='executor',
            srcs=['executor.py'])

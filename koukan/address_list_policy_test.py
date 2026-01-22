@@ -3,14 +3,18 @@
 import unittest
 import logging
 
-from koukan.address_list_policy import AddressListPolicy
+from email.headerregistry import Address
+from koukan.message_validation_filter import MessageValidationFilterResult
+
+from koukan.address_list_policy import (
+    AddressListPolicy,
+    match_address_list)
 from koukan.recipient_router_filter import Destination
+from koukan.filter import Mailbox, TransactionMetadata
+
+from koukan.matcher_result import MatcherResult
 
 class AddressListPolicyTest(unittest.TestCase):
-    def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
-
     def test_smoke(self):
         my_dest = Destination('http://my-endpoint')
         policy = AddressListPolicy(['example.com'], '+', ['alice'], my_dest)
@@ -64,5 +68,32 @@ class AddressListPolicyTest(unittest.TestCase):
         self.assertIsNone(dest)
         self.assertEqual(err.code, 550)
 
+
+    def test_matcher(self):
+        match_yaml = {
+            'which_addr': 'header_from',
+            'domains': ['example.com'],
+        }
+        tx = TransactionMetadata()
+        vo = MessageValidationFilterResult()
+        vo.parsed_header_from = Address(addr_spec='alice@example.com')
+        tx.add_filter_output('koukan.message_validation_filter', vo)
+        self.assertTrue(match_address_list(match_yaml, tx))
+        vo.parsed_header_from = Address(addr_spec='alice@ex.com')
+        self.assertEqual(
+            MatcherResult.NO_MATCH, match_address_list(match_yaml, tx))
+
+        vo.parsed_header_from = None
+        tx.mail_from = Mailbox('alice@example.com')
+        match_yaml['which_addr'] = 'mail_from'
+        self.assertTrue(match_address_list(match_yaml, tx))
+
+        tx.mail_from = Mailbox('alice@ex.com')
+        self.assertEqual(
+            MatcherResult.NO_MATCH, match_address_list(match_yaml, tx))
+
+
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(message)s')
     unittest.main()

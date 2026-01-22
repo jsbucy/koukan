@@ -71,8 +71,8 @@ endpoint:
   - filter: message_validation
   - filter: policy_action
     match:
-      - filter_name: koukan.message_validation_filter.MessageValidationFilter
-        validity_threshold: HIGH
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: HIGH
     action: REJECT
     tag: message_validation
   - filter: exploder
@@ -102,8 +102,8 @@ endpoint:
   - filter: message_validation
   - filter: policy_action
     match:
-      - filter_name: koukan.message_validation_filter.MessageValidationFilter.MessageValidationFilter
-        validity_threshold: HIGH
+      matcher: koukan.message_validation_filter.MessageValidationFilter.MessageValidationFilter
+      validity_threshold: HIGH
     action: REJECT
     tag: message_validation
    
@@ -193,18 +193,21 @@ endpoint:
       # dest == None: reject
   - filter: remote_host
   - filter: message_validation
+
   - filter: policy_action
     match:
-      - filter_name: koukan.remote_host_filter.RemoteHostFilter
-      # xxx are these conditions and? or? filter-dependent?
-      - fcrdns: false
-      - ehlo_alignment: false
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
     action: REJECT
     tag: remote_host
+
   - filter: policy_action
     match:
-      - filter_name: koukan.message_validation_filter.MessageValidationFilter
-        validity_threshold: MEDIUM
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: MEDIUM
     action: REJECT
     tag: message_validation
   - filter: exploder
@@ -265,16 +268,18 @@ endpoint:
 
   - filter: policy_action
     match:
-      - filter_name: koukan.remote_host_filter.RemoteHostFilter
-      # xxx are these conditions and? or? filter-dependent?
-      - fcrdns: false
-      - ehlo_alignment: false
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
     action: REJECT
     tag: remote_host
+
   - filter: policy_action
     match:
-      - filter_name: koukan.message_validation_filter.MessageValidationFilter
-        validity_threshold: MEDIUM
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: MEDIUM
     action: REJECT
     tag: message_validation
 
@@ -316,6 +321,7 @@ modules:
     hello: koukan.hello_filter
   recipient_router_policy:
     hello: koukan.hello_policy
+  #transaction_matcher:
 
 storage:
   # url: postgresql+psycopg://my-username@/my-database?host=/var/run/postgresql
