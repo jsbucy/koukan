@@ -33,8 +33,8 @@ from koukan.storage_schema import (
     BlobSpec,
     VersionConflictException,
     body_blob_uri )
-from koukan.filter import TransactionMetadata, WhichJson
-from koukan.rest_schema import BlobUri
+from koukan.filter import TransactionMetadata
+from koukan.rest_schema import BlobUri, WhichJson
 
 from koukan.version_cache import IdVersion, IdVersionMap
 

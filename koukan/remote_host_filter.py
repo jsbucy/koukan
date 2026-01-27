@@ -11,10 +11,12 @@ from koukan.filter_chain import FilterResult, Filter
 from koukan.response import Response
 
 from koukan.matcher_result import MatcherResult
+from koukan.filter_output import FilterOutput
 
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
+from koukan.rest_schema import WhichJson
 
-class RemoteHostFilterResult:
+class RemoteHostFilterResult(FilterOutput):
     class Status(IntEnum):
         OK = 0
         DNS_TEMP = 1
@@ -36,6 +38,14 @@ class RemoteHostFilterResult:
         self.remote_hostname = remote_hostname
         self.fcrdns = fcrdns
         self.ehlo_alignment = ehlo_alignment
+
+    def to_json(self, w : WhichJson):
+        if w != WhichJson.DB_ATTEMPT:
+            return None
+        out = {'status': int(self.status),
+               'fcrdns': self.fcrdns,
+               'ehlo_alignment': self.ehlo_alignment}
+        return out
 
     def match(self, yaml : dict):
         if (expected_fcrdns := yaml.get('fcrdns', None)) is not None:

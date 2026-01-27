@@ -25,6 +25,8 @@ from koukan.storage_schema import BlobSpec
 from koukan.message_builder import MessageBuilderSpec
 from koukan.sender import Sender
 
+from koukan.filter_output import FilterOutput
+
 class HostPort:
     host : str
     port : int
@@ -435,7 +437,7 @@ _tx_fields = [
             copy=Sender.copy),
     # RecipientRouterFilter -> RestEndpoint
     TxField('rest_upstream_sender', validity=None),
-    TxField('filter_output', validity=None, is_dict=True),
+    TxField('filter_output', validity=[WhichJson.DB_ATTEMPT], is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
     TxField('ephemeral_filter_output', validity=None, is_dict=True),
 ]
@@ -490,7 +492,7 @@ class TransactionMetadata:
     # key is fully-qualified filter class name:
     # koukan.remote_host_filter.RemoteHostFilter
     # value is impl-specific type mutually known by producer and consumer
-    filter_output : Optional[Dict[str, Any]] = None
+    filter_output : Optional[Dict[str, FilterOutput]] = None
     ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
     def __init__(self, 
@@ -697,7 +699,14 @@ class TransactionMetadata:
         if (v := getattr(self, name)) is None:
             return
 
-        if isinstance(v, list):
+        if field.is_dict:
+            v_js = {}
+            for kk,vv in v.items():
+                if hasattr(vv, 'to_json') and ((jsvv := vv.to_json(which_js)) is not None):
+                    v_js[kk] = jsvv
+            if not v_js:
+                v_js = None
+        elif isinstance(v, list):
             if v:
                 if field.emit_rest_placeholder(which_js):
                     v_js = [{}] * len(v)

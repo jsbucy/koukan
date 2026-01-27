@@ -249,6 +249,47 @@ class End2EndTest(unittest.TestCase):
         else:
             self.fail('didn\'t receive message')
 
+    def test_policy_reject(self):
+        self._configure_and_run()
+
+        with open('testdata/bad_from.msg', 'rb') as f:
+            raw = f.read()
+        rcpt_resp, final_resp = send_smtp(
+            'localhost', self.gateway_mx_port, 'localhost',
+            'alice@example.com', ['bob@example.com'],
+            raw=raw)
+        logging.debug(rcpt_resp)
+        logging.debug(final_resp)
+        self.assertEqual(250, rcpt_resp[0][0])
+        self.assertEqual(550, final_resp[0])
+        self.assertIn(b'5.6.0 message rejected message_validation', final_resp[1])
+
+        handlers = {}
+        for handler in self.fake_smtpd.handlers:
+            logging.debug(handler)
+            if len(handler.rcpt_to) != 1:
+                continue
+            rcpt = handler.rcpt_to[0]
+            if rcpt != 'bob@example.com':
+                continue
+            self.assertNotIn(rcpt, handlers)
+            handlers[rcpt] = handler
+            self.assertIsNone(handler.data)
+
+        self.assertEqual(1, len(handlers))
+        cursor = self.router.storage.get_transaction_cursor(db_id=1)
+        cursor.load()
+        # XXX currently the way filter_output has DB_ATTEMPT validity,
+        # it just loads the json into the tx on a read.
+        logging.debug(cursor.tx)
+        filter_output = cursor.tx.filter_output
+        self.assertIsNotNone(message_validation := filter_output.get('koukan.message_validation_filter.MessageValidationFilter', None))
+        self.assertEqual(1, message_validation['status'])
+        self.assertIn('InvalidHeaderDefect', message_validation['err'])
+
+        self.assertIsNotNone(policy_action := filter_output.get('koukan.policy_action_filter.PolicyActionFilter', None))
+        self.assertIn('message_validation', policy_action['matched_tags'])
+
     # mx smtp -> rest
     def test_rest_receiving(self):
         self._configure_and_run()
@@ -357,7 +398,6 @@ class End2EndTest(unittest.TestCase):
             self.assertIn(b'Received:', handler.data)
 
         self.assertEqual(2, len(handlers))
-
 
 
     # submission rest message_builder -> smtp

@@ -22,9 +22,10 @@ from koukan.blob import Blob
 from koukan.filter import TransactionMetadata, get_esmtp_param
 from koukan.filter_chain import Filter, FilterResult
 from koukan.matcher_result import MatcherResult
+from koukan.filter_output import FilterOutput
+from koukan.rest_schema import WhichJson
 
-
-class MessageValidationFilterResult:
+class MessageValidationFilterResult(FilterOutput):
     received_header_count = None
     # NOTE Address parses addr_spec in __init__ and Address.addr_spec
     # reserializes from parsed so parsed_header_from.addr_spec may not
@@ -53,6 +54,16 @@ class MessageValidationFilterResult:
         if received_header_count is not None:
             self.received_header_count = received_header_count
 
+    def to_json(self, w : WhichJson):
+        if w != WhichJson.DB_ATTEMPT:
+            return None
+        out = {'status': int(self.status)}
+        if self.received_header_count is not None:
+            out['received_header_count'] = self.received_header_count
+        if self.err:
+            out['err'] = self.err
+        return out
+
     # Sets the first error that caused the message not to qualify for status.
     # Status is monotonic; errors should be checked from low to high
     def add_error(self, status, err : str):
@@ -73,14 +84,14 @@ class MessageValidationFilterResult:
         if (r := yaml.get('max_received_headers', None)) is not None:
             if self.received_header_count is None:
                 return MatcherResult.PRECONDITION_UNMET
-            if self.received_header_count > r:
-                return MatcherResult.MATCH
+            if self.received_header_count <= r:
+                return MatcherResult.NO_MATCH
         if (v := yaml.get('validity_threshold', None)) is not None:
             if self.status is None:
                 return MatcherResult.PRECONDITION_UNMET
-            if self.status < MessageValidationFilterResult.Status[v]:
-                return MatcherResult.MATCH
-        return MatcherResult.NO_MATCH
+            if self.status >= MessageValidationFilterResult.Status[v]:
+                return MatcherResult.NO_MATCH
+        return MatcherResult.MATCH
 
     def _maybe_set_from(self, header : AddressHeader):
         # parser reports header from in a group too

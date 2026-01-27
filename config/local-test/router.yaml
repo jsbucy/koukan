@@ -102,7 +102,7 @@ endpoint:
   - filter: message_validation
   - filter: policy_action
     match:
-      matcher: koukan.message_validation_filter.MessageValidationFilter.MessageValidationFilter
+      matcher: koukan.message_validation_filter.MessageValidationFilter
       validity_threshold: HIGH
     action: REJECT
     tag: message_validation

@@ -21,10 +21,15 @@ py_library(name='sender',
            srcs=['sender.py'],
            deps=[':rest_schema'])
 
+py_library(name='filter_output',
+           srcs=['filter_output.py'],
+           deps=[':rest_schema'])
+
 py_library(name='filter',
            srcs=['filter.py'],
            deps=[':blob',
                  ':deadline',
+                 ':filter_output',
                  ':sender',
                  ':message_builder',
                  ':response',
@@ -385,8 +390,10 @@ py_library(name='remote_host_filter',
            srcs=['remote_host_filter.py'],
            deps=[':filter',
                  ':filter_chain',
+                 ':filter_output',
                  ':dns_wrapper',
                  ':matcher_result',
+                 ':rest_schema'
                  '@pypi//dnspython'])
 
 py_test(name='remote_host_filter_test',
@@ -421,8 +428,10 @@ py_library(name='message_validation_filter',
            deps=[':blob',
                  ':filter',
                  ':filter_chain',
+                 ':filter_output',
                  ':matcher_result',
-                 ':remote_host_filter'])
+                 ':remote_host_filter',
+                 ':rest_schema'])
 
 py_test(name='message_validation_filter_test',
         srcs=['message_validation_filter_test.py'],
@@ -452,7 +461,9 @@ py_library(name='policy_action_filter',
            deps=[':blob',
                  ':filter',
                  ':filter_chain',
-                 ':matcher_result'])
+                 ':filter_output',
+                 ':matcher_result',
+                 ':rest_schema'])
 
 py_test(name='policy_action_filter_test',
         srcs=['policy_action_filter_test.py'],
@@ -742,6 +753,7 @@ py_test(name='end2end_test',
               '//config/local-test:gateway.yaml',
               '//examples/send_message:body.txt',
               '//testdata:8bit_headers.msg',
+              '//testdata:bad_from.msg',
               '//testdata:multipart.msg',
               '//testdata:trivial.msg'],
         deps=[':router_service',

@@ -7,18 +7,28 @@ from koukan.filter import TransactionMetadata
 from koukan.filter_chain import Filter, FilterResult
 from koukan.response import Response
 from koukan.matcher_result import MatcherResult
+from koukan.filter_output import FilterOutput
+from koukan.rest_schema import WhichJson
 
-class PolicyActionFilterOutput:
+class PolicyActionFilterOutput(FilterOutput):
     matched_tags : Set[str]
     def __init__(self):
         self.matched_tags = set()
+
+    def to_json(self, w : WhichJson):
+        if w != WhichJson.DB_ATTEMPT:
+            return None
+        return {'matched_tags': list(self.matched_tags)}
+
 
 class _Output:
     unmet_precondition_tags : Set[str]
     def __init__(self):
         self.unmet_precondition_tags = set()
 
+
 TransactionMatcher = Callable[[dict, TransactionMetadata], MatcherResult]
+
 
 class PolicyActionFilter(Filter):
     yaml : dict

@@ -13,6 +13,7 @@ from koukan.blob import InlineBlob
 from koukan.sender import Sender
 
 from koukan.matcher_result import MatcherResult
+from koukan.rest_schema import WhichJson
 
 class FilterOutput:
     expect_call = True
@@ -40,12 +41,13 @@ class PolicyActionFilterTest(unittest.TestCase):
         tx.add_filter_output('my_filter', filter_output)
         filter.on_update(prev.delta(tx))
         self.assertIsNone(out := tx.get_filter_output(filter.fullname()))
-        # self.assertNotIn('test_smoke', out.matched_tags)
 
         filter_output.match_result = MatcherResult.MATCH
         filter.on_update(prev.delta(tx))
         self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
         self.assertIn('test_smoke', out.matched_tags)
+        self.assertEqual({'matched_tags': ['test_smoke']},
+                         out.to_json(WhichJson.DB_ATTEMPT))
 
         filter_output.expect_call = False
         filter.on_update(prev.delta(tx))
