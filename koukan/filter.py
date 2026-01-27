@@ -437,7 +437,9 @@ _tx_fields = [
             copy=Sender.copy),
     # RecipientRouterFilter -> RestEndpoint
     TxField('rest_upstream_sender', validity=None),
-    TxField('filter_output', validity=[WhichJson.DB_ATTEMPT], is_dict=True),
+    TxField('filter_output',
+            validity=set([WhichJson.DB_ATTEMPT]),
+            is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
     TxField('ephemeral_filter_output', validity=None, is_dict=True),
 ]

@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 import logging
 from enum import IntEnum
 import string
@@ -57,7 +57,7 @@ class MessageValidationFilterResult(FilterOutput):
     def to_json(self, w : WhichJson):
         if w != WhichJson.DB_ATTEMPT:
             return None
-        out = {'status': int(self.status)}
+        out : Dict[str, Any] = {'status': int(self.status)}
         if self.received_header_count is not None:
             out['received_header_count'] = self.received_header_count
         if self.err:

@@ -14,7 +14,7 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult
 from koukan.received_header_filter import ReceivedHeaderFilter
 
-from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
+from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterOutput
 
 class ReceivedHeaderFilterTest(unittest.TestCase):
     def setUp(self):
@@ -28,8 +28,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             remote_host=HostPort('1.2.3.4', port=25000),
             mail_from=Mailbox('alice'))
         delta.add_filter_output(
-            RemoteHostFilter.fullname(), RemoteHostFilterResult(
-                status = RemoteHostFilterResult.Status.OK,
+            RemoteHostFilter.fullname(), RemoteHostFilterOutput(
+                status = RemoteHostFilterOutput.Status.OK,
                 remote_hostname = 'gargantua1',
                 fcrdns = True ))
 
@@ -100,8 +100,8 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
             body=InlineBlob(b'From: <alice>\r\n\r\nhello\r\n',
                                  last=True))
         tx.add_filter_output(
-            RemoteHostFilter.fullname(), RemoteHostFilterResult(
-                status = RemoteHostFilterResult.Status.OK,
+            RemoteHostFilter.fullname(), RemoteHostFilterOutput(
+                status = RemoteHostFilterOutput.Status.OK,
                 remote_hostname = 'gargantua1',
                 fcrdns = True ))
         tx.smtp_meta = {

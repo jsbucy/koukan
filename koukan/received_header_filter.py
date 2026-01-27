@@ -17,7 +17,7 @@ from koukan.filter import (
 from koukan.filter_chain import FilterResult, ProxyFilter
 from koukan.response import Response
 
-from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterResult
+from koukan.remote_host_filter import RemoteHostFilter, RemoteHostFilterOutput
 
 class ReceivedHeaderFilter(ProxyFilter):
     inject_time : Optional[datetime] = None
@@ -43,7 +43,7 @@ class ReceivedHeaderFilter(ProxyFilter):
 
         rh = tx.get_filter_output(RemoteHostFilter.fullname())
         remote_hostname = fcrdns = None
-        if (rh is not None) and (isinstance(rh, RemoteHostFilterResult)):
+        if (rh is not None) and (isinstance(rh, RemoteHostFilterOutput)):
             fcrdns = rh.fcrdns
             remote_hostname = rh.remote_hostname
         logging.debug('%s %s', fcrdns, remote_hostname)

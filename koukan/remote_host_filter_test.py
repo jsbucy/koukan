@@ -18,7 +18,8 @@ from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
 from koukan.remote_host_filter import (
     RemoteHostFilter,
-    Resolver )
+    RemoteHostFilterOutput )
+from koukan.dns_wrapper import Resolver
 from koukan.fake_dns_wrapper import FakeResolver
 
 from koukan.matcher_result import MatcherResult
@@ -133,6 +134,7 @@ class RemoteHostFilterTest(unittest.TestCase):
         assert tx.filter_output is not None
         self.assertIsNotNone(
             rh := tx.filter_output[RemoteHostFilter.fullname()])
+        assert isinstance(rh, RemoteHostFilterOutput)
         self.assertEqual(
             exp_fcrdns, rh.match({'fcrdns': True}))
         self.assertEqual(

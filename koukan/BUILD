@@ -393,7 +393,7 @@ py_library(name='remote_host_filter',
                  ':filter_output',
                  ':dns_wrapper',
                  ':matcher_result',
-                 ':rest_schema'
+                 ':rest_schema',
                  '@pypi//dnspython'])
 
 py_test(name='remote_host_filter_test',

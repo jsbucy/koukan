@@ -16,7 +16,7 @@ from koukan.filter_output import FilterOutput
 from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 from koukan.rest_schema import WhichJson
 
-class RemoteHostFilterResult(FilterOutput):
+class RemoteHostFilterOutput(FilterOutput):
     class Status(IntEnum):
         OK = 0
         DNS_TEMP = 1
@@ -25,7 +25,7 @@ class RemoteHostFilterResult(FilterOutput):
     status : Status
     remote_hostname : Optional[str] = None
     # if tx.remote_host is None, the filter won't populate
-    # RemoteHostFilterResult at all (PRECONDITION_MISSING), any dns
+    # RemoteHostFilterOutput at all (PRECONDITION_MISSING), any dns
     # error -> fcrdns == False
     fcrdns : bool
     ehlo_alignment : bool
@@ -79,8 +79,8 @@ class RemoteHostFilter(Filter):
         try:
             ans = self.resolver.resolve_address(tx.remote_host.host)
         except ServFailExceptions:
-            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-                RemoteHostFilterResult.Status.DNS_TEMP))
+            tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(
+                RemoteHostFilterOutput.Status.DNS_TEMP))
             return Response(450, 'RemoteHostFilter ptr err')
         except NotFoundExceptions:
             pass
@@ -90,8 +90,8 @@ class RemoteHostFilter(Filter):
         if not(ans) or not ans[0].target:
             remote_hostname = ''
             fcrdns = False
-            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-                RemoteHostFilterResult.Status.NOT_FOUND,
+            tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(
+                RemoteHostFilterOutput.Status.NOT_FOUND,
                 remote_hostname, fcrdns))
             return None
         remote_hostname = str(ans[0].target)
@@ -121,8 +121,8 @@ class RemoteHostFilter(Filter):
             fcrdns = False
 
         if all_failed:
-            tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-                RemoteHostFilterResult.Status.DNS_TEMP, remote_hostname,
+            tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(
+                RemoteHostFilterOutput.Status.DNS_TEMP, remote_hostname,
                 fcrdns))
             return Response(450, 'RemoteHostFilter fwd err')
 
@@ -134,8 +134,8 @@ class RemoteHostFilter(Filter):
                 ehlo == remote_hostname.rstrip('.')):
                 ehlo_alignment = True
 
-        tx.add_filter_output(self.fullname(), RemoteHostFilterResult(
-            RemoteHostFilterResult.Status.OK, remote_hostname, fcrdns,
+        tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(
+            RemoteHostFilterOutput.Status.OK, remote_hostname, fcrdns,
             ehlo_alignment))
 
         logging.debug('RemoteHostFilter._resolve() '
