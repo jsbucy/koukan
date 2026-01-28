@@ -214,6 +214,11 @@ class TxField:
         assert self.is_list
         return self.json_field + '_list_offset'
 
+    def dict_json(self):
+        assert self.is_dict
+        return self.json_field + '_dict_json'
+
+
 def blob_spec_from_json(blob_json):
     blob_uri = None
     if (uri := blob_json.get('uri', None)) is not None:
@@ -495,6 +500,7 @@ class TransactionMetadata:
     # koukan.remote_host_filter.RemoteHostFilter
     # value is impl-specific type mutually known by producer and consumer
     filter_output : Optional[Dict[str, FilterOutput]] = None
+    filter_output_dict_json : Optional[Dict[str, Any]] = None
     ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
     def __init__(self, 
@@ -533,6 +539,11 @@ class TransactionMetadata:
     def __repr__(self):
         out = ''
         for name,field in tx_json_fields.items():
+            if field.is_dict and hasattr(self, field.dict_json()):
+                v = getattr(self, field.dict_json())
+                if v:
+                    out += '%s %s\n' % (field.dict_json(), v)
+
             if hasattr(self, name):
                 v = getattr(self, name)
                 if (field.is_list and v == []) or v is None:
@@ -540,6 +551,7 @@ class TransactionMetadata:
                 out += '%s: %s\n' % (name, v)
                 if field.is_list and getattr(self, field.list_offset(), None) is not None:
                     out += '%s %d\n' % (field.list_offset(), getattr(self, field.list_offset()))
+
         return out
 
     def empty(self, which_js : WhichJson):
@@ -582,7 +594,13 @@ class TransactionMetadata:
             if isinstance(js_v, list) and not js_v:
                 return None
             v : Any
-            if field.is_list:
+            if field.is_dict:
+                if hasattr(tx, field.dict_json()) and (
+                        getattr(tx, field.dict_json()) is not None):
+                    return None  # bad: duplicate key
+                setattr(tx, field.dict_json(), js_v)
+                continue
+            elif field.is_list:
                 if not isinstance(js_v, list):
                     return None
                 if field.emit_rest_placeholder(which_js):
@@ -742,61 +760,68 @@ class TransactionMetadata:
             out = self
 
         for f,field in tx_json_fields.items():
-            old_v = getattr(self, f, None)
-            new_v = getattr(delta, f, None)
-            if old_v is None and new_v is None:
-                continue
-            if old_v is None and new_v is not None:
-                setattr(out, f, new_v)
-                continue
-            if old_v is not None and new_v is None:
-                setattr(out, f, old_v)
-                continue
-
-            # cd6c8bd2 double-check that body didn't change in some
-            # unexpected way
-            # TODO I'm not sure why this is necessary/the check in
-            # delta() isn't sufficient
-            if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
-                if body_delta is None:
-                    raise ValueError()
-                if body_delta:
-                    setattr(out, f, new_v)
-                continue
-
-            if field.is_dict and old_v is not None and new_v is not None:
-                oo = dict(old_v)
-                for kk in new_v.keys() - old_v.keys():
-                    vv = new_v[kk]
-                    if kk in old_v and old_v[kk] != vv:
-                        raise ValueError()
-                    oo[kk] = vv
-                setattr(out, f, oo)
-                continue
-            elif not field.is_list:
-                # use the old value, assume the new one is the same
-                # TODO could verify that old_v == new_v
-                setattr(out, f, old_v)
-                continue
-            assert isinstance(old_v, list)
-            if not(new_v):
-                setattr(out, f, old_v)
-                continue
-            offset = getattr(delta, field.list_offset(), 0)
-            if offset is None:
-                offset = 0
-            if offset != len(old_v):
-                logging.debug(
-                    'list offset mismatch %s old len %d new offset %s',
-                    f, len(old_v), offset)
-                raise ValueError()
-            l = []
-            l.extend(old_v)
-            l.extend(new_v)
-            setattr(out, f, l)
+            self._merge_one(delta, f, field, out)
+            if field.is_dict:
+                self._merge_one(delta, field.dict_json(), field, out)
 
         return out
+
+    def _merge_one(self, delta, f, field, out):
+        old_v = getattr(self, f, None)
+        new_v = getattr(delta, f, None)
+        if old_v is None and new_v is None:
+            return
+        if old_v is None and new_v is not None:
+            setattr(out, f, new_v)
+            return
+        if old_v is not None and new_v is None:
+            setattr(out, f, old_v)
+            return
+
+        # cd6c8bd2 double-check that body didn't change in some
+        # unexpected way
+        # TODO I'm not sure why this is necessary/the check in
+        # delta() isn't sufficient
+        if f == 'body' and old_v is not None and new_v is not None:
+            body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
+            if body_delta is None:
+                raise ValueError()
+            if body_delta:
+                setattr(out, f, new_v)
+            return
+
+        if field.is_dict and old_v is not None and new_v is not None:
+            oo = dict(old_v)
+            for kk in new_v.keys() - old_v.keys():
+                vv = new_v[kk]
+                if kk in old_v and old_v[kk] != vv:
+                    raise ValueError()
+                oo[kk] = vv
+            setattr(out, f, oo)
+
+            return
+        elif not field.is_list:
+            # use the old value, assume the new one is the same
+            # TODO could verify that old_v == new_v
+            setattr(out, f, old_v)
+            return
+        assert isinstance(old_v, list)
+        if not(new_v):
+            setattr(out, f, old_v)
+            return
+        offset = getattr(delta, field.list_offset(), 0)
+        if offset is None:
+            offset = 0
+        if offset != len(old_v):
+            logging.debug(
+                'list offset mismatch %s old len %d new offset %s',
+                f, len(old_v), offset)
+            raise ValueError()
+        l = []
+        l.extend(old_v)
+        l.extend(new_v)
+        setattr(out, f, l)
+
 
     # merges into self
     def merge(self, delta, out : Optional["TransactionMetadata"] = None):
@@ -814,79 +839,86 @@ class TransactionMetadata:
         assert successor is not None
         out = TransactionMetadata()
         for (f,json_field) in tx_json_fields.items():
-            old_v = getattr(self, f, None)
-            new_v = getattr(successor, f, None)
-            if old_v is None and new_v is None:
-                continue
-            if ((which_json is not None) and not json_field.valid(which_json)):
-                continue  # ignore
-
-            if ((which_json is not None) and (
-                    json_field.emit_rest_placeholder(which_json)) and
-                (old_v is not None and new_v is None)):
-                continue
-            if (old_v is not None) and (new_v is None):
-               logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
-               raise ValueError()
-            if (old_v is None) and (new_v is not None):
-                setattr(out, f, new_v)
-                continue
-
-            # emit body in the delta if it changed
-            if f == 'body' and old_v is not None and new_v is not None:
-                body_delta = old_v.delta(new_v, which_json)
-                if body_delta is None:
-                    raise ValueError()
-                if body_delta:
-                    setattr(out, f, new_v)
-                continue
-
-            if json_field.is_dict and old_v is not None and new_v is not None:
-                if new_v.keys() < old_v.keys():
-                    raise ValueError()
-                for kk,vv in old_v.items():
-                    if new_v[kk] != vv:
-                        raise ValueError()
-                oo = {}
-                for kk in new_v.keys() - old_v.keys():
-                    oo[kk] = new_v[kk]
-                setattr(out, f, oo)
-                continue
-            elif not json_field.is_list:  #not isinstance(old_v, list):
-                if old_v != new_v:
-                    logging.debug('tx.delta value change %s old=%s new=%s',
-                                  f, old_v, new_v)
-                    raise ValueError()
-                setattr(out, f, None)
-                continue
-            assert isinstance(old_v, list)
-            assert isinstance(new_v, list)
-            if json_field.emit_rest_placeholder(which_json):
-                if any([x != None for x in new_v]):
-                    logging.debug('non-None placeholder')
-                    raise ValueError()
-                if len(new_v) < len(old_v):
-                    logging.debug('list shrink placeholder')
-                    raise ValueError()
-                continue
-
-            old_len = len(old_v)
-            if old_len > len(new_v):
-                logging.debug('tx.delta invalid list trunc %s', f)
-                raise ValueError()
-            for i in range(0, old_len):
-                if old_v[i] is None and new_v[i] is not None:
-                    pass  #ok   XXX why would old_v be None?
-                if old_v[i] is not None and new_v[i] is None:
-                    logging.debug('tx.delta %s ->None', f)
-                    raise ValueError()
-                if old_v[i] != new_v[i]:
-                    logging.debug('tx.delta %s !=', f)
-                    raise ValueError()
-            setattr(out, f, new_v[old_len:])
-            setattr(out, json_field.list_offset(), old_len)
+            self._delta_one(successor, which_json, f, json_field, out)
+            if json_field.is_dict:
+                self._delta_one(successor, which_json,
+                                json_field.dict_json(), json_field, out)
 
         return out
+
+    def _delta_one(self, successor, which_json, f, json_field, out):
+        old_v = getattr(self, f, None)
+        new_v = getattr(successor, f, None)
+        if old_v is None and new_v is None:
+            return
+        if ((which_json is not None) and not json_field.valid(which_json)):
+            return  # ignore
+
+        if ((which_json is not None) and (
+                json_field.emit_rest_placeholder(which_json)) and
+            (old_v is not None and new_v is None)):
+            return
+        if (old_v is not None) and (new_v is None):
+           logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
+           raise ValueError()
+        if (old_v is None) and (new_v is not None):
+            setattr(out, f, new_v)
+            return
+
+        # emit body in the delta if it changed
+        if f == 'body' and old_v is not None and new_v is not None:
+            body_delta = old_v.delta(new_v, which_json)
+            if body_delta is None:
+                raise ValueError()
+            if body_delta:
+                setattr(out, f, new_v)
+            return
+
+        if json_field.is_dict and old_v is not None and new_v is not None:
+            if new_v.keys() < old_v.keys():
+                raise ValueError()
+            for kk,vv in old_v.items():
+                if new_v[kk] != vv:
+                    raise ValueError()
+            oo = {}
+            for kk in new_v.keys() - old_v.keys():
+                oo[kk] = new_v[kk]
+            setattr(out, f, oo)
+            return
+        elif not json_field.is_list:
+            if old_v != new_v:
+                logging.debug('tx.delta value change %s old=%s new=%s',
+                              f, old_v, new_v)
+                raise ValueError()
+            setattr(out, f, None)
+            return
+        assert isinstance(old_v, list)
+        assert isinstance(new_v, list)
+        if json_field.emit_rest_placeholder(which_json):
+            if any([x != None for x in new_v]):
+                logging.debug('non-None placeholder')
+                raise ValueError()
+            if len(new_v) < len(old_v):
+                logging.debug('list shrink placeholder')
+                raise ValueError()
+            return
+
+        old_len = len(old_v)
+        if old_len > len(new_v):
+            logging.debug('tx.delta invalid list trunc %s', f)
+            raise ValueError()
+        for i in range(0, old_len):
+            if old_v[i] is None and new_v[i] is not None:
+                pass  #ok   XXX why would old_v be None?
+            if old_v[i] is not None and new_v[i] is None:
+                logging.debug('tx.delta %s ->None', f)
+                raise ValueError()
+            if old_v[i] != new_v[i]:
+                logging.debug('tx.delta %s !=', f)
+                raise ValueError()
+        setattr(out, f, new_v[old_len:])
+        setattr(out, json_field.list_offset(), old_len)
+
 
     def maybe_delta(self, next, which_json : Optional[WhichJson] = None
                     ) -> Optional['TransactionMetadata']:
@@ -951,6 +983,8 @@ class TransactionMetadata:
     def get_filter_output(self, f) -> Any:
         if self.filter_output is None:
             return None
+        # TODO deserialize from filter_output_dict_json with
+        # caller-provided from_json callable
         return self.filter_output.get(f, None)
 
     def add_ephemeral_filter_output(self, f, v):

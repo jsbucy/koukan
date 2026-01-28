@@ -279,15 +279,16 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual(1, len(handlers))
         cursor = self.router.storage.get_transaction_cursor(db_id=1)
         cursor.load()
-        # XXX currently the way filter_output has DB_ATTEMPT validity,
-        # it just loads the json into the tx on a read.
         logging.debug(cursor.tx)
-        filter_output = cursor.tx.filter_output
-        self.assertIsNotNone(message_validation := filter_output.get('koukan.message_validation_filter.MessageValidationFilter', None))
+        filter_output_json = cursor.tx.filter_output_dict_json
+        logging.debug(filter_output_json)
+        self.assertIsNotNone(message_validation := filter_output_json.get(
+            'koukan.message_validation_filter.MessageValidationFilter', None))
         self.assertEqual(1, message_validation['status'])
         self.assertIn('InvalidHeaderDefect', message_validation['err'])
 
-        self.assertIsNotNone(policy_action := filter_output.get('koukan.policy_action_filter.PolicyActionFilter', None))
+        self.assertIsNotNone(policy_action := filter_output_json.get(
+            'koukan.policy_action_filter.PolicyActionFilter', None))
         self.assertIn('message_validation', policy_action['matched_tags'])
 
     # mx smtp -> rest
