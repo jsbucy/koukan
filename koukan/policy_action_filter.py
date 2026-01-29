@@ -88,7 +88,12 @@ class PolicyActionFilter(Filter):
 
     def _match(self, tx) -> bool:
         tag = self.yaml['tag']
-        r = self._match_rec(tx, self.yaml['match'])
+        # empty match specification matches everything for
+        # fallthrough/catchall at the end of a group
+        match = self.yaml.get('match', None)
+        if match is None:
+            return True
+        r = self._match_rec(tx, match)
         if r == MatcherResult.PRECONDITION_UNMET:
             # TODO something like if yaml['required'] and
             # tx.body.finalized, raise

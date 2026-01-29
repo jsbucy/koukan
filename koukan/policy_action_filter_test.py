@@ -52,6 +52,24 @@ class PolicyActionFilterTest(unittest.TestCase):
         filter_output.expect_call = False
         filter.on_update(prev.delta(tx))
 
+    def test_trivial(self):
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke'},
+            # no match: specification matches everything
+            matchers={})
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.sender = Sender('ingress', 'smtp-mx')
+        tx.filter_output = {}
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+
+        filter_output = FilterOutput()
+        tx.add_filter_output('my_filter', filter_output)
+        filter.on_update(prev.delta(tx))
+        self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
+        self.assertIn('test_smoke', out.matched_tags)
+
     def test_missing_input(self):
         filter = PolicyActionFilter(
             {'tag': 'test_smoke',
