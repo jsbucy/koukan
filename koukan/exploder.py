@@ -177,6 +177,11 @@ class Exploder(Filter):
         # accept reusing !finalized blob. Exploder passes it through
         # but AsyncFilterWrapper buffers.
 
+        # If we store&forward, we return a 250 downstream even though
+        # it's still inflight upstream.
+        if tx.cancelled and tx.data_response is not None:
+            return FilterResult()
+
         if tx_delta.mail_from:
             # note: mail_response doesn't have EXPLODER_CREATE
             # validity so won't be copied to the upstream tx. If mail
@@ -274,4 +279,5 @@ class Exploder(Filter):
                     rcpt.update(retry_delta)
 
             tx.data_response = Response(250, 'DATA ok (Exploder store&forward)')
+
         return FilterResult()

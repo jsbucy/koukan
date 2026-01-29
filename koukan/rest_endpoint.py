@@ -301,7 +301,7 @@ class RestEndpoint(Filter):
 
     def _maybe_cancel(self, tx_delta) -> Optional[FilterResult]:
         assert self.downstream_tx is not None
-        if tx_delta.cancelled:
+        if tx_delta.cancelled and self.downstream_tx.data_response is None:
             self._cancel()
             upstream_delta = TransactionMetadata()
             # TODO I'm not sure whether it's possible to get new

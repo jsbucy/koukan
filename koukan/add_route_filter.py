@@ -64,6 +64,15 @@ class AddRouteFilter(Filter):
     def on_update(self, tx_delta : TransactionMetadata):
         # post-exploder output chain/single-rcpt only for now
         assert self.downstream_tx is not None
+
+        # similar to exploder, if this is wired with
+        # AsyncFilterWrapper+StorageWriterFilter, this will return an
+        # immediate 250 even though it's still inflight.
+        if (self.add_route.tx is not None and
+            self.add_route.tx.data_response is not None and
+            self.downstream_tx.cancelled):
+            return FilterResult()
+
         assert len(self.downstream_tx.rcpt_to) <= 1
         add_route_delta = tx_delta.copy_valid(WhichJson.ADD_ROUTE)
         if self.add_route.tx is None:

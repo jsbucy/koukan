@@ -22,6 +22,8 @@ class Sink(CoroutineFilter):
         logging.debug('Sink.on_update %s', self.downstream_tx)
         logging.debug(delta)
         # self.downstream['sink'] = 'sink'
+        if self.downstream_tx.cancelled:
+            return
         assert delta.mail_response is None
         if delta.mail_from:
             self.downstream_tx.mail_response = Response(201)

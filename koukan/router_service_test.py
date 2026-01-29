@@ -949,13 +949,10 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url)
 
-        cancelled = False
-
         def exp(tx, tx_delta):
-            nonlocal cancelled
             logging.debug(tx)
             if tx.cancelled:
-                cancelled = True
+                return TransactionMetadata()
             self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
             self.assertEqual([m.mailbox for m in tx.rcpt_to],
                              ['bob@example.com'])
@@ -982,17 +979,22 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
 
-        self.assertEqual(250, tx.mail_response.code, 201)
+        self.assertEqual(250, tx.mail_response.code)
         self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
         self.assertRcptCodesEqual([250], tx.rcpt_response)
         self.assertIn('RCPT ok (AsyncFilterWrapper store&forward)',
                       tx.rcpt_response[0].message)
+        self.assertEqual(250, tx.data_response.code)
+        self.assertIn('AsyncFilterWrapper store&forward',
+                      tx.data_response.message)
 
         for i in range(0,2):
             logging.debug('test_notification upstream tx %d', i)
-            upstream_endpoint = FakeFilter()
-            def exp(tx, tx_delta):
+            upstream_endpoint2 = FakeFilter()
+            def exp2(tx, tx_delta):
                 logging.debug(tx)
+                if tx.cancelled:
+                    return TransactionMetadata()
                 self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
                 self.assertEqual([m.mailbox for m in tx.rcpt_to],
                                  ['bob@example.com'])
@@ -1000,11 +1002,11 @@ class RouterServiceTest(unittest.TestCase):
                 tx.mail_response = Response(201)
                 tx.rcpt_response = [Response(402)]
                 return prev.delta(tx)
-            for j in range(0, 3):
-                upstream_endpoint.add_expectation(exp)
+            for j in range(0, 4):
+                upstream_endpoint2.add_expectation(exp2)
 
             logging.debug('dequeue attempt')
-            self.add_endpoint(upstream_endpoint)
+            self.add_endpoint(upstream_endpoint2)
             self._dequeue()
 
             if i == 1:
@@ -1024,7 +1026,8 @@ class RouterServiceTest(unittest.TestCase):
                     tx.rcpt_response = [Response(204)]
                     tx.data_response = Response(205)
                     return prev.delta(tx)
-                dsn_endpoint.add_expectation(exp_dsn)
+                for j in range(0,2):
+                    dsn_endpoint.add_expectation(exp_dsn)
                 logging.debug('dequeue dsn')
                 self.add_endpoint(dsn_endpoint)
                 self._dequeue()

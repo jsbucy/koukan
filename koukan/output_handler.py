@@ -306,6 +306,10 @@ class OutputHandler:
                             raise
                         backoff(i)
                         self.cursor.load()
+
+                if done and not self.tx.cancelled:
+                    self.tx.cancelled = True
+                    self.filter_chain.update()
         logging.debug('done %s', self.rest_id)
 
     # -> final attempt reason, next retry time

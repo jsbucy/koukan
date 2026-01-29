@@ -168,9 +168,10 @@ class FilterChain:
             delta = f._prev_downstream_tx.delta(f.downstream_tx)
             if not noop and not delta:
                 break
-            assert delta.mail_response is None
-            assert not delta.rcpt_response
-            assert delta.data_response is None
+            if not delta.cancelled:
+                assert delta.mail_response is None
+                assert not delta.rcpt_response
+                assert delta.data_response is None
 
             f._prev_downstream_tx = f.downstream_tx.copy()
 
@@ -200,7 +201,7 @@ class FilterChain:
             completion.append((f, co, fut, filter_result))
             if f == self.filters[-1]:
                 assert fut is None  # i.e. RestEndpoint
-            if not f.downstream_tx.check_preconditions():
+            if not delta.cancelled and not f.downstream_tx.check_preconditions():
                 break
 
         for f, co, fut, prev_result in reversed(completion):

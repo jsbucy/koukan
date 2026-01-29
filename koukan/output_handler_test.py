@@ -65,6 +65,8 @@ class OutputHandlerTest(unittest.TestCase):
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
+            if tx.cancelled:
+                return TransactionMetadata()
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'bob')
             self.assertEqual(tx.body.pread(0), b'hello, world!')
@@ -75,7 +77,8 @@ class OutputHandlerTest(unittest.TestCase):
                 data_response = Response(203))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.add_expectation(exp)
+        for i in range(0,2):
+            endpoint.add_expectation(exp)
 
         tx_cursor = self.storage.load_one()
         assert tx_cursor.in_attempt
@@ -185,6 +188,8 @@ class OutputHandlerTest(unittest.TestCase):
         body = b'hello, world!'
         def exp_body(tx, tx_delta):
             logging.debug(tx)
+            if tx.cancelled:
+                return TransactionMetadata()
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob1', 'bob2'])
             if tx.body is None or not tx.body.finalized():
@@ -338,6 +343,8 @@ class OutputHandlerTest(unittest.TestCase):
         chain = FilterChain([endpoint])
 
         def exp_rcpt(tx, tx_delta):
+            if tx.cancelled:
+                return TransactionMetadata()
             self.assertEqual(tx.mail_from.mailbox, 'alice')
             self.assertEqual([m.mailbox for m in tx.rcpt_to], ['bob'])
             upstream_delta = TransactionMetadata(
@@ -348,7 +355,7 @@ class OutputHandlerTest(unittest.TestCase):
         endpoint.add_expectation(exp_rcpt)
         def exp(tx, delta):
             pass
-        for i in range(0,3):
+        for i in range(0,4):
             endpoint.add_expectation(exp)
 
         reader = self.storage.load_one()
@@ -490,17 +497,22 @@ class OutputHandlerTest(unittest.TestCase):
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
+            logging.debug(tx)
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
             tx.merge_from(upstream_delta)
             return upstream_delta
+        def exp_cancel(tx, tx_delta):
+            self.assertTrue(tx.cancelled)
         endpoint.add_expectation(exp)
+        endpoint.add_expectation(exp_cancel)
 
         notification_endpoint = MockAsyncFilter()
 
         def exp_notification(tx, tx_delta):
+            logging.debug(tx)
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
             dsn = tx.body.pread(0).decode('utf-8')
@@ -566,13 +578,16 @@ class OutputHandlerTest(unittest.TestCase):
 
         def exp(tx, tx_delta):
             logging.debug('test_notification_message_builder exp %s', tx)
+            if tx.cancelled:
+                return TransactionMetadata()
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.add_expectation(exp)
+        for i in range(0,2):
+            endpoint.add_expectation(exp)
 
         notification_endpoint = MockAsyncFilter()
 
@@ -648,13 +663,17 @@ class OutputHandlerTest(unittest.TestCase):
         chain = FilterChain([endpoint])
 
         def exp(tx, tx_delta):
+            logging.debug(tx)
+            if tx.cancelled:
+                return TransactionMetadata()
             upstream_delta = TransactionMetadata(
                 mail_response = Response(201),
                 rcpt_response = [Response(202)],
                 data_response = Response(550))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.add_expectation(exp)
+        for i in range(0,2):
+            endpoint.add_expectation(exp)
 
         # no notification_endpoint_factory since not requested
         tx_cursor = self.storage.load_one()
@@ -683,6 +702,9 @@ class OutputHandlerTest(unittest.TestCase):
         notification_endpoint = MockAsyncFilter()
 
         def exp_notification(tx, tx_delta):
+            logging.debug(tx)
+            if tx.cancelled:
+                return TransactionMetadata()
             self.assertEqual(tx.mail_from.mailbox, '')
             self.assertEqual(tx.rcpt_to[0].mailbox, 'alice')
             dsn = tx.body.pread(0).decode('utf-8')
@@ -696,7 +718,11 @@ class OutputHandlerTest(unittest.TestCase):
             return upstream_delta, 1
         notification_endpoint.expect_update(exp_notification)
 
+        def exp_cancel(tx, delta):
+            assert tx.cancelled
+            return TransactionMetadata()
         endpoint = FakeFilter()
+        endpoint.add_expectation(exp_cancel)
         chain = FilterChain([endpoint])
 
         tx_cursor = self.storage.load_one()

@@ -108,6 +108,9 @@ class PolicyActionFilter(Filter):
     def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream_tx
         assert tx is not None
+        if tx.cancelled:
+            return FilterResult()
+
         out = tx.get_filter_output(self.fullname())
         if out is None:
             out = PolicyActionFilterOutput()
