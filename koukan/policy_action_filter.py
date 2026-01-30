@@ -1,7 +1,9 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Callable, Dict, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 import logging
+import random
+from functools import reduce
 
 from koukan.filter import TransactionMetadata
 from koukan.filter_chain import Filter, FilterResult
@@ -11,14 +13,34 @@ from koukan.filter_output import FilterOutput
 from koukan.rest_schema import WhichJson
 
 class PolicyActionFilterOutput(FilterOutput):
-    matched_tags : Set[str]
+    matched_tags_set : Set[str]
+    matched_tags : List[str]
+
+    matched_rules_set : Set[str]
+    matched_rules : List[str]
+
     def __init__(self):
-        self.matched_tags = set()
+        self.matched_tags_set = set()
+        self.matched_tags = []
+        self.matched_rules_set = set()
+        self.matched_rules = []
 
     def to_json(self, w : WhichJson):
         if w != WhichJson.DB_ATTEMPT:
             return None
-        return {'matched_tags': list(self.matched_tags)}
+        return {'matched_tags': self.matched_tags,
+                'matched_rules': self.matched_rules}
+
+    def _add_tag(self, tag):
+        assert tag not in self.matched_tags_set
+        self.matched_tags_set.add(tag)
+        self.matched_tags.append(tag)
+
+    def _add_rule(self, rule):
+        assert rule not in self.matched_rules_set
+        self.matched_rules_set.add(rule)
+        self.matched_rules.append(rule)
+
 
 
 class _Output:
@@ -104,11 +126,35 @@ class PolicyActionFilter(Filter):
 
         return r == MatcherResult.MATCH
 
-    def _apply_action(self, tx, tag):
-        action = self.yaml.get('action', 'ACCEPT')
+    def _sample_action(self, action):
+        if not isinstance(action, list):
+            return action
+        denom = reduce(lambda x,y: x + y[0], action, 0)
+        n = random.uniform(0, denom)
+        for i in action:
+            rate, act = i
+            if n < rate:
+                return act
+            n -= rate
+        assert False, 'bug'
+
+    def _apply_action(self, tx, tag, out):
+        action = self._sample_action(self.yaml.get('action', 'MATCH'))
+        name = self.yaml.get('name', None)
+        name = name if name is not None else tag
+
         if action == 'REJECT':
+            out._add_rule(name)
+            out._add_tag(tag)
             tx.fill_inflight_responses(
                 Response(550, '5.6.0 message rejected ' + tag))
+        elif action == 'LOG':
+            out._add_rule(name)
+        elif action == 'MATCH':
+            out._add_rule(name)
+            out._add_tag(tag)
+        else:
+            raise ValueError()
 
     def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream_tx
@@ -126,12 +172,11 @@ class PolicyActionFilter(Filter):
             (tag in eout.unmet_precondition_tags)):
             return FilterResult()
 
-        if tag in out.matched_tags:
+        if tag in out.matched_tags_set:
             return FilterResult()
 
         if not self._match(tx):
             return FilterResult()
-        self._apply_action(tx, tag)
-        out.matched_tags.add(tag)
+        self._apply_action(tx, tag, out)
         tx.add_filter_output(self.fullname(), out)
         return FilterResult()

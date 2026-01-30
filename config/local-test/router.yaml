@@ -265,7 +265,6 @@ endpoint:
       # no domains: match everything
       # dest == None: reject
   - filter: message_validation
-
   - filter: policy_action
     match:
       any:

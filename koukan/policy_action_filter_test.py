@@ -3,6 +3,7 @@
 
 import logging
 import unittest
+import random
 
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.policy_action_filter import (
@@ -46,7 +47,8 @@ class PolicyActionFilterTest(unittest.TestCase):
         filter.on_update(prev.delta(tx))
         self.assertIsNotNone(out := tx.get_filter_output(filter.fullname()))
         self.assertIn('test_smoke', out.matched_tags)
-        self.assertEqual({'matched_tags': ['test_smoke']},
+        self.assertEqual({'matched_tags': ['test_smoke'],
+                          'matched_rules': ['test_smoke']},
                          out.to_json(WhichJson.DB_ATTEMPT))
 
         filter_output.expect_call = False
@@ -107,7 +109,7 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual(550, tx.mail_response.code)
 
     def test_matcher(self):
-        class TestMatcher:  #(TransactionMatcher):
+        class TestMatcher:
             m = True
             def match(self, yaml, tx : TransactionMetadata) -> bool:
                 return self.m
@@ -232,6 +234,22 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual(MatcherResult.PRECONDITION_UNMET,
                          f._match_rec(None, yaml))
 
+    def test_percent(self):
+        random.seed(1)
+
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke'},
+            # no match: specification matches everything
+            matchers={})
+
+        actions = [
+            [0.5, 'LOG'],
+            [0.5, 'REJECT']
+        ]
+
+        self.assertEqual(
+            'LRRLLLRRLL',
+            ''.join([filter._sample_action(actions)[0] for i in range(0,10)]))
 
 
 if __name__ == '__main__':
