@@ -113,6 +113,9 @@ class ReceivedHeaderFilter(ProxyFilter):
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
 
+        if self.downstream_tx.cancelled:
+            return FilterResult()
+
         body = tx_delta.maybe_body_blob()
         tx_delta.body = None
         if body is not None and not body.finalized():
