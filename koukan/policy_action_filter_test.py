@@ -179,60 +179,69 @@ class PolicyActionFilterTest(unittest.TestCase):
             'nomatch': lambda tx, yaml: MatcherResult.NO_MATCH,
             'precond': lambda tx, yaml: MatcherResult.PRECONDITION_UNMET }
 
-        yaml = {'all': [
-            {'matcher': 'match'},
-            {'matcher': 'match'}
-        ]}
+        match_yaml = {
+            'all': [
+                {'matcher': 'match'},
+                {'matcher': 'match'}
+            ]}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
 
-        yaml = {'all': [
+        match_yaml = {
+            'all': [
+                {'matcher': 'match'},
+                {'matcher': 'nomatch'}
+            ]}
+        f = PolicyActionFilter(
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
+            matchers = matchers)
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
+
+        match_yaml = {'any': [
             {'matcher': 'match'},
             {'matcher': 'nomatch'}
             ]}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
 
-        yaml = {'any': [
-            {'matcher': 'match'},
-            {'matcher': 'nomatch'}
-            ]}
-        f = PolicyActionFilter(
-            yaml = yaml,
-            matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
-
-        yaml = {'any': [
+        match_yaml = {'any': [
             {'matcher': 'nomatch'},
             {'matcher': 'nomatch'}
             ]}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
 
-        yaml = {'not': {'matcher': 'match'}}
+        match_yaml = {'not': {'matcher': 'match'}}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, yaml))
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
 
-        yaml = {'not': {'matcher': 'nomatch'}}
+        match_yaml = {'not': {'matcher': 'nomatch'}}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
 
-        yaml = {'not': {'matcher': 'precond'}}
+        match_yaml = {'not': {'matcher': 'precond'}}
         f = PolicyActionFilter(
-            yaml = yaml,
+            yaml = {'tag': 'test_expr',
+                    'match': match_yaml},
             matchers = matchers)
         self.assertEqual(MatcherResult.PRECONDITION_UNMET,
-                         f._match_rec(None, yaml))
+                         f._match_rec(None, match_yaml))
 
     def test_percent(self):
         random.seed(1)

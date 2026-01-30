@@ -56,9 +56,16 @@ class PolicyActionFilter(Filter):
     yaml : dict
     matchers : Dict[str, TransactionMatcher]
 
+    group_name : str
+    rule_name : str
+
     def __init__(self, yaml : dict, matchers : Dict[str, TransactionMatcher]):
         self.yaml = yaml
         self.matchers = matchers
+
+        self.group_name = yaml['tag']
+        n = yaml.get('name', None)
+        self.rule_name = n if n else self.group_name
 
     def _add_missing(self, tx, tag):
         if (out := tx.get_ephemeral_filter_output(self.fullname())) is None:
@@ -67,21 +74,22 @@ class PolicyActionFilter(Filter):
 
     def _match_one(self, tx, yaml):
         matcher_name = yaml['matcher']
+        matcher_yaml = dict(yaml)
+        del matcher_yaml['matcher']
         if matcher := self.matchers.get(matcher_name, None):
-            return matcher(yaml, tx)
+            return matcher(matcher_yaml, tx)
 
         filter_output = tx.get_filter_output(matcher_name)
         if filter_output is None:
             return MatcherResult.PRECONDITION_UNMET
-        return filter_output.match(yaml)
+        return filter_output.match(matcher_yaml)
 
     def _match_rec(self, tx, yaml):
         if 'matcher' in yaml:
             return self._match_one(tx, yaml)
-
         assert len(yaml) == 1
         op = [k for k in yaml.keys()][0]
-        assert op in {'any', 'all', 'not', 'matcher'}
+        assert op in {'any', 'all', 'not'}
         arg = yaml[op]
 
         if op == 'not':
@@ -109,7 +117,6 @@ class PolicyActionFilter(Filter):
 
 
     def _match(self, tx) -> bool:
-        tag = self.yaml['tag']
         # empty match specification matches everything for
         # fallthrough/catchall at the end of a group
         match = self.yaml.get('match', None)
@@ -117,11 +124,7 @@ class PolicyActionFilter(Filter):
             return True
         r = self._match_rec(tx, match)
         if r == MatcherResult.PRECONDITION_UNMET:
-            # TODO something like if yaml['required'] and
-            # tx.body.finalized, raise
-            # ie it's expected to always match by the end/if
-            # it's missing at the end, it's a bug
-            self._add_missing(tx, tag)
+            self._add_missing(tx, self.group_name)
             return False
 
         return r == MatcherResult.MATCH
@@ -138,21 +141,19 @@ class PolicyActionFilter(Filter):
             n -= rate
         assert False, 'bug'
 
-    def _apply_action(self, tx, tag, out):
+    def _apply_action(self, tx, out):
         action = self._sample_action(self.yaml.get('action', 'MATCH'))
-        name = self.yaml.get('name', None)
-        name = name if name is not None else tag
 
         if action == 'REJECT':
-            out._add_rule(name)
-            out._add_tag(tag)
+            out._add_rule(self.rule_name)
+            out._add_tag(self.group_name)
             tx.fill_inflight_responses(
-                Response(550, '5.6.0 message rejected ' + tag))
+                Response(550, '5.6.0 message rejected ' + self.group_name))
         elif action == 'LOG':
-            out._add_rule(name)
+            out._add_rule(self.rule_name)
         elif action == 'MATCH':
-            out._add_rule(name)
-            out._add_tag(tag)
+            out._add_rule(self.rule_name)
+            out._add_tag(self.group_name)
         else:
             raise ValueError()
 
@@ -165,18 +166,18 @@ class PolicyActionFilter(Filter):
         out = tx.get_filter_output(self.fullname())
         if out is None:
             out = PolicyActionFilterOutput()
-        tag = self.yaml['tag']
 
         if (((eout := tx.get_ephemeral_filter_output(self.fullname()))
              is not None) and
-            (tag in eout.unmet_precondition_tags)):
+            (self.group_name in eout.unmet_precondition_tags)):
             return FilterResult()
 
-        if tag in out.matched_tags_set:
+        if (self.group_name in out.matched_tags_set or
+            self.rule_name in out.matched_rules):
             return FilterResult()
 
         if not self._match(tx):
             return FilterResult()
-        self._apply_action(tx, tag, out)
+        self._apply_action(tx, out)
         tx.add_filter_output(self.fullname(), out)
         return FilterResult()
