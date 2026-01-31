@@ -124,6 +124,88 @@ expect vs ingress where there is a previous hop to retry.
 rest_output: RestEndpoint actually sends the message somewhere via
 http/rest
 
+policy_action: cf "signals&policies" below
+
+Signals&Policies
+----------------
+
+Koukan provides a simple yet powerful system for taking exceptional
+actions on transactions matching specific criteria.
+
+The basic idea is to separate signals from policy. A signal might be a
+piece of information like: "the smtp client EHLO matched their reverse
+dns." Whereas a policy might be: "reject transactions where the EHLO
+didn't match." This allows uniform implementation of actions in one
+place rather than scattering them across every signal. It also allows
+policies to include arbitrary logical combinations of signals often
+for allowlisting "reject tx where the EHLO didn't match unless it is
+from the ip subnet of my known inbound gateway thing."
+
+Output chain filters emit signals to ``tx.filter_output``. This is
+typically a filter-specific subclass of
+``FilterOutput``. ``FilterOutput.match(yaml)`` returns whether the
+output matches criteria specified in yaml. ``MatcherResult`` includes
+``PRECONDITION_UNMET`` if e.g. the matcher is being run at
+``tx.mail_from`` but the signal depends on the body, etc.
+
+Simple matchers can also be loaded via ``modules.transaction_matcher``
+similar to ``recipient_router_filter.RoutingPolicy``. A simple matcher
+is a just ``Callable[[yaml, TransactionMetadata], MatcherResult]`` cf
+``koukan.transaction_matchers`` e.g. cidr, tls.
+
+Policies are specified with an invocation of ``policy_action``
+filter. This consists of
+
+* a match expression which can be an individual signal ``matcher``
+  invocation or a logical expression all/any/not.  An empty/unpopulated
+  match expression always matches for use as the catchall/fallthrough at
+  the end of a group.
+* a group/tag name
+* a rule name (defaults to tag if not present)
+* an action: currently REJECT/LOG/MATCH
+  this can also be a list of [weight, action] for percent experiments
+
+Example::
+
+  endpoint:
+  - name: ingress
+    # ...
+    chain:
+    - filter: remote_host
+    - filter: policy_action
+      match:
+        any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
+      action:
+      - [9, LOG]
+      - [1, REJECT]
+      tag: remote_host
+
+
+The policy action filter has its own output object which contains 2
+sets: matched_tags and matched_rules.
+
+PolicyActionFilter first checks the rule's tag and rule name against
+PolicyActionFilterOutput; if either is present, the rule is treated as
+a no-op. Then it evaluates the match expression. If it returns
+``PRECONDITION_UNMET``, the tag is no-op'd for the rest of the
+current ``FilterChain.update()`` invocation.
+
+If the expression matches, PolicyActionFilter applies the action:
+
+* REJECT: sets the responses to 550
+* MATCH: retires rule and tag
+* LOG: retires rule only. This is useful to dark-launch multiple
+  reject rules to see all the ones that match rather than stopping
+  after the first.
+
+For percent experiments, the denominator is the sum of the weights. In
+this example the denominator is 10 so it will LOG 90% of the time and
+REJECT 10%.
+
 
 Cluster/k8s
 ===========
