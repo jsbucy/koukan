@@ -23,7 +23,8 @@ py_library(name='sender',
 
 py_library(name='filter_output',
            srcs=['filter_output.py'],
-           deps=[':rest_schema'])
+           deps=[':matcher_result',
+                 ':rest_schema'])
 
 py_library(name='filter',
            srcs=['filter.py'],
@@ -470,6 +471,25 @@ py_test(name='policy_action_filter_test',
         deps=[':policy_action_filter',
               ':filter'])
 
+py_library(name='spf_check_filter',
+           srcs=['spf_check_filter.py'],
+           deps=[':address',
+                 ':filter',
+                 ':filter_chain',
+                 ':filter_output',
+                 ':matcher_result',
+                 ':response',
+                 # pyspf doesn't have a pip dep on dnspython but uses
+                 # it opportunistically
+                 '@pypi//dnspython',
+                 '@pypi//pyspf'])
+
+py_test(name='spf_check_filter_test',
+        srcs=['spf_check_filter_test.py'],
+        deps=[':spf_check_filter',
+              ':filter',
+              '@pypi//pyspf'])
+
 py_library(name='filter_chain_factory',
            srcs=['filter_chain_factory.py'],
            deps=[':filter',
@@ -531,6 +551,7 @@ py_library(name='filter_chain_wiring',
                  ':remote_host_filter',
                  ':rest_endpoint',
                  ':sender',
+                 ':spf_check_filter',
                  ':transaction_matchers'])
 
 py_library(name='executor',
