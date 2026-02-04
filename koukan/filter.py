@@ -974,26 +974,26 @@ class TransactionMetadata:
             return None
         return self.body_blob()
 
-    def add_filter_output(self, f, v):
+    def add_filter_output(self, f : str, v : Any):
         if self.filter_output is None:
             self.filter_output = {}
         self.filter_output[f] = v
         return v
 
-    def get_filter_output(self, f) -> Any:
+    def get_filter_output(self, f : str) -> Any:
         if self.filter_output is None:
             return None
         # TODO deserialize from filter_output_dict_json with
         # caller-provided from_json callable
         return self.filter_output.get(f, None)
 
-    def add_ephemeral_filter_output(self, f, v):
+    def add_ephemeral_filter_output(self, f : str, v : Any):
         if self.ephemeral_filter_output is None:
             self.ephemeral_filter_output = {}
         self.ephemeral_filter_output[f] = v
         return v
 
-    def get_ephemeral_filter_output(self, f) -> Any:
+    def get_ephemeral_filter_output(self, f : str) -> Any:
         if self.ephemeral_filter_output is None:
             return None
         return self.ephemeral_filter_output.get(f, None)

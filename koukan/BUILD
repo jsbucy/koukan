@@ -488,6 +488,7 @@ py_test(name='spf_check_filter_test',
         srcs=['spf_check_filter_test.py'],
         deps=[':spf_check_filter',
               ':filter',
+              ':rest_schema',
               '@pypi//pyspf'])
 
 py_library(name='filter_chain_factory',

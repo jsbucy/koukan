@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from enum import IntEnum
 
 import spf
@@ -13,6 +13,7 @@ from koukan.filter_chain import Filter, FilterResult
 from koukan.filter_output import FilterOutput
 from koukan.matcher_result import MatcherResult
 from koukan.response import Response
+from koukan.rest_schema import WhichJson
 
 class SpfCheckFilterOutput(FilterOutput):
     class Status(IntEnum):
@@ -59,6 +60,18 @@ class SpfCheckFilterOutput(FilterOutput):
                 return MatcherResult.NO_MATCH
         return MatcherResult.MATCH
 
+    def to_json(self, w : WhichJson):
+        if w != WhichJson.DB_ATTEMPT:
+            return None
+        out : Dict[str, Any] = {}
+        if self.extra_domains_results:
+            out['extra_domains_results'] = {
+                d : r.name for d,r in self.extra_domains_results.items()}
+        if self.mail_from_result is not None:
+            out['mail_from_result'] = self.mail_from_result.name
+        return out
+
+
 class SpfCheckFilter(Filter):
     extra_domains : List[str]
     def __init__(self, extra_domains : List[str]):
@@ -66,20 +79,23 @@ class SpfCheckFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if tx_delta.remote_host is None and tx_delta.mail_from is None:
+            logging.debug('noop')
             return FilterResult()
 
         tx = self.downstream_tx
         assert tx is not None
-        out = tx.get_filter_output(self.fullname)
+        out = tx.get_filter_output(self.fullname())
         if out is None:
             out = SpfCheckFilterOutput()
-            tx.add_filter_output(self.fullname, out)
+            tx.add_filter_output(self.fullname(), out)
 
         if tx_delta.remote_host is not None:
             for d in self.extra_domains:
                 # we're passing a domain from config here so it should
                 # never fall back to ehlo.
-                out.extra_domains_results[d] = self._check(d, ehlo=None)
+                result = self._check(d, ehlo=None)
+                out.extra_domains_results[d] = result
+                logging.debug('%s %s', d, result)
 
         if tx_delta.mail_from is not None or tx_delta.smtp_meta is not None:
             # Checking the ehlo domain is (only?) for <>/bounces.
@@ -97,6 +113,7 @@ class SpfCheckFilter(Filter):
                     tx_delta.mail_from.mailbox)
             status = self._check(env_from_domain, ehlo)
             out.mail_from_result = status
+            logging.debug(status)
         return FilterResult()
 
     def _check(self, domain, ehlo):

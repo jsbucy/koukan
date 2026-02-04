@@ -10,6 +10,7 @@ import spf
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.spf_check_filter import SpfCheckFilter, SpfCheckFilterOutput
 from koukan.matcher_result import MatcherResult
+from koukan.rest_schema import WhichJson
 
 def fake_dns_lookup(name,qtype,strict=True,timeout=None,level=0):
     logging.debug('%s %s', name, qtype)
@@ -26,6 +27,9 @@ def fake_dns_lookup(name,qtype,strict=True,timeout=None,level=0):
     return []
 
 class SpfCheckFilterTest(unittest.TestCase):
+    def setUp(self):
+        self.maxDiff = 4096
+
     def test_mail_from_fail(self):
         spf.DNSLookup = fake_dns_lookup
 
@@ -38,10 +42,13 @@ class SpfCheckFilterTest(unittest.TestCase):
         tx.mail_from = Mailbox('alice@example.com')
         f.on_update(prev.delta(tx))
 
-        out = tx.get_filter_output(f.fullname)
+        out = tx.get_filter_output(f.fullname())
         self.assertEqual(SpfCheckFilterOutput.Status.fail, out.mail_from_result)
         self.assertEqual(MatcherResult.NO_MATCH,
                          out.match({'mail_from_result': 'pass'}))
+        self.assertEqual(
+            {'mail_from_result': 'fail'},
+            out.to_json(WhichJson.DB_ATTEMPT))
 
     def test_mail_from_pass(self):
         spf.DNSLookup = fake_dns_lookup
@@ -55,7 +62,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         tx.mail_from = Mailbox('alice@example.com')
         f.on_update(prev.delta(tx))
 
-        out = tx.get_filter_output(f.fullname)
+        out = tx.get_filter_output(f.fullname())
         self.assertEqual(SpfCheckFilterOutput.Status.spf_pass,
                          out.mail_from_result)
         self.assertEqual(
@@ -74,7 +81,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         tx.mail_from = Mailbox('')
         f.on_update(prev.delta(tx))
 
-        out = tx.get_filter_output(f.fullname)
+        out = tx.get_filter_output(f.fullname())
         self.assertEqual(SpfCheckFilterOutput.Status.spf_pass,
                          out.mail_from_result)
         self.assertEqual(
@@ -93,13 +100,19 @@ class SpfCheckFilterTest(unittest.TestCase):
         tx.mail_from = Mailbox('alice@somewhere-else.local')
         f.on_update(prev.delta(tx))
 
-        out = tx.get_filter_output(f.fullname)
+        out = tx.get_filter_output(f.fullname())
         self.assertEqual(MatcherResult.MATCH,
                          out.match({'mail_from_result': 'none'}))
         self.assertEqual(
             MatcherResult.MATCH,
             out.match({'extra_domain': 'inbound-gateway.local',
                        'extra_domain_result': 'pass'}))
+        js = out.to_json(WhichJson.DB_ATTEMPT)
+        logging.debug(js)
+        self.assertEqual(
+            {'extra_domains_results': {'inbound-gateway.local': 'spf_pass'},
+             'mail_from_result': 'none'},
+            js)
 
 
 if __name__ == '__main__':

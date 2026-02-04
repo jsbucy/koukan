@@ -193,6 +193,7 @@ endpoint:
       # dest == None: reject
   - filter: remote_host
   - filter: message_validation
+  - filter: spf_check
 
   - filter: policy_action
     match:
