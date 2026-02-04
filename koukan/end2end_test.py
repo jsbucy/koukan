@@ -90,7 +90,7 @@ class End2EndTest(unittest.TestCase):
         last = 0
         dkim = None
         for i,f in enumerate(chain):
-            if f['filter'] == 'dkim':
+            if f['filter'] == 'dkim_sign':
                 dkim = i
                 break
         filter_yaml = chain[dkim]

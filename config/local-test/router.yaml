@@ -136,7 +136,7 @@ endpoint:
     policy:
       name: address_list
       # no domains/dest -> reject all
-  - filter: dkim
+  - filter: dkim_sign
     # key: config/local-test/dkim.key
     domain: example.com
     selector: sel

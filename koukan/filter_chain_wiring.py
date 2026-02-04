@@ -16,7 +16,7 @@ from koukan.recipient_router_filter import (
     RoutingPolicy )
 from koukan.recipient_router_factory import RecipientRouterFactory
 from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
-from koukan.dkim_endpoint import DkimEndpoint
+from koukan.dkim_sign_filter import DkimSignFilter
 from koukan.mx_resolution import DnsResolutionFilter
 from koukan.message_parser_filter import MessageParserFilter
 from koukan.filter import (
@@ -67,7 +67,7 @@ class FilterChainWiring:
         self.policy_factory.load_matchers(yaml)
 
         factory.add_filter('rest_output', self.rest_output)
-        factory.add_filter('dkim', self.dkim)
+        factory.add_filter('dkim_sign', self.dkim_sign)
         factory.add_filter('message_parser', self.message_parser)
         factory.add_filter('remote_host', self.remote_host)
         factory.add_filter('received_header', self.received_header)
@@ -211,10 +211,10 @@ class FilterChainWiring:
             client_provider=client,
             chunk_size=chunk_size)
 
-    def dkim(self, yaml, sender : Sender):
+    def dkim_sign(self, yaml, sender : Sender):
         if 'key' not in yaml:
             return None
-        return DkimEndpoint(
+        return DkimSignFilter(
             yaml['domain'], yaml['selector'], yaml['key'])
 
     def message_parser(self, yaml, sender : Sender):

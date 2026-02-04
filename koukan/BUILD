@@ -289,15 +289,15 @@ py_library(name='dest_domain_policy',
                  ':response',
                  ':filter'])
 
-py_library(name='dkim_endpoint',
-           srcs=['dkim_endpoint.py'],
+py_library(name='dkim_sign_filter',
+           srcs=['dkim_sign_filter.py'],
            deps=[':filter_chain',
                  ':response',
                  '@pypi//dkimpy'])
 
-py_test(name='dkim_endpoint_test',
-        srcs=['dkim_endpoint_test.py'],
-        deps=[':dkim_endpoint',
+py_test(name='dkim_sign_filter_test',
+        srcs=['dkim_sign_filter_test.py'],
+        deps=[':dkim_sign_filter',
              '@pypi//dkimpy'])
 
 py_library(name='dns_wrapper',
@@ -537,7 +537,7 @@ py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
            deps=[':add_route_filter',
                  ':async_filter_wrapper',
-                 ':dkim_endpoint',
+                 ':dkim_sign_filter',
                  ':exploder',
                  ':filter',
                  ':filter_chain_factory',

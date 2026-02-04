@@ -8,11 +8,11 @@ import tempfile
 from dkim import dknewkey
 
 from koukan.blob import InlineBlob
-from koukan.dkim_endpoint import DkimEndpoint
+from koukan.dkim_sign_filter import DkimSignFilter
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
 from koukan.response import Response
 
-class DkimEndpointTest(unittest.TestCase):
+class DkimSignFilterTest(unittest.TestCase):
     def setUp(self):
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s %(message)s')
@@ -28,7 +28,8 @@ class DkimEndpointTest(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_smoke(self):
-        dkim_endpoint = DkimEndpoint('example.com', 'selector123', self.privkey)
+        dkim_endpoint = DkimSignFilter(
+            'example.com', 'selector123', self.privkey)
         dkim_endpoint.wire_downstream(TransactionMetadata())
         dkim_endpoint.wire_upstream(TransactionMetadata())
 
@@ -67,8 +68,8 @@ class DkimEndpointTest(unittest.TestCase):
         self.assertIsNone(filter_result.downstream_delta)
 
     def test_bad(self):
-        dkim_endpoint = DkimEndpoint('example.com', 'selector123',
-                                     self.privkey)
+        dkim_endpoint = DkimSignFilter(
+            'example.com', 'selector123', self.privkey)
         tx = TransactionMetadata()
         dkim_endpoint.wire_downstream(tx)
         dkim_endpoint.wire_upstream(TransactionMetadata())

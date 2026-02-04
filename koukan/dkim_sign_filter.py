@@ -12,7 +12,7 @@ from koukan.filter import (
     TransactionMetadata )
 from koukan.filter_chain import FilterResult, ProxyFilter
 
-class DkimEndpoint(ProxyFilter):
+class DkimSignFilter(ProxyFilter):
     domain : str
     selector :str
 
@@ -46,7 +46,7 @@ class DkimEndpoint(ProxyFilter):
         delta = None
         if sig is None:
             delta = TransactionMetadata(
-                data_response = Response(500, 'signing failed (DkimEndpoint'))
+                data_response = Response(500, 'signing failed (DkimSignFilter'))
         return FilterResult(delta)
 
     def sign(self, blob : Blob) -> Optional[bytes]:
