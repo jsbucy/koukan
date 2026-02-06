@@ -34,6 +34,7 @@ from koukan.message_builder_filter import MessageBuilderFilter
 from koukan.sender import Sender
 from koukan.message_validation_filter import MessageValidationFilter
 from koukan.spf_check_filter import SpfCheckFilter
+from koukan.dkim_check_filter import DkimCheckFilter
 
 from koukan.policy_factory import PolicyFactory
 
@@ -85,6 +86,7 @@ class FilterChainWiring:
             'policy_action', self.policy_factory.build_policy_action)
         factory.add_filter('message_validation', self.message_validation)
         factory.add_filter('spf_check', self.spf_check)
+        factory.add_filter('dkim_check', self.dkim_check)
 
     def exploder_upstream(self, sender : Sender,
                           rcpt_timeout : float,
@@ -249,3 +251,6 @@ class FilterChainWiring:
 
     def spf_check(self, yaml, sender : Sender):
         return SpfCheckFilter(yaml.get('extra_domains', []))
+
+    def dkim_check(self, yaml, sender : Sender):
+        return DkimCheckFilter(yaml.get('extra_domains', []))

@@ -194,7 +194,7 @@ endpoint:
   - filter: remote_host
   - filter: message_validation
   - filter: spf_check
-
+  - filter: dkim_check
   - filter: policy_action
     match:
       any:
@@ -266,6 +266,8 @@ endpoint:
       # no domains: match everything
       # dest == None: reject
   - filter: message_validation
+  - filter: dkim_check
+
   - filter: policy_action
     match:
       any:

@@ -93,7 +93,7 @@ class DkimCheckFilterTest(unittest.TestCase):
 
         r1 = out.results[2]
         self.assertEqual(Status.dkim_pass, r1.status)
-        self.assertEqual(Alignment.same_org, r1.alignment)
+        self.assertEqual(Alignment.same_sld, r1.alignment)
         self.assertEqual('lists.example.com', r1.domain)
 
         r2 = out.results[3]

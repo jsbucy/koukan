@@ -29,7 +29,7 @@ class Status(IntEnum):
 # header-from domain vs d= "sdid"
 class Alignment(IntEnum):
     domain = 0
-    same_org = 1  # publicsuffix2.get_sld() a la dmarc relaxed alignment
+    same_sld = 1  # publicsuffix2.get_sld() a la dmarc relaxed alignment
     other = 2
 
 class DkimCheckFilterOutput(FilterOutput):
@@ -39,7 +39,7 @@ class DkimCheckFilterOutput(FilterOutput):
         domain : Optional[str] = None  # d= sdid
         status : Status
         alignment : Alignment
-        tags : Dict[bytes, bytes]
+        tags : Dict[str,str]
         def __init__(self):
             self.tags = {}
 
@@ -49,10 +49,8 @@ class DkimCheckFilterOutput(FilterOutput):
         self.results = []
 
     def match(self, yaml : dict):
-        # 1: any sig w/specified alignment passes
-        # 2: sig w/any alignment from known inbound-gateway domain
         assert not ('alignment' in yaml and 'domains' in yaml)
-        align = Alignment[yaml.get('alignment', 'same_org')]
+        align = Alignment[yaml.get('alignment', 'same_sld')]
         status = Status[yaml.get('status', 'dkim_pass')]
         domains = yaml.get('domains', [])
         for r in self.results:
@@ -63,9 +61,8 @@ class DkimCheckFilterOutput(FilterOutput):
                     if d == r.domain:  # xxx case?
                         return MatcherResult.MATCH
                 return MatcherResult.NO_MATCH
-
-            # xxx inclusive same_org also matches domain?
-            if r.alignment != align:
+            # TODO ever want exact alignment?
+            if r.alignment > align:
                 continue
             return MatcherResult.MATCH
 
@@ -76,8 +73,8 @@ class DkimCheckFilterOutput(FilterOutput):
             return None
         return {
             'results': [
-                { 'status': r.status,
-                  'alignment': r.alignment,
+                { 'status': r.status.name,
+                  'alignment': r.alignment.name,
                   'signing_domain': r.domain,
                   'tags': r.tags } for r in self.results
             ]
@@ -147,7 +144,7 @@ class DkimCheckFilter(Filter):
                 signer_sld = publicsuffix2.get_sld(res.domain)
                 logging.debug('%s %s', header_from_sld, signer_sld)
                 if header_from_sld == signer_sld:  # xxx case?
-                    res.alignment = Alignment.same_org
+                    res.alignment = Alignment.same_sld
                 else:
                     res.alignment = Alignment.other
 
