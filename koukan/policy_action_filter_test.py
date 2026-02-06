@@ -260,6 +260,28 @@ class PolicyActionFilterTest(unittest.TestCase):
             'LRRLLLRRLL',
             ''.join([filter._sample_action(actions)[0] for i in range(0,10)]))
 
+    def test_custom_err(self):
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'code': 450,
+             'message': 'custom error text',
+             'action': 'REJECT'},
+            # no match: specification matches everything
+            matchers={})
+
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.sender = Sender('ingress', 'smtp-mx')
+        tx.filter_output = {}
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+
+        filter_output = FilterOutput()
+        tx.add_filter_output('my_filter', filter_output)
+        filter.on_update(prev.delta(tx))
+        logging.debug(tx)
+        self.assertEqual(450, tx.mail_response.code)
+        self.assertEqual('custom error text', tx.mail_response.message)
 
 if __name__ == '__main__':
     logging.basicConfig(

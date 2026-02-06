@@ -148,10 +148,12 @@ class PolicyActionFilter(Filter):
         action = self._sample_action(self.yaml.get('action', 'MATCH'))
 
         if action == 'REJECT':
+            code = self.yaml.get('code', 550)
+            err = self.yaml.get(
+                'message', '5.6.0 message rejected ' + self.rule_name)
             out._add_rule(self.rule_name)
             out._add_tag(self.group_name)
-            tx.fill_inflight_responses(
-                Response(550, '5.6.0 message rejected ' + self.group_name))
+            tx.fill_inflight_responses(Response(code, err))
         elif action == 'LOG':
             out._add_rule(self.rule_name)
         elif action == 'MATCH':
