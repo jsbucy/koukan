@@ -8,6 +8,7 @@ gunicorn~=21.2.0
 httpx[http2]~=0.27.0
 uvicorn~=0.35.0
 parameterized~=0.9.0
+publicsuffix2~=2.20191221
 psycopg~=3.1.18
 pyspf~=2.0.14
 testing.postgresql~=1.3.0

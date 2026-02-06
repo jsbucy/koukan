@@ -491,6 +491,26 @@ py_test(name='spf_check_filter_test',
               ':rest_schema',
               '@pypi//pyspf'])
 
+py_library(name='dkim_check_filter',
+           srcs=['dkim_check_filter.py'],
+           deps=[':address',
+                 ':filter',
+                 ':filter_chain',
+                 ':filter_output',
+                 ':matcher_result',
+                 ':message_validation_filter',
+                 ':response',
+                 '@pypi//dkimpy',
+                 '@pypi//publicsuffix2'])
+
+py_test(name='dkim_check_filter_test',
+        srcs=['dkim_check_filter_test.py'],
+        data=['//testdata:trivial.msg'],
+        deps=[':dkim_check_filter',
+              ':filter',
+              ':rest_schema',
+              '@pypi//dkimpy'])
+
 py_library(name='filter_chain_factory',
            srcs=['filter_chain_factory.py'],
            deps=[':filter',
