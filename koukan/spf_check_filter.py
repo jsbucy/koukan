@@ -101,7 +101,7 @@ class SpfCheckFilter(Filter):
             # Checking the ehlo domain is (only?) for <>/bounces.
             ehlo = None
             if tx.smtp_meta:
-                ehlo = tx.smtp_meta.get('ehlo', None)
+                ehlo = tx.smtp_meta.get('ehlo_host', None)
 
             env_from_domain = ''
             if tx_delta.mail_from and tx_delta.mail_from.mailbox:
@@ -111,9 +111,9 @@ class SpfCheckFilter(Filter):
                 # with email._header_value_parser.
                 env_from_domain = domain_from_address(
                     tx_delta.mail_from.mailbox)
-            status = self._check(env_from_domain, ehlo)
-            out.mail_from_result = status
-            logging.debug(status)
+            if env_from_domain or ehlo:
+                status = self._check(env_from_domain, ehlo)
+                out.mail_from_result = status
         return FilterResult()
 
     def _check(self, domain, ehlo):

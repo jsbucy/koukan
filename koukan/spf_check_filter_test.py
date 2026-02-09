@@ -29,6 +29,10 @@ def fake_dns_lookup(name,qtype,strict=True,timeout=None,level=0):
 class SpfCheckFilterTest(unittest.TestCase):
     def setUp(self):
         self.maxDiff = 4096
+        self._dnslookup = spf.DNSLookup
+
+    def tearDown(self):
+        spf.DNSLookup = self._dnslookup
 
     def test_mail_from_fail(self):
         spf.DNSLookup = fake_dns_lookup
@@ -38,7 +42,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         f.wire_downstream(tx)
         prev = tx.copy()
         tx.remote_host = HostPort('1.2.5.4', 25000)
-        tx.smtp_meta = {'ehlo': 'mx.example.com'}
+        tx.smtp_meta = {'ehlo_host': 'mx.example.com'}
         tx.mail_from = Mailbox('alice@example.com')
         f.on_update(prev.delta(tx))
 
@@ -50,6 +54,20 @@ class SpfCheckFilterTest(unittest.TestCase):
             {'mail_from_result': 'fail'},
             out.to_json(WhichJson.DB_ATTEMPT))
 
+    def test_invalid_mail_from(self):
+        f = SpfCheckFilter([])
+        tx = TransactionMetadata()
+        f.wire_downstream(tx)
+        prev = tx.copy()
+        tx.remote_host = HostPort('1.2.5.4', 25000)
+        tx.smtp_meta = {}  # ehlo_host missing
+        tx.mail_from = Mailbox('alice')
+        f.on_update(prev.delta(tx))
+
+        out = tx.get_filter_output(f.fullname())
+        self.assertEqual(None, out.mail_from_result)
+
+
     def test_mail_from_pass(self):
         spf.DNSLookup = fake_dns_lookup
 
@@ -58,7 +76,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         f.wire_downstream(tx)
         prev = tx.copy()
         tx.remote_host = HostPort('1.2.3.4', 25000)
-        tx.smtp_meta = {'ehlo': 'mx.example.com'}
+        tx.smtp_meta = {'ehlo_host': 'mx.example.com'}
         tx.mail_from = Mailbox('alice@example.com')
         f.on_update(prev.delta(tx))
 
@@ -77,7 +95,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         f.wire_downstream(tx)
         prev = tx.copy()
         tx.remote_host = HostPort('1.2.3.4', 25000)
-        tx.smtp_meta = {'ehlo': 'mx.example.com'}
+        tx.smtp_meta = {'ehlo_host': 'mx.example.com'}
         tx.mail_from = Mailbox('')
         f.on_update(prev.delta(tx))
 
@@ -96,7 +114,7 @@ class SpfCheckFilterTest(unittest.TestCase):
         f.wire_downstream(tx)
         prev = tx.copy()
         tx.remote_host = HostPort('4.3.2.1', 25000)
-        tx.smtp_meta = {'ehlo': 'mx.example.com'}
+        tx.smtp_meta = {'ehlo_host': 'mx.example.com'}
         tx.mail_from = Mailbox('alice@somewhere-else.local')
         f.on_update(prev.delta(tx))
 
