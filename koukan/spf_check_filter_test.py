@@ -50,23 +50,12 @@ class SpfCheckFilterTest(unittest.TestCase):
         self.assertEqual(SpfCheckFilterOutput.Status.fail, out.mail_from_result)
         self.assertEqual(MatcherResult.NO_MATCH,
                          out.match({'mail_from_result': 'pass'}))
+        self.assertEqual(MatcherResult.MATCH,
+                         out.match({'mail_from_result': 'fail'}))
+
         self.assertEqual(
             {'mail_from_result': 'fail'},
             out.to_json(WhichJson.DB_ATTEMPT))
-
-    def test_invalid_mail_from(self):
-        f = SpfCheckFilter([])
-        tx = TransactionMetadata()
-        f.wire_downstream(tx)
-        prev = tx.copy()
-        tx.remote_host = HostPort('1.2.5.4', 25000)
-        tx.smtp_meta = {}  # ehlo_host missing
-        tx.mail_from = Mailbox('alice')
-        f.on_update(prev.delta(tx))
-
-        out = tx.get_filter_output(f.fullname())
-        self.assertEqual(None, out.mail_from_result)
-
 
     def test_mail_from_pass(self):
         spf.DNSLookup = fake_dns_lookup
@@ -86,6 +75,10 @@ class SpfCheckFilterTest(unittest.TestCase):
         self.assertEqual(
             MatcherResult.MATCH,
             out.match({'mail_from_result': 'pass'}))
+
+        prev = tx.copy()
+        tx.rcpt_to.append(Mailbox('bob@example.com'))
+        f.on_update(prev.delta(tx))
 
     def test_ehlo_pass(self):
         spf.DNSLookup = fake_dns_lookup
@@ -125,6 +118,11 @@ class SpfCheckFilterTest(unittest.TestCase):
             MatcherResult.MATCH,
             out.match({'extra_domain': 'inbound-gateway.local',
                        'extra_domain_result': 'pass'}))
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            out.match({'extra_domain': 'inbound-gateway.local',
+                       'extra_domain_result': 'fail'}))
+
         js = out.to_json(WhichJson.DB_ATTEMPT)
         logging.debug(js)
         self.assertEqual(

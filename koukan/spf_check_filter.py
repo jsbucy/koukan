@@ -78,9 +78,22 @@ class SpfCheckFilter(Filter):
         self.extra_domains = extra_domains
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
-        if tx_delta.remote_host is None and tx_delta.mail_from is None:
+        if tx_delta.mail_from is None:
             logging.debug('noop')
             return FilterResult()
+        tx = self.downstream_tx
+        assert tx is not None
+
+        # NOTE for the time being, this assumes it is in a downstream
+        # chain receiving transactions directly from the gateway where
+        # all of these fields should always be populated.
+        assert tx.remote_host is not None
+        assert tx.smtp_meta is not None
+        # Checking the ehlo domain is (only?) for <>/bounces.
+        assert (ehlo := tx.smtp_meta.get('ehlo_host', None)) is not None
+
+        host = tx.remote_host.host
+        assert host
 
         tx = self.downstream_tx
         assert tx is not None
@@ -89,40 +102,22 @@ class SpfCheckFilter(Filter):
             out = SpfCheckFilterOutput()
             tx.add_filter_output(self.fullname(), out)
 
-        if tx_delta.remote_host is not None:
-            for d in self.extra_domains:
-                # we're passing a domain from config here so it should
-                # never fall back to ehlo.
-                result = self._check(d, ehlo=None)
-                out.extra_domains_results[d] = result
-                logging.debug('%s %s', d, result)
+        for domain in self.extra_domains:
+            # we're passing a domain from config here so it should
+            # never fall back to ehlo.
+            result, detail = spf.check2(i=host, s=domain, h=None)
+            status = SpfCheckFilterOutput.Status.from_str(result)
+            out.extra_domains_results[domain] = status
 
-        if tx_delta.mail_from is not None or tx_delta.smtp_meta is not None:
-            # Checking the ehlo domain is (only?) for <>/bounces.
-            ehlo = None
-            if tx.smtp_meta:
-                ehlo = tx.smtp_meta.get('ehlo_host', None)
+        env_from_domain = ''
+        if tx_delta.mail_from.mailbox:
+            # pyspf appears to split mail_from on @ which is
+            # incorrect for quoted-string local part. Academic but
+            # domain_from_address() probably does a better job
+            # with email._header_value_parser.
+            env_from_domain = domain_from_address(tx_delta.mail_from.mailbox)
 
-            env_from_domain = ''
-            if tx_delta.mail_from and tx_delta.mail_from.mailbox:
-                # pyspf appears to split mail_from on @ which is
-                # incorrect for quoted-string local part. Academic but
-                # domain_from_address() probably does a better job
-                # with email._header_value_parser.
-                env_from_domain = domain_from_address(
-                    tx_delta.mail_from.mailbox)
-            if env_from_domain or ehlo:
-                status = self._check(env_from_domain, ehlo)
-                out.mail_from_result = status
+        result, detail = spf.check2(i=host, s=env_from_domain, h=ehlo)
+        out.mail_from_result = SpfCheckFilterOutput.Status.from_str(result)
         return FilterResult()
 
-    def _check(self, domain, ehlo):
-        tx = self.downstream_tx
-        assert tx is not None
-
-        assert tx.remote_host is not None
-        host = tx.remote_host.host
-
-        result, detail = spf.check2(i=host, s=domain, h=ehlo)
-        status = SpfCheckFilterOutput.Status.from_str(result)
-        return status
