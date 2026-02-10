@@ -37,11 +37,24 @@ class DkimCheckFilterOutput(FilterOutput):
     # for each dkim-signature header
     class Result:
         domain : Optional[str] = None  # d= sdid
-        status : Status
-        alignment : Alignment
+        status : Status = Status.fail
+        alignment : Optional[Alignment] = None
+
+        timestamp : Optional[int] = None
+        expiration : Optional[int] = None
+        headers : List[str]
         tags : Dict[str,str]
         def __init__(self):
             self.tags = {}
+            self.headers = []
+
+        def to_json(self):
+            out = { 'status': self.status.name }
+            for field in ('alignment', 'headers', 'timestamp', 'expiration',
+                          'signing_domain', 'tags'):
+                if hasattr(self, field) and (v := getattr(self, field)):
+                    out[field] = v
+            return out
 
     results: List[Result]
 
@@ -62,7 +75,7 @@ class DkimCheckFilterOutput(FilterOutput):
                         return MatcherResult.MATCH
                 return MatcherResult.NO_MATCH
             # TODO ever want exact alignment?
-            if r.alignment > align:
+            if r.alignment is None or (r.alignment > align):
                 continue
             return MatcherResult.MATCH
 
@@ -71,18 +84,36 @@ class DkimCheckFilterOutput(FilterOutput):
     def to_json(self, w : WhichJson):
         if self.results is None:
             return None
-        return {
-            'results': [
-                { 'status': r.status.name,
-                  'alignment': r.alignment.name,
-                  'signing_domain': r.domain,
-                  'tags': r.tags } for r in self.results
-            ]
-        }
+        return {'results': [r.to_json() for r in self.results]}
 
 class DkimCheckFilter(Filter):
     def __init__(self, inject_dns=None):
         self.inject_dns = inject_dns
+
+    def _fixup_tags(self, header_value : bytes,
+                    result : DkimCheckFilterOutput.Result):
+        result.tags = {
+            k.decode('ascii') : v.decode('ascii')
+            for k,v in dkim.util.parse_tag_value(header_value).items()}
+        # xxx decode error, domain could be utf8?
+        if headers := result.tags.get('h', None):
+            result.headers = [h.strip() for h in headers.split(':')]
+            del result.tags['h']
+        if domain := result.tags.get('d', None):
+            result.domain = domain
+            del result.tags['d']
+
+        for tag,field in [('t','timestamp'), ('x','expiration')]:
+            if (value := result.tags.get(tag, None)):
+                if value.isdigit():
+                    setattr(result, field, int(value))
+                    del result.tags[tag]
+
+        # drop these because they're large and unlikely to be
+        # useful to matchers
+        for h in ['b', 'bh']:
+            if h in result.tags:
+                del result.tags[h]
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if (body := tx_delta.maybe_body_blob()) is None or not body.finalized():
@@ -107,15 +138,7 @@ class DkimCheckFilter(Filter):
             res = DkimCheckFilterOutput.Result()
             signer_domain = None
             try:
-                res.tags = {k.decode('ascii'):v.decode('ascii')
-                            for k,v in dkim.util.parse_tag_value(v).items()}
-                # xxx decode error, domain could be utf8?
-                res.domain = res.tags['d']
-                del res.tags['d']
-                # drop these because they're large and unlikely to be
-                # useful to matchers
-                del res.tags['b']
-                del res.tags['bh']
+                self._fixup_tags(v, res)
                 kwargs = {}
                 if self.inject_dns:
                     kwargs['dnsfunc'] = self.inject_dns

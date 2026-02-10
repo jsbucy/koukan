@@ -4,6 +4,7 @@
 import logging
 import unittest
 import tempfile
+import time
 
 import socket
 from email.headerregistry import Address, AddressHeader
@@ -90,6 +91,9 @@ class DkimCheckFilterTest(unittest.TestCase):
         self.assertEqual(Status.dkim_pass, r0.status)
         self.assertEqual(Alignment.domain, r0.alignment)
         self.assertEqual('example.com', r0.domain)
+        self.assertEqual(['from', 'subject', 'message-id', 'date', 'from'],
+                         r0.headers)
+        self.assertLess(abs(r0.timestamp - time.time()), 5)
 
         r1 = out.results[2]
         self.assertEqual(Status.dkim_pass, r1.status)
@@ -104,7 +108,9 @@ class DkimCheckFilterTest(unittest.TestCase):
         self.assertEqual(Alignment.other, r3.alignment)
         self.assertEqual('somewhere-else.com', r3.domain)
 
-        logging.debug(out.to_json(WhichJson.DB_ATTEMPT))
+        js = out.to_json(WhichJson.DB_ATTEMPT)
+        self.assertEqual(['from', 'subject', 'message-id', 'date', 'from'],
+                         js['results'][1]['headers'])
 
         self.assertEqual(
             MatcherResult.MATCH,
@@ -124,6 +130,30 @@ class DkimCheckFilterTest(unittest.TestCase):
             out.match({'status': 'dkim_pass',
                        'domains': ['somewhere-else.org']}))
 
+
+    def test_fixup_tags(self):
+        f = DkimCheckFilter(self.dns)
+
+        result = DkimCheckFilterOutput.Result()
+        f._fixup_tags(b't=12345;x=-2', result)
+        logging.debug(result.tags)
+        self.assertEqual(12345, result.timestamp)
+        self.assertIsNone(result.expiration)
+        self.assertEqual('-2', result.tags['x'])
+        self.assertEqual({'status': 'fail', 'timestamp': 12345,
+                          'tags': {'x': '-2'}},
+                         result.to_json())
+
+        result = DkimCheckFilterOutput.Result()
+        f._fixup_tags(b'h=from : subject : message-id : date : from;\r\n',
+                      result)
+        self.assertEqual(
+            ['from', 'subject', 'message-id', 'date', 'from'],
+            result.headers)
+        self.assertEqual(
+            {'status': 'fail',
+             'headers': ['from', 'subject', 'message-id', 'date', 'from']},
+            result.to_json())
 
 
 if __name__ == '__main__':
