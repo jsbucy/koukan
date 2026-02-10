@@ -96,35 +96,140 @@ the address.
 Output Chain Filters
 --------------------
 
-remote_host: resolves tx.remote_host ip to name
+remote_host
+^^^^^^^^^^^
+resolves tx.remote_host ip to name
 
-message_builder: renders/serializes tx.body message builder request
+RemoteHostFilterOutput.match() yaml
+
+fcrdns: bool  forward-confirmed reverse dns for remote_host
+
+ehlo_alignment: bool  ehlo aligns to rdns of remote_host
+
+message_builder
+^^^^^^^^^^^^^^^
+renders/serializes tx.body message builder request
 json to rfc822 (for sending)
 
-message_parser: parses rfc822 tx.body to message builder json (for receiving)
+message_parser
+^^^^^^^^^^^^^^
+parses rfc822 tx.body to message builder json (for receiving)
 
-received_header: prepends Received: header to tx.body
+received_header
+^^^^^^^^^^^^^^^
+prepends Received: header to tx.body
 
-dkim: signing
+dkim_sign
+^^^^^^^^^
+domain-keys identified mail message signing
 
-dns_resolution: replaces tx.resolution containing a hostname with one
+filter yaml:
+
+key: private key
+
+domain: domain to sign as d=
+
+selector: selector to sign as s=
+
+dns_resolution
+^^^^^^^^^^^^^^
+replaces tx.resolution containing a hostname with one
 containing a list of IP addresses for the gateway to attempt in order
 
-router: RecipientRouterFilter populates tx.rest_upstream_sender which controls
+router
+^^^^^^
+RecipientRouterFilter populates tx.rest_upstream_sender which controls
 where RestEndpoint sends it and if that is the gateway, tx.resolution
 controls where the gateway sends it
 
-relay_auth: fails the tx if it doesn't contain smtp auth info in
+filter yaml:
+
+policy: the routing policy either dest_domain or address_list
+
+dest_domain is used for submission/egress to send to the rhs of the address
+address_list is used for ingress to enumerate endpoints for local addresses
+
+Note: address_list_policy lists are also available with a
+``TransactionMatcher`` interface ``matcher: address_list`` for use
+with policy_action.
+
+relay_auth
+^^^^^^^^^^
+fails the tx if it doesn't contain smtp auth info in
 smtp_meta or remote_host in allowlist
 
-exploder: Exploder, output_chain configures the upstream chain, ``msa:
-true`` allows store&forward in a few more situations that clients
+exploder
+^^^^^^^^
+filter_yaml:
+
+output_chain configures the upstream chain
+
+msa: if true allows store&forward in a few more situations that clients
 expect vs ingress where there is a previous hop to retry.
 
-rest_output: RestEndpoint actually sends the message somewhere via
-http/rest
+rest_output
+^^^^^^^^^^^
+RestEndpoint actually sends the message somewhere via http/rest
 
-policy_action: cf "signals&policies" below
+policy_action
+^^^^^^^^^^^^^
+cf "signals&policies" below
+
+spf_check
+^^^^^^^^^
+sender policy framework host verification
+
+filter yaml:
+
+domains: list of additional domains to check. Some inbound gateway
+setups use spf to publish/discover egress IPs.
+
+SpfCheckFilterOutput.match() yaml
+
+mail_from_result: temperror | spf_pass | permerror | fail | softfail | none | neutral
+
+extra_domain: domain from filter yaml domains
+
+extra_domain_result: same values as mail_from_result
+
+dkim_check
+^^^^^^^^^^
+domain-keys identified mail signature verification
+
+DkimCheckFilterOutput.results is a list of
+DkimCheckFilterOutput.Result which contains details on each dkim
+signature in the message in order
+
+DkimCheckFilterOutput.match() matches if *any* signature matches the
+given criteria
+
+matcher yaml:
+
+status: temp_err | dkim_pass (default) | fail | unknown_algo
+
+alignment: domain | same_sld (default) | other
+applied inclusively i.e. same_sld also matches domain
+
+domains: mutually exclusive with alignment. List of specific domains to check.
+
+
+message_validation
+^^^^^^^^^^^^^^^^^^
+parses the message and reports rfc822/mime problems in FilterOutput
+
+MessageValidationFilterResult.match() yaml
+
+validity_threshold : NONE | BASIC | MEDIUM | HIGH
+
+matches if the status is at least as good as this. MEDIUM is the
+suggested default for ingress and HIGH for submission. MEDIUM requires
+that the headers are reasonably well-formed and contain exactly 1
+from, date, message-id. HIGH requires no defects reported by
+``email.parser``.
+
+max_received_headers: matches if the message has more than this many
+received headers
+
 
 Signals&Policies
 ----------------
@@ -132,8 +237,8 @@ Signals&Policies
 Koukan provides a simple yet powerful system for taking exceptional
 actions on transactions matching specific criteria.
 
-The basic idea is to separate signals from policy. A signal might be a
-piece of information like: "the smtp client EHLO matched their reverse
+The basic idea is to separate signals from policy. A signal is a
+piece of information such as: "the smtp client EHLO matched their reverse
 dns." Whereas a policy might be: "reject transactions where the EHLO
 didn't match." This allows uniform implementation of actions in one
 place rather than scattering them across every signal. It also allows
@@ -150,22 +255,52 @@ output matches criteria specified in yaml. ``MatcherResult`` includes
 
 Simple matchers can also be loaded via ``modules.transaction_matcher``
 similar to ``recipient_router_filter.RoutingPolicy``. A simple matcher
-is a just ``Callable[[yaml, TransactionMetadata], MatcherResult]`` cf
-``koukan.transaction_matchers`` e.g. cidr, tls.
+is a just ``Callable[[yaml, TransactionMetadata], MatcherResult]``
 
 Policies are specified with an invocation of ``policy_action``
-filter. This consists of
+filter. Filter yaml:
 
-* a match expression which can be an individual signal ``matcher``
+match: match expression, can be an individual signal ``matcher``
   invocation or a logical expression all/any/not.  An empty/unpopulated
   match expression always matches for use as the catchall/fallthrough at
   the end of a group.
-* a group/tag name
-* a rule name (defaults to tag if not present)
-* an action: currently REJECT/LOG/MATCH
-  this can also be a list of [weight, action] for percent experiments
 
-Example::
+match expression examples::
+
+  match:
+    matcher: koukan.remote_host_filter.RemoteHostFilter
+    # ...
+
+   match:  # (not x) or (y and z)
+     any:
+     - not:
+       matcher: x
+     - all:
+       - matcher: y
+         y_matcher_arg: 1
+       - matcher: z
+         z_matcher_arg: "q"
+
+tag: group/tag name
+
+name: rule name (defaults to tag if not present)
+
+action: REJECT | LOG | MATCH
+or list of [weight, action] for percent experiments. The denominator
+is the sum of the weights.
+
+code: smtp response code for REJECT (default 550)
+
+message: smtp response message for REJECT (default: '5.6.0 message rejected'
+along with the matching rule name)
+
+action examples::
+
+  action:
+  - [0.9: LOG]
+  - [0.1: REJECT]
+
+Full policy_action example::
 
   endpoint:
   - name: ingress
@@ -184,6 +319,8 @@ Example::
       - [1, REJECT]
       tag: remote_host
 
+This means: if RemoteHostFilter either returned false for fcrdns or
+ehlo alignment, LOG 90% of the time and REJECT 10% of the time.
 
 The policy action filter has its own output object which contains 2
 sets: matched_tags and matched_rules.
@@ -191,21 +328,38 @@ sets: matched_tags and matched_rules.
 PolicyActionFilter first checks the rule's tag and rule name against
 PolicyActionFilterOutput; if either is present, the rule is treated as
 a no-op. Then it evaluates the match expression. If it returns
-``PRECONDITION_UNMET``, the tag is no-op'd for the rest of the
-current ``FilterChain.update()`` invocation.
+``PRECONDITION_UNMET``, all policy invocations with the same tag are
+no-op'd for the rest of the current ``FilterChain.update()``
+invocation.
 
 If the expression matches, PolicyActionFilter applies the action:
 
-* REJECT: sets the responses to 550
+* REJECT: sets the responses to code from yaml (default: 550)
 * MATCH: retires rule and tag
 * LOG: retires rule only. This is useful to dark-launch multiple
   reject rules to see all the ones that match rather than stopping
   after the first.
 
-For percent experiments, the denominator is the sum of the weights. In
-this example the denominator is 10 so it will LOG 90% of the time and
-REJECT 10%.
 
+Signals
+^^^^^^^
+
+The following built-in filters populate filter_output, cf individual
+filter descriptions (above):
+
+* MessageValidationFilter
+* RemoteHostFilter
+* DkimCheckFilter
+* SpfCheckFilter
+
+In addition several simple matchers are available in ``koukan.transaction_matchers``:
+
+network_address: transaction_matchers.match_network_address remote_host cidr
+
+tls: transaction_matchers.match_tls was the transaction received with tls?
+
+address_list: matches lists of email addresses using the same
+specification as the routing policy AddressListPolicy
 
 Cluster/k8s
 ===========
