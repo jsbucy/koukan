@@ -82,6 +82,10 @@ class DkimCheckFilterOutput(FilterOutput):
         return MatcherResult.NO_MATCH
 
     def to_json(self, w : WhichJson):
+        if w not in [WhichJson.DB_ATTEMPT,
+                     WhichJson.REST_CREATE,
+                     WhichJson.REST_UPDATE]:
+            return None
         if self.results is None:
             return None
         return {'results': [r.to_json() for r in self.results]}

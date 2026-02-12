@@ -22,7 +22,7 @@ import copy
 
 class Transaction:
     CHUNK_SIZE=1048576
-    sender : str
+    sender : Dict[str, Any]
     tx_id : str
     tx_json : dict
     tx_json_path : Optional[str] = None
@@ -46,13 +46,13 @@ class Transaction:
                  tx_json,
                  dir : str,
                  tx_url):
-        self.sender = sender
+        self.sender = {'sender': sender}
+        if sender_js := tx_json.get('sender', None):
+            self.sender.update(sender_js)
         self.blob_paths = {}
         self.tx_id = tx_id
-        logging.debug('Tx.init %s', tx_json)
+        logging.debug('Tx.init %s %s %s', sender, tx_id, tx_json)
         self.tx_json = copy.copy(tx_json)
-        if 'smtp_meta' in self.tx_json:
-            del self.tx_json['smtp_meta']
         self.tx_json['mail_response'] = {'code': 250, 'message': 'ok'}
         self.tx_json['rcpt_response'] = [{'code': 250, 'message': 'ok'}]
         self.dir = dir
@@ -65,12 +65,14 @@ class Transaction:
 
     def get_json(self):
         json_out = copy.copy(self.tx_json)
-        if 'mail_from' in json_out:
-            json_out['mail_from'] = {}
+        for f in ['mail_from', 'sender', 'filter_output']:
+            if f in json_out:
+                json_out[f] = {}
         if 'rcpt_to' in json_out:
             json_out['rcpt_to'] = [{} for x in self.tx_json['rcpt_to']]
-        if 'sender' in json_out:
-            json_out['sender'] = {}
+        if 'smtp_meta' in self.tx_json:
+             del json_out['smtp_meta']
+
 
         json_out['body'] = {}
         json_out['body']['blob_status'] = {
@@ -151,6 +153,19 @@ class Transaction:
         content['filename'] = filename
         logging.debug(content)
         return True
+
+    def update(self, patch) -> Optional[Tuple[int, str]]:
+        logging.debug(patch)
+
+        if 'filter_output' in patch:
+            if 'filter_output' not in self.tx_json:
+                self.tx_json['filter_output'] = {}
+            self.tx_json['filter_output'].update(patch['filter_output'])
+        elif set(patch.keys()) - {'filter_output'}:
+            return 400, 'only accept update filter_output'
+
+        self.version += 1
+        return None
 
     def update_message_builder(self, message_json) -> Optional[Tuple[int, str]]:
         assert not self.cancelled
@@ -327,9 +342,19 @@ class Receiver:
         self.transactions[tx_id] = tx
         return tx_url, tx.get_json(), str(tx.version)
 
-    def get_tx(self, tx_rest_id : str):
+    def get_tx(self, tx_rest_id : str
+               ) -> Tuple[dict[Any, Any], str]:  # tx json, etag
         tx = self._get_tx(tx_rest_id)
         return tx.get_json(), str(tx.version)
+
+    def update_tx(self, tx_rest_id : str, patch) -> Tuple[
+            Optional[Tuple[int, str]],  # err code, msg
+            Optional[Tuple[dict[Any, Any], str]]]:  # tx json, etag
+        tx = self._get_tx(tx_rest_id)
+        err = tx.update(patch)
+        if err:
+            return err, None
+        return None, self.get_tx(tx_rest_id)
 
     def update_tx_message_builder(self, tx_rest_id : str, message_json):
         tx = self._get_tx(tx_rest_id)

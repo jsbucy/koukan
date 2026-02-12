@@ -56,6 +56,27 @@ def create_app(receiver = None, path = None):
         return FastApiJsonResponse(status_code=200, content=tx_json,
                                    headers={'etag': etag})
 
+    @app.patch('/transactions/{tx_rest_id}')
+    async def update_transaction(
+            tx_rest_id : str,
+            request : FastApiRequest) -> FastApiResponse:
+        try:
+            err, res = receiver.update_tx(tx_rest_id, await request.json())
+        except Exception as e:
+            logging.exception('fastapi_receiver.get_transaction')
+            err = 500, 'uncaught exception'
+        if err is not None:
+            code, msg = err
+            return FastApiResponse(status_code=code, content=msg)
+        elif res is not None:
+            tx_json, etag = res
+            return FastApiJsonResponse(status_code=200, content=tx_json,
+                                       headers={'etag': etag})
+        else:
+            assert False
+
+
+
     @app.post('/transactions/{tx_rest_id}/message_builder')
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
                                      ) -> FastApiResponse:

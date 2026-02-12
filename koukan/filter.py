@@ -443,7 +443,11 @@ _tx_fields = [
     # RecipientRouterFilter -> RestEndpoint
     TxField('rest_upstream_sender', validity=None),
     TxField('filter_output',
-            validity=set([WhichJson.DB_ATTEMPT]),
+            validity=set([WhichJson.DB_ATTEMPT,
+                          WhichJson.REST_CREATE,
+                          WhichJson.REST_UPDATE,
+                          WhichJson.REST_READ]),
+            rest_placeholder=True,
             is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
     TxField('ephemeral_filter_output', validity=None, is_dict=True),
@@ -595,10 +599,15 @@ class TransactionMetadata:
                 return None
             v : Any
             if field.is_dict:
-                if hasattr(tx, field.dict_json()) and (
+                # xxx dedupe w/below
+                if field.emit_rest_placeholder(which_js):
+                    if js_v != {}:
+                        return None
+                elif hasattr(tx, field.dict_json()) and (
                         getattr(tx, field.dict_json()) is not None):
                     return None  # bad: duplicate key
-                setattr(tx, field.dict_json(), js_v)
+                else:
+                    setattr(tx, field.dict_json(), js_v)
                 continue
             elif field.is_list:
                 if not isinstance(js_v, list):
@@ -860,7 +869,7 @@ class TransactionMetadata:
             return
         if (old_v is not None) and (new_v is None):
            logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
-           raise ValueError()
+           assert False, (which_json, old_v, new_v)
         if (old_v is None) and (new_v is not None):
             setattr(out, f, new_v)
             return
@@ -875,8 +884,10 @@ class TransactionMetadata:
             return
 
         if json_field.is_dict and old_v is not None and new_v is not None:
+            if which_json is not None and json_field.emit_rest_placeholder(which_json):
+                assert False
             if new_v.keys() < old_v.keys():
-                raise ValueError()
+                assert False, (f, set(old_v.keys()) - set(new_v.keys()))
             for kk,vv in old_v.items():
                 if new_v[kk] != vv:
                     raise ValueError()
@@ -924,7 +935,7 @@ class TransactionMetadata:
                     ) -> Optional['TransactionMetadata']:
         try:
             return self.delta(next, which_json)
-        except ValueError:
+        except (ValueError, AssertionError):
             return None
 
     # NOTE this copies the rcpt req/resp lists which we know we mutate

@@ -60,7 +60,7 @@ class End2EndTest(unittest.TestCase):
                 e['endpoint'] = urljoin(self.gateway_base_url, self.router_path)
             elif e['name'] == 'short_circuit':
                 e['endpoint'] = urljoin(self.router_base_url, self.short_circuit_path)
-            elif e['name'] == 'sink':
+            elif e['name'] in ['sink', 'receiver']:
                 e['endpoint'] = urljoin(self.receiver_base_url, self.router_path)
 
 
@@ -74,7 +74,7 @@ class End2EndTest(unittest.TestCase):
         if endpoint == 'gateway':
             dest['host_list'] = [
                 {'host': 'fake_smtpd', 'port': self.fake_smtpd_port}]
-        elif endpoint == 'sink':
+        elif endpoint in ['sink', 'receiver']:
             dest['options']['receive_parsing'] = {
                 'max_inline': 8 }
 
@@ -302,8 +302,11 @@ class End2EndTest(unittest.TestCase):
                   'alice@example.com', ['bob@rest-application.example.com'],
                   raw=msg)
         for tx_id,tx in self.receiver.transactions.items():
-            logging.debug('test_rest_receiving %s', tx_id)
-            if tx.tx_json['mail_from']['m'] == 'alice@example.com':
+            logging.debug('test_rest_receiving %s %s', tx_id, tx.sender)
+            # the same receiver is wired as both the add-route/sor
+            # endpoint and the
+            if (tx.tx_json['mail_from']['m'] == 'alice@example.com' and
+                tx.sender.get('tag', '') != 'sor'):
                 break
         else:
             self.fail('didn\'t receive message')
@@ -487,7 +490,7 @@ class End2EndTest(unittest.TestCase):
 
         for tx_id,tx in self.receiver.transactions.items():
             logging.debug('test_rest_receiving %s', tx_id)
-            if tx.tx_json['mail_from']['m'] == 'alice@example.com':
+            if tx.tx_json['mail_from']['m'] == 'alice@example.com' and tx.sender['tag'] == 'sor':
                 break
         else:
             self.fail('didn\'t receive message')

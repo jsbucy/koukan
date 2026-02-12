@@ -403,7 +403,7 @@ class FilterTest(unittest.TestCase):
         prev.add_filter_output('x', 'xx')
 
         next = TransactionMetadata()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(AssertionError):
             prev.delta(next)
 
         next.filter_output = dict(prev.filter_output)

@@ -458,6 +458,13 @@ class RestHandler(Handler):
         if req_json is None:  # heartbeat/ping
             pass
         elif not self.async_filter.incremental():
+            # TODO this is meant to reject multi-rcpt if not wired
+            # with exploder and could probably be made more specific
+            # to that condition. Then it would return rcpt_response
+            # 451-4.5.3 'too many recipients (no exploder)' instead of
+            # an http error which would be more legible from smtp. The
+            # extra condition would be
+            # downstream_delta.rcpt_to_list_offset > 0?
             return self.response(
                 code=400,
                 msg='endpoint does not accept incremental updates')

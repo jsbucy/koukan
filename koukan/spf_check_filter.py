@@ -61,7 +61,9 @@ class SpfCheckFilterOutput(FilterOutput):
         return MatcherResult.MATCH
 
     def to_json(self, w : WhichJson):
-        if w != WhichJson.DB_ATTEMPT:
+        if w not in [WhichJson.DB_ATTEMPT,
+                     WhichJson.REST_CREATE,
+                     WhichJson.REST_UPDATE]:
             return None
         out : Dict[str, Any] = {}
         if self.extra_domains_results:

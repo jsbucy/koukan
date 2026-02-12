@@ -91,6 +91,8 @@ class RestEndpoint(Filter):
 
     blob_readers : Dict[Blob, BlobReader]
 
+    send_filter_output = False
+
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -105,7 +107,8 @@ class RestEndpoint(Filter):
                  timeout_data=TIMEOUT_DATA,
                  min_poll=1,
                  max_inline=1024,
-                 chunk_size : Optional[int] = None):
+                 chunk_size : Optional[int] = None,
+                 send_filter_output = False):
         self.base_url = static_base_url
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
@@ -117,6 +120,7 @@ class RestEndpoint(Filter):
 
         self.client = client_provider.get()
         self.blob_readers = {}
+        self.send_filter_output = send_filter_output
 
     def _merge_upstream_tx(self, rest_resp : HttpResponse
                            ) -> Optional[TransactionMetadata]:
@@ -176,9 +180,10 @@ class RestEndpoint(Filter):
                 tx.remote_host = remote_host
                 self.remote_host = remote_host
 
-            json=tx.to_json(WhichJson.REST_CREATE)
+            tx_json=tx.to_json(WhichJson.REST_CREATE)
+
             logging.debug('RestEndpoint._create remote_host %s %s %s',
-                          self.base_url, remote_host, json)
+                          self.base_url, remote_host, tx_json)
 
             req_headers = {'content-type': 'application/json'}
             deadline_left = deadline.deadline_left()
@@ -186,7 +191,7 @@ class RestEndpoint(Filter):
             try:
                 rest_resp = self.client.post(
                     self.base_url,
-                    json=json,
+                    json=tx_json,
                     headers=req_headers,
                     timeout=deadline_left)
             except RequestError as e:
@@ -214,21 +219,23 @@ class RestEndpoint(Filter):
         assert self.downstream_tx is not None
         assert self.rest_upstream_tx is not None
 
-        body_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
+        tx_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
 
         rest_resp = self._post_tx(
-            self.transaction_url, body_json, self.client.patch, deadline)
+            self.transaction_url, tx_json, self.client.patch, deadline)
         if rest_resp is None:
+            return None
+        if rest_resp.status_code != 200:
             return None
         if 'etag' not in rest_resp.headers:
             return None
         self.etag = rest_resp.headers['etag']
         return self._merge_upstream_tx(rest_resp)
 
-    def _post_tx(self, url, body_json : dict,
+    def _post_tx(self, url, payload_json : dict,
                  http_method,
                  deadline : Deadline) -> Optional[HttpResponse]:
-        logging.debug('RestEndpoint._post_tx %s', url)
+        logging.debug('RestEndpoint._post_tx %s %s', http_method.__name__, url)
         req_headers : Dict[str, str] = {}
         deadline_left = deadline.deadline_left()
         self._set_request_timeout(req_headers, deadline_left)
@@ -236,9 +243,9 @@ class RestEndpoint(Filter):
         req_headers['if-match'] = self.etag
         try:
             kwargs : Dict[Any, Any] = {}
-            if body_json:
+            if payload_json:
                 req_headers['content-type'] = 'application/json'
-                kwargs['json'] = body_json
+                kwargs['json'] = payload_json
             else:
                 kwargs['data'] = b''
             rest_resp = http_method(
@@ -252,8 +259,6 @@ class RestEndpoint(Filter):
         logging.info('RestEndpoint._update resp %s %s',
                      rest_resp, rest_resp.content)
 
-        if rest_resp.status_code != 200:
-            return rest_resp
         return rest_resp
 
     def _cancel(self):
@@ -338,6 +343,8 @@ class RestEndpoint(Filter):
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
             upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
+            if not self.send_filter_output and upstream_tx.filter_output:
+                upstream_tx.filter_output = None
             if self.downstream_tx.rest_upstream_sender:
                 sender = self.downstream_tx.rest_upstream_sender
                 self.rest_upstream_tx.sender = Sender(sender.name, sender.tag)
@@ -366,6 +373,8 @@ class RestEndpoint(Filter):
             assert self.rest_upstream_tx is not None
             delta_no_body = tx_delta.copy()
             delta_no_body.body = None
+            if not self.send_filter_output and delta_no_body.filter_output:
+                delta_no_body.filter_output = None
 
             self.rest_upstream_tx.merge_from(delta_no_body)
 

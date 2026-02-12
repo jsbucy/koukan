@@ -54,6 +54,10 @@ rest_endpoint:
 - name: sink
   endpoint: http://localhost:8002/senders/router/transactions
   sender: router
+  tag: sor
+- name: receiver
+  endpoint: http://localhost:8002/senders/router/transactions
+  sender: router
 - name: short_circuit
   endpoint: http://localhost:8000/senders/ingress/transactions
   sender: ingress
@@ -182,7 +186,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: sink
+        endpoint: receiver
         options:
           receive_parsing:
   - filter: router
@@ -257,7 +261,7 @@ endpoint:
       prefixes:
       - bob
       destination:
-        endpoint: sink
+        endpoint: receiver
         options:
           receive_parsing:
   - filter: router

@@ -55,7 +55,9 @@ class MessageValidationFilterResult(FilterOutput):
             self.received_header_count = received_header_count
 
     def to_json(self, w : WhichJson):
-        if w != WhichJson.DB_ATTEMPT:
+        if w not in [WhichJson.DB_ATTEMPT,
+                     WhichJson.REST_CREATE,
+                     WhichJson.REST_UPDATE]:
             return None
         out : Dict[str, Any] = {'status': int(self.status)}
         if self.received_header_count is not None:
