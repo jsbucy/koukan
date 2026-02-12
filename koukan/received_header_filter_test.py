@@ -144,5 +144,4 @@ class ReceivedHeaderFilterTest(unittest.TestCase):
         result = filter.on_update(delta)
 
 if __name__ == '__main__':
-    #unittest.util._MAX_LENGTH = 1024
     unittest.main()

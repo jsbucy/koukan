@@ -32,7 +32,18 @@ sender: principals/roles for sending messages, cf below
 
 endpoint: output chains, cf below
 
-rest_endpoint: referenced from recipient routing destination
+rest_endpoint: list of endpoints referenced by recipient router filter
+destination (cf below)
+
+endpoint.name: referenced by recipient routing destination endpoint
+
+endpoint.endpoint: url
+
+endpoint.sender: must match endpoint url path
+
+endpoint.tag: sender tag to send upstream
+
+endpoint.options: cf recipient router filter (below)
 
 modules: user plugins: output chain filters, recipient routing policies
 
@@ -144,10 +155,26 @@ controls where the gateway sends it
 
 filter yaml:
 
-policy: the routing policy either dest_domain or address_list
+policy: routing policy options
+
+policy.name: dest_domain | address_list or pluggable via
+modules.recipient_router_policy
 
 dest_domain is used for submission/egress to send to the rhs of the address
+
 address_list is used for ingress to enumerate endpoints for local addresses
+
+policy.endpoint: keys into top-level rest_endpoint
+
+policy.options: updates rest_endpoint options.
+
+policy.options.receive_parsing: required for message_parser to parse
+the message for rest receivers
+
+policy.options.send_filter_output: enables sending tx.filter_output
+(cf Signals&Policies below) to receivers. Default false. Rest
+receivers may or may not want this but it should be disabled for the
+smtp gateway and short-circuiting.
 
 Note: address_list_policy lists are also available with a
 ``TransactionMatcher`` interface ``matcher: address_list`` for use

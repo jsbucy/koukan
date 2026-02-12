@@ -27,6 +27,13 @@ from koukan.blob import CompositeBlob, InlineBlob
 from koukan.response import Response as MailResponse
 from koukan.message_builder import MessageBuilderSpec
 from koukan.sender import Sender
+from koukan.filter_output import FilterOutput
+
+class FakeFilterOutput(FilterOutput):
+    def match(self, yaml):
+        raise NotImplementedError()
+    def to_json(self, which_js):
+        return {'z': 123}
 
 class Request:
     method = None
@@ -178,6 +185,7 @@ class RestEndpointTest(unittest.TestCase):
         if ((wsgi_input := environ.get('wsgi.input', None)) and
             (length := environ.get('CONTENT_LENGTH', None))):
             req.body = wsgi_input.read(int(length))
+            logging.debug(req.body)
         self.requests.append(req)
 
         expected_req, resp = self.responses.pop(0)
@@ -792,16 +800,19 @@ class RestEndpointTest(unittest.TestCase):
                 'data_response': {'code': 203, 'message': 'ok'} },
             etag='2'))
 
-        delta = TransactionMetadata(
-            mail_from=Mailbox('alice'),
-            rcpt_to=[Mailbox('bob')],
-            body=InlineBlob(body, last=True))
-        tx.merge_from(delta)
-        rest_endpoint.on_update(delta)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        tx.body = InlineBlob(body, last=True)
+        tx.filter_output = {'x': FakeFilterOutput()}
+        rest_endpoint.on_update(prev.delta(tx))
         logging.debug('tx after update %s', tx)
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
         self.assertEqual(tx.data_response.code, 203)
+
+        req = self.requests.pop(0)
+        self.assertNotIn('filter_output', json.loads(req.body))
 
     def testFilterApiMultiRcpt(self):
         rest_endpoint, tx = self.create_endpoint(
@@ -817,17 +828,24 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}],
                 'mail_response': mail_resp.to_json(WhichJson.REST_READ),
-                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)]},
+                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)],
+                'filter_output': {}
+            },
             location = self.tx_url,
             etag='1'))
 
-        delta = TransactionMetadata(
-            mail_from = Mailbox('alice'),
-            rcpt_to = [Mailbox('bob')])
-        tx.merge_from(delta)
-        rest_endpoint.on_update(delta)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice')
+        tx.rcpt_to = [Mailbox('bob')]
+        tx.filter_output = {'x': FakeFilterOutput()}
+        tx.options = {'send_filter_output': True}
+        rest_endpoint.on_update(prev.delta(tx))
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [rcpt0_resp.code])
+
+        req = self.requests.pop()
+        self.assertEqual({'x': {'z': 123}},
+                         json.loads(req.body)['filter_output'])
 
         # PATCH /transactions/123
         self.expect_request(resp=Response(
@@ -836,7 +854,8 @@ class RestEndpointTest(unittest.TestCase):
                 'mail_from': {},
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(WhichJson.REST_READ),
-                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)]},
+                'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ)],
+                'filter_output': {}},
             etag='2'))
         # GET /transactions/123
         self.expect_request(resp=Response(
@@ -846,7 +865,9 @@ class RestEndpointTest(unittest.TestCase):
                 'rcpt_to': [{}, {}],
                 'mail_response': mail_resp.to_json(WhichJson.REST_READ),
                 'rcpt_response': [rcpt0_resp.to_json(WhichJson.REST_READ),
-                                  rcpt1_resp.to_json(WhichJson.REST_READ)]},
+                                  rcpt1_resp.to_json(WhichJson.REST_READ)],
+                'filter_output': {}
+            },
             etag='3'))
 
         prev = tx.copy()
@@ -855,6 +876,7 @@ class RestEndpointTest(unittest.TestCase):
         logging.debug('RestEndpointTest.testFilterApiMultiRcpt '
                       'after patch 2nd rcpt %s', tx)
         self.assertEqual([202, 203], [r.code for r in tx.rcpt_response])
+
 
     def testFilterApiEmptyLastChunk(self):
         rest_endpoint, tx = self.create_endpoint(

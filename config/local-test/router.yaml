@@ -55,9 +55,13 @@ rest_endpoint:
   endpoint: http://localhost:8002/senders/router/transactions
   sender: router
   tag: sor
+  options:
+    send_filter_output: true
 - name: receiver
   endpoint: http://localhost:8002/senders/router/transactions
   sender: router
+  options:
+    send_filter_output: true
 - name: short_circuit
   endpoint: http://localhost:8000/senders/ingress/transactions
   sender: ingress

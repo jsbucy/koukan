@@ -91,8 +91,6 @@ class RestEndpoint(Filter):
 
     blob_readers : Dict[Blob, BlobReader]
 
-    send_filter_output = False
-
     def _set_request_timeout(self, headers, timeout : Optional[float] = None):
         if timeout and int(timeout) >= 2:
             # allow for propagation delay
@@ -107,8 +105,7 @@ class RestEndpoint(Filter):
                  timeout_data=TIMEOUT_DATA,
                  min_poll=1,
                  max_inline=1024,
-                 chunk_size : Optional[int] = None,
-                 send_filter_output = False):
+                 chunk_size : Optional[int] = None):
         self.base_url = static_base_url
         self.transaction_url = transaction_url
         self.timeout_start = timeout_start
@@ -120,7 +117,6 @@ class RestEndpoint(Filter):
 
         self.client = client_provider.get()
         self.blob_readers = {}
-        self.send_filter_output = send_filter_output
 
     def _merge_upstream_tx(self, rest_resp : HttpResponse
                            ) -> Optional[TransactionMetadata]:
@@ -180,7 +176,7 @@ class RestEndpoint(Filter):
                 tx.remote_host = remote_host
                 self.remote_host = remote_host
 
-            tx_json=tx.to_json(WhichJson.REST_CREATE)
+            tx_json = tx.to_json(WhichJson.REST_CREATE)
 
             logging.debug('RestEndpoint._create remote_host %s %s %s',
                           self.base_url, remote_host, tx_json)
@@ -320,6 +316,11 @@ class RestEndpoint(Filter):
             return FilterResult()
         return None
 
+    def send_filter_output(self):
+        tx = self.downstream_tx
+        assert tx is not None
+        return tx.options and tx.options.get('send_filter_output', False)
+
     def on_update(self, tx_delta : TransactionMetadata,
                   timeout : Optional[float] = None) -> FilterResult:
         assert self.downstream_tx is not None
@@ -342,8 +343,9 @@ class RestEndpoint(Filter):
         if not self.transaction_url:
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
-            upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(WhichJson.REST_CREATE)
-            if not self.send_filter_output and upstream_tx.filter_output:
+            upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(
+                WhichJson.REST_CREATE)
+            if (not self.send_filter_output()) and upstream_tx.filter_output:
                 upstream_tx.filter_output = None
             if self.downstream_tx.rest_upstream_sender:
                 sender = self.downstream_tx.rest_upstream_sender
@@ -357,7 +359,8 @@ class RestEndpoint(Filter):
             # cf _update_message_builder(), this is probably moot
             # because downstream_body is None on the first update
 
-            # xxx router_service_test test_message_builder sends MessageBuilderSpec here
+            # xxx router_service_test test_message_builder sends
+            # MessageBuilderSpec here
             self.rest_upstream_tx.body = None
 
             upstream_delta = self._create(self.downstream_tx.resolution,
@@ -373,7 +376,7 @@ class RestEndpoint(Filter):
             assert self.rest_upstream_tx is not None
             delta_no_body = tx_delta.copy()
             delta_no_body.body = None
-            if not self.send_filter_output and delta_no_body.filter_output:
+            if (not self.send_filter_output()) and delta_no_body.filter_output:
                 delta_no_body.filter_output = None
 
             self.rest_upstream_tx.merge_from(delta_no_body)

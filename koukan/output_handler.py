@@ -271,14 +271,6 @@ class OutputHandler:
                         env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
-                    # xxx need to send cancellation upstream here in case
-                    # this was a reject from the middle of the chain?
-                    # if 'final_attempt_reason' in env_kwargs and
-                    #     (tx.data_response is None or
-                    #       not tx.data_response.ok()) and
-                    #    not tx.cancelled:
-                    #       tx.cancelled = True
-                    #       self._handle_once()
                     if not delta and not env_kwargs and not refresh:
                         # xxx loop should be inside try, this will go
                         # to finally as it is?

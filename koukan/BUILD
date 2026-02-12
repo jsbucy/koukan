@@ -89,6 +89,7 @@ py_library(name='rest_endpoint',
 py_test(name='rest_endpoint_test',
         srcs=['rest_endpoint_test.py'],
         deps=[':rest_endpoint',
+              ':filter_output',
               '@pypi//werkzeug'])
 
 py_library(name='rest_service_handler',

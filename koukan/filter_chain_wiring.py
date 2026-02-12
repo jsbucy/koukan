@@ -211,8 +211,7 @@ class FilterChainWiring:
             timeout_start=yaml.get('rcpt_timeout', rcpt_timeout),
             timeout_data=yaml.get('data_timeout', data_timeout),
             client_provider=client,
-            chunk_size=chunk_size,
-            send_filter_output=yaml.get('send_filter_output', False))
+            chunk_size=chunk_size)
 
     def dkim_sign(self, yaml, sender : Sender):
         if 'key' not in yaml:

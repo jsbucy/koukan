@@ -91,10 +91,13 @@ class RecipientRouterFactory:
         # the router yaml
         if (s := self.sender_factory(rest_upstream_sender)) is not None:
             rest_upstream_sender = s
+        options = rest_endpoint_yaml.get('options', {})
+        dest_options = dest.get('options', {})
+        options.update(dest_options)
         return Destination(
             rest_endpoint = rest_endpoint_yaml.get('endpoint', None),
             rest_upstream_sender = rest_upstream_sender,
-            options = dest.get('options', None),
+            options = options if options else None,
             remote_host = hosts)
 
     def _policy_address_list(self, policy_yaml):

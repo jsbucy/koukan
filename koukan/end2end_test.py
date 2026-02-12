@@ -317,6 +317,17 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual('bob@rest-application.example.com',
                          tx_json['rcpt_to'][0]['m'])
 
+        self.assertIsNotNone(filter_output := tx_json['filter_output'])
+        self.assertEqual(
+            {'koukan.dkim_check_filter.DkimCheckFilter',
+             'koukan.message_validation_filter.MessageValidationFilter',
+             'koukan.remote_host_filter.RemoteHostFilter'},
+            set(filter_output.keys()))
+        self.assertEqual(
+            {'status': 3, 'received_header_count': 1},
+            filter_output[
+                'koukan.message_validation_filter.MessageValidationFilter'])
+
         logging.debug(json.dumps(tx.tx_json, indent=2))
         logging.debug(json.dumps(tx.message_json, indent=2))
         blob_content = {}
@@ -528,5 +539,4 @@ class End2EndTest(unittest.TestCase):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
-
     unittest.main()

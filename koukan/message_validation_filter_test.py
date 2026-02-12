@@ -169,5 +169,4 @@ class MessageValidationFilterTest(unittest.TestCase):
         self.assertEqual('alice@example.com', out.parsed_header_from.addr_spec)
 
 if __name__ == '__main__':
-    #unittest.util._MAX_LENGTH = 1024
     unittest.main()
