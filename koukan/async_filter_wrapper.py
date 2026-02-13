@@ -226,22 +226,22 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         logging.debug(tx_delta)
         assert self.downstream_tx is not None
 
-        tx_orig = self.downstream_tx.copy()
         upstream_delta = self.update(self.downstream_tx, tx_delta)
+        tx = tx_orig = self.downstream_tx.copy()
         deadline = Deadline(self.timeout)
-        upstream_tx = self.downstream_tx.copy()
-        while deadline.remaining() and upstream_tx.req_inflight():
-            version = self.version
-            assert version is not None
-            dl = deadline.deadline_left()
-            assert dl is not None
-            rv, u = self.wait(version, dl)
-            if u is None:
-                u = self.get()
-            assert u is not None
-            upstream_tx = u
-        upstream_delta = tx_orig.delta(upstream_tx)
-        self.downstream_tx.merge_from(upstream_delta)
+        if tx.req_inflight():
+            while deadline.remaining() and tx.req_inflight():
+                version = self.version
+                assert version is not None
+                dl = deadline.deadline_left()
+                assert dl is not None
+                rv, u = self.wait(version, dl)
+                if u is None:
+                    u = self.get()
+                assert u is not None
+                tx = u
+            upstream_delta = tx_orig.delta(tx)
+            self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()
 
 

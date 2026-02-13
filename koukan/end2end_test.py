@@ -501,17 +501,29 @@ class End2EndTest(unittest.TestCase):
 
         for tx_id,tx in self.receiver.transactions.items():
             logging.debug('test_rest_receiving %s', tx_id)
+            logging.debug(tx.tx_json)
             if tx.tx_json['mail_from']['m'] == 'alice@example.com' and tx.sender['tag'] == 'sor':
                 break
         else:
             self.fail('didn\'t receive message')
+
+        storage_tx = 0
+        for i in range(1,5):
+            cursor = self.router.storage.get_transaction_cursor(i)
+            tx = cursor.load()
+            logging.debug(tx)
+            if tx is None:
+                break
+            storage_tx += 1
+        self.assertEqual(3 if 'store_and_forward' in filter_yaml else 2,
+                         storage_tx)
 
     def test_add_route_sync(self):
         return self._test_add_route({'output_chain': 'sink'})
 
     def test_add_route_async(self):
         return self._test_add_route({'output_chain': 'sink',
-                                     'store_and_forard': True})
+                                     'store_and_forward': True})
 
     def test_message_rejection_submission(self):
         self._configure_and_run()

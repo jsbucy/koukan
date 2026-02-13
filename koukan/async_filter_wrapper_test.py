@@ -227,7 +227,7 @@ class AsyncFilterWrapperTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(filename)s:%(lineno)d '
-                        '%(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
     unittest.main()
