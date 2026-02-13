@@ -442,11 +442,18 @@ _tx_fields = [
             copy=Sender.copy),
     # RecipientRouterFilter -> RestEndpoint
     TxField('rest_upstream_sender', validity=None),
+
+    # filter_output is kind of a value-result
+    # downstream/StorageWriterFilter writes this to db tx
+    # upstream/OutputHandler writes to attempt
     TxField('filter_output',
-            validity=set([WhichJson.DB_ATTEMPT,
-                          WhichJson.REST_CREATE,
-                          WhichJson.REST_UPDATE,
-                          WhichJson.REST_READ]),
+            validity=set([
+                WhichJson.DB,
+                WhichJson.DB_ATTEMPT,
+                WhichJson.REST_CREATE,
+                WhichJson.REST_UPDATE,
+                WhichJson.REST_READ,
+                WhichJson.ADD_ROUTE]),
             rest_placeholder=True,
             is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
@@ -729,10 +736,20 @@ class TransactionMetadata:
             return
 
         if field.is_dict:
-            v_js = {}
-            for kk,vv in v.items():
-                if hasattr(vv, 'to_json') and ((jsvv := vv.to_json(which_js)) is not None):
-                    v_js[kk] = jsvv
+            v_js = getattr(self, field.dict_json())
+            # TODO this means we got downstream filter_output but
+            # created new data in OutputHandler. We should eventually merge
+            # these but for the time being, this is only expected to
+            # come up with add_route and that chain should be kind of
+            # a "straight pipe" and not emit new filter_output.
+            if v_js and v:
+                raise ValueError()
+            if not v_js:
+                v_js = {}
+                for kk,vv in v.items():
+                    if hasattr(vv, 'to_json') and (
+                            (jsvv := vv.to_json(which_js)) is not None):
+                        v_js[kk] = jsvv
             if not v_js:
                 v_js = None
         elif isinstance(v, list):

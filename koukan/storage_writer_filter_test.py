@@ -124,11 +124,10 @@ class StorageWriterFilterTest(unittest.TestCase):
             rcpt_to = [Mailbox('bob')])
         orig_tx_cursor.create('tx_rest_id', orig_tx, create_leased=True)
         orig_tx_cursor.start_attempt()
-        prev = orig_tx_cursor.tx.copy()
-        tx = orig_tx_cursor.tx
-        tx.mail_response = Response(550)
+        attempt_delta = TransactionMetadata(mail_response = Response(550))
         orig_tx_cursor.write_envelope(
-            prev.delta(tx),
+            tx_delta = TransactionMetadata(),
+            attempt_delta = attempt_delta,
             finalize_attempt=True,
             final_attempt_reason='upstream permfail')
 
@@ -182,7 +181,9 @@ class StorageWriterFilterTest(unittest.TestCase):
         for i in range(0, 5):
             try:
                 upstream_cursor.write_envelope(
-                    TransactionMetadata(mail_response=Response(201)))
+                    tx_delta = TransactionMetadata(),
+                    attempt_delta=TransactionMetadata(
+                        mail_response=Response(201)))
             except VersionConflictException:
                 logging.debug('VersionConflictException')
                 if i == 4:
@@ -212,7 +213,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         else:
             self.fail('no rcpt')
         upstream_cursor.write_envelope(
-            TransactionMetadata(rcpt_response=[Response(202)]))
+            tx_delta=TransactionMetadata(),
+            attempt_delta=TransactionMetadata(rcpt_response=[Response(202)]))
         self.join(t)
 
         tx = filter.get()
@@ -245,7 +247,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         else:
             self.fail('no body')
         upstream_cursor.write_envelope(
-            TransactionMetadata(data_response=Response(203)))
+            tx_delta=TransactionMetadata(),
+            attempt_delta=TransactionMetadata(data_response=Response(203)))
 
         self.join(t)
 
@@ -325,7 +328,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         while tx_cursor.tx.mail_from is None:
             tx_cursor.wait()
         tx_cursor.write_envelope(
-            TransactionMetadata(mail_response=Response(201)))
+            tx_delta=TransactionMetadata(),
+            attempt_delta=TransactionMetadata(mail_response=Response(201)))
 
         self.join(t, 3)
         tx = filter.get()

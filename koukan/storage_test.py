@@ -64,8 +64,10 @@ class StorageTestBase(unittest.TestCase):
             buggy.start_attempt()
 
         self.assertTrue(upstream.start_attempt())
-        upstream.write_envelope(TransactionMetadata(
-            mail_response=Response(450)))
+        upstream.write_envelope(
+            tx_delta=TransactionMetadata(),
+            attempt_delta=TransactionMetadata(
+                mail_response=Response(450)))
 
         downstream = self.s.get_transaction_cursor()
         self.assertIsNotNone(downstream.load(rest_id='tx_rest_id'))
@@ -116,8 +118,10 @@ class StorageTestBase(unittest.TestCase):
 
         upstream.load()
         self.assertEqual(upstream.tx.retry['max_attempts'], 100)
-        upstream.write_envelope(TransactionMetadata(
-            rcpt_response=[Response(456)]))
+        upstream.write_envelope(
+            tx_delta=TransactionMetadata(),
+            attempt_delta=TransactionMetadata(
+                rcpt_response=[Response(456)]))
 
         upstream.write_envelope(TransactionMetadata(),
                                 finalize_attempt = True)

@@ -82,7 +82,9 @@ class Rcpt:
                 logging.debug(env_delta)
                 try:
                     # finalize_attempt=True if data_resp ??
-                    cursor.write_envelope(env_delta)
+                    cursor.write_envelope(
+                        tx_delta=TransactionMetadata(),
+                        attempt_delta=env_delta)
                 except VersionConflictException:
                     logging.debug('VersionConflictException')
                     time.sleep(0.3)

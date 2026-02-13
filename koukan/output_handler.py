@@ -288,7 +288,14 @@ class OutputHandler:
                 for i in range(0,5):
                     try:
                         prev = self.cursor.tx.copy()
-                        self.cursor.write_envelope(delta, **env_kwargs)
+                        db_tx_delta = delta.copy_valid(WhichJson.DB)
+                        db_attempt_delta = delta.copy_valid(
+                            WhichJson.DB_ATTEMPT)
+                        db_tx_delta.filter_output = None
+                        db_attempt_delta.filter_output = delta.filter_output
+                        self.cursor.write_envelope(
+                            db_tx_delta, attempt_delta=db_attempt_delta,
+                            **env_kwargs)
                         self.prev_downstream.merge_from(
                             prev.delta(self.cursor.tx))
                         break

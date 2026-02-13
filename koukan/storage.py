@@ -274,7 +274,8 @@ class TransactionCursor:
                        finalize_attempt : Optional[bool] = None,
                        next_attempt_time : Optional[int] = None,
                        notification_done : Optional[bool] = None,
-                       ping_tx : bool = False):
+                       ping_tx : bool = False,
+                       attempt_delta : Optional[TransactionMetadata] = None):
         with self.parent.begin_transaction() as db_tx:
             self._write(db_tx=db_tx,
                         tx_delta=tx_delta,
@@ -282,7 +283,8 @@ class TransactionCursor:
                         finalize_attempt=finalize_attempt,
                         next_attempt_time = next_attempt_time,
                         notification_done=notification_done,
-                        ping_tx=ping_tx)
+                        ping_tx=ping_tx,
+                        attempt_delta=attempt_delta)
         self._update_version_cache(leased = False if finalize_attempt else None)
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata
@@ -378,18 +380,17 @@ class TransactionCursor:
                notification_done : Optional[bool] = None,
                # only for upcalls from BlobWriter
                input_done = False,
-               ping_tx = False):
+               ping_tx = False,
+               attempt_delta : Optional[TransactionMetadata] = None):
         assert self.version is not None
-        dd = tx_delta.copy_valid(WhichJson.DB)
-        logging.debug(dd)
-        dd.copy_valid_from(WhichJson.DB_ATTEMPT, tx_delta)
         # XXX body doesn't have DB validity?
-        dd.body = tx_delta.body
-        tx_delta = dd
+        body = tx_delta.body
+        tx_delta = tx_delta.copy_valid(WhichJson.DB)
+        tx_delta.body = body
 
-        logging.debug('TxCursor._write %s %s %s',
-                      self.rest_id, tx_delta,
-                      finalize_attempt)
+        logging.debug('TxCursor._write %s %s tx %s attempt %s',
+                      self.rest_id, finalize_attempt,
+                      tx_delta, attempt_delta)
         assert final_attempt_reason != 'oneshot'  # internal-only
         assert not(finalize_attempt and not self.in_attempt)
 
@@ -407,6 +408,7 @@ class TransactionCursor:
         assert self.tx is not None
 
         if (tx_delta.empty(WhichJson.ALL) and
+            (attempt_delta is None or attempt_delta.empty(WhichJson.ALL)) and
             (not tx_delta.body) and
             (final_attempt_reason is None) and
             (notification_done is None) and
@@ -422,8 +424,12 @@ class TransactionCursor:
         assert tx_to_db is not None
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = None
-        if not tx_delta.empty(WhichJson.DB_ATTEMPT):
-            attempt_json = tx_to_db.to_json(WhichJson.DB_ATTEMPT)
+        attempt_to_db = None
+        if (attempt_delta is not None) and not attempt_delta.empty(WhichJson.DB_ATTEMPT):
+            attempt_to_db = self.tx.copy_valid(WhichJson.DB_ATTEMPT)
+            attempt_to_db.merge_from(attempt_delta)
+            attempt_json = attempt_to_db.to_json(WhichJson.DB_ATTEMPT)
+
         # It doesn't make sense to request reliable notifications for
         # an ephemeral transaction: if you want "attempt once and
         # send a notification" use retry={'max_attempts': 1}
@@ -432,7 +438,7 @@ class TransactionCursor:
         assert tx_to_db.retry is not None or tx_to_db.notification is None
         logging.debug(
             'TransactionCursor._write %d %s version=%d '
-            'final_attempt_reason=%s %s %s',
+            'final_attempt_reason=%s tx %s attempt %s',
             self.db_id, self.rest_id, self.version, final_attempt_reason,
             tx_to_db_json, attempt_json)
         new_version = self.version + 1
@@ -513,6 +519,8 @@ class TransactionCursor:
         # XXX doesn't include response fields? tx.merge() should
         # handle that?
         self.tx.merge_from(tx_delta)
+        if attempt_delta is not None:
+            self.tx.merge_from(attempt_delta)
         # xxx final_attempt_reason, other cols?
         # self.tx.final_attempt_reason = self.final_attempt_reason
 
