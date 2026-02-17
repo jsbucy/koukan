@@ -249,7 +249,16 @@ class End2EndTest(unittest.TestCase):
         else:
             self.fail('didn\'t receive message')
 
-    def test_policy_reject(self):
+    def test_policy_reject_mail(self):
+        self._configure_and_run()
+        rcpt_resp, final_resp = send_smtp(
+            'localhost', self.gateway_mx_port, 'nonlocalhost',
+            'alice@example.com', ['bob@example.com'],
+            'hello, world!')
+        self.assertEqual(550, final_resp[0])
+
+
+    def test_policy_reject_body(self):
         self._configure_and_run()
 
         with open('testdata/bad_from.msg', 'rb') as f:

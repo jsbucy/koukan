@@ -579,6 +579,91 @@ class ExploderTest(unittest.TestCase):
         self.assertEqual(203, tx.data_response.code)
 
 
+    def test_cancel_mail(self):
+        upstream = MockAsyncFilter()
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
+                            lambda: upstream,
+                            rcpt_timeout=5)
+        tx = TransactionMetadata()
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice@example.com')
+        tx.mail_response=Response(550, 'fcrdns')
+        tx.cancelled = True
+        exploder.wire_downstream(tx)
+
+        prev2 = tx.copy()
+        exploder.on_update(prev.delta(tx))
+        # verify bugfix: should not raise
+        prev2.delta(tx)
+
+
+    def test_cancel_data(self):
+        upstream = MockAsyncFilter()
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
+                            lambda: upstream,
+                            rcpt_timeout=5)
+        tx = TransactionMetadata()
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice@example.com')
+        tx.rcpt_to=[Mailbox('bob@example.com')]
+        exploder.wire_downstream(tx)
+
+        def exp_update(tx, delta):
+            prev = tx.copy()
+            tx.mail_response=Response(201)
+            tx.rcpt_response=[Response(202)]
+            return prev.delta(tx), 2
+
+        upstream.expect_update(exp_update)
+
+        exploder.on_update(prev.delta(tx))
+
+        prev = tx.copy()
+        tx.data = InlineBlob(b'hello, world!', last=True)
+        tx.data_response = Response(550, 'dkim')
+        tx.cancelled = True
+
+        def exp_cancel(tx, delta):
+            self.assertTrue(tx.cancelled)
+            return TransactionMetadata(), 3
+
+        upstream.expect_update(exp_update)
+
+        exploder.on_update(prev.delta(tx))
+        self.assertFalse(upstream.update_expectation)
+
+    def test_cancel_noop(self):
+        upstream = MockAsyncFilter()
+        exploder = Exploder(Sender('submission', 'smtp-msa'),
+                            Sender('submission', 'smtp-msa-upstream'),
+                            lambda: upstream,
+                            rcpt_timeout=5)
+        tx = TransactionMetadata()
+        prev = tx.copy()
+        tx.mail_from=Mailbox('alice@example.com')
+        tx.rcpt_to=[Mailbox('bob@example.com')]
+        tx.body = InlineBlob(b'hello, world!', last=True)
+        exploder.wire_downstream(tx)
+
+        def exp_update(tx, delta):
+            prev = tx.copy()
+            tx.mail_response=Response(201)
+            tx.rcpt_response=[Response(202)]
+            tx.data_response=Response(203)
+            return prev.delta(tx), 2
+
+        upstream.expect_update(exp_update)
+
+        exploder.on_update(prev.delta(tx))
+
+        prev = tx.copy()
+        tx.cancelled = True
+
+        exploder.on_update(prev.delta(tx))
+        # should not make an upstream call
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s [%(thread)d] '
