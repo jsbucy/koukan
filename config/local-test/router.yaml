@@ -74,8 +74,6 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
-  - filter: relay_auth
-  #  smtp_auth: true
   - filter: message_validation
   - filter: policy_action
     match:

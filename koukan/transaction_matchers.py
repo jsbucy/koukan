@@ -8,7 +8,6 @@ from koukan.filter import TransactionMetadata
 
 # Kitchen sink for trivial matchers
 
-#class NetworkAddressMatcher(TransactionMatcher):
 def match_network_address(yaml : dict, tx : TransactionMetadata):
     if tx.remote_host is None:
         return MatcherResult.PRECONDITION_UNMET
@@ -20,3 +19,8 @@ def match_tls(yaml : dict, tx : TransactionMetadata):
     if tx.smtp_meta is None:
         return MatcherResult.PRECONDITION_UNMET
     return MatcherResult.from_bool(tx.smtp_meta.get('tls', False))
+
+def match_smtp_auth(yaml : dict, tx : TransactionMetadata):
+    if tx.smtp_meta is None:
+        return MatcherResult.PRECONDITION_UNMET
+    return MatcherResult.from_bool(tx.smtp_meta.get('auth', False))

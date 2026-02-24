@@ -27,7 +27,6 @@ from koukan.filter_chain import BaseFilter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
-from koukan.relay_auth_filter import RelayAuthFilter
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
@@ -72,7 +71,6 @@ class FilterChainWiring:
         factory.add_filter('message_parser', self.message_parser)
         factory.add_filter('remote_host', self.remote_host)
         factory.add_filter('received_header', self.received_header)
-        factory.add_filter('relay_auth', self.relay_auth)
         factory.add_filter('dns_resolution', self.dns_resolution)
 
         # exploder_output_factory / router handle_new_tx()
@@ -227,9 +225,6 @@ class FilterChainWiring:
 
     def received_header(self, yaml, sender : Sender):
         return ReceivedHeaderFilter(yaml.get('received_hostname', None))
-
-    def relay_auth(self, yaml, sender : Sender):
-        return RelayAuthFilter(smtp_auth = yaml.get('smtp_auth', False))
 
     def dns_resolution(self, yaml, sender : Sender):
         host_list = yaml.get('static_hosts', None)

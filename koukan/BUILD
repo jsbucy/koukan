@@ -414,17 +414,6 @@ py_test(name='received_header_filter_test',
         srcs=['received_header_filter_test.py'],
         deps=[':received_header_filter'])
 
-py_library(name='relay_auth_filter',
-           srcs=['relay_auth_filter.py'],
-           deps=[':filter',
-                 ':filter_chain',
-                 ':response'])
-
-py_test(name='relay_auth_filter_test',
-        srcs=['relay_auth_filter_test.py'],
-        deps=[':relay_auth_filter',
-              ':fake_endpoints'])
-
 py_library(name='message_validation_filter',
            srcs=['message_validation_filter.py'],
            deps=[':blob',
@@ -570,7 +559,6 @@ py_library(name='filter_chain_wiring',
                  ':policy_factory',
                  ':received_header_filter',
                  ':recipient_router_factory',
-                 ':relay_auth_filter',
                  ':remote_host_filter',
                  ':rest_endpoint',
                  ':sender',
