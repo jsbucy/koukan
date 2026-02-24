@@ -5,13 +5,13 @@ import logging
 
 from koukan.policy_factory import PolicyFactory
 from koukan.filter import TransactionMetadata
+from koukan.matcher_result import MatcherResult
 
 class PolicyFactoryTest(unittest.TestCase):
     def test_smoke(self):
         yaml = {'modules': {
             'transaction_matcher': {
                 'hello': 'koukan.hello_matcher',
-                'nohello': 'koukan.hello_matcher:nomatch'
             }
         }}
 
@@ -20,8 +20,8 @@ class PolicyFactoryTest(unittest.TestCase):
 
         match_yaml = {}
         tx = TransactionMetadata()
-        self.assertTrue(f.matchers['hello'](match_yaml, tx))
-        self.assertFalse(f.matchers['nohello'](match_yaml, tx))
+        self.assertEqual(MatcherResult.MATCH,
+                         f.matchers['hello'](match_yaml, tx))
 
 if __name__ == '__main__':
     logging.basicConfig(

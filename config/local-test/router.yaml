@@ -329,7 +329,8 @@ modules:
     hello: koukan.hello_filter
   recipient_router_policy:
     hello: koukan.hello_policy
-  #transaction_matcher:
+  transaction_matcher:
+    match_hello: koukan.hello_matcher:match
 
 storage:
   # url: postgresql+psycopg://my-username@/my-database?host=/var/run/postgresql

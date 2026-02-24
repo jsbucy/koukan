@@ -14,6 +14,8 @@ from koukan.policy_action_filter import (
     PolicyActionFilter,
     TransactionMatcher )
 
+from koukan.matcher_result import MatcherResult
+
 from koukan.transaction_matchers import (
     match_network_address,
     match_smtp_auth,
@@ -50,7 +52,7 @@ class PolicyFactory:
         assert len(param) == 2
         assert sig.parameters[param[0]].annotation == dict  # yaml
         assert sig.parameters[param[1]].annotation == TransactionMetadata
-        assert sig.return_annotation == bool
+        assert sig.return_annotation == MatcherResult
 
         self.add_matcher(name, fn)
 

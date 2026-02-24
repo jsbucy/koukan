@@ -535,7 +535,8 @@ py_library(name='policy_factory',
 
 py_library(name='hello_matcher',
            srcs=['hello_matcher.py'],
-           deps=[':filter'])
+           deps=[':filter',
+                 ':matcher_result'])
 
 py_test(name='policy_factory_test',
         srcs=['policy_factory_test.py'],
@@ -791,8 +792,9 @@ py_test(name='end2end_test',
         deps=[':router_service',
               ':gateway_lib',
               ':executor',
-              ':hello_policy',
               ':hello_filter',
+              ':hello_matcher',
+              ':hello_policy',
               ':ssmtp',
               ':fake_smtpd',
               ':postgres_test_utils',
