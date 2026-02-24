@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import unittest
 import logging
+import asyncio
+
 from koukan.filter import Mailbox
 from koukan.response import Response
 from koukan.filter_chain import (
@@ -13,24 +15,37 @@ from koukan.filter_chain import (
     ProxyFilter )
 from koukan.blob import InlineBlob
 from koukan.filter import TransactionMetadata
-import asyncio
+from koukan.filter_output import FilterOutput
+from koukan.matcher_result import MatcherResult
+
+class SinkOut(FilterOutput):
+    def match(self, yaml : dict) -> MatcherResult:
+        return MatcherResult.NO_MATCH
 
 class Sink(CoroutineFilter):
     updates = 0
     async def on_update(self, delta, upstream):
         self.updates += 1
-        logging.debug('Sink.on_update %s', self.downstream_tx)
+        tx = self.downstream_tx
+        logging.debug('Sink.on_update %s', tx)
         logging.debug(delta)
         # self.downstream['sink'] = 'sink'
-        if self.downstream_tx.cancelled:
+        if tx.cancelled:
             return
         assert delta.mail_response is None
         if delta.mail_from:
-            self.downstream_tx.mail_response = Response(201)
-        for i in range(len(self.downstream_tx.rcpt_response), len(self.downstream_tx.rcpt_to)):
-            self.downstream_tx.rcpt_response.append(Response(202))
+            tx.mail_response = Response(201)
+        for i in range(len(tx.rcpt_response), len(tx.rcpt_to)):
+            tx.rcpt_response.append(Response(202))
         if delta.body and delta.body.finalized():
-            self.downstream_tx.data_response = Response(203)
+            tx.data_response = Response(203)
+
+        if self.updates > 1:
+            assert tx.get_filter_output(self.fullname()) is not None
+        else:
+            tx.add_filter_output(self.fullname(), SinkOut())
+        assert tx.get_ephemeral_filter_output(self.fullname()) is None
+        tx.add_ephemeral_filter_output(self.fullname(), SinkOut())
 
 class AddDownstream(CoroutineFilter):
     async def on_update(self, delta, upstream):
@@ -149,6 +164,9 @@ class FilterChainTest(unittest.TestCase):
         sink_count = sink.updates
         chain.update()
         self.assertEqual(sink_count + 1, sink.updates)
+
+        assert tx.get_filter_output(sink.fullname()) is not None
+        assert tx.get_ephemeral_filter_output(sink.fullname()) is None
 
     def test_filter_result(self):
         tx = TransactionMetadata()
