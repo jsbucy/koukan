@@ -173,6 +173,74 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertIsNone(
             out := tx.get_filter_output(f1.fullname()))
 
+    def test_log_retirement(self):
+        x_count = 0
+        y_count = 0
+        def x(yaml, tx):
+            nonlocal x_count
+            logging.debug('x')
+            x_count += 1
+            if x_count == 1:
+                return MatcherResult.PRECONDITION_UNMET
+            return MatcherResult.MATCH
+        def y(yaml, tx):
+            nonlocal y_count
+            logging.debug('y')
+            y_count += 1
+            return MatcherResult.MATCH
+
+        matchers = {'x': x, 'y': y}
+
+        match_x_yaml = {
+            'match': {'matcher': 'x'},
+            'action': 'LOG',
+            'name': 'match_x',
+            'tag': 'my_group'}
+        match_y_yaml = {
+            'match': {'matcher': 'y'},
+            'name': 'match_y',
+            'tag': 'my_group'}
+
+        filter_x = PolicyActionFilter(match_x_yaml, matchers=matchers)
+        filter_y = PolicyActionFilter(match_y_yaml, matchers=matchers)
+
+        tx = TransactionMetadata()
+        filter_x.wire_downstream(tx)
+        filter_y.wire_downstream(tx)
+
+        # first call: x precondition noops group
+        filter_x.on_update(TransactionMetadata())
+        self.assertIsNotNone(
+            eout := tx.get_ephemeral_filter_output(filter_x.fullname()))
+        self.assertIn('my_group', eout.unmet_precondition_tags)
+
+        filter_y.on_update(TransactionMetadata())
+        self.assertEqual(1, x_count)
+        self.assertEqual(0, y_count)
+        tx.ephemeral_filter_output = None
+
+        self.assertIsNone(out := tx.get_filter_output(filter_x.fullname()))
+
+        # second call: x matches, log action does not retire group -> keep going
+        filter_x.on_update(TransactionMetadata())
+        filter_y.on_update(TransactionMetadata())
+
+        self.assertEqual(2, x_count)
+        self.assertEqual(1, y_count)
+
+        self.assertIsNotNone(out := tx.get_filter_output(filter_x.fullname()))
+        self.assertIn('match_x', out.matched_rules)
+        self.assertIn('match_y', out.matched_rules)
+        self.assertIn('my_group', out.matched_tags)
+
+        # third call: both matchers previously matched -> noop
+        filter_x.on_update(TransactionMetadata())
+        filter_y.on_update(TransactionMetadata())
+
+        self.assertEqual(2, x_count)
+        self.assertEqual(1, y_count)
+
+
     def test_expr(self):
         matchers = {
             'match': lambda tx, yaml: MatcherResult.MATCH,
