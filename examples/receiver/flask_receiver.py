@@ -49,6 +49,18 @@ def create_app(receiver = None, path = None):
         tx_json, etag = receiver.get_tx(tx_rest_id)
         return tx_json, 200, [('etag', etag)]
 
+    @app.route('/transactions/<tx_rest_id>', methods=['PATCH'])
+    def update_transaction(tx_rest_id):
+        err, res = receiver.update_tx(tx_rest_id, request.json)
+        if err is not None:
+            code, msg = err
+            return FlaskResponse(status=code, response=msg)
+        elif res is not None:
+            tx_json, etag = res
+            return tx_json, 200, [('etag', etag)]
+        else:
+            assert False
+
     @app.route('/transactions/<tx_rest_id>/message_builder', methods=['POST'])
     def update_message_builder(tx_rest_id):
         err, res = receiver.update_tx_message_builder(tx_rest_id, request.json)
