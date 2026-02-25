@@ -62,10 +62,20 @@ class DkimSignFilter(ProxyFilter):
         # TODO need to handle IDN here?
 
         try:
-            return dkim.sign(data, self.selector.encode('us-ascii'),
-                             self.domain.encode('us-ascii'),
-                             self.privkey,
-                             include_headers=[b'From', b'Date', b'Message-ID'])
+            # note: dkimpy includes 'bcc' in SHOULD_NOT citing rfc6376
+            # though apparently this was present in rfc4871 and
+            # subsequently removed
+            signer = dkim.DKIM(data)
+            for h in [b'bcc', b'resent-bcc']:
+                if h in signer.should_not_sign:
+                    signer.should_not_sign.remove(h)
+            return signer.sign(
+                self.selector.encode('us-ascii'),
+                self.domain.encode('us-ascii'),
+                self.privkey,
+                # just sign every header not in the should_not_sign
+                # disallowlist
+                include_headers=signer.all_sign_headers())
         except dkim.DKIMException as e:
             logging.info('failed to sign %s', e)
             return None

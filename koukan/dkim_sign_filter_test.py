@@ -39,7 +39,7 @@ class DkimSignFilterTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@domain')],
             body = InlineBlob(
                 b'From: <alice>\r\n'
-                b'To: <bob>\r\n'
+                b'Bcc: <bob>\r\n'
                 b'\r\n'
                 b'hello\r\n',
                 last=False))
@@ -62,9 +62,10 @@ class DkimSignFilterTest(unittest.TestCase):
             TransactionMetadata(body=tx.body))
         upstream_body = dkim_endpoint.upstream_tx.body
         self.assertTrue(upstream_body.finalized())
-        logging.debug(upstream_body.pread(0))
-        self.assertTrue(upstream_body.pread(0).startswith(
-            b'DKIM-Signature:'))
+        signed_message = upstream_body.pread(0)
+        logging.debug(signed_message)
+        self.assertTrue(signed_message.startswith(b'DKIM-Signature:'))
+        self.assertIn(b'h=from : bcc;', signed_message)
         self.assertIsNone(filter_result.downstream_delta)
 
     def test_bad(self):
