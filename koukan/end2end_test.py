@@ -395,6 +395,31 @@ class End2EndTest(unittest.TestCase):
 
 
     # submission smtp -> smtp
+    def test_msa(self):
+        self._configure_and_run()
+
+        with open('testdata/trivial.msg', 'rb') as f:
+            msg = f.read()
+
+        send_smtp('localhost', self.gateway_msa_port, 'localhost',
+                  'alice@example.com', ['bob@example.com'],
+                  raw=msg)
+
+        handlers = {}
+        for handler in self.fake_smtpd.handlers:
+            logging.debug(handler)
+            if len(handler.rcpt_to) != 1:
+                continue
+            rcpt = handler.rcpt_to[0]
+            if rcpt != 'bob@example.com':
+                continue
+            self.assertNotIn(rcpt, handlers)
+            handlers[rcpt] = handler
+            self.assertIn(b'DKIM-Signature:', handler.data)
+            self.assertIn(b'Received:', handler.data)
+
+        self.assertEqual(1, len(handlers))
+
 
     # submission rest w/mime -> smtp
     # w/payload reuse

@@ -90,7 +90,6 @@ class FilterChainFactory:
         filter_name = filter_yaml['filter']
         spec = self.filters[filter_name]
         filter = spec.builder(filter_yaml, sender)
-        logging.debug(filter)
         if filter is not None:
             assert isinstance(filter, BaseFilter)
         return filter

@@ -74,6 +74,37 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
+  - filter: policy_action
+    match:
+      not:
+        matcher: smtp_auth
+    name: matcher_smoke_smtp_auth
+    tag: matcher_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      not:
+        matcher: tls
+    name: matcher_smoke_tls
+    tag: matcher_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      not:
+        matcher: network_address
+        cidr: 10.0.0.0/8
+    name: matcher_smoke_network_address
+    tag: matcher_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      not:
+        matcher: address_list
+        domains:
+        - example.com
+    name: matcher_smoke_address_list
+    tag: matcher_smoke
+    action: LOG
   - filter: message_validation
   - filter: policy_action
     match:
@@ -200,7 +231,17 @@ endpoint:
   - filter: remote_host
   - filter: message_validation
   - filter: spf_check
+  - filter: policy_action
+    match:
+      matcher: koukan.remote_host_filter.SpfCheckFilter
+    tag: spf_smoke
+    action: LOG
   - filter: dkim_check
+  - filter: policy_action
+    match:
+      matcher: koukan.remote_host_filter.DkimCheckFilter
+    tag: dkim_smoke
+    action: LOG
   - filter: policy_action
     match:
       any:
