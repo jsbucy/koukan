@@ -54,7 +54,7 @@ class SpfCheckFilterTest(unittest.TestCase):
                          out.match({'mail_from_result': 'fail'}))
 
         self.assertEqual(
-            {'mail_from_result': 'fail'},
+            {'mail_from_result': 3},
             out.to_json(WhichJson.DB_ATTEMPT))
 
     def test_mail_from_pass(self):
@@ -126,8 +126,8 @@ class SpfCheckFilterTest(unittest.TestCase):
         js = out.to_json(WhichJson.DB_ATTEMPT)
         logging.debug(js)
         self.assertEqual(
-            {'extra_domains_results': {'inbound-gateway.local': 'spf_pass'},
-             'mail_from_result': 'none'},
+            {'extra_domains_results': {'inbound-gateway.local': 1},
+             'mail_from_result': 5},
             js)
 
 

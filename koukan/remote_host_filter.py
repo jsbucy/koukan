@@ -17,6 +17,7 @@ from koukan.dns_wrapper import NotFoundExceptions, Resolver, ServFailExceptions
 from koukan.rest_schema import WhichJson
 
 class RemoteHostFilterOutput(FilterOutput):
+    # to_json() emits these as int so only extend this enum conservatively
     class Status(IntEnum):
         OK = 0
         DNS_TEMP = 1

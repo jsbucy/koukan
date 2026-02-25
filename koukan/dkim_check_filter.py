@@ -19,6 +19,7 @@ from koukan.rest_schema import WhichJson
 
 from koukan.message_validation_filter import MessageValidationFilter
 
+# to_json() emits these as int so only extend this enum conservatively
 class Status(IntEnum):
     temp_err = 0  # e.g. dns
     dkim_pass = 1
@@ -49,7 +50,7 @@ class DkimCheckFilterOutput(FilterOutput):
             self.headers = []
 
         def to_json(self):
-            out = { 'status': self.status.name }
+            out = { 'status': int(self.status) }
             for field in ('alignment', 'headers', 'timestamp', 'expiration',
                           'signing_domain', 'tags'):
                 if hasattr(self, field) and (v := getattr(self, field)):

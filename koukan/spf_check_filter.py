@@ -16,6 +16,7 @@ from koukan.response import Response
 from koukan.rest_schema import WhichJson
 
 class SpfCheckFilterOutput(FilterOutput):
+    # to_json() emits these as int so only extend this enum conservatively
     class Status(IntEnum):
         temperror = 0
         spf_pass = 1
@@ -68,9 +69,9 @@ class SpfCheckFilterOutput(FilterOutput):
         out : Dict[str, Any] = {}
         if self.extra_domains_results:
             out['extra_domains_results'] = {
-                d : r.name for d,r in self.extra_domains_results.items()}
+                d : int(r) for d,r in self.extra_domains_results.items()}
         if self.mail_from_result is not None:
-            out['mail_from_result'] = self.mail_from_result.name
+            out['mail_from_result'] = int(self.mail_from_result)
         return out
 
 

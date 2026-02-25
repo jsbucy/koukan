@@ -32,6 +32,7 @@ class MessageValidationFilterOutput(FilterOutput):
     # be identical to the original?
     parsed_header_from : Optional[Address] = None
 
+    # to_json() emits these as int so only extend this enum conservatively
     class Status(IntEnum):
         # major problem with headers e.g. MissingHeaderBodySeparatorDefect
         NONE = 0

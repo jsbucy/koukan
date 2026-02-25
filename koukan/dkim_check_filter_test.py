@@ -140,7 +140,7 @@ class DkimCheckFilterTest(unittest.TestCase):
         self.assertEqual(12345, result.timestamp)
         self.assertIsNone(result.expiration)
         self.assertEqual('-2', result.tags['x'])
-        self.assertEqual({'status': 'fail', 'timestamp': 12345,
+        self.assertEqual({'status': 2, 'timestamp': 12345,
                           'tags': {'x': '-2'}},
                          result.to_json())
 
@@ -151,7 +151,7 @@ class DkimCheckFilterTest(unittest.TestCase):
             ['from', 'subject', 'message-id', 'date', 'from'],
             result.headers)
         self.assertEqual(
-            {'status': 'fail',
+            {'status': 2,
              'headers': ['from', 'subject', 'message-id', 'date', 'from']},
             result.to_json())
 
