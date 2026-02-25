@@ -26,6 +26,6 @@ Contents
    internals
    plugins
    faq
-
+   news
 
 

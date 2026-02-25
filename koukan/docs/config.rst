@@ -107,6 +107,8 @@ the address.
 Output Chain Filters
 --------------------
 
+.. _remote_host_filter:
+
 remote_host
 ^^^^^^^^^^^
 resolves tx.remote_host ip to name
@@ -172,18 +174,13 @@ policy.options.receive_parsing: required for message_parser to parse
 the message for rest receivers
 
 policy.options.send_filter_output: enables sending tx.filter_output
-(cf Signals&Policies below) to receivers. Default false. Rest
+(cf :ref:`signals` below) to receivers. Default false. Rest
 receivers may or may not want this but it should be disabled for the
 smtp gateway and short-circuiting.
 
 Note: address_list_policy lists are also available with a
 ``TransactionMatcher`` interface ``matcher: address_list`` for use
 with policy_action.
-
-relay_auth
-^^^^^^^^^^
-fails the tx if it doesn't contain smtp auth info in
-smtp_meta or remote_host in allowlist
 
 exploder
 ^^^^^^^^
@@ -200,7 +197,9 @@ RestEndpoint actually sends the message somewhere via http/rest
 
 policy_action
 ^^^^^^^^^^^^^
-cf "signals&policies" below
+cf :ref:`signals` below
+
+.. _spf_check_filter:
 
 spf_check
 ^^^^^^^^^
@@ -218,6 +217,8 @@ mail_from_result: temperror | spf_pass | permerror | fail | softfail | none | ne
 extra_domain: domain from filter yaml domains
 
 extra_domain_result: same values as mail_from_result
+
+.. _dkim_check_filter:
 
 dkim_check
 ^^^^^^^^^^
@@ -240,6 +241,8 @@ applied inclusively i.e. same_sld also matches domain
 domains: mutually exclusive with alignment. List of specific domains to check.
 
 
+.. _message_validation_filter:
+
 message_validation
 ^^^^^^^^^^^^^^^^^^
 parses the message and reports rfc822/mime problems in FilterOutput
@@ -258,31 +261,40 @@ max_received_headers: matches if the message has more than this many
 received headers
 
 
+.. _signals:
+
 Signals&Policies
 ----------------
 
 Koukan provides a simple yet powerful system for taking exceptional
 actions on transactions matching specific criteria.
 
-The basic idea is to separate signals from policy. A signal is a
-piece of information such as: "the smtp client EHLO matched their reverse
-dns." Whereas a policy might be: "reject transactions where the EHLO
-didn't match." This allows uniform implementation of actions in one
-place rather than scattering them across every signal. It also allows
-policies to include arbitrary logical combinations of signals often
-for allowlisting "reject tx where the EHLO didn't match unless it is
-from the ip subnet of my known inbound gateway thing."
+A signal is a piece of information such as: "the smtp client EHLO
+matched their reverse dns." A policy consists of a match expression to
+identify messages which is a logical combination of signals and an
+action to take on messages that match the expression. For example:
+"for transactions where the EHLO didn't match, return an smtp 550
+response."
+
+This separation between signals and policies allows uniform
+implementation of actions in one place rather than scattering them
+across every signal. It also allows policies to include arbitrary
+logical combinations of signals often for allowlisting: "reject tx
+where the EHLO didn't match unless it is from the ip subnet of my
+known inbound gateway thing."
 
 Output chain filters emit signals to ``tx.filter_output``. This is
 typically a filter-specific subclass of
 ``FilterOutput``. ``FilterOutput.match(yaml)`` returns whether the
 output matches criteria specified in yaml. ``MatcherResult`` includes
 ``PRECONDITION_UNMET`` if e.g. the matcher is being run at
-``tx.mail_from`` but the signal depends on the body, etc.
+``tx.mail_from`` but the signal depends on the body, etc. This no-ops
+all policy_action invocations with the same tag for the remainder of
+the current ``FilterChain.update()`` cycle.
 
 Simple matchers can also be loaded via ``modules.transaction_matcher``
 similar to ``recipient_router_filter.RoutingPolicy``. A simple matcher
-is a just ``Callable[[yaml, TransactionMetadata], MatcherResult]``
+is just ``Callable[[yaml, TransactionMetadata], MatcherResult]``
 
 Policies are specified with an invocation of ``policy_action``
 filter. Filter yaml:
@@ -374,19 +386,27 @@ Signals
 The following built-in filters populate filter_output, cf individual
 filter descriptions (above):
 
-* MessageValidationFilter
-* RemoteHostFilter
-* DkimCheckFilter
-* SpfCheckFilter
+* :ref:`message_validation_filter`
+* :ref:`remote_host_filter`
+* :ref:`dkim_check_filter`
+* :ref:`spf_check_filter`
 
 In addition several simple matchers are available in ``koukan.transaction_matchers``:
 
-network_address: transaction_matchers.match_network_address remote_host cidr
+network_address: transaction_matchers.match_network_address remote_host cidr::
 
-tls: transaction_matchers.match_tls was the transaction received with tls?
+  match:
+    matcher: network_address
+    cidr: 192.168.1.0/24
+
+tls: transaction_matchers.match_tls was the transaction received via
+smtp with tls?
 
 address_list: matches lists of email addresses using the same
 specification as the routing policy AddressListPolicy
+
+smtp_auth: matches if the message was received with smtp
+authentication. Replaces ``relay_auth`` filter
 
 Cluster/k8s
 ===========
