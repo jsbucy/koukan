@@ -25,7 +25,7 @@ from koukan.blob import InlineBlob
 
 from koukan.message_validation_filter import (
     MessageValidationFilter,
-    MessageValidationFilterResult )
+    MessageValidationFilterOutput )
 
 
 class DkimCheckFilterTest(unittest.TestCase):
@@ -73,7 +73,7 @@ class DkimCheckFilterTest(unittest.TestCase):
 
         logging.debug(message)
 
-        valid = MessageValidationFilterResult()
+        valid = MessageValidationFilterOutput()
         valid.parsed_header_from = Address(addr_spec='alice@example.com')
 
         f = DkimCheckFilter(self.dns)

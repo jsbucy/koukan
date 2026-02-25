@@ -13,11 +13,11 @@ from koukan.filter_chain import FilterResult
 
 from koukan.message_validation_filter import (
     MessageValidationFilter,
-    MessageValidationFilterResult )
+    MessageValidationFilterOutput )
 
 from koukan.matcher_result import MatcherResult
 
-Status = MessageValidationFilterResult.Status
+Status = MessageValidationFilterOutput.Status
 
 class MessageValidationFilterTest(unittest.TestCase):
     def setUp(self):

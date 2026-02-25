@@ -4,7 +4,7 @@ import unittest
 import logging
 
 from email.headerregistry import Address
-from koukan.message_validation_filter import MessageValidationFilterResult
+from koukan.message_validation_filter import MessageValidationFilterOutput
 
 from koukan.address_list_policy import (
     AddressListPolicy,
@@ -75,7 +75,7 @@ class AddressListPolicyTest(unittest.TestCase):
             'domains': ['example.com'],
         }
         tx = TransactionMetadata()
-        vo = MessageValidationFilterResult()
+        vo = MessageValidationFilterOutput()
         vo.parsed_header_from = Address(addr_spec='alice@example.com')
         tx.add_filter_output('koukan.message_validation_filter', vo)
         self.assertTrue(match_address_list(match_yaml, tx))

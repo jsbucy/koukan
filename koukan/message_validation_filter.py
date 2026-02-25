@@ -25,7 +25,7 @@ from koukan.matcher_result import MatcherResult
 from koukan.filter_output import FilterOutput
 from koukan.rest_schema import WhichJson
 
-class MessageValidationFilterResult(FilterOutput):
+class MessageValidationFilterOutput(FilterOutput):
     received_header_count = None
     # NOTE Address parses addr_spec in __init__ and Address.addr_spec
     # reserializes from parsed so parsed_header_from.addr_spec may not
@@ -91,7 +91,7 @@ class MessageValidationFilterResult(FilterOutput):
         if (v := yaml.get('validity_threshold', None)) is not None:
             if self.status is None:
                 return MatcherResult.PRECONDITION_UNMET
-            if self.status >= MessageValidationFilterResult.Status[v]:
+            if self.status >= MessageValidationFilterOutput.Status[v]:
                 return MatcherResult.NO_MATCH
         return MatcherResult.MATCH
 
@@ -201,11 +201,11 @@ class MessageValidationFilter(Filter):
         tx.add_filter_output(self.fullname(), result)
         return FilterResult()
 
-    def _check(self, body_blob : Blob) -> MessageValidationFilterResult:
+    def _check(self, body_blob : Blob) -> MessageValidationFilterOutput:
         assert self.downstream_tx is not None
         assert self.downstream_tx.mail_from is not None
 
-        result = MessageValidationFilterResult()
+        result = MessageValidationFilterOutput()
         smtputf8 = get_esmtp_param(
             self.downstream_tx.mail_from.esmtp, 'smtputf8') is not None
 
@@ -218,7 +218,7 @@ class MessageValidationFilter(Filter):
             end_of_headers = b.find(b'\r\n\r\n', 0, self.max_header_bytes)
             if end_of_headers == -1:
                 result.add_error(
-                    MessageValidationFilterResult.Status.BASIC,
+                    MessageValidationFilterOutput.Status.BASIC,
                     'couldn\'t find end of rfc822 headers in %d' %
                     self.max_header_bytes)
                 return result
@@ -237,7 +237,7 @@ class MessageValidationFilter(Filter):
             full_headers = b[0:end_of_headers + 4]
 
         if _has_defect(parsed.defects, [MissingHeaderBodySeparatorDefect]):
-            result.add_error(MessageValidationFilterResult.Status.BASIC,
+            result.add_error(MessageValidationFilterOutput.Status.BASIC,
                              'MissingHeaderBodySeparatorDefect')
             return result
 
@@ -256,7 +256,7 @@ class MessageValidationFilter(Filter):
                 if ord(ch) < 0x20 and ch not in string.printable:
                     raise NonPrintableDefect
         except Exception as ex:
-            result.add_error(MessageValidationFilterResult.Status.MEDIUM,
+            result.add_error(MessageValidationFilterOutput.Status.MEDIUM,
                              'invalid text encoding in headers')
             return result
 
@@ -265,12 +265,12 @@ class MessageValidationFilter(Filter):
         # https://github.com/python/cpython/issues/81074
         accepted_defects = [NonASCIILocalPartDefect,
                             UndecodableBytesDefect] if smtputf8 else []
-        if result.status >= MessageValidationFilterResult.Status.MEDIUM:
+        if result.status >= MessageValidationFilterOutput.Status.MEDIUM:
             for header_name in ['from', 'date', 'message-id']:
                 headers = _get_all(parsed, header_name)
                 if len(headers) != 1:
                     result.add_error(
-                        MessageValidationFilterResult.Status.MEDIUM,
+                        MessageValidationFilterOutput.Status.MEDIUM,
                         'missing/multiple ' + header_name)
                     break
                 else:
@@ -279,13 +279,13 @@ class MessageValidationFilter(Filter):
                         result._maybe_set_from(header)
                     if _has_other_defect(header.defects, accepted_defects):
                         result.add_error(
-                            MessageValidationFilterResult.Status.MEDIUM,
+                            MessageValidationFilterOutput.Status.MEDIUM,
                             'invalid ' + header_name + str(header.defects))
                         break
 
-        if result.status >= MessageValidationFilterResult.Status.HIGH:
+        if result.status >= MessageValidationFilterOutput.Status.HIGH:
             if self._check_mime_tree_defects(parsed, accepted_defects, 0):
                 result.add_error(
-                    MessageValidationFilterResult.Status.HIGH, 'mime tree')
+                    MessageValidationFilterOutput.Status.HIGH, 'mime tree')
                 return result
         return result
