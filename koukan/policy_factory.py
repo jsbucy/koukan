@@ -19,7 +19,7 @@ from koukan.matcher_result import MatcherResult
 from koukan.transaction_matchers import (
     match_network_address,
     match_smtp_auth,
-    match_tls )
+    match_smtp_tls )
 from koukan.address_list_policy import match_address_list
 
 class PolicyFactory:
@@ -29,7 +29,7 @@ class PolicyFactory:
         self.matchers = {}
         self.add_matcher('address_list', match_address_list)
         self.add_matcher('network_address', match_network_address)
-        self.add_matcher('tls', match_tls)
+        self.add_matcher('smtp_tls', match_smtp_tls)
         self.add_matcher('smtp_auth', match_smtp_auth)
 
     # TODO dedupe with recipient_router_factory?

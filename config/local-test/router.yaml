@@ -84,7 +84,7 @@ endpoint:
   - filter: policy_action
     match:
       not:
-        matcher: tls
+        matcher: smtp_tls
     name: matcher_smoke_tls
     tag: matcher_smoke
     action: LOG

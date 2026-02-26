@@ -16,7 +16,7 @@ def match_network_address(yaml : dict, tx : TransactionMetadata):
     cidr = ip_network(yaml['cidr'])
     return MatcherResult.from_bool(ip in cidr)
 
-def match_tls(yaml : dict, tx : TransactionMetadata):
+def match_smtp_tls(yaml : dict, tx : TransactionMetadata):
     assert tx.mail_from is None or tx.smtp_meta is not None
     if tx.smtp_meta is None:
         return MatcherResult.PRECONDITION_UNMET
