@@ -402,6 +402,15 @@ reuse in multiple reject rules::
      tag: validation
      action: REJECT
 
+The router can optionally send filter_output to rest receivers router.yaml::
+
+  rest_endpoint:
+  - name: receiver
+    options:
+      send_filter_output: true
+
+This defaults to false. If enabled, the router will send HTTP PATCH to
+the transaction endpoint to populate filter_output.
 
 Signals
 ^^^^^^^
