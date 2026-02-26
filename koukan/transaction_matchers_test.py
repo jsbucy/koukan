@@ -7,7 +7,7 @@ from koukan.filter import HostPort, TransactionMetadata
 from koukan.transaction_matchers import (
     match_network_address,
     match_smtp_auth,
-    match_tls )
+    match_smtp_tls )
 from koukan.matcher_result import MatcherResult
 
 class NetworkAddressMatcherTest(unittest.TestCase):
@@ -21,9 +21,9 @@ class NetworkAddressMatcherTest(unittest.TestCase):
 class TlsMatcherTest(unittest.TestCase):
     def test_smoke(self):
         tx = TransactionMetadata()
-        self.assertEqual(MatcherResult.PRECONDITION_UNMET, match_tls({}, tx))
+        self.assertEqual(MatcherResult.PRECONDITION_UNMET, match_smtp_tls({}, tx))
         tx.smtp_meta = {'tls': True}
-        self.assertEqual(MatcherResult.MATCH, match_tls({}, tx))
+        self.assertEqual(MatcherResult.MATCH, match_smtp_tls({}, tx))
 
 class SmtAuthMatcherTest(unittest.TestCase):
     def test_smoke(self):
