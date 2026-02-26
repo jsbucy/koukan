@@ -811,7 +811,7 @@ class TransactionMetadata:
         if f == 'body' and old_v is not None and new_v is not None:
             body_delta = old_v.delta(new_v, WhichJson.ALL)  # XXX
             if body_delta is None:
-                raise ValueError()
+                assert False
             if body_delta:
                 setattr(out, f, new_v)
             return
@@ -821,7 +821,7 @@ class TransactionMetadata:
             for kk in new_v.keys() - old_v.keys():
                 vv = new_v[kk]
                 if kk in old_v and old_v[kk] != vv:
-                    raise ValueError()
+                    assert False
                 oo[kk] = vv
             setattr(out, f, oo)
 
@@ -839,10 +839,8 @@ class TransactionMetadata:
         if offset is None:
             offset = 0
         if offset != len(old_v):
-            logging.debug(
-                'list offset mismatch %s old len %d new offset %s',
-                f, len(old_v), offset)
-            raise ValueError()
+            assert False, ('list offset mismatch %s old len %d new offset %s' %
+                           (f, len(old_v), offset))
         l = []
         l.extend(old_v)
         l.extend(new_v)
@@ -855,7 +853,7 @@ class TransactionMetadata:
             out = TransactionMetadata()
         try:
             return self.merge_from(delta, out)
-        except ValueError:
+        except AssertionError:
             return None
 
     # compute a delta from self to successor
@@ -895,7 +893,7 @@ class TransactionMetadata:
         if f == 'body' and old_v is not None and new_v is not None:
             body_delta = old_v.delta(new_v, which_json)
             if body_delta is None:
-                raise ValueError()
+                assert False
             if body_delta:
                 setattr(out, f, new_v)
             return
@@ -907,7 +905,7 @@ class TransactionMetadata:
                 assert False, (f, set(old_v.keys()) - set(new_v.keys()))
             for kk,vv in old_v.items():
                 if new_v[kk] != vv:
-                    raise ValueError()
+                    assert False
             oo = {}
             for kk in new_v.keys() - old_v.keys():
                 oo[kk] = new_v[kk]
@@ -915,35 +913,29 @@ class TransactionMetadata:
             return
         elif not json_field.is_list:
             if old_v != new_v:
-                logging.debug('tx.delta value change %s old=%s new=%s',
-                              f, old_v, new_v)
-                raise ValueError()
+                assert False, ('tx.delta value change %s old=%s new=%s' %
+                               (f, old_v, new_v))
             setattr(out, f, None)
             return
         assert isinstance(old_v, list)
         assert isinstance(new_v, list)
         if json_field.emit_rest_placeholder(which_json):
             if any([x != None for x in new_v]):
-                logging.debug('non-None placeholder')
-                raise ValueError()
+                assert False, 'non-None placeholder'
             if len(new_v) < len(old_v):
-                logging.debug('list shrink placeholder')
-                raise ValueError()
+                assert False, 'list shrink placeholder'
             return
 
         old_len = len(old_v)
         if old_len > len(new_v):
-            logging.debug('tx.delta invalid list trunc %s', f)
-            raise ValueError()
+            assert False, 'tx.delta invalid list trunc ' + f
         for i in range(0, old_len):
             if old_v[i] is None and new_v[i] is not None:
                 pass  #ok   XXX why would old_v be None?
             if old_v[i] is not None and new_v[i] is None:
-                logging.debug('tx.delta %s ->None', f)
-                raise ValueError()
+                assert False, 'tx.delta ' + f + ' ->None'
             if old_v[i] != new_v[i]:
-                logging.debug('tx.delta %s !=', f)
-                raise ValueError()
+                assert False, 'tx.delta ' + f + ' !='
         setattr(out, f, new_v[old_len:])
         setattr(out, json_field.list_offset(), old_len)
 

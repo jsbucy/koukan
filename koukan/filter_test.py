@@ -16,6 +16,19 @@ from koukan.deadline import Deadline
 from koukan.message_builder import MessageBuilderSpec
 from koukan.rest_schema import BlobUri
 from koukan.storage_schema import BlobSpec
+from koukan.filter_output import FilterOutput
+
+class FakeFilterOutput(FilterOutput):
+    x : str
+    def __init__(self, x):
+        self.x = x
+
+    def match(self):
+        raise NotImplementedError()
+
+    def to_json(self, which_js):
+        return {'x': self.x}
+
 
 class FilterTest(unittest.TestCase):
     def setUp(self):
@@ -397,30 +410,72 @@ class FilterTest(unittest.TestCase):
         self.assertEqual('/transactions/123/blob/blob1',
                          body.blobs['blob1'].reuse_uri.parsed_uri)
 
+    def test_body_delta(self):
+        prev = TransactionMetadata()
+        prev.body = InlineBlob(b'Hello')
+        next = TransactionMetadata()
+        next.body = InlineBlob(b'Hello, world!')
+        self.assertIsNotNone(delta := prev.delta(next))
+
+        prev.merge_from(prev.delta(next))
+
+        next.body = InlineBlob(b'He')
+        with self.assertRaises(AssertionError):
+            prev.delta(next)
 
     def test_dict(self):
         prev = TransactionMetadata()
-        prev.add_filter_output('x', 'xx')
+        self.assertIsNone(prev.get_ephemeral_filter_output('z'))
+
+        x = FakeFilterOutput('xx')
+        prev.add_filter_output('x', x)
 
         next = TransactionMetadata()
         with self.assertRaises(AssertionError):
             prev.delta(next)
 
         next.filter_output = dict(prev.filter_output)
-        next.filter_output['x'] = 'xxx'
-        with self.assertRaises(ValueError):
+        next.filter_output['x'] = FakeFilterOutput('xxx')
+        with self.assertRaises(AssertionError):
             prev.delta(next)
 
         next.filter_output = dict(prev.filter_output)
         delta = prev.delta(next)
         self.assertEqual({}, delta.filter_output)
 
-        next.filter_output['y'] = 'yy'
+        y = next.filter_output['y'] = FakeFilterOutput('yy')
         delta = prev.delta(next)
-        self.assertEqual({'y': 'yy'}, delta.filter_output)
+        self.assertEqual({'y': next.filter_output['y']}, delta.filter_output)
 
         prev.merge_from(delta)
-        self.assertEqual({'x': 'xx', 'y': 'yy'}, prev.filter_output)
+        self.assertEqual({'x': x, 'y': y}, prev.filter_output)
+
+        json_out = prev.to_json(WhichJson.DB)
+        self.assertEqual(
+            {'filter_output': {'x': {'x': 'xx'}, 'y': {'x': 'yy'}}},
+            json_out)
+
+        self.assertIsNotNone(prev.get_filter_output('x'))
+
+        prev.add_ephemeral_filter_output('z', FakeFilterOutput('zz'))
+        self.assertIsNotNone(prev.get_ephemeral_filter_output('z'))
+
+        loaded = TransactionMetadata.from_json(json_out)
+        self.assertEqual(
+            {'x': {'x': 'xx'}, 'y': {'x': 'yy'}},
+            loaded.filter_output_dict_json)
+        self.assertIsNone(loaded.filter_output)
+        self.assertIsNone(loaded.get_filter_output('x'))
+
+    def test_dict_shrink(self):
+        prev = TransactionMetadata()
+        prev.add_filter_output('x', FakeFilterOutput('xx'))
+        prev.add_filter_output('y', FakeFilterOutput('yy'))
+
+        next = TransactionMetadata()
+        next.add_filter_output('x', FakeFilterOutput('xx'))
+        with self.assertRaises(AssertionError):
+            prev.delta(next)
 
     def test_copy_list_offset(self):
         prev = TransactionMetadata(
