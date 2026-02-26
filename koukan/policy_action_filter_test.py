@@ -351,6 +351,53 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual(450, tx.mail_response.code)
         self.assertEqual('custom error text', tx.mail_response.message)
 
+    def test_policy_match(self):
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'action': 'REJECT',
+             'match': {
+                 'not': {
+                     'any': [{
+                         'matcher': 'koukan.policy_action_filter.PolicyActionFilter',
+                         'tag': 'my_tag'
+                     }, {
+                         'matcher': 'koukan.policy_action_filter.PolicyActionFilter',
+                         'rule': 'my_rule'
+                     }]
+                 }}
+             },
+            matchers={})
+
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.add_filter_output(filter.fullname(), PolicyActionFilterOutput())
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        filter.on_update(prev.delta(tx))
+        self.assertEqual(550, tx.mail_response.code)
+
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        out = PolicyActionFilterOutput()
+        out._add_tag('my_tag')
+        tx.add_filter_output(filter.fullname(), out)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        filter.on_update(prev.delta(tx))
+        self.assertIsNone(tx.mail_response)
+
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        out = PolicyActionFilterOutput()
+        out._add_rule('my_rule')
+        tx.add_filter_output(filter.fullname(), out)
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        filter.on_update(prev.delta(tx))
+        self.assertIsNone(tx.mail_response)
+
+
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.DEBUG,

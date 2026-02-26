@@ -34,7 +34,11 @@ class PolicyActionFilterOutput(FilterOutput):
                 'matched_rules': self.matched_rules}
 
     def match(self, yaml):
-        raise NotImplementedError()
+        if (tag := yaml.get('tag', None)) and (tag in self.matched_tags):
+            return MatcherResult.MATCH
+        if (rule := yaml.get('rule', None)) and (rule in self.matched_rules):
+            return MatcherResult.MATCH
+        return MatcherResult.NO_MATCH
 
     def _add_tag(self, tag):
         assert tag not in self.matched_tags_set

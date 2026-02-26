@@ -25,7 +25,7 @@ class TlsMatcherTest(unittest.TestCase):
         tx.smtp_meta = {'tls': True}
         self.assertEqual(MatcherResult.MATCH, match_smtp_tls({}, tx))
 
-class SmtAuthMatcherTest(unittest.TestCase):
+class SmtpAuthMatcherTest(unittest.TestCase):
     def test_smoke(self):
         self.assertEqual(
             MatcherResult.PRECONDITION_UNMET,

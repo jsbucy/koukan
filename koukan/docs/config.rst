@@ -361,7 +361,7 @@ Full policy_action example::
 This means: if RemoteHostFilter either returned false for fcrdns or
 ehlo alignment, LOG 90% of the time and REJECT 10% of the time.
 
-The policy action filter has its own output object which contains 2
+The policy action filter has its own filter_output object which contains 2
 sets: matched_tags and matched_rules.
 
 PolicyActionFilter first checks the rule's tag and rule name against
@@ -379,6 +379,29 @@ If the expression matches, PolicyActionFilter applies the action:
   reject rules to see all the ones that match rather than stopping
   after the first.
 
+PolicyActionFilter's output object is itself a matcher! This means you
+can match on the results of previous policy_action invocations so you
+can, for example, write a single rule to match an allowlist signal to
+reuse in multiple reject rules::
+
+  chain:
+  - filter: policy_action
+    match:
+      matcher: network_address
+      cidr: 192.168.1.0/24
+    name: my_inbound_gw
+  - filter: message_validation
+  - filter: policy_action
+    match:
+      all:
+        - not:
+            matcher: koukan.policy_action_filter.PolicyActionFilter
+            rule: my_inbound_gw
+        - matcher: koukan.message_validation_filter.MessageValidationFilter
+          validity_threshold: HIGH
+     tag: validation
+     action: REJECT
+
 
 Signals
 ^^^^^^^
@@ -390,6 +413,7 @@ filter descriptions (above):
 * :ref:`remote_host_filter`
 * :ref:`dkim_check_filter`
 * :ref:`spf_check_filter`
+* :ref:`policy_action <signals>`
 
 In addition several simple matchers are available in ``koukan.transaction_matchers``:
 
