@@ -13,32 +13,43 @@ from koukan.matcher_result import MatcherResult
 class NetworkAddressMatcherTest(unittest.TestCase):
     def test_smoke(self):
         tx = TransactionMetadata()
-        self.assertEqual(MatcherResult.PRECONDITION_UNMET, match_network_address({'cidr': '1.0.0.0/8'}, tx))
+        self.assertEqual(MatcherResult.PRECONDITION_UNMET,
+                         match_network_address({'cidr': '1.0.0.0/8'}, tx,
+                                               rcpt_num=None))
         tx.remote_host = HostPort('1.2.3.4', 8000)
-        self.assertEqual(MatcherResult.MATCH, match_network_address({'cidr': '1.0.0.0/8'}, tx))
-        self.assertEqual(MatcherResult.NO_MATCH, match_network_address({'cidr': '1.1.0.0/16'}, tx))
+        self.assertEqual(MatcherResult.MATCH,
+                         match_network_address({'cidr': '1.0.0.0/8'}, tx,
+                                               rcpt_num=None))
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_network_address({'cidr': '1.1.0.0/16'}, tx, rcpt_num=None))
 
 class TlsMatcherTest(unittest.TestCase):
     def test_smoke(self):
         tx = TransactionMetadata()
-        self.assertEqual(MatcherResult.PRECONDITION_UNMET, match_smtp_tls({}, tx))
+        self.assertEqual(MatcherResult.PRECONDITION_UNMET,
+                         match_smtp_tls({}, tx, rcpt_num=None))
         tx.smtp_meta = {'tls': True}
-        self.assertEqual(MatcherResult.MATCH, match_smtp_tls({}, tx))
+        self.assertEqual(MatcherResult.MATCH, match_smtp_tls({}, tx,
+                                                             rcpt_num=None))
 
 class SmtpAuthMatcherTest(unittest.TestCase):
     def test_smoke(self):
         self.assertEqual(
             MatcherResult.PRECONDITION_UNMET,
-            match_smtp_auth({}, TransactionMetadata()))
+            match_smtp_auth({}, TransactionMetadata(), rcpt_num=None))
         self.assertEqual(
             MatcherResult.NO_MATCH,
-            match_smtp_auth({}, TransactionMetadata(smtp_meta={})))
+            match_smtp_auth({}, TransactionMetadata(smtp_meta={}),
+                            rcpt_num=None))
         self.assertEqual(
             MatcherResult.NO_MATCH,
-            match_smtp_auth({}, TransactionMetadata(smtp_meta={'auth': False})))
+            match_smtp_auth({}, TransactionMetadata(smtp_meta={'auth': False}),
+                            rcpt_num=None))
         self.assertEqual(
             MatcherResult.MATCH,
-            match_smtp_auth({}, TransactionMetadata(smtp_meta={'auth': True})))
+            match_smtp_auth({}, TransactionMetadata(smtp_meta={'auth': True}),
+                            rcpt_num=None))
 
 if __name__ == '__main__':
     logging.basicConfig(

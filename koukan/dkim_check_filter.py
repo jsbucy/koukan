@@ -62,7 +62,7 @@ class DkimCheckFilterOutput(FilterOutput):
     def __init__(self):
         self.results = []
 
-    def match(self, yaml : dict):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         assert not ('alignment' in yaml and 'domains' in yaml)
         align = Alignment[yaml.get('alignment', 'same_sld')]
         status = Status[yaml.get('status', 'dkim_pass')]

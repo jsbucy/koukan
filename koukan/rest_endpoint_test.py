@@ -30,7 +30,7 @@ from koukan.sender import Sender
 from koukan.filter_output import FilterOutput
 
 class FakeFilterOutput(FilterOutput):
-    def match(self, yaml):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         raise NotImplementedError()
     def to_json(self, which_js):
         return {'z': 123}

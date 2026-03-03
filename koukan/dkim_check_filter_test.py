@@ -115,21 +115,23 @@ class DkimCheckFilterTest(unittest.TestCase):
         self.assertEqual(
             MatcherResult.MATCH,
             out.match({'alignment': 'domain',
-                       'status': 'dkim_pass'}))
+                       'status': 'dkim_pass'},
+                      rcpt_num=None))
         self.assertEqual(
             MatcherResult.NO_MATCH,
             out.match({'alignment': 'domain',
-                       'status': 'temp_err'}))
-
+                       'status': 'temp_err'},
+                      rcpt_num=None))
         self.assertEqual(
             MatcherResult.MATCH,
             out.match({'status': 'dkim_pass',
-                       'domains': ['somewhere-else.com']}))
+                       'domains': ['somewhere-else.com']},
+                      rcpt_num=None))
         self.assertEqual(
             MatcherResult.NO_MATCH,
             out.match({'status': 'dkim_pass',
-                       'domains': ['somewhere-else.org']}))
-
+                       'domains': ['somewhere-else.org']},
+                      rcpt_num=None))
 
     def test_fixup_tags(self):
         f = DkimCheckFilter(self.dns)

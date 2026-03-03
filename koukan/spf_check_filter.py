@@ -41,7 +41,7 @@ class SpfCheckFilterOutput(FilterOutput):
     def __init__(self):
         self.extra_domains_results = {}
 
-    def match(self, yaml : dict):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         # This never returns PRECONDITION_UNMET: this should be
         # invoked from a chain immediately upstream from smtp so the
         # first tx update always includes remote_host, smtp_meta and

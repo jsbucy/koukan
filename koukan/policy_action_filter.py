@@ -6,7 +6,7 @@ import random
 from functools import reduce
 
 from koukan.filter import TransactionMetadata
-from koukan.filter_chain import Filter, FilterResult
+from koukan.filter_chain import ProxyFilter, FilterResult
 from koukan.response import Response
 from koukan.matcher_result import MatcherResult
 from koukan.filter_output import FilterOutput
@@ -25,6 +25,14 @@ class PolicyActionFilterOutput(FilterOutput):
         self.matched_rules_set = set()
         self.matched_rules = []
 
+    def copy(self):
+        out = PolicyActionFilterOutput()
+        out.matched_tags_set = set(self.matched_tags_set)
+        out.matched_tags = list(self.matched_tags)
+        out.matched_rules_set = set(self.matched_rules_set)
+        out.matched_rules = list(self.matched_rules)
+        return out
+
     def to_json(self, w : WhichJson):
         if w not in [WhichJson.DB_ATTEMPT,
                      WhichJson.REST_CREATE,
@@ -33,7 +41,7 @@ class PolicyActionFilterOutput(FilterOutput):
         return {'matched_tags': self.matched_tags,
                 'matched_rules': self.matched_rules}
 
-    def match(self, yaml):
+    def match(self, yaml, rcpt_num : Optional[int]):
         if (tag := yaml.get('tag', None)) and (tag in self.matched_tags):
             return MatcherResult.MATCH
         if (rule := yaml.get('rule', None)) and (rule in self.matched_rules):
@@ -57,11 +65,16 @@ class _Output:
     def __init__(self):
         self.unmet_precondition_tags = set()
 
+    def copy(self):
+        out = _Output()
+        out.unmet_precondition_tags = set(self.unmet_precondition_tags)
+        return out
 
-TransactionMatcher = Callable[[dict, TransactionMetadata], MatcherResult]
+TransactionMatcher = Callable[
+    [dict, TransactionMetadata, Optional[int]], MatcherResult]
 
 
-class PolicyActionFilter(Filter):
+class PolicyActionFilter(ProxyFilter):
     yaml : dict
     matchers : Dict[str, TransactionMatcher]
 
@@ -81,21 +94,25 @@ class PolicyActionFilter(Filter):
             out = tx.add_ephemeral_filter_output(self.fullname(), _Output())
         out.unmet_precondition_tags.add(tag)
 
-    def _match_one(self, tx, yaml):
+    def _match_one(self, tx, yaml, rcpt_num : Optional[int]):
         matcher_name = yaml['matcher']
         matcher_yaml = dict(yaml)
         del matcher_yaml['matcher']
         if matcher := self.matchers.get(matcher_name, None):
-            return matcher(matcher_yaml, tx)
+            return matcher(matcher_yaml, tx, rcpt_num)
 
         filter_output = tx.get_filter_output(matcher_name)
         if filter_output is None:
+            # per-rcpt matchers should not return this if used in
+            # conjunction with a tx matcher, it must have a result by
+            # the time this is invoked
+            assert rcpt_num is None
             return MatcherResult.PRECONDITION_UNMET
-        return filter_output.match(matcher_yaml)
+        return filter_output.match(matcher_yaml, rcpt_num)
 
-    def _match_rec(self, tx, yaml):
+    def _match_rec(self, tx, yaml, rcpt_num : Optional[int]):
         if 'matcher' in yaml:
-            return self._match_one(tx, yaml)
+            return self._match_one(tx, yaml, rcpt_num)
         assert len(yaml) == 1
         op = [k for k in yaml.keys()][0]
         assert op in {'any', 'all', 'not'}
@@ -103,7 +120,7 @@ class PolicyActionFilter(Filter):
 
         if op == 'not':
             assert isinstance(arg, dict)
-            r = self._match_rec(tx, arg)
+            r = self._match_rec(tx, arg, rcpt_num)
             if r == MatcherResult.PRECONDITION_UNMET:
                 return MatcherResult.PRECONDITION_UNMET
             elif r == MatcherResult.MATCH:
@@ -114,24 +131,24 @@ class PolicyActionFilter(Filter):
             assert isinstance(arg, list)
             for i in arg:
                 assert isinstance(i, dict)
-                if (r := self._match_rec(tx, i)) != MatcherResult.NO_MATCH:
+                if (r := self._match_rec(tx, i, rcpt_num)) != MatcherResult.NO_MATCH:
                     return r
             return MatcherResult.NO_MATCH
         elif op == 'all':
             assert isinstance(arg, list)
             for i in arg:
-                if (r := self._match_rec(tx, i)) != MatcherResult.MATCH:
+                if (r := self._match_rec(tx, i, rcpt_num)) != MatcherResult.MATCH:
                     return r
             return MatcherResult.MATCH
 
 
-    def _match(self, tx) -> bool:
+    def _match(self, tx, rcpt_num : Optional[int]) -> bool:
         # empty match specification matches everything for
         # fallthrough/catchall at the end of a group
         match = self.yaml.get('match', None)
         if match is None:
             return True
-        r = self._match_rec(tx, match)
+        r = self._match_rec(tx, match, rcpt_num)
         if r == MatcherResult.PRECONDITION_UNMET:
             self._add_missing(tx, self.group_name)
             return False
@@ -150,7 +167,7 @@ class PolicyActionFilter(Filter):
             n -= rate
         assert False, 'bug'
 
-    def _apply_action(self, tx, out):
+    def _apply_action(self, tx, out, rcpt_num : Optional[int]):
         action = self._sample_action(self.yaml.get('action', 'MATCH'))
 
         if action == 'REJECT':
@@ -159,7 +176,11 @@ class PolicyActionFilter(Filter):
                 'message', '5.6.0 message rejected ' + self.rule_name)
             out._add_rule(self.rule_name)
             out._add_tag(self.group_name)
-            tx.fill_inflight_responses(Response(code, err))
+            if rcpt_num is not None:
+                assert len(tx.rcpt_response) == rcpt_num
+                tx.rcpt_response.append(Response(code, err))
+            else:
+                tx.fill_inflight_responses(Response(code, err))
         elif action == 'LOG':
             out._add_rule(self.rule_name)
         elif action == 'MATCH':
@@ -177,18 +198,44 @@ class PolicyActionFilter(Filter):
         out = tx.get_filter_output(self.fullname())
         if out is None:
             out = PolicyActionFilterOutput()
+        else:
+            out = out.copy()
 
-        if (((eout := tx.get_ephemeral_filter_output(self.fullname()))
-             is not None) and
-            (self.group_name in eout.unmet_precondition_tags)):
-            return FilterResult()
+        eout = tx.get_ephemeral_filter_output(self.fullname())
+        if eout is None:
+            eout = _Output()
+        else:
+            eout = eout.copy()
 
-        if (self.group_name in out.matched_tags_set or
-            self.rule_name in out.matched_rules):
-            return FilterResult()
+        assert self.upstream_tx is not None
+        if self.yaml.get('mode', None) == 'PER_RCPT':
+            delta = tx_delta.copy()
+            delta.rcpt_to = []
+            self.upstream_tx.merge_from(delta)
 
-        if not self._match(tx):
-            return FilterResult()
-        self._apply_action(tx, out)
+            if not tx_delta.rcpt_to:
+                return FilterResult()
+            off = tx_delta.rcpt_to_list_offset
+            assert off is not None
+            for i in range(off, off + len(tx_delta.rcpt_to)):
+                if self._match(tx, i):
+                    self._apply_action(tx, out, i)
+        else:
+            self.upstream_tx.merge_from(tx_delta)
+
+            if self.group_name in eout.unmet_precondition_tags:
+                return FilterResult()
+
+            if (self.group_name in out.matched_tags_set or
+                self.rule_name in out.matched_rules):
+                return FilterResult()
+
+            if not self._match(tx, rcpt_num=None):
+                return FilterResult()
+            self._apply_action(tx, out, rcpt_num=None)
+
+        # TODO does this actually need to be CoroutineProxyFilter in
+        # case both this and the upstream emitted filter output?
+        # only possible with pipelining?
         tx.add_filter_output(self.fullname(), out)
         return FilterResult()

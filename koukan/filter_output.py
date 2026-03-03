@@ -9,5 +9,5 @@ class FilterOutput(ABC):
         return None
 
     @abstractmethod
-    def match(self, yaml : dict) -> MatcherResult:
+    def match(self, yaml : dict, rcpt_num : Optional[int]) -> MatcherResult:
         raise NotImplementedError()

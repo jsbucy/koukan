@@ -21,7 +21,7 @@ class PolicyFactoryTest(unittest.TestCase):
         match_yaml = {}
         tx = TransactionMetadata()
         self.assertEqual(MatcherResult.MATCH,
-                         f.matchers['hello'](match_yaml, tx))
+                         f.matchers['hello'](match_yaml, tx, rcpt_num=None))
 
 if __name__ == '__main__':
     logging.basicConfig(

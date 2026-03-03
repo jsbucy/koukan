@@ -1,5 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+from typing import Optional
 import unittest
 import logging
 import asyncio
@@ -19,7 +20,7 @@ from koukan.filter_output import FilterOutput
 from koukan.matcher_result import MatcherResult
 
 class SinkOut(FilterOutput):
-    def match(self, yaml : dict) -> MatcherResult:
+    def match(self, yaml : dict, rcpt_num : Optional[int]) -> MatcherResult:
         return MatcherResult.NO_MATCH
 
 class Sink(CoroutineFilter):

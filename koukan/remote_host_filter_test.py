@@ -136,10 +136,10 @@ class RemoteHostFilterTest(unittest.TestCase):
             rh := tx.filter_output[RemoteHostFilter.fullname()])
         assert isinstance(rh, RemoteHostFilterOutput)
         self.assertEqual(
-            exp_fcrdns, rh.match({'fcrdns': True}))
+            exp_fcrdns, rh.match({'fcrdns': True}, rcpt_num=None))
         self.assertEqual(
             exp_ehlo_alignment,
-            rh.match({'ehlo_alignment': True}))
+            rh.match({'ehlo_alignment': True}, rcpt_num=None))
         logging.info('%s %s', rh.remote_hostname, rh.fcrdns)
         if exp_mail_response_err:
             assert tx.mail_response is not None

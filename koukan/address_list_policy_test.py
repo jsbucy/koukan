@@ -78,19 +78,21 @@ class AddressListPolicyTest(unittest.TestCase):
         vo = MessageValidationFilterOutput()
         vo.parsed_header_from = Address(addr_spec='alice@example.com')
         tx.add_filter_output('koukan.message_validation_filter', vo)
-        self.assertTrue(match_address_list(match_yaml, tx))
+        self.assertTrue(match_address_list(match_yaml, tx, rcpt_num=None))
         vo.parsed_header_from = Address(addr_spec='alice@ex.com')
         self.assertEqual(
-            MatcherResult.NO_MATCH, match_address_list(match_yaml, tx))
+            MatcherResult.NO_MATCH,
+            match_address_list(match_yaml, tx, rcpt_num=None))
 
         vo.parsed_header_from = None
         tx.mail_from = Mailbox('alice@example.com')
         match_yaml['which_addr'] = 'mail_from'
-        self.assertTrue(match_address_list(match_yaml, tx))
+        self.assertTrue(match_address_list(match_yaml, tx, rcpt_num=None))
 
         tx.mail_from = Mailbox('alice@ex.com')
         self.assertEqual(
-            MatcherResult.NO_MATCH, match_address_list(match_yaml, tx))
+            MatcherResult.NO_MATCH,
+            match_address_list(match_yaml, tx, rcpt_num=None))
 
 
 if __name__ == '__main__':

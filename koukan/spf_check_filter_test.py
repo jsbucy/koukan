@@ -49,9 +49,9 @@ class SpfCheckFilterTest(unittest.TestCase):
         out = tx.get_filter_output(f.fullname())
         self.assertEqual(SpfCheckFilterOutput.Status.fail, out.mail_from_result)
         self.assertEqual(MatcherResult.NO_MATCH,
-                         out.match({'mail_from_result': 'pass'}))
+                         out.match({'mail_from_result': 'pass'}, rcpt_num=None))
         self.assertEqual(MatcherResult.MATCH,
-                         out.match({'mail_from_result': 'fail'}))
+                         out.match({'mail_from_result': 'fail'}, rcpt_num=None))
 
         self.assertEqual(
             {'mail_from_result': 3},
@@ -74,7 +74,7 @@ class SpfCheckFilterTest(unittest.TestCase):
                          out.mail_from_result)
         self.assertEqual(
             MatcherResult.MATCH,
-            out.match({'mail_from_result': 'pass'}))
+            out.match({'mail_from_result': 'pass'}, rcpt_num=None))
 
         prev = tx.copy()
         tx.rcpt_to.append(Mailbox('bob@example.com'))
@@ -97,7 +97,7 @@ class SpfCheckFilterTest(unittest.TestCase):
                          out.mail_from_result)
         self.assertEqual(
             MatcherResult.MATCH,
-            out.match({'mail_from_result': 'pass'}))
+            out.match({'mail_from_result': 'pass'}, rcpt_num=None))
 
     def test_extra_domains(self):
         spf.DNSLookup = fake_dns_lookup
@@ -113,15 +113,15 @@ class SpfCheckFilterTest(unittest.TestCase):
 
         out = tx.get_filter_output(f.fullname())
         self.assertEqual(MatcherResult.MATCH,
-                         out.match({'mail_from_result': 'none'}))
+                         out.match({'mail_from_result': 'none'}, rcpt_num=None))
         self.assertEqual(
             MatcherResult.MATCH,
             out.match({'extra_domain': 'inbound-gateway.local',
-                       'extra_domain_result': 'pass'}))
+                       'extra_domain_result': 'pass'}, rcpt_num=None))
         self.assertEqual(
             MatcherResult.NO_MATCH,
             out.match({'extra_domain': 'inbound-gateway.local',
-                       'extra_domain_result': 'fail'}))
+                       'extra_domain_result': 'fail'}, rcpt_num=None))
 
         js = out.to_json(WhichJson.DB_ATTEMPT)
         logging.debug(js)

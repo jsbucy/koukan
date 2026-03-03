@@ -83,7 +83,7 @@ class MessageValidationFilterOutput(FilterOutput):
             return self.err
         assert False, 'err not populated'
 
-    def match(self, yaml : dict):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         if (r := yaml.get('max_received_headers', None)) is not None:
             if self.received_header_count is None:
                 return MatcherResult.PRECONDITION_UNMET

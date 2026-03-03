@@ -1,5 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+from typing import Optional
 import unittest
 import logging
 
@@ -23,7 +24,7 @@ class FakeFilterOutput(FilterOutput):
     def __init__(self, x):
         self.x = x
 
-    def match(self):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         raise NotImplementedError()
 
     def to_json(self, which_js):
@@ -435,9 +436,9 @@ class FilterTest(unittest.TestCase):
             prev.delta(next)
 
         next.filter_output = dict(prev.filter_output)
-        next.filter_output['x'] = FakeFilterOutput('xxx')
-        with self.assertRaises(AssertionError):
-            prev.delta(next)
+        updated = FakeFilterOutput('xxx')
+        next.filter_output['x'] = updated
+        self.assertIs(prev.delta(next).filter_output['x'], updated)
 
         next.filter_output = dict(prev.filter_output)
         delta = prev.delta(next)

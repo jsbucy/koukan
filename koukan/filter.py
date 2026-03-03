@@ -818,11 +818,9 @@ class TransactionMetadata:
 
         if field.is_dict and old_v is not None and new_v is not None:
             oo = dict(old_v)
-            for kk in new_v.keys() - old_v.keys():
-                vv = new_v[kk]
-                if kk in old_v and old_v[kk] != vv:
-                    assert False
-                oo[kk] = vv
+            for kk,vv  in new_v.items():
+                if kk not in old_v or old_v[kk] is not vv:
+                    oo[kk] = vv
             setattr(out, f, oo)
 
             return
@@ -903,12 +901,14 @@ class TransactionMetadata:
                 assert False
             if new_v.keys() < old_v.keys():
                 assert False, (f, set(old_v.keys()) - set(new_v.keys()))
-            for kk,vv in old_v.items():
-                if new_v[kk] != vv:
-                    assert False
+
             oo = {}
-            for kk in new_v.keys() - old_v.keys():
-                oo[kk] = new_v[kk]
+            # dict values are regarded as immutable, we emit iff the
+            # object changed
+            for k,v in new_v.items():
+                if k not in old_v or old_v[k] is not v:
+                    oo[k] = v
+
             setattr(out, f, oo)
             return
         elif not json_field.is_list:

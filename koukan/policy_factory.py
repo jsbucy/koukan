@@ -6,7 +6,7 @@ import importlib
 import inspect
 
 from koukan.filter_chain import (
-    Filter,
+    ProxyFilter,
     TransactionMetadata )
 from koukan.sender import Sender
 
@@ -18,6 +18,7 @@ from koukan.matcher_result import MatcherResult
 
 from koukan.transaction_matchers import (
     match_network_address,
+    match_num_rcpts,
     match_smtp_auth,
     match_smtp_tls )
 from koukan.address_list_policy import match_address_list
@@ -25,10 +26,11 @@ from koukan.address_list_policy import match_address_list
 class PolicyFactory:
     matchers : Dict[str, TransactionMatcher]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.matchers = {}
         self.add_matcher('address_list', match_address_list)
         self.add_matcher('network_address', match_network_address)
+        self.add_matcher('num_rcpts', match_num_rcpts)
         self.add_matcher('smtp_tls', match_smtp_tls)
         self.add_matcher('smtp_auth', match_smtp_auth)
 
@@ -49,9 +51,10 @@ class PolicyFactory:
         fn = self._load_user_module(name, mod)
         sig = inspect.signature(fn)
         param = list(sig.parameters)
-        assert len(param) == 2
+        assert len(param) == 3
         assert sig.parameters[param[0]].annotation == dict  # yaml
         assert sig.parameters[param[1]].annotation == TransactionMetadata
+        assert sig.parameters[param[2]].annotation == Optional[int]
         assert sig.return_annotation == MatcherResult
 
         self.add_matcher(name, fn)
@@ -69,5 +72,5 @@ class PolicyFactory:
             logging.debug('%s %s', name, mod)
             self._load_matcher(name, mod)
 
-    def build_policy_action(self, yaml : dict, sender : Sender) -> Filter:
+    def build_policy_action(self, yaml : dict, sender : Sender) -> ProxyFilter:
         return PolicyActionFilter(yaml, self.matchers)

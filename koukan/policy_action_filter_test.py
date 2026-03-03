@@ -1,6 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
 import logging
 import unittest
 import random
@@ -21,7 +22,7 @@ class FilterOutput:
     match_result = MatcherResult.NO_MATCH
     def __init__(self):
         pass
-    def match(self, yaml : dict) -> MatcherResult:
+    def match(self, yaml : dict, rcpt_num : Optional[int]) -> MatcherResult:
         assert self.expect_call
         return self.match_result
 
@@ -50,9 +51,10 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual({'matched_tags': ['test_smoke'],
                           'matched_rules': ['test_smoke']},
                          out.to_json(WhichJson.DB_ATTEMPT))
-
         filter_output.expect_call = False
         filter.on_update(prev.delta(tx))
+
+    # TODO mode: PER_RCPT
 
     def test_trivial(self):
         filter = PolicyActionFilter(
@@ -111,7 +113,8 @@ class PolicyActionFilterTest(unittest.TestCase):
     def test_matcher(self):
         class TestMatcher:
             m = True
-            def match(self, yaml, tx : TransactionMetadata) -> bool:
+            def match(self, yaml, tx : TransactionMetadata,
+                      rcpt_num : Optional[int]) -> bool:
                 return self.m
 
         matcher = TestMatcher()
@@ -139,8 +142,8 @@ class PolicyActionFilterTest(unittest.TestCase):
         def fail(yaml, tx):
             assert False
         matchers = {
-            'unmet': lambda yaml,tx: MatcherResult.PRECONDITION_UNMET,
-            'assert': lambda yaml,tx: fail
+            'unmet': lambda yaml, tx, rcpt: MatcherResult.PRECONDITION_UNMET,
+            'assert': lambda yaml, tx, rcpt: fail
         }
 
         f1 = PolicyActionFilter(
@@ -176,14 +179,14 @@ class PolicyActionFilterTest(unittest.TestCase):
     def test_log_retirement(self):
         x_count = 0
         y_count = 0
-        def x(yaml, tx):
+        def x(yaml, tx, rcpt):
             nonlocal x_count
             logging.debug('x')
             x_count += 1
             if x_count == 1:
                 return MatcherResult.PRECONDITION_UNMET
             return MatcherResult.MATCH
-        def y(yaml, tx):
+        def y(yaml, tx, rcpt):
             nonlocal y_count
             logging.debug('y')
             y_count += 1
@@ -243,9 +246,9 @@ class PolicyActionFilterTest(unittest.TestCase):
 
     def test_expr(self):
         matchers = {
-            'match': lambda tx, yaml: MatcherResult.MATCH,
-            'nomatch': lambda tx, yaml: MatcherResult.NO_MATCH,
-            'precond': lambda tx, yaml: MatcherResult.PRECONDITION_UNMET }
+            'match': lambda tx, yaml, rcpt: MatcherResult.MATCH,
+            'nomatch': lambda tx, yaml, rcpt: MatcherResult.NO_MATCH,
+            'precond': lambda tx, yaml, rcpt: MatcherResult.PRECONDITION_UNMET }
 
         match_yaml = {
             'all': [
@@ -256,7 +259,7 @@ class PolicyActionFilterTest(unittest.TestCase):
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {
             'all': [
@@ -267,7 +270,7 @@ class PolicyActionFilterTest(unittest.TestCase):
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {'any': [
             {'matcher': 'match'},
@@ -277,7 +280,7 @@ class PolicyActionFilterTest(unittest.TestCase):
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {'any': [
             {'matcher': 'nomatch'},
@@ -287,21 +290,21 @@ class PolicyActionFilterTest(unittest.TestCase):
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {'not': {'matcher': 'match'}}
         f = PolicyActionFilter(
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.NO_MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {'not': {'matcher': 'nomatch'}}
         f = PolicyActionFilter(
             yaml = {'tag': 'test_expr',
                     'match': match_yaml},
             matchers = matchers)
-        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml))
+        self.assertEqual(MatcherResult.MATCH, f._match_rec(None, match_yaml, rcpt_num=None))
 
         match_yaml = {'not': {'matcher': 'precond'}}
         f = PolicyActionFilter(
@@ -309,7 +312,7 @@ class PolicyActionFilterTest(unittest.TestCase):
                     'match': match_yaml},
             matchers = matchers)
         self.assertEqual(MatcherResult.PRECONDITION_UNMET,
-                         f._match_rec(None, match_yaml))
+                         f._match_rec(None, match_yaml, rcpt_num=None))
 
     def test_percent(self):
         random.seed(1)

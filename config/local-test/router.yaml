@@ -195,6 +195,15 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
+  - filter: policy_action
+    mode: PER_RCPT
+    match:
+      matcher: num_rcpts
+      max_rcpts: 1
+    action: REJECT
+    tag: max_rcpts
+    code: 451
+    message: 4.5.3 too many recipients
   - filter: router
     dry_run: true
     policy:

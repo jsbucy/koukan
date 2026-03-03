@@ -50,7 +50,7 @@ class RemoteHostFilterOutput(FilterOutput):
                'ehlo_alignment': self.ehlo_alignment}
         return out
 
-    def match(self, yaml : dict):
+    def match(self, yaml : dict, rcpt_num : Optional[int]):
         if (expected_fcrdns := yaml.get('fcrdns', None)) is not None:
             if self.fcrdns is None:
                 return MatcherResult.PRECONDITION_UNMET

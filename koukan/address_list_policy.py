@@ -38,7 +38,7 @@ def _match(domains, prefixes, delimiter, addr):
             return True
     return False
 
-def match_address_list(yaml, tx):
+def match_address_list(yaml, tx, rcpt_num : Optional[int]):
     which_addr = yaml.get('which_addr', 'mail_from')
     addr = None
     if which_addr == 'mail_from':
