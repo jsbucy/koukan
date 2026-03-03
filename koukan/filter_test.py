@@ -81,6 +81,7 @@ class FilterTest(unittest.TestCase):
         self.assertEqual(delta.to_json(WhichJson.REST_UPDATE), {
             'rcpt_to': [{'m': 'bob2'}],
             'rcpt_to_list_offset': 1 })
+        self.assertEqual('rcpt_to: [bob2]\nrcpt_to_list_offset 1\n', str(delta))
 
         merged = tx.merge(delta)
         self.assertEqual(merged.to_json(), {
@@ -427,9 +428,11 @@ class FilterTest(unittest.TestCase):
     def test_dict(self):
         prev = TransactionMetadata()
         self.assertIsNone(prev.get_ephemeral_filter_output('z'))
+        self.assertFalse(bool(prev))  # i.e. empty()
 
         x = FakeFilterOutput('xx')
         prev.add_filter_output('x', x)
+        self.assertTrue(bool(prev))  # i.e. empty()
 
         next = TransactionMetadata()
         with self.assertRaises(AssertionError):
@@ -467,6 +470,10 @@ class FilterTest(unittest.TestCase):
             loaded.filter_output_dict_json)
         self.assertIsNone(loaded.filter_output)
         self.assertIsNone(loaded.get_filter_output('x'))
+        self.assertEqual(
+            """filter_output_dict_json {'x': {'x': 'xx'}, """
+            """'y': {'x': 'yy'}}\n""",
+            str(loaded))
 
     def test_dict_shrink(self):
         prev = TransactionMetadata()

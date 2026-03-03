@@ -177,6 +177,8 @@ class PolicyActionFilter(ProxyFilter):
             out._add_rule(self.rule_name)
             out._add_tag(self.group_name)
             if rcpt_num is not None:
+                tx.rcpt_response.extend(
+                    [None] * (len(tx.rcpt_to) - len(tx.rcpt_response) - 1))
                 assert len(tx.rcpt_response) == rcpt_num
                 tx.rcpt_response.append(Response(code, err))
             else:
@@ -187,7 +189,7 @@ class PolicyActionFilter(ProxyFilter):
             out._add_rule(self.rule_name)
             out._add_tag(self.group_name)
         else:
-            raise ValueError()
+            assert False, 'invalid action ' + action
 
     def on_update(self, tx_delta : TransactionMetadata):
         tx = self.downstream_tx
@@ -234,8 +236,5 @@ class PolicyActionFilter(ProxyFilter):
                 return FilterResult()
             self._apply_action(tx, out, rcpt_num=None)
 
-        # TODO does this actually need to be CoroutineProxyFilter in
-        # case both this and the upstream emitted filter output?
-        # only possible with pipelining?
         tx.add_filter_output(self.fullname(), out)
         return FilterResult()

@@ -6,6 +6,7 @@ import logging
 import unittest
 import random
 
+from koukan.blob import InlineBlob
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.policy_action_filter import (
     PolicyActionFilter,
@@ -13,6 +14,7 @@ from koukan.policy_action_filter import (
     TransactionMatcher )
 from koukan.blob import InlineBlob
 from koukan.sender import Sender
+from koukan.response import Response
 
 from koukan.matcher_result import MatcherResult
 from koukan.rest_schema import WhichJson
@@ -54,7 +56,79 @@ class PolicyActionFilterTest(unittest.TestCase):
         filter_output.expect_call = False
         filter.on_update(prev.delta(tx))
 
-    # TODO mode: PER_RCPT
+    def test_smoke_per_rcpt(self):
+        match_result = MatcherResult.NO_MATCH
+        def match(yaml, tx, rcpt):
+            assert rcpt is not None
+            nonlocal match_result
+            return match_result
+
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'mode': 'PER_RCPT',
+             'match': {'matcher': 'my_matcher'},
+             'action': 'REJECT'},
+            matchers={'my_matcher': match})
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.filter_output = {}
+
+        tx.mail_response = Response(201)
+
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        filter.on_update(prev.delta(tx))
+
+        prev = tx.copy()
+        tx.rcpt_to = [Mailbox('bob@example.com')]
+        filter.on_update(prev.delta(tx))
+        self.assertFalse(tx.rcpt_response)
+
+        tx.rcpt_response = [Response(202)]
+
+        prev = tx.copy()
+        tx.rcpt_to.append(Mailbox('bob2@example.com'))
+        match_result = MatcherResult.MATCH
+        filter.on_update(prev.delta(tx))
+        self.assertEqual(2, len(tx.rcpt_response))
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual(202, tx.rcpt_response[0].code)
+        self.assertEqual(550, tx.rcpt_response[1].code)
+
+    def test_per_rcpt_pipelining(self):
+        def match(yaml, tx, rcpt):
+            assert rcpt is not None
+            return MatcherResult.from_bool(rcpt > 0)
+
+        filter = PolicyActionFilter(
+            {'tag': 'test_smoke',
+             'mode': 'PER_RCPT',
+             'match': {'matcher': 'my_matcher'},
+             'action': 'REJECT'},
+            matchers={'my_matcher': match})
+        filter.wire_downstream(TransactionMetadata())
+        tx = filter.downstream_tx
+        tx.filter_output = {filter.fullname() : PolicyActionFilterOutput()}
+
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        tx.rcpt_to = [Mailbox('bob@example.com'), Mailbox('bob2@example.com')]
+        tx.body = InlineBlob(b'hello, world!', last=True)
+        prev2 = tx.copy()
+
+        filter.on_update(prev.delta(tx))
+        self.assertIsNone(tx.mail_response)
+        self.assertEqual(2, len(tx.rcpt_response))
+        self.assertIsNone(tx.rcpt_response[0])
+        self.assertEqual(550, tx.rcpt_response[1].code)
+        self.assertIsNone(tx.data_response)
+
+        logging.debug(tx.filter_output)
+        # we should have replaced filter_output
+        self.assertIsNot(prev2.filter_output[filter.fullname()],
+                         tx.filter_output[filter.fullname()])
+        # ... and that should be in the delta going upstream
+        self.assertIsNotNone(prev2.delta(tx).filter_output[filter.fullname()])
 
     def test_trivial(self):
         filter = PolicyActionFilter(
@@ -112,6 +186,7 @@ class PolicyActionFilterTest(unittest.TestCase):
 
     def test_matcher(self):
         class TestMatcher:
+            # XXX MatcherResult
             m = True
             def match(self, yaml, tx : TransactionMetadata,
                       rcpt_num : Optional[int]) -> bool:
