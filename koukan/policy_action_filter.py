@@ -90,9 +90,13 @@ class PolicyActionFilter(ProxyFilter):
         self.rule_name = n if n else self.group_name
 
     def _add_missing(self, tx, tag):
-        if (out := tx.get_ephemeral_filter_output(self.fullname())) is None:
-            out = tx.add_ephemeral_filter_output(self.fullname(), _Output())
-        out.unmet_precondition_tags.add(tag)
+        eout = tx.get_ephemeral_filter_output(self.fullname())
+        if eout is not None:
+            eout = eout.copy()
+        else:
+            eout = _Output()
+        tx.add_ephemeral_filter_output(self.fullname(), eout)
+        eout.unmet_precondition_tags.add(tag)
 
     def _match_one(self, tx, yaml, rcpt_num : Optional[int]):
         matcher_name = yaml['matcher']
@@ -203,12 +207,6 @@ class PolicyActionFilter(ProxyFilter):
         else:
             out = out.copy()
 
-        eout = tx.get_ephemeral_filter_output(self.fullname())
-        if eout is None:
-            eout = _Output()
-        else:
-            eout = eout.copy()
-
         assert self.upstream_tx is not None
         if self.yaml.get('mode', None) == 'PER_RCPT':
             delta = tx_delta.copy()
@@ -225,7 +223,8 @@ class PolicyActionFilter(ProxyFilter):
         else:
             self.upstream_tx.merge_from(tx_delta)
 
-            if self.group_name in eout.unmet_precondition_tags:
+            if ((eout := tx.get_ephemeral_filter_output(self.fullname())) is not None) and (
+                    self.group_name in eout.unmet_precondition_tags):
                 return FilterResult()
 
             if (self.group_name in out.matched_tags_set or

@@ -9,6 +9,7 @@ import random
 from koukan.blob import InlineBlob
 from koukan.filter import Mailbox, TransactionMetadata
 from koukan.policy_action_filter import (
+    _Output,
     PolicyActionFilter,
     PolicyActionFilterOutput,
     TransactionMatcher )
@@ -240,8 +241,12 @@ class PolicyActionFilterTest(unittest.TestCase):
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
 
+        tx.ephemeral_filter_output = {f1.fullname(): _Output()}
         delta = prev.delta(tx)
+        prev2 = tx.copy()
         f1.on_update(delta)
+        self.assertIsNot(prev2.ephemeral_filter_output[f2.fullname()],
+                         tx.ephemeral_filter_output[f2.fullname()])
         self.assertIsNotNone(
             eout := tx.get_ephemeral_filter_output(f1.fullname()))
         self.assertIsNone(
