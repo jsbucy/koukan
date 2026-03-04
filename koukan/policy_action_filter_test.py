@@ -187,8 +187,7 @@ class PolicyActionFilterTest(unittest.TestCase):
 
     def test_matcher(self):
         class TestMatcher:
-            # XXX MatcherResult
-            m = True
+            m = MatcherResult.MATCH
             def match(self, yaml, tx : TransactionMetadata,
                       rcpt_num : Optional[int]) -> bool:
                 return self.m
@@ -215,11 +214,11 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual(550, tx.mail_response.code)
 
     def test_preconditions(self):
-        def fail(yaml, tx):
+        def fail(yaml, tx, rcpt):
             assert False
         matchers = {
             'unmet': lambda yaml, tx, rcpt: MatcherResult.PRECONDITION_UNMET,
-            'assert': lambda yaml, tx, rcpt: fail
+            'assert': fail
         }
 
         f1 = PolicyActionFilter(
@@ -233,7 +232,8 @@ class PolicyActionFilterTest(unittest.TestCase):
 
         tx = TransactionMetadata()
         f1.wire_downstream(tx)
-        f2.wire_downstream(tx)
+        f1.wire_upstream(TransactionMetadata())
+        f2.wire_downstream(TransactionMetadata())
 
         prev = tx.copy()
         tx.sender = Sender('ingress', 'smtp-mx')
@@ -241,17 +241,22 @@ class PolicyActionFilterTest(unittest.TestCase):
         prev = tx.copy()
         tx.mail_from = Mailbox('alice')
 
-        tx.ephemeral_filter_output = {f1.fullname(): _Output()}
+        eout = _Output()
+        tx.ephemeral_filter_output = {f1.fullname(): eout}
         delta = prev.delta(tx)
         prev2 = tx.copy()
         f1.on_update(delta)
-        self.assertIsNot(prev2.ephemeral_filter_output[f2.fullname()],
-                         tx.ephemeral_filter_output[f2.fullname()])
+        self.assertIsNot(
+            eout, tx.ephemeral_filter_output[f2.fullname()])
+        eout2 = prev2.delta(tx).ephemeral_filter_output[f2.fullname()]
+        self.assertIsNotNone(eout2)
+        self.assertIsNot(eout, eout2)
         self.assertIsNotNone(
             eout := tx.get_ephemeral_filter_output(f1.fullname()))
         self.assertIsNone(
             out := tx.get_filter_output(f1.fullname()))
         self.assertIn('my_tag', eout.unmet_precondition_tags)
+        f2.downstream_tx.ephemeral_filter_output = f1.upstream_tx.ephemeral_filter_output
         f2.on_update(delta)
         self.assertIsNone(
             out := tx.get_filter_output(f1.fullname()))

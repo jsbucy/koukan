@@ -70,6 +70,9 @@ class _Output:
         out.unmet_precondition_tags = set(self.unmet_precondition_tags)
         return out
 
+    def __repr__(self):
+        return str(self.unmet_precondition_tags)
+
 TransactionMatcher = Callable[
     [dict, TransactionMetadata, Optional[int]], MatcherResult]
 
@@ -81,7 +84,8 @@ class PolicyActionFilter(ProxyFilter):
     group_name : str
     rule_name : str
 
-    def __init__(self, yaml : dict, matchers : Dict[str, TransactionMatcher]):
+    def __init__(self, yaml : dict, matchers : Dict[str, TransactionMatcher]
+                 ) -> None:
         self.yaml = yaml
         self.matchers = matchers
 
@@ -90,15 +94,17 @@ class PolicyActionFilter(ProxyFilter):
         self.rule_name = n if n else self.group_name
 
     def _add_missing(self, tx, tag):
+        logging.debug(tag)
         eout = tx.get_ephemeral_filter_output(self.fullname())
         if eout is not None:
             eout = eout.copy()
         else:
             eout = _Output()
         tx.add_ephemeral_filter_output(self.fullname(), eout)
+        self.upstream_tx.add_ephemeral_filter_output(self.fullname(), eout)
         eout.unmet_precondition_tags.add(tag)
 
-    def _match_one(self, tx, yaml, rcpt_num : Optional[int]):
+    def _match_one(self, tx, yaml, rcpt_num : Optional[int]) -> MatcherResult:
         matcher_name = yaml['matcher']
         matcher_yaml = dict(yaml)
         del matcher_yaml['matcher']
@@ -114,7 +120,7 @@ class PolicyActionFilter(ProxyFilter):
             return MatcherResult.PRECONDITION_UNMET
         return filter_output.match(matcher_yaml, rcpt_num)
 
-    def _match_rec(self, tx, yaml, rcpt_num : Optional[int]):
+    def _match_rec(self, tx, yaml, rcpt_num : Optional[int]) -> MatcherResult:
         if 'matcher' in yaml:
             return self._match_one(tx, yaml, rcpt_num)
         assert len(yaml) == 1
@@ -144,7 +150,7 @@ class PolicyActionFilter(ProxyFilter):
                 if (r := self._match_rec(tx, i, rcpt_num)) != MatcherResult.MATCH:
                     return r
             return MatcherResult.MATCH
-
+        assert False, 'bug'
 
     def _match(self, tx, rcpt_num : Optional[int]) -> bool:
         # empty match specification matches everything for
@@ -153,6 +159,7 @@ class PolicyActionFilter(ProxyFilter):
         if match is None:
             return True
         r = self._match_rec(tx, match, rcpt_num)
+        logging.debug('%s %s', self.group_name, r.name)
         if r == MatcherResult.PRECONDITION_UNMET:
             self._add_missing(tx, self.group_name)
             return False
@@ -222,8 +229,9 @@ class PolicyActionFilter(ProxyFilter):
                     self._apply_action(tx, out, i)
         else:
             self.upstream_tx.merge_from(tx_delta)
-
-            if ((eout := tx.get_ephemeral_filter_output(self.fullname())) is not None) and (
+            logging.debug(tx)
+            eout = tx.get_ephemeral_filter_output(self.fullname())
+            if (eout is not None) and (
                     self.group_name in eout.unmet_precondition_tags):
                 return FilterResult()
 
@@ -232,8 +240,11 @@ class PolicyActionFilter(ProxyFilter):
                 return FilterResult()
 
             if not self._match(tx, rcpt_num=None):
+                logging.debug(tx)
                 return FilterResult()
             self._apply_action(tx, out, rcpt_num=None)
 
         tx.add_filter_output(self.fullname(), out)
+        self.upstream_tx.add_filter_output(self.fullname(), out)
+
         return FilterResult()
