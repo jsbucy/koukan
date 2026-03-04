@@ -6,7 +6,7 @@
 # uvicorn --log-level debug --host localhost --port 8002 --factory
 #   'examples.receiver.fastapi_receiver:create_app'
 
-from typing import Union
+from typing import Optional, Tuple
 import logging
 
 from fastapi import (
@@ -16,6 +16,16 @@ from fastapi import (
 from fastapi.responses import JSONResponse as FastApiJsonResponse
 
 from examples.receiver.receiver import Receiver
+
+async def maybe_req_json(
+        req : FastApiRequest
+) -> Tuple[Optional[FastApiResponse], Optional[dict]]:
+    if req.headers.get('content-type', '') != 'application/json':
+        return FastApiResponse(status_code=415, content='bad content-type'), None
+    try:
+        return None, await req.json()
+    except Exception:
+        return FastApiResponse(status_code=400, content='bad json'), None
 
 def create_app(receiver = None, path = None):
     app = FastAPI()
@@ -31,7 +41,9 @@ def create_app(receiver = None, path = None):
             sender : str,
             request : FastApiRequest) -> FastApiResponse:
         try:
-            req_json = await request.json()
+            err, req_json = await maybe_req_json(request)
+            if err:
+                return err
             tx_url, tx_json, etag = receiver.create_tx(
                 sender,
                 req_json,
@@ -61,7 +73,17 @@ def create_app(receiver = None, path = None):
             tx_rest_id : str,
             request : FastApiRequest) -> FastApiResponse:
         try:
-            err, res = receiver.update_tx(tx_rest_id, await request.json())
+            # a heartbeat request has no content-type header and a 0-length body
+            if 'content-type' not in request.headers:
+                if await request.body():
+                    return FastApiResponse(status_code=400)
+                else:
+                    req_json = None
+            else:
+                err_resp, req_json = await maybe_req_json(request)
+                if err_resp:
+                    return err_resp
+            err, res = receiver.update_tx(tx_rest_id, req_json)
         except Exception as e:
             logging.exception('fastapi_receiver.get_transaction')
             err = 500, 'uncaught exception'
@@ -80,7 +102,9 @@ def create_app(receiver = None, path = None):
     @app.post('/transactions/{tx_rest_id}/message_builder')
     async def update_message_builder(tx_rest_id : str, request : FastApiRequest,
                                      ) -> FastApiResponse:
-        builder_json = await request.json()
+        err, builder_json = await maybe_req_json(request)
+        if err:
+            return err
         
         err, res = receiver.update_tx_message_builder(tx_rest_id, builder_json)
 

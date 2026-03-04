@@ -154,15 +154,15 @@ class Transaction:
         logging.debug(content)
         return True
 
-    def update(self, patch) -> Optional[Tuple[int, str]]:
+    def update(self, patch : Optional[dict]) -> Optional[Tuple[int, str]]:
         logging.debug(patch)
-
-        if 'filter_output' in patch:
-            if 'filter_output' not in self.tx_json:
-                self.tx_json['filter_output'] = {}
-            self.tx_json['filter_output'].update(patch['filter_output'])
-        elif set(patch.keys()) - {'filter_output'}:
-            return 400, 'only accept update filter_output'
+        if patch:
+            if 'filter_output' in patch:
+                if 'filter_output' not in self.tx_json:
+                    self.tx_json['filter_output'] = {}
+                self.tx_json['filter_output'].update(patch['filter_output'])
+            elif set(patch.keys()) - {'filter_output'}:
+                return 400, 'only accept update filter_output'
 
         self.version += 1
         return None
@@ -347,7 +347,7 @@ class Receiver:
         tx = self._get_tx(tx_rest_id)
         return tx.get_json(), str(tx.version)
 
-    def update_tx(self, tx_rest_id : str, patch) -> Tuple[
+    def update_tx(self, tx_rest_id : str, patch : Optional[dict]) -> Tuple[
             Optional[Tuple[int, str]],  # err code, msg
             Optional[Tuple[dict[Any, Any], str]]]:  # tx json, etag
         tx = self._get_tx(tx_rest_id)

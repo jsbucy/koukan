@@ -6,6 +6,7 @@
 # gunicorn3 -b localhost:8002 --access-logfile - -w1 --log-level debug
 #   'examples.receiver.flask_receiver:create_app(path="/tmp/my_messages")'
 
+from typing import Optional, Tuple
 import logging
 
 from flask import (
@@ -17,6 +18,16 @@ from flask import (
     url_for)
 
 from examples.receiver.receiver import Receiver
+
+def maybe_req_json(req : FlaskRequest
+                   ) -> Tuple[Optional[FlaskResponse], Optional[dict]]:
+    if req.headers.get('content-type', '') != 'application/json':
+        return FlaskResponse(status=415, response='bad content-type'), None
+    try:
+        return None, req.json
+    except Exception:
+        return FlaskResponse(status=400, response='bad json'), None
+
 
 def create_app(receiver = None, path = None):
     app = Flask(__name__)
@@ -33,9 +44,12 @@ def create_app(receiver = None, path = None):
 
     @app.route('/senders/<sender>/transactions', methods=['POST'])
     def create_transaction(sender : str):
+        err, req_json = maybe_req_json(request)
+        if err:
+            return err
         tx_url, tx_json, etag = receiver.create_tx(
             sender,
-            request.json,
+            req_json,
             lambda tx_id: str(url_for(
                 'get_transaction', tx_rest_id=tx_id, _external=True))
         )
@@ -51,7 +65,18 @@ def create_app(receiver = None, path = None):
 
     @app.route('/transactions/<tx_rest_id>', methods=['PATCH'])
     def update_transaction(tx_rest_id):
-        err, res = receiver.update_tx(tx_rest_id, request.json)
+        # a heartbeat request has no content-type header and a 0-length body
+        if 'content-type' not in request.headers:
+            if request.data:
+                return FlaskResponse(status=400)
+            else:
+                req_json = None
+        else:
+            err_resp, req_json = maybe_req_json(request)
+            if err_resp:
+                return err_resp
+
+        err, res = receiver.update_tx(tx_rest_id, req_json)
         if err is not None:
             code, msg = err
             return FlaskResponse(status=code, response=msg)
@@ -63,7 +88,11 @@ def create_app(receiver = None, path = None):
 
     @app.route('/transactions/<tx_rest_id>/message_builder', methods=['POST'])
     def update_message_builder(tx_rest_id):
-        err, res = receiver.update_tx_message_builder(tx_rest_id, request.json)
+        err, req_json = maybe_req_json(request)
+        if err:
+            return err
+
+        err, res = receiver.update_tx_message_builder(tx_rest_id, req_json)
         if err:
             code, msg = err
             return FlaskResponse(status=code, response=msg)
