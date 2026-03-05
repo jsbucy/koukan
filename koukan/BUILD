@@ -290,6 +290,12 @@ py_library(name='dest_domain_policy',
                  ':response',
                  ':filter'])
 
+py_test(name='dest_domain_policy_test',
+        srcs=['dest_domain_policy_test.py'],
+        deps=[':dest_domain_policy',
+              ':filter',
+              ':message_validation_filter'])
+
 py_library(name='dkim_sign_filter',
            srcs=['dkim_sign_filter.py'],
            deps=[':filter_chain',

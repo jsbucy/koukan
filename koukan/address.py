@@ -4,7 +4,10 @@ from email import _header_value_parser
 
 
 def domain_from_address(addr):
-    spec = _header_value_parser.get_addr_spec(addr)
+    try:
+        spec = _header_value_parser.get_addr_spec(addr)
+    except:
+        return None
     if len(spec) != 2 or spec[0].defects:
         return None
     return spec[0].domain
