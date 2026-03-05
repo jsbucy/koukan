@@ -37,9 +37,9 @@ def _match(domains, prefixes, delimiter, addr):
             return True
     return False
 
-def match_address_list(yaml, tx, rcpt_num : Optional[int]):
+def match_address_list(yaml, tx, rcpt_num : Optional[int]) -> MatcherResult:
     which_addr = yaml.get('which_addr', 'mail_from')
-    addr = None
+    addr : Optional[str] = None
     if which_addr == 'mail_from':
         # TODO save parsed env-from Address somewhere
         if tx.mail_from is None:
@@ -52,6 +52,9 @@ def match_address_list(yaml, tx, rcpt_num : Optional[int]):
         if out is None or out.parsed_header_from is None:
             return MatcherResult.PRECONDITION_UNMET
         addr = out.parsed_header_from.addr_spec
+    elif which_addr == 'rcpt_to':
+        assert rcpt_num is not None
+        addr = tx.rcpt_to[rcpt_num].mailbox
     else:
         assert False, 'unknown which_addr ' + which_addr
 

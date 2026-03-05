@@ -96,6 +96,21 @@ class AddressListPolicyTest(unittest.TestCase):
             MatcherResult.NO_MATCH,
             match_address_list(match_yaml, tx, rcpt_num=None))
 
+        match_yaml = {
+            'which_addr': 'rcpt_to',
+            'domains': ['example.com'],
+        }
+        with self.assertRaises(AssertionError):
+            match_address_list(match_yaml, tx, rcpt_num=None)
+        tx.rcpt_to = [Mailbox('alice@nowhere.com'),
+                      Mailbox('alice@example.com')]
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_address_list(match_yaml, tx, rcpt_num=0))
+        self.assertEqual(
+            MatcherResult.MATCH,
+            match_address_list(match_yaml, tx, rcpt_num=1))
+
 
 if __name__ == '__main__':
     logging.basicConfig(
