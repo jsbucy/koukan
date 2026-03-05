@@ -272,7 +272,6 @@ py_test(name='recipient_router_filter_test',
 py_library(name='address_list_policy',
            srcs=['address_list_policy.py'],
            deps=[':recipient_router_filter',
-                 ':address',
                  ':matcher_result',
                  ':policy_action_filter',
                  ':response'])

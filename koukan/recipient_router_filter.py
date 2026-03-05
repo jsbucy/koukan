@@ -51,12 +51,15 @@ class RoutingPolicy(ABC):
 
 
 class RecipientRouterFilter(ProxyFilter):
-    policy : RoutingPolicy
+    policy : Optional[RoutingPolicy] = None
+    static_dest : Optional[Destination] = None
     dry_run : bool
 
-    def __init__(self, policy : RoutingPolicy, dry_run = False):
+    def __init__(self, policy : Optional[RoutingPolicy], dry_run = False,
+                 static_dest : Optional[Destination] = None):
         self.policy = policy
         self.dry_run = dry_run
+        self.static_dest = static_dest
 
     def _route(self, mailbox) -> Tuple[Optional[Response], bool]:
         tx = self.downstream_tx
@@ -65,7 +68,13 @@ class RecipientRouterFilter(ProxyFilter):
 
         logging.debug('RecipientRouterFilter._route() %s', tx)
         assert mailbox is not None
-        dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
+        if self.policy is not None:
+            dest, resp = self.policy.endpoint_for_rcpt(mailbox.mailbox)
+        else:
+            dest = self.static_dest
+            resp = None if dest is not None else Response(
+                550, '5.1.1 mailbox does not exist '
+                '(RecipientRouterFilter null policy)')
 
         if resp and resp.err():
             return resp, True

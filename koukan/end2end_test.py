@@ -81,6 +81,8 @@ class End2EndTest(unittest.TestCase):
     def _update_router(self, filter):
         if filter['filter'] != 'router':
             return
+        if (policy := filter.get('policy', None)) is None:
+            return  # fallthrough/reject
         policy = filter['policy']
         logging.debug('_update_router policy %s', policy)
         if policy['name'] in ['dest_domain', 'address_list']:

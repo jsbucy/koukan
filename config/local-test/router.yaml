@@ -81,6 +81,14 @@ endpoint:
     name: matcher_smoke_smtp_auth
     tag: matcher_smoke
     action: LOG
+  - filter: router
+    dry_run: true
+    policy:
+      name: dest_domain
+      destination:
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
   - filter: policy_action
     match:
       not:
@@ -170,9 +178,8 @@ endpoint:
       destination:
         endpoint: gateway
   - filter: router
-    policy:
-      name: address_list
-      # no domains/dest -> reject all
+    # no policy: match everything
+    # no dest: reject
   - filter: dkim_sign
     # key: config/local-test/dkim.key
     domain: example.com
@@ -233,10 +240,8 @@ endpoint:
           receive_parsing:
   - filter: router
     dry_run: true
-    policy:
-      name: address_list
-      # no domains: match everything
-      # dest == None: reject
+    # no policy: match everything
+    # no dest: reject
   - filter: remote_host
   - filter: message_validation
   - filter: spf_check
@@ -317,10 +322,8 @@ endpoint:
         options:
           receive_parsing:
   - filter: router
-    policy:
-      name: address_list
-      # no domains: match everything
-      # dest == None: reject
+    # no policy: match everything
+    # no dest: reject
   - filter: message_validation
   - filter: dkim_check
 

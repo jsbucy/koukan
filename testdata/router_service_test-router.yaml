@@ -111,8 +111,8 @@ endpoint:
       - example.com
       name: address_list
   - filter: router
-    policy:
-      name: address_list
+    # no policy: match everything
+    # no dest: reject
   - filter: message_parser
   - filter: sync
 

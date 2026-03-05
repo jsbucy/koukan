@@ -6,7 +6,6 @@ from email import _header_value_parser
 
 import logging
 
-from koukan.address import domain_from_address
 from koukan.response import Response
 from koukan.recipient_router_filter import Destination, RoutingPolicy
 

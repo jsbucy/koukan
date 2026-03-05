@@ -15,11 +15,12 @@ from koukan.filter import Mailbox, TransactionMetadata
 from koukan.matcher_result import MatcherResult
 
 class AddressListPolicyTest(unittest.TestCase):
-    def test_smoke(self):
+    def test_smoke(self) -> None:
         my_dest = Destination('http://my-endpoint')
         policy = AddressListPolicy(['example.com'], '+', ['alice'], my_dest)
 
-        for addr in ['@@@', 'alice']:
+        # invalid address never matches
+        for addr in ['alice', 'alice@', '@example.com', '@@@']:
             dest, err = policy.endpoint_for_rcpt(addr)
             self.assertIsNone(dest)
             self.assertIsNone(err)
@@ -66,10 +67,11 @@ class AddressListPolicyTest(unittest.TestCase):
         policy = AddressListPolicy(['example.com'], None, [], None)
         dest, err = policy.endpoint_for_rcpt('qqq@example.com')
         self.assertIsNone(dest)
+        assert err is not None
         self.assertEqual(err.code, 550)
 
 
-    def test_matcher(self):
+    def test_matcher(self) -> None:
         match_yaml = {
             'which_addr': 'header_from',
             'domains': ['example.com'],
@@ -96,6 +98,7 @@ class AddressListPolicyTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
     unittest.main()
