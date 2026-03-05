@@ -23,7 +23,7 @@ Response = Tuple[int, str]
 
 # -> per-rcpt responses, final (mail/data) response
 def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
-         raw : Optional[bytes] = None
+         raw : Optional[bytes] = None, header_from : Optional[str] = None
          ) -> Tuple[Optional[List[Response]], Optional[Response]]:
     with smtplib.SMTP(host=host, port=int(port), local_hostname=ehlo) as s:
         s.ehlo(ehlo)
@@ -31,7 +31,9 @@ def main(host, port, ehlo, mail_from, rcpt_to, data : Optional[str] = None,
 
         if data is not None:
             m = email.message.EmailMessage(policy=policy.SMTP)
-            m['from'] = Address(addr_spec=mail_from)
+            f = header_from if header_from else mail_from if mail_from else None
+            if f:
+                m['from'] = Address(addr_spec=f)
             m['to'] = [Address(addr_spec=t) for t in rcpt_to]
             m.add_header(
                 'Date', email.utils.format_datetime(email.utils.localtime()))

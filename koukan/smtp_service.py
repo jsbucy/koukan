@@ -200,7 +200,15 @@ class SmtpHandler:
             self.chain.tx.local_host = self.local_host
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
-        self.chain.tx.mail_from = Mailbox(mail_from, params)
+        # aiosmtpd.SMTP.smtp_MAIL() uses
+        # email._header_value_parser.get_angle_addr() to consume the
+        # address from the command line which strips angle brackets
+        # from a non-empty address but returns '<>' verbatim.
+        # aiosmtpd expects envelope.mail_from to be non-empty <> for
+        # the rcpt command precondition check but the rest of our
+        # stack expects '' for rfc5321 "null reverse-path"
+        self.chain.tx.mail_from = Mailbox(
+            mail_from if mail_from != '<>' else '', params)
         fut = self.executor.submit(
             lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
         if fut is None:

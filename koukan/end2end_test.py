@@ -249,6 +249,31 @@ class End2EndTest(unittest.TestCase):
         else:
             self.fail('didn\'t receive message')
 
+    def test_null_reverse_path(self):
+        self._configure_and_run()
+        rcpt_resp, final_resp = send_smtp(
+            'localhost', self.gateway_mx_port, 'localhost',
+            '', ['bob@example.com'],
+            'hello, world!', header_from='alice@example.com')
+        self.assertEqual(250, rcpt_resp[0][0])
+
+        for handler in self.fake_smtpd.handlers:
+            # smtpd machinery constructs extra handlers during startup?
+            if handler.ehlo is None:
+                logging.debug('empty handler? %s', handler)
+                continue
+            logging.debug(handler)
+            self.assertEqual(handler.ehlo, 'localhost')
+            self.assertEqual(handler.mail_from, '')
+            self.assertEqual(len(handler.mail_options), 1)
+            self.assertTrue(handler.mail_options[0].startswith('SIZE='))
+            self.assertEqual(handler.rcpt_to, ['bob@example.com'])
+            self.assertEqual(handler.rcpt_options, [[]])
+            self.assertIn(b'hello, world!', handler.data)
+            break
+        else:
+            self.fail('didn\'t receive message')
+
     def test_policy_reject_mail(self):
         self._configure_and_run()
         rcpt_resp, final_resp = send_smtp(

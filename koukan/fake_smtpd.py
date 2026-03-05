@@ -59,7 +59,7 @@ class InMemoryHandler:
 
     async def handle_MAIL(self, server, session, envelope, address, options
                           ) -> str:
-        self.mail_from = address
+        self.mail_from = address if address != '<>' else ''
         self.mail_options = options
         logging.debug('InMemoryHandler.handle_MAIL %s %s', address, options)
         envelope.mail_from = address
