@@ -36,6 +36,7 @@ class PolicyActionFilterTest(unittest.TestCase):
              'match': {'matcher': 'my_filter'}},
             matchers={})
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
@@ -56,6 +57,10 @@ class PolicyActionFilterTest(unittest.TestCase):
                          out.to_json(WhichJson.DB_ATTEMPT))
         filter_output.expect_call = False
         filter.on_update(prev.delta(tx))
+        self.assertIs(
+            tx.filter_output[filter.fullname()], filter.upstream_tx.filter_output[filter.fullname()])
+        self.assertIsNone(tx.ephemeral_filter_output)
+        self.assertIsNone(filter.upstream_tx.ephemeral_filter_output)
 
     def test_smoke_per_rcpt(self):
         match_result = MatcherResult.NO_MATCH
@@ -71,6 +76,7 @@ class PolicyActionFilterTest(unittest.TestCase):
              'action': 'REJECT'},
             matchers={'my_matcher': match})
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.filter_output = {}
 
@@ -108,6 +114,7 @@ class PolicyActionFilterTest(unittest.TestCase):
              'action': 'REJECT'},
             matchers={'my_matcher': match})
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.filter_output = {filter.fullname() : PolicyActionFilterOutput()}
 
@@ -155,6 +162,7 @@ class PolicyActionFilterTest(unittest.TestCase):
              'match': {'matcher': 'my_filter'}},
             matchers={})
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
@@ -171,6 +179,8 @@ class PolicyActionFilterTest(unittest.TestCase):
              'action': 'REJECT'},
             matchers={})
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
+
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
@@ -200,6 +210,8 @@ class PolicyActionFilterTest(unittest.TestCase):
             matchers={'test_matcher': matcher.match})
 
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
+
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
@@ -234,6 +246,7 @@ class PolicyActionFilterTest(unittest.TestCase):
         f1.wire_downstream(tx)
         f1.wire_upstream(TransactionMetadata())
         f2.wire_downstream(TransactionMetadata())
+        f2.wire_upstream(TransactionMetadata())
 
         prev = tx.copy()
         tx.sender = Sender('ingress', 'smtp-mx')
@@ -253,6 +266,8 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertIsNot(eout, eout2)
         self.assertIsNotNone(
             eout := tx.get_ephemeral_filter_output(f1.fullname()))
+        self.assertIs(
+            eout, f1.upstream_tx.get_ephemeral_filter_output(f1.fullname()))
         self.assertIsNone(
             out := tx.get_filter_output(f1.fullname()))
         self.assertIn('my_tag', eout.unmet_precondition_tags)
@@ -294,29 +309,38 @@ class PolicyActionFilterTest(unittest.TestCase):
 
         tx = TransactionMetadata()
         filter_x.wire_downstream(tx)
-        filter_y.wire_downstream(tx)
+        filter_x.wire_upstream(TransactionMetadata())
+        filter_y.wire_downstream(TransactionMetadata())
+        filter_y.wire_upstream(TransactionMetadata())
 
         # first call: x precondition noops group
+        prev = filter_x.upstream_tx.copy()
         filter_x.on_update(TransactionMetadata())
         self.assertIsNotNone(
             eout := tx.get_ephemeral_filter_output(filter_x.fullname()))
         self.assertIn('my_group', eout.unmet_precondition_tags)
 
-        filter_y.on_update(TransactionMetadata())
+        delta = prev.delta(filter_x.upstream_tx)
+        filter_y.downstream_tx.merge_from(delta)
+        filter_y.on_update(delta)
         self.assertEqual(1, x_count)
         self.assertEqual(0, y_count)
-        tx.ephemeral_filter_output = None
+        for f in [filter_x, filter_y]:
+            f.downstream_tx.ephemeral_filter_output = f.upstream_tx.ephemeral_filter_output = None
 
         self.assertIsNone(out := tx.get_filter_output(filter_x.fullname()))
 
         # second call: x matches, log action does not retire group -> keep going
+        prev = filter_x.upstream_tx.copy()
         filter_x.on_update(TransactionMetadata())
-        filter_y.on_update(TransactionMetadata())
+        delta = prev.delta(filter_x.upstream_tx)
+        filter_y.downstream_tx.merge_from(delta)
+        filter_y.on_update(delta)
 
         self.assertEqual(2, x_count)
         self.assertEqual(1, y_count)
 
-        self.assertIsNotNone(out := tx.get_filter_output(filter_x.fullname()))
+        self.assertIsNotNone(out := filter_y.downstream_tx.get_filter_output(filter_x.fullname()))
         self.assertIn('match_x', out.matched_rules)
         self.assertIn('match_y', out.matched_rules)
         self.assertIn('my_group', out.matched_tags)
@@ -426,6 +450,7 @@ class PolicyActionFilterTest(unittest.TestCase):
             matchers={})
 
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.sender = Sender('ingress', 'smtp-mx')
         tx.filter_output = {}
@@ -457,6 +482,7 @@ class PolicyActionFilterTest(unittest.TestCase):
             matchers={})
 
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         tx.add_filter_output(filter.fullname(), PolicyActionFilterOutput())
         prev = tx.copy()
@@ -465,6 +491,7 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertEqual(550, tx.mail_response.code)
 
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         out = PolicyActionFilterOutput()
         out._add_tag('my_tag')
@@ -475,6 +502,7 @@ class PolicyActionFilterTest(unittest.TestCase):
         self.assertIsNone(tx.mail_response)
 
         filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
         tx = filter.downstream_tx
         out = PolicyActionFilterOutput()
         out._add_rule('my_rule')
