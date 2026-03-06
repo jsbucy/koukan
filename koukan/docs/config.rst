@@ -157,7 +157,8 @@ controls where the gateway sends it
 
 filter yaml:
 
-policy: routing policy options
+policy: routing policy. If unspecified, routes all addresses to
+``destination`` if present or rejects otherwise.
 
 policy.name: dest_domain | address_list or pluggable via
 modules.recipient_router_policy
@@ -324,6 +325,10 @@ tag: group/tag name
 
 name: rule name (defaults to tag if not present)
 
+mode: PER_RCPT or unspecified. If mode is PER_RCPT, the policy is
+invoked once for each recipient and the action is applied only to that
+rcpt_response.
+
 action: REJECT | LOG | MATCH
 or list of [weight, action] for percent experiments. The denominator
 is the sum of the weights.
@@ -440,6 +445,13 @@ specification as the routing policy AddressListPolicy
 
 smtp_auth: matches if the message was received with smtp
 authentication. Replaces ``relay_auth`` filter
+
+num_rcpts: matches if the number of rcpts prior to this rcpt with a
+success response is >= yaml max_rcpts
+
+invalid_mail_from: matches if the mail_from mailbox is in invalid
+
+invalid_rcpt_to: PER_RCPT matcher that matches if the rcpt_to mailbox is invalid
 
 Cluster/k8s
 ===========

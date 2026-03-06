@@ -2,6 +2,53 @@
 NEWS
 ====
 
+``signals_rcpt`` branch
+=======================
+
+(merged 2026/3/6)
+
+Add per_rcpt policy_action mode to allow writing rules to reject
+individual recipients. :ref:`signals`
+
+Matcher updates:
+
+* add num_rcpts matcher
+* add per_rcpt support to address_list matcher
+* add invalid_mail_from/rcpt_to matchers
+
+bugfixes/improvements
+---------------------
+
+receivers handle heartbeats, validate content-type
+
+aiosmtpd passes null-reverse-path to handler as <> but the koukan
+stack expects empty string
+
+domain_from_address() catch exceptions parsing the address
+
+recipient router support no policy = route everything
+
+This is a better way to write the catchall since ``address_list`` doesn’t
+match invalid address.
+
+before::
+
+  - filter: router
+    policy:
+      name: address_list
+      # no domains/dest -> reject all
+
+after::
+
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
+
+RestEndpoint fail the tx if we got that far without
+endpoint/base_url. This can happen with a bad routing config.
+Previously this would result in an uncaught exception.
+
+
 Signals branch
 ==============
 
