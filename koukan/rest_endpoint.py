@@ -343,6 +343,11 @@ class RestEndpoint(Filter):
         if not self.transaction_url:
             if self.base_url is None:
                 self.base_url = self.downstream_tx.rest_endpoint
+                # this condition is probably a misconfiguration
+                if self.base_url is None:
+                    self.downstream_tx.fill_inflight_responses(
+                        Response(550, 'RestEndpoint no endpoint!'))
+                    return FilterResult()
             upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(
                 WhichJson.REST_CREATE)
             if (not self.send_filter_output()) and upstream_tx.filter_output:

@@ -661,9 +661,21 @@ class RestEndpointTest(unittest.TestCase):
         logging.debug(tx)
         self.assertEqual(tx.data_response.code, 450)
 
+    def test_no_endpoint(self):
+        rest_endpoint, tx = self.create_endpoint(
+            min_poll=0.1,
+            chunk_size=8)
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to=[Mailbox('bob')])
+        tx.merge_from(delta)
+        rest_endpoint.on_update(delta)
+        self.assertEqual(550, tx.mail_response.code)
+        # failed precondition
+        self.assertEqual([503], [r.code for r in tx.rcpt_response])
+
     def test_smoke(self):
         rest_endpoint, tx = self.create_endpoint(
-            static_base_url=self.static_base_url,
             min_poll=0.1,
             chunk_size=8)
 
@@ -694,6 +706,7 @@ class RestEndpointTest(unittest.TestCase):
             'rest_endpoint_test', 'outbound',
             yaml={'remote_host': '1.2.3.4',
                   'smtp_meta': {'ehlo_host': 'short_circuit.local'}})
+        delta.rest_endpoint = self.static_base_url
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
 

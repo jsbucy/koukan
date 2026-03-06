@@ -229,7 +229,6 @@ class PolicyActionFilter(ProxyFilter):
                     self._apply_action(tx, out, i)
         else:
             self.upstream_tx.merge_from(tx_delta)
-            logging.debug(tx)
             eout = tx.get_ephemeral_filter_output(self.fullname())
             if (eout is not None) and (
                     self.group_name in eout.unmet_precondition_tags):
@@ -240,7 +239,6 @@ class PolicyActionFilter(ProxyFilter):
                 return FilterResult()
 
             if not self._match(tx, rcpt_num=None):
-                logging.debug(tx)
                 return FilterResult()
             self._apply_action(tx, out, rcpt_num=None)
 
