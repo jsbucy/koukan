@@ -76,6 +76,21 @@ endpoint:
   chain:
   - filter: policy_action
     match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
       not:
         matcher: smtp_auth
     name: matcher_smoke_smtp_auth
@@ -142,6 +157,21 @@ endpoint:
       deadline: 30
 
   chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
   # chain before message_builder to not parse its output which we
   # assume is good.
   - filter: message_validation
@@ -202,6 +232,21 @@ endpoint:
     downstream_timeout: 5
     upstream_refresh: 1
   chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
   - filter: policy_action
     mode: PER_RCPT
     match:
@@ -293,6 +338,21 @@ endpoint:
       sender: submission
       tag: notification
   chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
   - filter: remote_host
   - filter: received_header
     received_hostname: gargantua1    
@@ -361,6 +421,21 @@ endpoint:
 
 - name: sink
   chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
   - filter: router
     policy:
       name: address_list

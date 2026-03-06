@@ -17,6 +17,8 @@ from koukan.policy_action_filter import (
 from koukan.matcher_result import MatcherResult
 
 from koukan.transaction_matchers import (
+    match_invalid_mail_from,
+    match_invalid_rcpt_to,
     match_network_address,
     match_num_rcpts,
     match_smtp_auth,
@@ -29,6 +31,8 @@ class PolicyFactory:
     def __init__(self) -> None:
         self.matchers = {}
         self.add_matcher('address_list', match_address_list)
+        self.add_matcher('invalid_mail_from', match_invalid_mail_from)
+        self.add_matcher('invalid_rcpt_to', match_invalid_rcpt_to)
         self.add_matcher('network_address', match_network_address)
         self.add_matcher('num_rcpts', match_num_rcpts)
         self.add_matcher('smtp_tls', match_smtp_tls)

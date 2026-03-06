@@ -5,6 +5,7 @@ from ipaddress import ip_address, ip_network
 
 from koukan.matcher_result import MatcherResult
 from koukan.filter import TransactionMetadata
+from koukan.address import domain_from_address
 
 # Kitchen sink for trivial matchers
 
@@ -44,3 +45,20 @@ def match_num_rcpts(
             if rcpts >= yaml['max_rcpts']:
                 return MatcherResult.MATCH
     return MatcherResult.NO_MATCH
+
+def match_invalid_mail_from(
+        yaml : dict, tx : TransactionMetadata, rcpt_num : Optional[int]):
+    addr = tx.mail_from
+    if addr is None:
+        return MatcherResult.PRECONDITION_UNMET
+    if not addr.mailbox:  # 5321 null reverse-path
+        return MatcherResult.NO_MATCH
+    return MatcherResult.from_bool(
+        domain_from_address(addr.mailbox) is None)
+
+def match_invalid_rcpt_to(
+        yaml : dict, tx : TransactionMetadata, rcpt_num : Optional[int]):
+    assert rcpt_num is not None
+    addr = tx.rcpt_to[rcpt_num]
+    assert addr is not None
+    return MatcherResult.from_bool(domain_from_address(addr.mailbox) is None)

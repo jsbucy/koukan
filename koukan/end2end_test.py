@@ -369,7 +369,8 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual(
             {'koukan.dkim_check_filter.DkimCheckFilter',
              'koukan.message_validation_filter.MessageValidationFilter',
-             'koukan.remote_host_filter.RemoteHostFilter'},
+             'koukan.remote_host_filter.RemoteHostFilter',
+             'koukan.policy_action_filter.PolicyActionFilter'},
             set(filter_output.keys()))
         self.assertEqual(
             {'status': 3, 'received_header_count': 1},

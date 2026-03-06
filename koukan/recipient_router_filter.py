@@ -39,11 +39,11 @@ class RoutingPolicy(ABC):
     # called on the first recipient in the transaction
 
     # Returns either a Destination or an error Response.
+
     # The error response is really to say "we were explicitly
     # configured to reject this address" vs "address syntax error"
-    # Possibly there should be input validation near the beginning of
-    # the chain to emit "501 5.1.3 Bad destination system address" in
-    # that case.
+    # Explicitly reject invalid envelope addresses at the beginning of
+    # each chain with policy_action matcher invalid_mail_from/rcpt_to.
     @abstractmethod
     def endpoint_for_rcpt(self, rcpt : Mailbox) -> Tuple[
             Optional[Destination], Optional[Response]]:

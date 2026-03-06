@@ -255,6 +255,10 @@ py_test(name='message_parser_filter_test',
 py_library(name='address',
            srcs=['address.py'])
 
+py_test(name='address_test',
+        srcs=['address_test.py'],
+        deps=[':address'])
+
 py_library(name='recipient_router_filter',
            srcs=['recipient_router_filter.py'],
            deps=[':blob',
@@ -523,13 +527,15 @@ py_library(name='recipient_router_factory',
 
 py_library(name='transaction_matchers',
            srcs=['transaction_matchers.py'],
-           deps=[':filter',
+           deps=[':address',
+                 ':filter',
                  ':matcher_result'])
 
 py_test(name='transaction_matchers_test',
         srcs=['transaction_matchers_test.py'],
         deps=[':filter',
               ':matcher_result',
+              ':response',
               ':transaction_matchers'])
 
 py_library(name='policy_factory',
