@@ -1,6 +1,11 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+
 import dns.resolver
+from dns.resolver import (
+    NoAnswer,
+    NXDOMAIN
+)
 import logging
 
 NotFoundExceptions = (

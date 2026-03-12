@@ -220,6 +220,25 @@ endpoint:
     static_hosts:
       - host: 127.0.0.1
         port: 3025
+  - filter: policy_action
+    tag: dns_perm
+    match:
+      any:
+        - matcher: koukan.mx_resolution.DnsResolutionFilter
+          rcpt_result: PERM
+        - matcher: koukan.mx_resolution.DnsResolutionFilter
+          mail_result: PERM
+    action: REJECT
+    code: 550
+    message: rcpt_to dns nxdomain/nullmx
+  - filter: policy_action
+    tag: dns_temp
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      rcpt_result: TEMP
+    action: REJECT
+    code: 450
+    message: rcpt_to dns temp
   - filter: rest_output
     verify: localhost.crt
     rcpt_timeout: 300

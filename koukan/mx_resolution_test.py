@@ -7,6 +7,8 @@ from koukan.mx_resolution import DnsResolutionFilter
 from koukan.filter import HostPort, Mailbox, Resolution, TransactionMetadata
 from koukan.fake_dns_wrapper import FakeResolver
 from koukan.response import Response
+from koukan.matcher_result import MatcherResult
+from koukan.rest_schema import WhichJson
 
 from dns.resolver import NXDOMAIN, NoNameservers
 from dns.resolver import Answer
@@ -41,6 +43,25 @@ mx_answer = Answer(
     RdataType.MX,
     RdataClass.IN,
     mx_message)  # type: ignore[arg-type]
+
+nullmx_message_text = """id 1234
+opcode QUERY
+rcode NOERROR
+flags QR AA RD
+;QUESTION
+nullmx.com. IN MX
+;ANSWER
+nullmx.com. IN MX 0 .
+;AUTHORITY
+;ADDITIONAL
+"""
+
+nullmx_message = dns.message.from_text(nullmx_message_text)
+nullmx_answer = Answer(
+    dns.name.from_text('nullmx.com.'),
+    RdataType.MX,
+    RdataClass.IN,
+    nullmx_message)  # type: ignore[arg-type]
 
 a_message_text = """id 1234
 opcode QUERY
@@ -193,8 +214,33 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter_result = filter.on_update(delta)
-        self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
-        self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
+
+        out = filter.downstream_tx.get_filter_output(filter.fullname())
+        logging.debug(out.to_json(WhichJson.DB_ATTEMPT))
+        self.assertEqual(
+            MatcherResult.MATCH, out.match({'rcpt_result': 'TEMP'}, None))
+        self.assertEqual(
+            MatcherResult.NO_MATCH, out.match({'rcpt_result': 'OK'}, None))
+
+    def test_nullmx(self):
+        resolver = FakeResolver([nullmx_answer])
+
+        filter = DnsResolutionFilter(
+            suffix='',
+            resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
+
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            resolution = Resolution([HostPort('nullmx.com', 25)]))
+        filter.downstream_tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+
+        out = filter.downstream_tx.get_filter_output(filter.fullname())
+        logging.debug(out.to_json(WhichJson.DB_ATTEMPT))
+        self.assertEqual(
+            MatcherResult.MATCH, out.match({'rcpt_result': 'NX'}, None))
 
     def test_servfail(self):
         resolver = FakeResolver([NoNameservers()])
@@ -207,8 +253,11 @@ class DnsResolutionFilterTest(unittest.TestCase):
             resolution = Resolution([HostPort('example.CoM', 25)]))
         filter.downstream_tx.merge_from(delta)
         filter_result = filter.on_update(delta)
-        self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
-        self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
+        # self.assertTrue(filter_result.downstream_delta.mail_response.code, 450)
+        # self.assertIn('empty', filter_result.downstream_delta.mail_response.message)
+        out = filter.downstream_tx.get_filter_output(filter.fullname())
+        self.assertEqual(
+            MatcherResult.MATCH, out.match({'rcpt_result': 'TEMP'}, None))
 
     def test_duplicate_ip(self):
         filter = DnsResolutionFilter(
@@ -252,6 +301,29 @@ class DnsResolutionFilterTest(unittest.TestCase):
         filter.on_update(delta)
         self.assertEqual([h.host for h in filter.upstream_tx.resolution.hosts],
                          ['example2.com', '1.2.3.4'])
+
+
+    def test_mail_from(self):
+        resolver = FakeResolver([
+            mx_answer,
+            a_answer,
+            dns.resolver.NoAnswer()])  # AAAA
+
+        filter = DnsResolutionFilter(
+            suffix='',
+            resolver=resolver)
+        filter.wire_downstream(TransactionMetadata())
+        filter.wire_upstream(TransactionMetadata())
+
+        delta = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'))
+        filter.downstream_tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+
+        out = filter.downstream_tx.get_filter_output(filter.fullname())
+        logging.debug(out.to_json(WhichJson.DB_ATTEMPT))
+        self.assertEqual(
+            MatcherResult.MATCH, out.match({'mail_result': 'OK'}, None))
 
 
 if __name__ == '__main__':

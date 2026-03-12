@@ -369,6 +369,7 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual(
             {'koukan.dkim_check_filter.DkimCheckFilter',
              'koukan.message_validation_filter.MessageValidationFilter',
+             'koukan.mx_resolution.DnsResolutionFilter',
              'koukan.remote_host_filter.RemoteHostFilter',
              'koukan.policy_action_filter.PolicyActionFilter'},
             set(filter_output.keys()))
@@ -448,6 +449,7 @@ class End2EndTest(unittest.TestCase):
         handlers = {}
         for handler in self.fake_smtpd.handlers:
             logging.debug(handler)
+            logging.debug(handler.data)
             if len(handler.rcpt_to) != 1:
                 continue
             rcpt = handler.rcpt_to[0]
