@@ -1,7 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from enum import IntEnum
 import logging
 
@@ -28,7 +28,18 @@ class Result(IntEnum):
 
 class DnsResolutionFilterOutput(FilterOutput):
     mail_from_result : Optional[Result] = None
-    rcpt_to_result : Optional[Result] = None
+    rcpt_to_result : List[Optional[Result]]
+    resolution_result : Optional[Result] = None
+
+    def __init__(self):
+        self.rcpt_to_result = []
+
+    def copy(self):
+        out = DnsResolutionFilterOutput()
+        out.mail_from_result = self.mail_from_result
+        out.rcpt_to_result = list(self.rcpt_to_result)
+        out.resolution_result = self.resolution_result
+        return out
 
     def to_json(self, which_js : WhichJson) -> Optional[dict]:
         if which_js not in [WhichJson.DB_ATTEMPT,
@@ -36,11 +47,13 @@ class DnsResolutionFilterOutput(FilterOutput):
                             WhichJson.REST_UPDATE]:
             return None
 
-        out = {}
+        out : Dict[str, Any] = {}
         if self.mail_from_result is not None:
             out['mail_from_result'] = int(self.mail_from_result)
-        if self.rcpt_to_result is not None:
-            out['rcpt_to_result'] = int(self.rcpt_to_result)
+        if self.rcpt_to_result:
+            out['rcpt_to_result'] = self.rcpt_to_result
+        if self.resolution_result is not None:
+            out['resolution_result'] = int(self.resolution_result)
         return out
 
     def match(self, yaml : dict, rcpt_num : Optional[int]) -> MatcherResult:
@@ -50,11 +63,19 @@ class DnsResolutionFilterOutput(FilterOutput):
                 return MatcherResult.PRECONDITION_UNMET
             elif self.mail_from_result != Result[expected_mail]:
                 return MatcherResult.NO_MATCH
+
         expected_rcpt = yaml.get('rcpt_result', None)
         if expected_rcpt is not None:
-            if self.rcpt_to_result is None:
+            assert rcpt_num is not None
+            rcpt_result = self.rcpt_to_result[rcpt_num]
+            if rcpt_result != Result[expected_rcpt]:
+                return MatcherResult.NO_MATCH
+
+        expected_resolution = yaml.get('resolution_result', None)
+        if expected_resolution is not None:
+            if self.resolution_result is None:
                 return MatcherResult.PRECONDITION_UNMET
-            elif self.rcpt_to_result != Result[expected_rcpt]:
+            elif self.resolution_result != Result[expected_resolution]:
                 return MatcherResult.NO_MATCH
 
         return MatcherResult.MATCH
@@ -70,11 +91,11 @@ def resolve(resolver, hostport : HostPort) -> Optional[List[str]]:
         if len(answers) == 1 and answers[0].preference == 0 and answers[0].exchange.labels == (b'',):
             return None
         mxen = [ mx.exchange for mx in answers]
-    except ServFailExceptions:
+    except ServFailExceptions as e:
         return []
-    except NoAnswer:  # name exists but not that rrtype
+    except NoAnswer as e:  # name exists but not that rrtype
         mxen = [hostport.host]
-    except NXDOMAIN:  # name doesn't exist at all
+    except NXDOMAIN as e:  # name doesn't exist at all
         return None
 
     seen = []
@@ -176,7 +197,9 @@ class DnsResolutionFilter(ProxyFilter):
             downstream_resolution = None
         self.upstream_tx.merge_from(tx_delta)
 
-        if downstream_resolution is None and tx_delta.mail_from is None:
+        if (downstream_resolution is None and
+            tx_delta.mail_from is None and
+            not tx_delta.rcpt_to):
             return FilterResult()
 
         out = self.downstream_tx.get_filter_output(self.fullname())
@@ -192,13 +215,24 @@ class DnsResolutionFilter(ProxyFilter):
             if mail_from_domain:
                 out.mail_from_result, hosts = self._resolve(
                     Resolution([HostPort(mail_from_domain, 0)]))
-                logging.debug(out.mail_from_result)
+                logging.debug('%s %s', mail_from_domain, out.mail_from_result)
+
+        if tx_delta.rcpt_to:
+            off = tx_delta.rcpt_to_list_offset
+            assert off is not None
+            out.rcpt_to_result.extend(
+                [None] * (len(self.downstream_tx.rcpt_to) - len(out.rcpt_to_result)))
+            for i,rcpt in enumerate(tx_delta.rcpt_to):
+                assert rcpt is not None
+                rcpt_domain = domain_from_address(rcpt.mailbox)
+                out.rcpt_to_result[off + i], hosts = self._resolve(
+                    Resolution([HostPort(rcpt_domain, 0)]))
 
         if downstream_resolution:
             assert self.upstream_tx.resolution is None
-            out.rcpt_to_result, hosts = self._resolve(downstream_resolution)
-            logging.debug('%s %s', out.rcpt_to_result, hosts)
-            if out.rcpt_to_result == Result.OK:
+            out.resolution_result, hosts = self._resolve(downstream_resolution)
+            logging.debug('%s %s', out.resolution_result, hosts)
+            if out.resolution_result == Result.OK:
                 assert hosts
                 self.upstream_tx.resolution = Resolution(hosts)
 

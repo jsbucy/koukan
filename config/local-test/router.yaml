@@ -96,6 +96,22 @@ endpoint:
     name: matcher_smoke_smtp_auth
     tag: matcher_smoke
     action: LOG
+  - filter: dns_resolution
+    suffix: ''  # match everything
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
+  - filter: policy_action
+    tag: dns_perm
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      rcpt_result: NX
+    mode: PER_RCPT
+    action: REJECT
+    code: 550
+    message: rcpt_to dns nxdomain/nullmx
+
+  # XXX does this rcpt router do anything?
   - filter: router
     dry_run: true
     policy:
@@ -215,19 +231,20 @@ endpoint:
     domain: example.com
     selector: sel
   - filter: hello
+
   - filter: dns_resolution
     suffix: ''  # match everything
     static_hosts:
       - host: 127.0.0.1
         port: 3025
+
   - filter: policy_action
     tag: dns_perm
     match:
-      any:
-        - matcher: koukan.mx_resolution.DnsResolutionFilter
-          rcpt_result: PERM
-        - matcher: koukan.mx_resolution.DnsResolutionFilter
-          mail_result: PERM
+      # could also validate mail_result here but presumably we're
+      # limiting senders to our own domains that we know work, etc.
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      resolution_result: NX
     action: REJECT
     code: 550
     message: rcpt_to dns nxdomain/nullmx
@@ -235,10 +252,11 @@ endpoint:
     tag: dns_temp
     match:
       matcher: koukan.mx_resolution.DnsResolutionFilter
-      rcpt_result: TEMP
+      resolution_result: TEMP
     action: REJECT
     code: 450
     message: rcpt_to dns temp
+
   - filter: rest_output
     verify: localhost.crt
     rcpt_timeout: 300
@@ -308,6 +326,15 @@ endpoint:
     # no dest: reject
   - filter: remote_host
   - filter: message_validation
+  - filter: dns_resolution
+    suffix: ''  # match everything
+  - filter: policy_action
+    tag: dns_nx
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      mail_result: NX
+    action: LOG
+
   - filter: spf_check
   - filter: policy_action
     match:
