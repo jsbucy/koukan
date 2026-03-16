@@ -383,7 +383,7 @@ class ControllerTls(Controller):
                     tls_context=ssl_context,
                     authenticator=self.auth,
                     proxy_protocol_timeout=self.proxy_protocol_timeout,
-                    ident='koukan smtp gateway',
+                    ident='ESMTP koukan smtp gateway',
                     **kwargs)
         handler.set_smtp(smtp)
         return smtp

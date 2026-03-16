@@ -119,7 +119,7 @@ class FakeSmtpdController(Controller):
     def factory(self):
         handler = self.handler_factory()
         if self.protocol == 'smtp':
-            return SMTP(handler, ident='koukan fake smtpd')
+            return SMTP(handler, ident='ESMTP koukan fake smtpd')
         elif self.protocol == 'lmtp':
             return LMTP(handler)
         else:
