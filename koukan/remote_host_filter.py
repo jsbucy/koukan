@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from enum import IntEnum
 
 import dns.resolver
@@ -45,9 +45,10 @@ class RemoteHostFilterOutput(FilterOutput):
                      WhichJson.REST_CREATE,
                      WhichJson.REST_UPDATE]:
             return None
-        out = {'status': int(self.status),
-               'fcrdns': self.fcrdns,
-               'ehlo_alignment': self.ehlo_alignment}
+        out : Dict[str, Any] = {
+            'status': int(self.status),
+            'fcrdns': self.fcrdns,
+            'ehlo_alignment': self.ehlo_alignment}
         if self.remote_hostname:
             out['remote_hostname'] = self.remote_hostname
         return out
