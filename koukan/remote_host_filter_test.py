@@ -23,6 +23,8 @@ from koukan.dns_wrapper import Resolver
 from koukan.fake_dns_wrapper import FakeResolver
 
 from koukan.matcher_result import MatcherResult
+from koukan.rest_schema import WhichJson
+
 
 ptr_message_text = """id 1234
 opcode QUERY
@@ -107,13 +109,6 @@ aaaa_answer = Answer(
     aaaa_message)  # type: ignore[arg-type]
 
 class RemoteHostFilterTest(unittest.TestCase):
-    def setUp(self):
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
-            '%(message)s')
-
-
     def _test(self, addr,
               answers : List[Union[Answer, Exception]],
               exp_hostname,
@@ -147,7 +142,10 @@ class RemoteHostFilterTest(unittest.TestCase):
         else:
             self.assertIsNone(tx.mail_response)
         self.assertEqual(exp_hostname, rh.remote_hostname)
-        #self.assertEqual(exp_fcrdns, rh.fcrdns)
+
+        json_out = rh.to_json(WhichJson.DB_ATTEMPT)
+        logging.debug(json_out)
+        self.assertEqual(exp_hostname, json_out.get('remote_hostname', None))
 
     def test_success_ipv4(self):
         self._test(
@@ -170,7 +168,7 @@ class RemoteHostFilterTest(unittest.TestCase):
     def test_nx_ptr(self):
         self._test('1.2.3.4',
                    [dns.resolver.NXDOMAIN()],
-                   '',
+                   None,
                    exp_fcrdns=MatcherResult.NO_MATCH,
                    exp_mail_response_err=False,
                    exp_ehlo_alignment=MatcherResult.NO_MATCH)
@@ -205,4 +203,9 @@ class RemoteHostFilterTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
+        '%(message)s')
+
     unittest.main()

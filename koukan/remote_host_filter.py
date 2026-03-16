@@ -48,6 +48,8 @@ class RemoteHostFilterOutput(FilterOutput):
         out = {'status': int(self.status),
                'fcrdns': self.fcrdns,
                'ehlo_alignment': self.ehlo_alignment}
+        if self.remote_hostname:
+            out['remote_hostname'] = self.remote_hostname
         return out
 
     def match(self, yaml : dict, rcpt_num : Optional[int]):
@@ -91,11 +93,9 @@ class RemoteHostFilter(Filter):
         remote_hostname = None
         fcrdns = False
         if not(ans) or not ans[0].target:
-            remote_hostname = ''
             fcrdns = False
             tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(
-                RemoteHostFilterOutput.Status.NOT_FOUND,
-                remote_hostname, fcrdns))
+                RemoteHostFilterOutput.Status.NOT_FOUND, None, fcrdns))
             return None
         remote_hostname = str(ans[0].target)
 
