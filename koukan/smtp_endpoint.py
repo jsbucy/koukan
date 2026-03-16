@@ -101,22 +101,32 @@ class SmtpEndpoint(Filter):
             # passing the hostname to SMTP() swallows the greeting
             # on success :/
             self.smtp._host = tx.remote_host.host
-            resp = Response.from_smtp(
+            logging.info('%s connect %s:%d',
+                         tx.rest_id, tx.remote_host.host, tx.remote_host.port)
+            greeting = Response.from_smtp(
                 self.smtp.connect(tx.remote_host.host, tx.remote_host.port))
+            logging.info('%s %s', tx.rest_id, greeting)
         except (self.smtplib.SMTPException, ConnectionError) as e:
-            logging.info('SmtpEndpoint.connect %s %s', e, tx.remote_host)
-            return Response(400, 'SmtpEndpoint: connect error')
+            logging.info('%s connect %s %s', tx.rest_id, e, tx.remote_host)
+            return Response(400, 'connect error %s' % e)
+
+        if greeting.err():
+            self._shutdown()
+            return greeting
 
         # TODO all of these smtplib.SMTP calls on self.smtp can throw
         # e.g. on tcp reset/server hung up
         # LMTP sends LHLO here
-        resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
-        if resp.err():
+        logging.info('%s ehlo %s', tx.rest_id, self.ehlo_hostname)
+        ehlo_resp = Response.from_smtp(self.smtp.ehlo(self.ehlo_hostname))
+        logging.info('%s %s', tx.rest_id, ehlo_resp)
+        if ehlo_resp.err():
             self._shutdown()
-            return resp
+            return ehlo_resp
 
-        # TODO save/log greeting, ehlo resp?
-
+        # TODO don't have a great place to save greeting/ehlo_resp in
+        # the tx, upstream_smtp_meta?
+        # TODO there are probably cases where you want to fail if no tls
         if 'starttls' not in self.smtp.esmtp_features:
             return Response()
 
@@ -178,11 +188,11 @@ class SmtpEndpoint(Filter):
             else:
                 mailbox = tx_delta.mail_from.mailbox
                 esmtp = [e.to_str() for e in tx_delta.mail_from.esmtp]
-                logging.debug('SmtpEndpoint %s MAIL FROM %s %s',
+                logging.info('%s MAIL FROM %s %s',
                               tx.rest_id, mailbox, esmtp)
                 tx.mail_response = Response.from_smtp(
                     self.smtp.mail(mailbox, esmtp))
-                logging.debug('SmtpEndpoint %s mail resp %s',
+                logging.info('%s mail resp %s',
                               tx.rest_id, tx.mail_response)
             if tx.mail_response.err():
                 self._shutdown()
@@ -206,10 +216,10 @@ class SmtpEndpoint(Filter):
                 continue
             else:
                 esmtp = [e.to_str() for e in rcpt.esmtp]
-                logging.debug('SmtpEndpoint %s RCPT TO %s %s',
+                logging.info('%s RCPT TO %s %s',
                               tx.rest_id, rcpt.mailbox, esmtp)
                 resp = Response.from_smtp(self.smtp.rcpt(rcpt.mailbox, esmtp))
-            logging.debug('SmtpEndpoint %s rcpt resp %s', tx.rest_id, resp)
+            logging.info('%s rcpt resp %s', tx.rest_id, resp)
             if resp.ok():
                 self.good_rcpt = True
             tx.rcpt_response.append(resp)
@@ -219,8 +229,7 @@ class SmtpEndpoint(Filter):
                 500, 'BUG: message_builder in SmtpEndpoint')
         body = tx.maybe_body_blob()
         if not tx.data_response and (body is not None):
-            logging.info('SmtpEndpoint %s append_data len=%d',
-                         tx.rest_id, body.len())
+            logging.info('%s append_data len=%d', tx.rest_id, body.len())
             if not self.good_rcpt:
                 tx.data_response = Response(
                     554, 'no valid recipients (SmtpEndpoint)')  # 5321/3.3
@@ -241,7 +250,7 @@ class SmtpEndpoint(Filter):
                     return
                 tx.data_response = Response.from_smtp(self.smtp.data(self.body))
                 self.body = None
-                logging.info('SmtpEndpoint %s data_response %s',
+                logging.info('%s data_response %s',
                              tx.rest_id, tx.data_response)
                 return
 
@@ -265,6 +274,4 @@ class SmtpEndpoint(Filter):
                 tx.data_response = data_resp
                 self._shutdown()
 
-            logging.info('SmtpEndpoint %s data_resp %s',
-                         tx.rest_id, tx.data_response)
-
+            logging.info('%s data_resp %s', tx.rest_id, tx.data_response)
