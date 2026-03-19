@@ -144,10 +144,44 @@ domain: domain to sign as d=
 
 selector: selector to sign as s=
 
+.. _dns_resolution_filter:
+
 dns_resolution
 ^^^^^^^^^^^^^^
-replaces tx.resolution containing a hostname with one
-containing a list of IP addresses for the gateway to attempt in order
+ProxyFilter that replaces tx.resolution containing a hostname with one
+containing a list of IP addresses for the gateway to attempt in order.
+
+Also resolves the rhs of addresses in tx.mail_from and rcpt_to for use
+in policies.
+
+We suggest the typical config is
+
+submission_exploder: permfail rcpt_to if NX
+
+submission upstream (after recipient router):
+
+* permfail resolution if NX
+* tempfail resolution if TEMP
+
+ingress_exploder: permfail mail_from if NX
+
+koukan.mx_resolution.DnsResolutionFilterOutput matcher yaml
+
+Results:
+
+* OK = 0 the name was resolved to one or more IP addresses
+* NX = 1 the name doesn't exist at all (dns rcode=3/NXDOMAIN) or has a
+  rfc7505 nullmx record
+* TEMP = 2 there was a transient DNS error or the name did not resolve
+  to any IP addresses
+
+mail_result:
+
+rcpt_result: ``mode: PER_RCPT``
+
+resolution_result: ``tx.resolution`` is the result of recipient routing :ref:`recipient_router_filter`
+
+.. _recipient_router_filter:
 
 router
 ^^^^^^
@@ -428,6 +462,7 @@ filter descriptions (above):
 * :ref:`dkim_check_filter`
 * :ref:`spf_check_filter`
 * :ref:`policy_action <signals>`
+* :ref:`dns_resolution_filter`
 
 In addition several simple matchers are available in ``koukan.transaction_matchers``:
 

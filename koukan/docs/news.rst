@@ -2,6 +2,18 @@
 NEWS
 ====
 
+``dns_policy`` branch
+=====================
+
+(merged 2026/3/17)
+
+Add DnsResolutionFilterOutput :ref:`dns_resolution_filter`
+
+drive-by improvements:
+- set smtp server ident
+- smtp client logging
+
+
 ``signals_rcpt`` branch
 =======================
 
