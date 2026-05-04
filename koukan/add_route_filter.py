@@ -11,9 +11,10 @@ from koukan.response import Response
 from koukan.sender import Sender
 
 def _err(r : Optional[Response]) -> Tuple[bool, Response]:
-    if r is None or r.ok():
+    if r is None:
         return False, Response(250, 'ok (AddRouteFilter noop)')
-    return True, Response(r.code, r.message + ' (AddRouteFilter upstream)')
+    return not r.ok(), Response(
+        r.code, r.message + ' (AddRouteFilter upstream)')
 
 # AddRouteFilter forks a message to another Filter in addition to the
 # primary/upstream. There are 2 likely configurations: chain with...
@@ -40,24 +41,33 @@ class AddRouteFilter(Filter):
         self.sender = sender
         self.tag = tag
 
+    # If there were any error responses in self.add_route.tx,
+    # propagate them to self.downstream_tx. Also populate missing
+    # prior responses with "250 noop ok". AddRouteFilter currently
+    # does not support multi-rcpt.
     def _resp_err(self):
         atx = self.add_route.tx
         logging.debug(atx)
-        mail_err, mail_resp = _err(atx.mail_response)
+        mail_err, mail_resp = False, None
+        if atx.mail_from:
+            mail_err, mail_resp = _err(atx.mail_response)
 
-        rcpt_resp = (
-            atx.rcpt_response[0]
-            if len(atx.rcpt_response) == 1  # cf assert in on_update()
-            else None)
-        rcpt_err, rcpt_resp = _err(rcpt_resp)
-        data_err, data_resp = _err(atx.data_response)
+        rcpt_err, rcpt_resp = False, None
+        # cf assert in on_update()
+        assert len(atx.rcpt_to) in (0,1)
+        assert len(atx.rcpt_response) <= len(atx.rcpt_to)
+        if atx.rcpt_to and len(atx.rcpt_response) == 1:
+            rcpt_err, rcpt_resp = _err(atx.rcpt_response[0])
+        data_err, data_resp = False, None
+        if atx.body and atx.body.finalized():
+            data_err, data_resp = _err(atx.data_response)
         if mail_err or rcpt_err or data_err:
             dtx = self.downstream_tx
-            if not dtx.mail_response:
+            if dtx.mail_from and not dtx.mail_response:
                 dtx.mail_response = mail_resp
-            if not dtx.rcpt_response:
+            if dtx.rcpt_to and not dtx.rcpt_response:
                 dtx.rcpt_response = [rcpt_resp]
-            if not dtx.data_response:
+            if dtx.body and dtx.body.finalized() and not dtx.data_response:
                 dtx.data_response = data_resp
             logging.debug(dtx)
 

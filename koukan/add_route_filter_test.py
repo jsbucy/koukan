@@ -69,6 +69,29 @@ class AddRouteFilterTest(unittest.TestCase):
         self.assertEqual([403], [r.code for r in tx.rcpt_response])
         self.assertEqual(405, tx.data_response.code)
 
+    def test_add_route_mail_err(self):
+        add_route = FakeFilter()
+        chain = FilterChain([add_route])
+        filter = AddRouteFilter(chain, 'add-route')
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
+
+        def exp_add_route_err(tx, tx_delta):
+            prev = tx.copy()
+            tx.mail_response = Response(401, 'no endpoint')
+            return prev.delta(tx)
+
+        add_route.add_expectation(exp_add_route_err)
+
+        b = 'hello, world!'
+        delta = TransactionMetadata(mail_from=Mailbox('alice'))
+        tx.merge_from(delta)
+        filter_result = filter.on_update(delta)
+        logging.debug(tx)
+
+        self.assertEqual(401, tx.mail_response.code)
+        self.assertEqual(0, len(tx.rcpt_response))
+        self.assertIsNone(tx.data_response)
 
 
 if __name__ == '__main__':

@@ -138,6 +138,7 @@ class FilterChain:
 
         delta.rcpt_response = []
         delta.rcpt_response_list_offset = None
+        assert len(f.upstream_tx.rcpt_response) <= len(f.upstream_tx.rcpt_to)
         for i, resp in enumerate(f.upstream_tx.rcpt_response):
             off = f._rcpt_offset[i]
             if (off < len(f.downstream_tx.rcpt_response) and
