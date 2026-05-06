@@ -108,6 +108,7 @@ class End2EndTest(unittest.TestCase):
     def _configure(self):
         self.gateway_mx_port = self._find_free_port()
         self.gateway_msa_port = self._find_free_port()
+        self.gateway_smtps_port = self._find_free_port()
         self.gateway_rest_port = self._find_free_port()
         self.gateway_base_url = 'http://localhost:%d/' % self.gateway_rest_port + self.router_path
 
@@ -129,6 +130,8 @@ class End2EndTest(unittest.TestCase):
             'localhost', self.gateway_mx_port]
         gateway_yaml['smtp_listener']['services'][1]['addr'] = [
             'localhost', self.gateway_msa_port]
+        gateway_yaml['smtp_listener']['services'][2]['addr'] = [
+            'localhost', self.gateway_smtps_port]
 
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
