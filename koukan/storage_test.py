@@ -284,18 +284,18 @@ class StorageTestBase(unittest.TestCase):
         tx_writer2 = self.s.get_transaction_cursor()
         tx_writer2.create('tx_rest_id2', TransactionMetadata(
             remote_host=HostPort('remote_host', 2525)))
+        blobs={
+            'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri()),
+            'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri()),
+            'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri()),
+            'blob_rest_id4': BlobSpec(create_id='blob_rest_id4')}
         tx_writer2.write_envelope(
             TransactionMetadata(
                 mail_from=Mailbox('alice'),
                 rcpt_to=[Mailbox('bob')],
-                body = MessageBuilderSpec(
-                    {"text_body": []},
-                    blobs={
-                        'blob_rest_id1': BlobSpec(reuse_uri=tx_writer.blobs[0].blob_uri()),
-                        'blob_rest_id2': BlobSpec(reuse_uri=tx_writer.blobs[1].blob_uri()),
-                        'blob_rest_id3': BlobSpec(reuse_uri=tx_writer.blobs[2].blob_uri()),
-                        'blob_rest_id4': BlobSpec(create_id='blob_rest_id4')})))
-        blob4 = BlobUri(tx_id='tx_rest_id2', blob='blob_rest_id4')
+                body = MessageBuilderSpec({"text_body": []}, blobs=blobs)))
+        blob4 = BlobUri(
+            tx_id='tx_rest_id2', tx_body=False, blob='blob_rest_id4')
         blob_writer4 = tx_writer2.get_blob_for_append(blob4)
         b4 = b'another blob'
         blob_writer4.append_data(0, b4, len(b4))
@@ -800,7 +800,7 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug(downstream.blobs)
         blob1_writer = downstream.get_blob_for_append(
-            BlobUri('tx_rest_id', blob='blob1'))
+            BlobUri('tx_rest_id', tx_body=False, blob='blob1'))
         b1 = b'hello blob1'
         blob1_writer.append_data(0, b1, last=True)
 
@@ -826,7 +826,7 @@ class StorageTestBase(unittest.TestCase):
         prev_reads = self.s._tx_reads
 
         blob2_writer = downstream.get_blob_for_append(
-            BlobUri('tx_rest_id', blob='blob2'))
+            BlobUri('tx_rest_id', tx_body=False, blob='blob2'))
         b2 = b'hello blob2'
         blob2_writer.append_data(0, b2, last=True)
 

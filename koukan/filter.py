@@ -222,7 +222,9 @@ class TxField:
 def blob_spec_from_json(blob_json):
     blob_uri = None
     if (uri := blob_json.get('uri', None)) is not None:
-        blob_uri = parse_blob_uri(uri)
+        # This is only used to consume blob_status from upstream so
+        # the blob uri is opaque and this doesn't parse it.
+        blob_uri = BlobUri(parsed_uri=uri)
     return BlobSpec(reuse_uri = blob_uri,
                     finalized = blob_json.get('finalized', False))
 
@@ -235,7 +237,7 @@ def body_from_json(body_json, which_js : WhichJson
         blob_specs = None
         if blob_status := message_builder_json.get('blob_status', None):
             blob_specs = {
-                bid:blob_spec_from_json(bs) for bid,bs in blob_status.items()}
+                bid:blob_spec_from_json(bs) for bid,bs in blob_status.items() }
             # this is just for rest, not part of the message builder spec
             del message_builder_json['blob_status']
         message_builder = MessageBuilderSpec(message_builder_json, blob_specs)
@@ -891,7 +893,7 @@ class TransactionMetadata:
         if f == 'body' and old_v is not None and new_v is not None:
             body_delta = old_v.delta(new_v, which_json)
             if body_delta is None:
-                assert False
+                assert False, (old_v, new_v)
             if body_delta:
                 setattr(out, f, new_v)
             return

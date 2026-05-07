@@ -38,21 +38,30 @@ def make_blob_uri(tx, blob : Optional[str] = None,
         uri += '/body'
     return uri
 
+# TODO this is used in 2 different contexts
+# 1: downstream if a client passes a reuse_uri in message builder spec, etc
+# 2: upstream if a receiver returns blob_status filter.blob_spec_from_json()
+# In the downstream case, the client can only reuse a uri that we
+# previously sent them so it must parse with parse_blob_uri(). In the
+# upstream case, it's opaque and this just contains
+# parsed_uri. Possibly this could be split into separate classes for
+# the 2 use cases.
+
+# TODO storage instantiates this with tx_body and blob=__internal_tx_body
+# but if RestHandler instantiates with both, it's a bug
 class BlobUri:
-    tx_id : str
-    tx_body : bool = False
+    tx_id : Optional[str] = None
+    tx_body : Optional[bool] = None
     blob : Optional[str] = None
     base_uri : Optional[str] = None
     parsed_uri : Optional[str] = None  # XXX original_uri
 
-    def __init__(self, tx_id : str, tx_body : bool = False,
+    def __init__(self,
+                 tx_id : Optional[str] = None,
+                 tx_body : Optional[bool] = None,
                  blob : Optional[str] = None,
                  base_uri : Optional[str] = None,
                  parsed_uri : Optional[str] = None):
-        assert tx_body or blob
-        # TODO storage instantiates this with tx_body and __internal_tx_body
-        # but if RestHandler instantiates with both, it's a bug
-        #assert not (tx_body and blob)
         self.tx_id = tx_id
         self.tx_body = tx_body
         self.blob = blob

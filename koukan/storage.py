@@ -126,7 +126,8 @@ class TransactionCursor:
             self.tx = None
 
         self.no_final_notification = rhs.no_final_notification
-        assert not self.id_version or not rhs.id_version or self.id_version == rhs.id_version
+        assert (not self.id_version or not rhs.id_version or
+                self.id_version == rhs.id_version)
         if not self.id_version and rhs.id_version:
             self.id_version = rhs.id_version
         # do not copy in_attempt
@@ -139,12 +140,18 @@ class TransactionCursor:
                 self.tx.body.set_blobs(self.blobs)
 
     def _update_version_cache(self, leased : Optional[bool]):
-        assert (self.db_id is not None) and (self.rest_id is not None) and (self.version is not None)
+        assert ((self.db_id is not None) and
+                (self.rest_id is not None) and
+                (self.version is not None))
         clone = None
-        if self.inflight_session_id is not None and self.inflight_session_id == self.parent.session_id:
+        if (self.inflight_session_id is not None and
+            self.inflight_session_id == self.parent.session_id):
             clone = self.clone(for_cache=True)
         if clone is not None and clone.tx is not None:
-            if clone.blobs and len(clone.blobs) == 1 and (blob_uri := clone.blobs[0].blob_uri()) is not None and blob_uri.tx_body:
+            if (clone.blobs and
+                len(clone.blobs) == 1 and
+                (blob_uri := clone.blobs[0].blob_uri()) is not None and
+                blob_uri.tx_body):
                 clone.tx.body = clone.blobs[0]
                 logging.debug(clone.tx.body)
             logging.debug(clone.tx)
@@ -526,10 +533,14 @@ class TransactionCursor:
 
         # RestHandler creation -> OH handoff tx needs to have the
         # same effect as _load_blobs()
-        if self.blobs and len(self.blobs) == 1 and (blob_uri := self.blobs[0].blob_uri()) is not None and blob_uri.tx_body:
+        if (self.blobs and
+            len(self.blobs) == 1 and
+            (blob_uri := self.blobs[0].blob_uri()) is not None and
+            blob_uri.tx_body):
             self.tx.body = self.blobs[0]
 
-        if self.tx.body is not None and isinstance(self.tx.body, MessageBuilderSpec):
+        if self.tx.body is not None and isinstance(
+                self.tx.body, MessageBuilderSpec):
             if self.blobs:
                 self.tx.body.set_blobs(self.blobs)
 
@@ -553,7 +564,8 @@ class TransactionCursor:
                          ).select_from(
                              join(self.parent.tx_table,
                                   self.parent.session_table,
-                                  self.parent.tx_table.c.inflight_session_id == self.parent.session_table.c.id,
+                                  self.parent.tx_table.c.inflight_session_id ==
+                                  self.parent.session_table.c.id,
                                   isouter = True)
                          ).where(self.parent.tx_table.c.rest_id == self.rest_id)
             res = db_tx.execute(sel)
@@ -833,10 +845,12 @@ class TransactionCursor:
     # returns True if all blobs ref'd from this tx are finalized
     def check_input_done(self, db_tx : Connection) -> bool:
         j = join(self.parent.blob_table, self.parent.tx_blobref_table,
-             self.parent.blob_table.c.id == self.parent.tx_blobref_table.c.blob_id,
+             self.parent.blob_table.c.id ==
+                 self.parent.tx_blobref_table.c.blob_id,
              isouter=False)
         sel = (select(self.parent.blob_table.c.id).select_from(j)
-               .where(self.parent.tx_blobref_table.c.transaction_id == self.db_id,
+               .where(self.parent.tx_blobref_table.c.transaction_id ==
+                      self.db_id,
                       or_(self.parent.blob_table.c.length.is_(None),
                           func.length(self.parent.blob_table.c.content) !=
                           self.parent.blob_table.c.length))
@@ -903,7 +917,8 @@ class BlobCursor(Blob, WritableBlob):
             return None
         if self.length > rhs.length:
             return None
-        if self._content_length is not None and self._content_length != rhs._content_length:
+        if (self._content_length is not None and
+            self._content_length != rhs._content_length):
             return None
         return self.length < rhs.length
 
