@@ -25,7 +25,7 @@ class Server:
             app = app,
             timeout_graceful_shutdown = 0,
             workers = 0,
-            log_config = {'version': 1})
+            log_config = None)
 
         if cert and key:
             logging.debug('cert %s key %s', cert, key)

@@ -514,8 +514,3 @@ storage:
 
   session_refresh_interval: 1
 
-logging:
-  version: 1
-  loggers:
-    hpack:
-      level: INFO

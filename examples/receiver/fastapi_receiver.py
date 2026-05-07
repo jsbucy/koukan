@@ -40,31 +40,23 @@ def create_app(receiver = None, path = None):
     async def create_transaction(
             sender : str,
             request : FastApiRequest) -> FastApiResponse:
-        try:
-            err, req_json = await maybe_req_json(request)
-            if err:
-                return err
-            tx_url, tx_json, etag = receiver.create_tx(
-                sender,
-                req_json,
-                lambda tx_id: str(request.url_for(
-                    'get_transaction', tx_rest_id=tx_id)))
-            return FastApiJsonResponse(
-                status_code=201,
-                headers={'location': tx_url, 'etag': etag},
-                content=tx_json)
-        except Exception as e:
-            logging.debug(e)
-            return FastApiResponse(status_code=500)
+        err, req_json = await maybe_req_json(request)
+        if err:
+            return err
+        tx_url, tx_json, etag = receiver.create_tx(
+            sender,
+            req_json,
+            lambda tx_id: str(request.url_for(
+                'get_transaction', tx_rest_id=tx_id)))
+        return FastApiJsonResponse(
+            status_code=201,
+            headers={'location': tx_url, 'etag': etag},
+            content=tx_json)
 
     @app.get('/transactions/{tx_rest_id}')
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
-        try:
-            tx_json, etag = receiver.get_tx(tx_rest_id)
-        except Exception as e:
-            logging.exception('fastapi_receiver.get_transaction')
-            return FastApiResponse(status_code=500)
+        tx_json, etag = receiver.get_tx(tx_rest_id)
         return FastApiJsonResponse(status_code=200, content=tx_json,
                                    headers={'etag': etag})
 
@@ -72,21 +64,17 @@ def create_app(receiver = None, path = None):
     async def update_transaction(
             tx_rest_id : str,
             request : FastApiRequest) -> FastApiResponse:
-        try:
-            # a heartbeat request has no content-type header and a 0-length body
-            if 'content-type' not in request.headers:
-                if await request.body():
-                    return FastApiResponse(status_code=400)
-                else:
-                    req_json = None
+        # a heartbeat request has no content-type header and a 0-length body
+        if 'content-type' not in request.headers:
+            if await request.body():
+                return FastApiResponse(status_code=400)
             else:
-                err_resp, req_json = await maybe_req_json(request)
-                if err_resp:
-                    return err_resp
-            err, res = receiver.update_tx(tx_rest_id, req_json)
-        except Exception as e:
-            logging.exception('fastapi_receiver.get_transaction')
-            err = 500, 'uncaught exception'
+                req_json = None
+        else:
+            err_resp, req_json = await maybe_req_json(request)
+            if err_resp:
+                return err_resp
+        err, res = receiver.update_tx(tx_rest_id, req_json)
         if err is not None:
             code, msg = err
             return FastApiResponse(status_code=code, content=msg)

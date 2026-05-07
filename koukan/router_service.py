@@ -132,9 +132,16 @@ class Service:
                 assert isinstance(e, int)
                 self._rest_id_entropy = e
 
-        logging_yaml = self.root_yaml.get('logging', None)
-        if logging_yaml:
-            logging.config.dictConfig(logging_yaml)
+        logging_yaml = self.root_yaml.get('logging', {
+            'version': 1,
+            'loggers': {}})
+
+        for u in ['uvicorn', 'uvicorn.access', 'uvicorn.error', 'hpack']:
+            if u not in logging_yaml['loggers']:
+                logging_yaml['loggers'][u] = { 'level': 'INFO' }
+
+        logging.debug(logging_yaml)
+        logging.config.dictConfig(logging_yaml)
 
         global_yaml = self.root_yaml.get('global', {})
 
