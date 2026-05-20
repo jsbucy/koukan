@@ -44,7 +44,8 @@ class SmtpEndpoint(Filter):
 
     def __init__(self,
                  smtplib : ModuleType,
-                 ehlo_hostname, timeout : Optional[int] = None,
+                 ehlo_hostname : str,
+                 timeout : Optional[int] = None,
                  protocol : str = 'smtp',
                  enable_bdat = False,
                  chunk_size = 2**16):
@@ -106,7 +107,9 @@ class SmtpEndpoint(Filter):
             greeting = Response.from_smtp(
                 self.smtp.connect(tx.remote_host.host, tx.remote_host.port))
             logging.info('%s %s', tx.rest_id, greeting)
-        except (self.smtplib.SMTPException, ConnectionError) as e:
+        except (self.smtplib.SMTPException,
+                ConnectionError,
+                OSError) as e:
             logging.info('%s connect %s %s', tx.rest_id, e, tx.remote_host)
             return Response(400, 'connect error %s' % e)
 
@@ -132,6 +135,12 @@ class SmtpEndpoint(Filter):
 
         # this returns the smtp response to the starttls command
         # and throws on tls negotiation failure?
+
+        # TODO if starttls(context=None), calls
+        # ssl._create_stdlib_context() which creates a sslcontext that
+        # doesn't verify the upstream cert. Probably should use
+        # ssl.create_default_context()?
+        # https://docs.python.org/3/library/ssl.html#verifying-certificates
         starttls_resp = Response.from_smtp(self.smtp.starttls())
         if starttls_resp.err():
             self._shutdown()

@@ -745,6 +745,12 @@ py_library(name='smtp_endpoint',
                  ':response',
                  '//koukan_cpython_smtplib:smtplib'])
 
+py_test(name='smtp_endpoint_test',
+        srcs=['smtp_endpoint_test.py'],
+        deps=[':fake_smtpd',
+              ':filter',
+              ':smtp_endpoint'])
+
 py_library(name='gateway_lib',
            srcs=['gateway.py'],
            deps=[':fastapi_service',

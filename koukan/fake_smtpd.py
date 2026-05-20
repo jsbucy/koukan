@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP
@@ -110,8 +110,12 @@ class InMemoryHandler:
             logging.debug('envelope.content %d bytes' % len(envelope.content))
         return '250 Message accepted for delivery'
 
+HandlerFactory = Callable[[], InMemoryHandler]
+
 class FakeSmtpdController(Controller):
-    def __init__(self, host, port, handler_factory, protocol : str):
+    def __init__(self, host : str, port : int,
+                 handler_factory : HandlerFactory,
+                 protocol : str):
         self.handler_factory = handler_factory
         self.protocol = protocol
         super(Controller, self).__init__(
@@ -128,7 +132,7 @@ class FakeSmtpdController(Controller):
 class FakeSmtpd:
     protocol : str
     handlers : List[InMemoryHandler]
-    def __init__(self, host : str, port : str,
+    def __init__(self, host : str, port,
                  protocol : str = 'smtp'):
         assert protocol in ['smtp', 'lmtp']
         self.protocol = protocol
