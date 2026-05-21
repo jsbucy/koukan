@@ -49,6 +49,7 @@ class End2EndTest(unittest.TestCase):
     router_path = '/senders/router/transactions'
     # router -> router (egress -> ingress)
     short_circuit_path = '/senders/ingress/transactions'
+    dead_socket = None
 
     def _find_free_port(self):
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -169,10 +170,10 @@ class End2EndTest(unittest.TestCase):
                 self._update_router(filter)
                 if filter['filter'] == 'dns_resolution':
                     filter['static_hosts'] = [
+                        {'host': '127.0.0.1',
+                         'port': self.dead_socket.server_address[1]},
                         {'host': '127.0.0.1', 'port': self.fake_smtpd_port}]
                 elif filter['filter'] == 'rest_output':
-                    if filter.get('static_endpoint', None) == 'http://localhost:8002/senders/router/transactions':
-                        filter['static_endpoint'] = urljoin(self.receiver_base_url, self.router_path)
                     if 'verify' in filter:
                         del filter['verify']
 
@@ -203,9 +204,14 @@ class End2EndTest(unittest.TestCase):
         self.executor.submit(self.http_server.run)
 
     def setUp(self):
+        self.dead_socket = socketserver.TCPServer(
+            ("localhost", 0), lambda x,y,z: None, bind_and_activate=False)
+        self.dead_socket.server_bind()
+        logging.debug('dead socket NOT listening at %d',
+                      self.dead_socket.server_address[1])
+
         self.executor = Executor(
             inflight_limit = 10, watchdog_timeout=10, debug_futures=True)
-
 
     def _configure_and_run(self):
         self._configure()
@@ -215,6 +221,10 @@ class End2EndTest(unittest.TestCase):
 
     def tearDown(self):
         logging.debug('End2EndTest.tearDown')
+        if self.dead_socket:
+            self.dead_socket.server_close()
+            self.dead_socket = None
+
         self.assertTrue(self.router.shutdown())
         self.assertTrue(self.gateway.shutdown())
         self.fake_smtpd.stop()

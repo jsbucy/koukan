@@ -73,7 +73,11 @@ class BlobUri:
                        self.parsed_uri)
 
     def __repr__(self):
-        out = 'tx_id=' + self.tx_id + ' tx_body=' + str(self.tx_body)
+        out = ''
+        if self.tx_id is not None:
+            out += 'tx_id=' + self.tx_id
+        if self.tx_body is not None:
+            out += ' tx_body=' + str(self.tx_body)
         if self.blob:
             out += ' blob=' + self.blob
         if self.parsed_uri:

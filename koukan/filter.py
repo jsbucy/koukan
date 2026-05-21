@@ -923,9 +923,9 @@ class TransactionMetadata:
         assert isinstance(new_v, list)
         if json_field.emit_rest_placeholder(which_json):
             if any([x != None for x in new_v]):
-                assert False, 'non-None placeholder'
+                assert False, 'non-None placeholder ' + f
             if len(new_v) < len(old_v):
-                assert False, 'list shrink placeholder'
+                assert False, 'list shrink placeholder ' + f
             return
 
         old_len = len(old_v)

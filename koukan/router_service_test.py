@@ -1272,62 +1272,82 @@ class RouterServiceTest(unittest.TestCase):
     def test_multi_node(self):
         service2_url, service2 = self._setup_router()
 
-        # start a tx on self.service
-        rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url,
-            timeout_start=5, timeout_data=5)
+        logging.debug(self.router_url)
+        logging.debug(service2_url)
+
+
+        # 1: start a tx on self.service
+        # 2: this hangs on upstream
+        # 3: while the tx is inflight on service, send several
+        # different tx reqs to service2, these should all be
+        # redirected
+        # 4: upstream() returns, wait for self.service shutdown, tx
+        # now unleased
+        # 5: send another GET to service2, this time should be
+        # successfully handled since tx is now unleased
+        # 6: send blob PUT to service2. tx now input_done and can be recovered
+        # 7: poll tx w/GET on service2 until successfully delivered
+
         body = b'hello, world!'
-        tx = TransactionMetadata()
-        rest_endpoint.wire_downstream(tx)
-        delta = TransactionMetadata(mail_from=Mailbox('alice@example.com'),
-                                    rcpt_to=[Mailbox('bob@example.com')])
 
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
 
-        # NOTE OutputHandler currently sets final_attempt_reason on
-        # downstream_timeout so this only fails over if the OH/router
-        # "unexpectedly" failed.
-        def exp_rcpt(tx, tx_delta):
+        def upstream(tx, tx_delta):
             time.sleep(1)
-            raise Exception()  # simulate router crash
-        upstream_endpoint.add_expectation(exp_rcpt)
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response = Response()
+            if tx_delta.rcpt_to:
+                tx.rcpt_response = [Response()]
+            return prev.delta(tx)
 
-        tx.merge_from(delta)
-        rest_endpoint.on_update(delta, timeout=1)
-        tx_url = rest_endpoint.transaction_url
-        logging.debug(rest_endpoint.transaction_url)
-        parsed = urlparse(rest_endpoint.transaction_url)
+        upstream_endpoint.add_expectation(upstream)
+
+        client = Client()
+        resp = client.post(self.router_url, json={
+            'mail_from': {'m': 'alice@example.com'},
+            'rcpt_to': [{'m': 'bob@example.com'}]
+        })
+        self.assertEqual(201, resp.status_code)
+        tx_url = resp.headers['location']
+        logging.debug(resp.json())
+
+        parsed = urlparse(tx_url)
 
         tx_url2 = urljoin(service2_url, parsed.path)
+        logging.debug(tx_url2)
 
         # GET the tx from service2, since the tx is leased in
         # self.service, it should be redirected
 
-        client = Client()
-        resp = client.get(tx_url2)
-        logging.debug('%s %s', resp.status_code, resp.headers)
-        self.assertEqual(308, resp.status_code)
-        self.assertEqual(tx_url, resp.headers['location'])
-
-        resp = client.patch(tx_url2,
-                            headers={'content-type': 'application/json',
-                                     'if-match': '123'},
-                            json={})
+        service2_client = Client()
+        resp = service2_client.get(tx_url2)
         logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
         self.assertEqual(308, resp.status_code)
         self.assertEqual(tx_url, resp.headers['location'])
 
-        resp = client.put(tx_url2 + '/body', content=body)
+        # mismatched etag is redirected
+        resp = service2_client.patch(
+            tx_url2,
+            headers={'content-type': 'application/json',
+                     'if-match': '123'},
+            json={})
+        logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
+        self.assertEqual(308, resp.status_code)
+        self.assertEqual(tx_url, resp.headers['location'])
+
+        # blob PUT is redirected
+        resp = service2_client.put(tx_url2 + '/body', content=body)
         logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
         self.assertEqual(308, resp.status_code)
         self.assertEqual(tx_url + '/body', resp.headers['location'])
 
-        # OH terminated by uncaught exception from exp_rcpt()
-        # -> tx unleased
+        # upstream() returned temp error -> tx unleased
         self.service.shutdown()
 
-        resp = client.get(tx_url2)
+        # tx unleased : now will be serviced by service2
+        resp = service2_client.get(tx_url2)
         logging.debug('%s %s', resp.status_code, resp.json())
         self.assertEqual(200, resp.status_code)
 
@@ -1349,7 +1369,7 @@ class RouterServiceTest(unittest.TestCase):
         for i in range(0,3):
             upstream_endpoint2.add_expectation(exp_body)
 
-        resp = client.put(tx_url2 + '/body', content=body)
+        resp = service2_client.put(tx_url2 + '/body', content=body)
         logging.debug('%s %s %s', resp.status_code, resp.headers, resp.content)
         self.assertEqual(200, resp.status_code)
 
@@ -1357,7 +1377,7 @@ class RouterServiceTest(unittest.TestCase):
 
         deadline = Deadline(5)
         while deadline.remaining():
-            resp = client.get(
+            resp = service2_client.get(
                 tx_url2,
                 headers={'request-timeout': str(int(deadline.remaining()))},
                 timeout = deadline.remaining())

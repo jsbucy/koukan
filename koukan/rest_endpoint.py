@@ -77,6 +77,8 @@ class RestEndpointClientProvider:
     def __del__(self):
         self.close()
 
+BlobUrlList = List[Tuple[Blob, str]]
+
 class RestEndpoint(Filter):
     transaction_url : Optional[str] = None
     base_url : Optional[str] = None
@@ -118,7 +120,8 @@ class RestEndpoint(Filter):
         self.client = client_provider.get()
         self.blob_readers = {}
 
-    def _merge_upstream_tx(self, rest_resp : HttpResponse
+    def _merge_upstream_tx(self, rest_resp : HttpResponse,
+                           update_downstream = True
                            ) -> Optional[TransactionMetadata]:
         assert self.rest_upstream_tx is not None
         assert self.downstream_tx is not None
@@ -146,21 +149,112 @@ class RestEndpoint(Filter):
         assert self.rest_upstream_tx.merge_from(upstream_delta) is not None
         self.upstream_body = self.rest_upstream_tx.body
 
-        delta = upstream_delta.copy()
-        delta.body = None
-        if self.downstream_tx.merge_from(delta) is None:
-            logging.debug('bad')
-            return None
+        if update_downstream:
+            delta = upstream_delta.copy()
+            delta.body = None
+            if self.downstream_tx.merge_from(delta) is None:
+                logging.debug('bad')
+                return None
         return upstream_delta
 
-    def _create(self,
-                resolution : Optional[Resolution],
-                tx : TransactionMetadata,
-                deadline : Deadline) -> Optional[TransactionMetadata]:
+    # Sends a POST to remote_host to start the upstream
+    # transaction. Polls _get() to wait until tx.mail_response is
+    # populated which is how SmtpEndpoint reports
+    # connection/negotiation failures. If !last and the upstream
+    # mail_response is not a temp err, returns False and does not
+    # mutate downstream_tx. Otherwise merges the upstream delta into
+    # downstream_tx and returns True.
+    def _try_one_host(self, remote_host : Optional[HostPort],
+                      last : bool,
+                      deadline : Deadline
+                      ) -> Optional[str]:  # err
+        assert self.downstream_tx is not None
+        tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(
+            WhichJson.REST_CREATE)
+        if (not self.send_filter_output()) and tx.filter_output:
+            tx.filter_output = None
+        if self.downstream_tx.rest_upstream_sender:
+            sender = self.downstream_tx.rest_upstream_sender
+            self.rest_upstream_tx.sender = Sender(sender.name, sender.tag)
+            if sender.yaml:
+                if rh := sender.yaml.get('remote_host', None):
+                    # xxx placeholder for (mainly? exclusively?) short-circuit
+                    tx.remote_host = HostPort(rh, 8000)
+                if sm := sender.yaml.get('smtp_meta', None):
+                    tx.smtp_meta = sm
+        self.rest_upstream_tx.body = None
+
         assert self.base_url is not None
         assert self.downstream_tx is not None
 
-        logging.debug('RestEndpoint._create %s %s', resolution, tx)
+        # TODO return last remote_host in tx "upstream_remote_host" etc
+        if remote_host is not None:
+            tx.remote_host = remote_host
+            self.remote_host = remote_host
+
+        prev = self.rest_upstream_tx.copy()
+
+        tx_json = tx.to_json(WhichJson.REST_CREATE)
+
+        logging.debug('RestEndpoint._try_one_host remote_host %s %s %s',
+                      self.base_url, remote_host, tx_json)
+
+        req_headers = {'content-type': 'application/json'}
+        deadline_left = deadline.deadline_left()
+        self._set_request_timeout(req_headers, deadline_left)
+        try:
+            rest_resp = self.client.post(
+                self.base_url,
+                json=tx_json,
+                headers=req_headers,
+                timeout=deadline_left)
+        except RequestError as e:
+            logging.debug('RestEndpoint._try_one_host http error %s', e)
+            return 'http exception'
+        logging.info('RestEndpoint._try_one_host req_headers %s resp %s %s %s',
+                     req_headers, rest_resp, rest_resp.headers, rest_resp.text)
+        if rest_resp.status_code != 201:
+            return 'http error '
+        self.transaction_url = rest_resp.headers['location']
+        if 'etag' not in rest_resp.headers:
+            return 'bad response no etag'
+        self.etag = rest_resp.headers['etag']
+        resp_json = rest_resp.json()
+        logging.debug(resp_json)
+        if resp_json is None:
+            return 'bad resp json'
+        upstream_delta = self._merge_upstream_tx(
+            rest_resp, update_downstream=False)
+        if upstream_delta is None:
+            return 'bad upstream delta'
+        logging.debug(self.rest_upstream_tx)
+        if self.rest_upstream_tx.req_inflight():
+            if self._get(deadline, update_downstream=False) is None:
+                return 'GET err'
+        upstream_delta = prev.delta(self.rest_upstream_tx)
+        if self.rest_upstream_tx.mail_response is None:
+            return 'GET mail_response timeout'
+        if not last and self.rest_upstream_tx.mail_response.temp():
+            return 'mail_response err'
+        upstream_delta.body = None
+        self.downstream_tx.merge_from(upstream_delta)
+        return None
+
+    def _start_upstream_tx(
+            self,
+            resolution : Optional[Resolution],
+            deadline : Deadline) -> bool:
+        assert self.downstream_tx is not None
+        if self.base_url is None:
+            self.base_url = self.downstream_tx.rest_endpoint
+            # this condition is probably a misconfiguration
+            if self.base_url is None:
+                self.downstream_tx.fill_inflight_responses(
+                    Response(550, 'RestEndpoint no endpoint!'))
+                return False
+
+        assert self.downstream_tx is not None
+        logging.debug('RestEndpoint._start_upstream_tx %s', resolution)
 
         hosts : Sequence[Optional[HostPort]] = [None]
         if resolution is not None and resolution.hosts is not None:
@@ -170,68 +264,77 @@ class RestEndpoint(Filter):
         # remote hosts?  Iterate endpoint on http err, remote host on
         # tx err?
         rest_resp = None
-        for remote_host in hosts:
-            # TODO return last remote_host in tx "upstream_remote_host" etc
-            if remote_host is not None:
-                tx.remote_host = remote_host
-                self.remote_host = remote_host
+        err : Optional[str] = None
+        for i, remote_host in enumerate(hosts):
+            last = i == len(hosts) - 1
+            if (err := self._try_one_host(remote_host, last, deadline)) is None:
+                return True
+        assert err is not None
+        self.downstream_tx.fill_inflight_responses(
+            Response(450, 'RestEndpoint._start_upstream_tx ' + err))
+        return False
 
-            tx_json = tx.to_json(WhichJson.REST_CREATE)
-
-            logging.debug('RestEndpoint._create remote_host %s %s %s',
-                          self.base_url, remote_host, tx_json)
-
-            req_headers = {'content-type': 'application/json'}
-            deadline_left = deadline.deadline_left()
-            self._set_request_timeout(req_headers, deadline_left)
-            try:
-                rest_resp = self.client.post(
-                    self.base_url,
-                    json=tx_json,
-                    headers=req_headers,
-                    timeout=deadline_left)
-            except RequestError as e:
-                logging.debug('RestEndpoint._create http error %s', e)
-                continue
-            logging.info('RestEndpoint._create req_headers %s resp %s %s %s',
-                         req_headers, rest_resp, rest_resp.headers, rest_resp.text)
-            if rest_resp.status_code != 201:
-                continue
-            self.transaction_url = rest_resp.headers['location']
-            if 'etag' not in rest_resp.headers:
-                return None
-            self.etag = rest_resp.headers['etag']
-            resp_json = rest_resp.json()
-            logging.debug(resp_json)
-            if resp_json is None:
-                return None
-            self.rest_upstream_tx = tx.copy()
-            return self._merge_upstream_tx(rest_resp)
-
-        return None
-
-    def _update(self, downstream_delta : TransactionMetadata,
-                deadline : Deadline) -> Optional[TransactionMetadata]:
+    def _update_tx(self, downstream_delta : TransactionMetadata,
+                   deadline : Deadline) -> Optional[str]:  # err
         assert self.downstream_tx is not None
         assert self.rest_upstream_tx is not None
 
         tx_json = downstream_delta.to_json(WhichJson.REST_UPDATE)
 
-        rest_resp = self._post_tx(
+        rest_resp = self._send_tx_request(
             self.transaction_url, tx_json, self.client.patch, deadline)
         if rest_resp is None:
-            return None
+            return 'timeout'
         if rest_resp.status_code != 200:
-            return None
+            return 'http err ' + str(rest_resp.status_code)
         if 'etag' not in rest_resp.headers:
-            return None
+            return 'bad resp no etag'
         self.etag = rest_resp.headers['etag']
-        return self._merge_upstream_tx(rest_resp)
+        if self._merge_upstream_tx(rest_resp) is None:
+            return 'bad resp json'
 
-    def _post_tx(self, url, payload_json : dict,
+        assert self.rest_upstream_tx is not None
+        err : Optional[str] = None
+        if self.rest_upstream_tx.req_inflight():
+            if self._get(deadline) is None:
+                return 'bad resp GET after POST/PUT'
+            elif self.rest_upstream_tx.req_inflight():
+                return 'upstream timeout'
+        return None
+
+    def _maybe_update_tx(self, tx_delta : TransactionMetadata,
+                         deadline : Deadline) -> bool:
+        # as long as the delta isn't just the body, send a patch even
+        # if it's empty as a heartbeat
+        # TODO maybe this should have nospin logic i.e. don't send
+        # a heartbeat more often than every n secs?
+
+        assert self.rest_upstream_tx is not None
+        downstream_delta = tx_delta.copy()
+        downstream_delta.body = None
+        if (not self.send_filter_output()) and downstream_delta.filter_output:
+            downstream_delta.filter_output = None
+
+        if not ((tx_delta.empty(WhichJson.REST_UPDATE) or
+                 not downstream_delta.empty(WhichJson.REST_UPDATE))):
+            return True  # no-op
+
+        self.rest_upstream_tx.merge_from(downstream_delta)
+
+
+        if (err := self._update_tx(downstream_delta, deadline)) is None:
+            return True
+        logging.debug(err)
+        assert self.downstream_tx is not None
+        self.downstream_tx.fill_inflight_responses(
+            Response(450, 'RestEndpoint._maybe_update ' + err))
+        return False
+
+    def _send_tx_request(self, url, payload_json : dict,
                  http_method,
                  deadline : Deadline) -> Optional[HttpResponse]:
-        logging.debug('RestEndpoint._post_tx %s %s', http_method.__name__, url)
+        logging.debug('RestEndpoint._send_tx_request %s %s',
+                      http_method.__name__, url)
         req_headers : Dict[str, str] = {}
         deadline_left = deadline.deadline_left()
         self._set_request_timeout(req_headers, deadline_left)
@@ -287,7 +390,7 @@ class RestEndpoint(Filter):
         assert isinstance(self.upstream_body, MessageBuilderSpec), self.upstream_body
 
         assert isinstance(downstream_body, MessageBuilderSpec)
-        rest_resp = self._post_tx(
+        rest_resp = self._send_tx_request(
             self.upstream_body.uri,
             downstream_body.json, self.client.post, deadline)
         if rest_resp is None or rest_resp.status_code != 200:
@@ -336,79 +439,15 @@ class RestEndpoint(Filter):
                       'timeout=%s downstream tx %s',
                       self.transaction_url, timeout, self.downstream_tx)
 
-        tx_update = False
         created = False
-        upstream_delta = None
 
         if not self.transaction_url:
-            if self.base_url is None:
-                self.base_url = self.downstream_tx.rest_endpoint
-                # this condition is probably a misconfiguration
-                if self.base_url is None:
-                    self.downstream_tx.fill_inflight_responses(
-                        Response(550, 'RestEndpoint no endpoint!'))
-                    return FilterResult()
-            upstream_tx = self.rest_upstream_tx = self.downstream_tx.copy_valid(
-                WhichJson.REST_CREATE)
-            if (not self.send_filter_output()) and upstream_tx.filter_output:
-                upstream_tx.filter_output = None
-            if self.downstream_tx.rest_upstream_sender:
-                sender = self.downstream_tx.rest_upstream_sender
-                self.rest_upstream_tx.sender = Sender(sender.name, sender.tag)
-                if sender.yaml:
-                    if rh := sender.yaml.get('remote_host', None):
-                        # xxx port is probably unused?
-                        upstream_tx.remote_host = HostPort(rh, 8000)
-                    if sm := sender.yaml.get('smtp_meta', None):
-                        upstream_tx.smtp_meta = sm
-            # cf _update_message_builder(), this is probably moot
-            # because downstream_body is None on the first update
-
-            # xxx router_service_test test_message_builder sends
-            # MessageBuilderSpec here
-            self.rest_upstream_tx.body = None
-
-            upstream_delta = self._create(self.downstream_tx.resolution,
-                                          self.rest_upstream_tx, deadline)
-            tx_update = True
+            if not self._start_upstream_tx(
+                self.downstream_tx.resolution, deadline):
+                return FilterResult()
             created = True
-        else:
-            # as long as the delta isn't just the body, send a patch even
-            # if it's empty as a heartbeat
-            # TODO maybe this should have nospin logic i.e. don't send
-            # a heartbeat more often than every n secs?
-
-            assert self.rest_upstream_tx is not None
-            delta_no_body = tx_delta.copy()
-            delta_no_body.body = None
-            if (not self.send_filter_output()) and delta_no_body.filter_output:
-                delta_no_body.filter_output = None
-
-            self.rest_upstream_tx.merge_from(delta_no_body)
-
-            if (tx_delta.empty(WhichJson.REST_UPDATE) or
-                not delta_no_body.empty(WhichJson.REST_UPDATE)):
-               upstream_delta = self._update(delta_no_body, deadline)
-               tx_update = True
-
-        if tx_update:
-            if upstream_delta is None:
-                self.downstream_tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint upstream http err'))
-                return FilterResult()
-            err = None
-            if self.rest_upstream_tx.req_inflight():
-                upstream_delta = self._get(deadline)
-                if upstream_delta is None:
-                    err = 'bad resp GET after POST/PUT'
-                    logging.debug(err)
-                if self.rest_upstream_tx.req_inflight():
-                    err = 'upstream timeout'
-            if err is not None:
-                logging.debug(err)
-                self.downstream_tx.fill_inflight_responses(
-                    Response(450, 'RestEndpoint ' + err))
-                return FilterResult()
+        elif not self._maybe_update_tx(tx_delta, deadline):
+            return FilterResult()
 
         assert self.transaction_url is not None
 
@@ -419,6 +458,7 @@ class RestEndpoint(Filter):
                 created, tx_delta.body, deadline)) is not None:
             return res
 
+        assert self.rest_upstream_tx is not None
         if not self.rest_upstream_tx.rcpt_ok():
             # FilterChain populates the "failed precondition" data response.
             return FilterResult()
@@ -457,8 +497,8 @@ class RestEndpoint(Filter):
             Response(450, 'RestEndpoint upstream timeout'))
         return FilterResult()
 
-    def _update_blobs(self, tx_delta):
-        blobs : List[Tuple[Blob, str]] = []  # url
+    def _update_blobs(self, tx_delta) -> BlobUrlList:
+        blobs : BlobUrlList = []  # url
         def add_blob(blob, blob_spec):
             assert isinstance(blob, Blob)
             assert isinstance(blob_spec, BlobSpec), blob_spec
@@ -476,6 +516,8 @@ class RestEndpoint(Filter):
             add_blob(tx_delta.body, body_blob)
         elif isinstance(tx_delta.body, MessageBuilderSpec):
             assert isinstance(self.upstream_body, MessageBuilderSpec), self.upstream_body
+            assert tx_delta.body.blobs is not None
+            assert self.upstream_body.blobs is not None
             for blob_id, blob in tx_delta.body.blobs.items():
                 add_blob(blob, self.upstream_body.blobs[blob_id])
             if tx_delta.body.body_blob is not None:
@@ -607,8 +649,9 @@ class RestEndpoint(Filter):
             rest_resp = self.client.get(self.transaction_url,
                                         headers=req_headers,
                                         timeout=timeout)
-            logging.debug('RestEndpoint.get_json %s %s',
-                          rest_resp, [r.headers for r in rest_resp.history])
+            logging.debug('RestEndpoint.get_json %s %s %s',
+                          rest_resp, [r.headers for r in rest_resp.history],
+                          get_resp_json(rest_resp))
         except RequestError as e:
             logging.debug('RestEndpoint.get_json() %s error %s',
                           self.transaction_url, e)
@@ -642,10 +685,10 @@ class RestEndpoint(Filter):
 
     # does GET /tx at least once, polls as long as tx contains
     # inflight reqs, returns delta vs initial rest_upstream_tx
-    def _get(self, deadline : Deadline, oneshot=False
+    def _get(self, deadline : Deadline, oneshot=False,
+             update_downstream=True
              ) -> Optional[TransactionMetadata]:
         assert self.rest_upstream_tx is not None
-        assert self.downstream_tx is not None
 
         prev = self.rest_upstream_tx.copy()
         while deadline.remaining():
@@ -658,7 +701,9 @@ class RestEndpoint(Filter):
             if rest_resp is None:  # timeout or invalid json
                 return None
             elif isinstance(rest_resp, HttpResponse):
-                if (delta := self._merge_upstream_tx(rest_resp)) is None:
+                if ((delta := self._merge_upstream_tx(
+                        rest_resp, update_downstream=update_downstream))
+                    is None):
                     return None
             logging.debug(self.rest_upstream_tx)
             if oneshot:
