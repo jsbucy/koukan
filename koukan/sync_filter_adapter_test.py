@@ -28,11 +28,18 @@ from koukan.storage_schema import VersionConflictException
 from koukan.filter_chain import FilterChain
 
 class SyncFilterAdapterTest(unittest.TestCase):
+    expect_executor_exception = False
+
     def setUp(self):
         self.executor = Executor(inflight_limit=10, watchdog_timeout=5)
 
     def tearDown(self):
-        self.executor.shutdown(timeout=5)
+        try:
+            self.executor.shutdown(timeout=5)
+        except:
+            self.assertTrue(self.expect_executor_exception)
+        else:
+            self.assertFalse(self.expect_executor_exception)
 
     def test_smoke(self):
         upstream = FakeFilter()
@@ -122,6 +129,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         self.assertTrue(sync_filter_adapter.idle(time.time(), 0, 0))
 
     def test_upstream_filter_exceptions(self):
+        self.expect_executor_exception = True
         upstream = FakeFilter()
         sync_filter_adapter = SyncFilterAdapter(
             self.executor, FilterChain([upstream]), 'rest_id')

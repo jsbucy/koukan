@@ -21,20 +21,17 @@ class Executor:
     lock : Lock
     cv : Condition
     watchdog_timeout : Optional[int] = None
-    debug_futures : Optional[List[Future]] = None
     _shutdown : bool = False
+    worker_exception = False
 
     def __init__(self, inflight_limit,
-                 watchdog_timeout : Optional[int] = None,
-                 debug_futures=False):
+                 watchdog_timeout : Optional[int] = None):
         self.inflight = {}
         self.inflight_sem = BoundedSemaphore(inflight_limit)
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
         self.watchdog_timeout = watchdog_timeout
-        if debug_futures:
-            self.debug_futures = []
 
     def _check_watchdog_locked(self, timeout = None) -> bool:
         if timeout is None:
@@ -72,10 +69,6 @@ class Executor:
                        daemon=True)
             self.inflight[t] = int(start)
         t.start()
-
-        if fut and (self.debug_futures is not None):
-            with self.lock:
-                self.debug_futures.append(fut)
         return fut
 
     def _run(self, fut : Future, fn):
@@ -85,6 +78,8 @@ class Executor:
             return fut.set_result(fn())
         except Exception as e:
             logging.exception('Executor._run() exception')
+            with self.lock:
+                self.worker_exception = True
             fut.set_exception(e)
         finally:
             with self.lock:
@@ -118,7 +113,5 @@ class Executor:
                                         timeout=1):
                         break
 
-        if self.debug_futures:
-            for fut in self.debug_futures:
-                fut.result()  # propagate exceptions
+        assert not self.worker_exception
         return watchdog_result

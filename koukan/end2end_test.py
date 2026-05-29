@@ -211,7 +211,7 @@ class End2EndTest(unittest.TestCase):
                       self.dead_socket.server_address[1])
 
         self.executor = Executor(
-            inflight_limit = 10, watchdog_timeout=10, debug_futures=True)
+            inflight_limit = 10, watchdog_timeout=10)
 
     def _configure_and_run(self):
         self._configure()

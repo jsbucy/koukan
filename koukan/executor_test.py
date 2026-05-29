@@ -6,8 +6,11 @@ import logging
 import time
 
 from threading import Semaphore
+from concurrent.futures import Future
+from functools import partial
 
 from koukan.executor import Executor
+
 
 def raise_exception():
     raise Exception()
@@ -22,11 +25,11 @@ class ExecutorTest(unittest.TestCase):
         fut = ex.submit(lambda: 3)
         self.assertEqual(fut.result(), 3)
 
-    def testDebugFutures(self):
-        ex = Executor(1, 10, debug_futures=True)
+    def test_worker_exception(self):
+        ex = Executor(1, 10)
         self.assertIsNotNone(ex.submit(raise_exception))
         with self.assertRaises(Exception):
-            ex.shutdown()
+            ex.shutdown(1)
 
     def testNonBlocking(self):
         ex = Executor(2, 10)

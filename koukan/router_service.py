@@ -71,8 +71,7 @@ class Service:
         self.root_yaml = root_yaml
 
         if self.daemon_executor is None:
-            self.daemon_executor = Executor(10, watchdog_timeout=300,
-                                            debug_futures=True)
+            self.daemon_executor = Executor(10, watchdog_timeout=300)
 
     def wait_shutdown(self, timeout : float, executor : Executor) -> bool:
         deadline = Deadline(timeout)
@@ -149,9 +148,7 @@ class Service:
         def executor(yaml):
             return Executor(
                 yaml.get('max_inflight', 10),
-                yaml.get('watchdog_timeout', 30),
-                debug_futures=yaml.get(
-                    'testonly_debug_futures', False))
+                yaml.get('watchdog_timeout', 30))
         self.rest_executor = executor(executor_yaml.get('rest', {}))
         self.output_executor = executor(executor_yaml.get('output', {}))
 

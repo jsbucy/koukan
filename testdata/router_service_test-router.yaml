@@ -3,11 +3,9 @@ global:
   executor:
     output:
       max_inflight: 100
-      testonly_debug_futures: true
       watchdog_timeout: 3
     rest:
       max_inflight: 100
-      testonly_debug_futures: true
       watchdog_timeout: 3
   gc_interval: null
   mailer_daemon_mailbox: mailer-daemon@d
