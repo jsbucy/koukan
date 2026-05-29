@@ -56,8 +56,7 @@ class Server:
     async def _ping_alive(self):
         while self.alive():
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(self.shutdown_event.wait()), 1)
+                await asyncio.wait_for(self.shutdown_event.wait(), 1)
                 break
             except TimeoutError:
                 pass
