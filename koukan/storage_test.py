@@ -13,7 +13,11 @@ from datetime import datetime, timedelta
 from functools import partial
 
 from koukan.blob import Blob
-from koukan.storage import BlobCursor, Storage, TransactionCursor
+from koukan.storage import (
+    BlobCursor,
+    Storage,
+    TransactionCursor,
+    TransactionGroup )
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
@@ -164,6 +168,43 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug(self.s.debug_dump())
 
+    def test_transaction_group(self):
+        group = TransactionGroup(self.s)
+        group.create(
+            'tx_rest_id',
+            TransactionMetadata(mail_from=Mailbox('alice')))
+        tx_id = group.tx_cursors[0].db_id
+
+        upstream_cursor = self.s.get_transaction_cursor()
+        assert upstream_cursor.load(rest_id='tx_rest_id')
+        logging.debug(upstream_cursor.tx)
+        upstream_cursor.start_attempt()
+        upstream_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(250)))
+
+        group = TransactionGroup(self.s)
+        group.load(tx_id=tx_id)
+        group.tx_cursors[0].write_envelope(
+            TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
+
+        group = TransactionGroup(self.s)
+        group.load(tx_id=tx_id)
+        group.clone_tx(
+            TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]))
+
+        group.update_all(
+            TransactionMetadata(body = BlobSpec(create_tx_body=True)))
+        logging.debug('reload')
+
+        group = TransactionGroup(self.s)
+        group.load(tx_id=tx_id)
+
+        blob_writer = group.tx_cursors[0].get_blob_for_append(
+            BlobUri(tx_id='tx_rest_id', tx_body=True))
+        blob_writer.append_data(0, b'hello, world!', last=True, update_tx=False)
+        group.update_all(input_done=True)
+
+
     def test_mixed_notify_retry(self):
         cursor = self.s.get_transaction_cursor()
         cursor.create(
@@ -219,7 +260,7 @@ class StorageTestBase(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         # reusing body of non-existent tx should fail
-        with self.assertRaises(ValueError):
+        with self.assertRaises(AssertionError):
             tx_writer2.create('tx_rest_id2', TransactionMetadata(
                 body=BlobSpec(
                     reuse_uri=BlobUri(tx_id='nonexistent', tx_body=True))))
