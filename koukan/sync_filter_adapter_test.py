@@ -15,8 +15,6 @@ from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
-from httpx import Response as HttpxResponse
-
 from koukan.blob import BlobReader, InlineBlob
 from koukan.sync_filter_adapter import SyncFilterAdapter
 from koukan.fake_endpoints import FakeFilter, MockAsyncFilter

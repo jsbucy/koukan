@@ -32,8 +32,6 @@ from fastapi.responses import (
 HttpRequest = FastApiRequest
 HttpResponse = FastApiResponse
 
-from httpx import Client, Response as HttpxResponse
-
 from koukan.deadline import Deadline
 from koukan.response import Response as MailResponse
 from koukan.blob import Blob, InlineBlob, WritableBlob
@@ -78,8 +76,6 @@ class RestHandler(Handler):
     endpoint_yaml : dict
     session_url : Optional[str] = None
     service_url : Optional[str] = None
-    HTTP_CLIENT = Callable[[str], HttpxResponse]
-    client : HTTP_CLIENT
     sender : Optional[Sender] = None
 
     def __init__(self,
@@ -92,7 +88,6 @@ class RestHandler(Handler):
                  endpoint_yaml : Optional[dict] = None,
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
-                 client : Optional[HTTP_CLIENT] = None,
                  sender : Optional[Sender] = None):
         assert service_url is not None
         self.executor = executor
@@ -107,8 +102,6 @@ class RestHandler(Handler):
             self.endpoint_yaml = {}
         self.session_url = session_url
         self.service_url = service_url
-        if client is not None:
-            self.client = client
         self.sender = sender
 
     def blob_rest_id(self):
@@ -718,7 +711,6 @@ class RestHandlerFactory(HandlerFactory):
     service_url : Optional[str] = None
     rest_id_factory : Callable[[], str]
     chunk_size : Optional[int] = None
-    client : Client
 
     def __init__(self, executor,
                  endpoint_factory,
@@ -732,7 +724,6 @@ class RestHandlerFactory(HandlerFactory):
         self.session_url = session_url
         self.service_url = service_url
         self.chunk_size = chunk_size
-        self.client = Client(follow_redirects=True)
 
     def create_tx(self, path_sender_name, tag) -> RestHandler:
         res = self.endpoint_factory.create(Sender(path_sender_name, tag))
@@ -750,7 +741,6 @@ class RestHandlerFactory(HandlerFactory):
             endpoint_yaml = yaml,
             session_url = self.session_url,
             service_url = self.service_url,
-            client = self.client.get,
             sender = sender,
             **kwargs)
 
@@ -766,5 +756,4 @@ class RestHandlerFactory(HandlerFactory):
             rest_id_factory=self.rest_id_factory,
             session_url = self.session_url,
             service_url = self.service_url,
-            client = self.client.get,
             **kwargs)
