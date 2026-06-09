@@ -32,8 +32,6 @@ from fastapi.responses import (
 HttpRequest = FastApiRequest
 HttpResponse = FastApiResponse
 
-from httpx import Client, Response as HttpxResponse
-
 from koukan.deadline import Deadline
 from koukan.response import Response as MailResponse
 from koukan.blob import Blob, InlineBlob, WritableBlob
