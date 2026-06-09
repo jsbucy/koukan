@@ -32,7 +32,7 @@ sender:
   retry: output_chain
   tag:
   - name: smtp-msa
-    output_chain: submission_exploder
+    output_chain: submission
     upstream_tag: smtp-msa-upstream
     retry: null
   - name: smtp-msa-upstream

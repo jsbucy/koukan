@@ -831,7 +831,7 @@ class TransactionMetadata:
             # TODO could verify that old_v == new_v
             setattr(out, f, old_v)
             return
-        assert isinstance(old_v, list)
+        assert isinstance(old_v, list), '%s %s' % (f, old_v)
         if not(new_v):
             setattr(out, f, old_v)
             return
@@ -920,7 +920,7 @@ class TransactionMetadata:
             setattr(out, f, None)
             return
         assert isinstance(old_v, list)
-        assert isinstance(new_v, list)
+        assert isinstance(new_v, list), '%s %s' % (f, new_v)
         if json_field.emit_rest_placeholder(which_json):
             if any([x != None for x in new_v]):
                 assert False, 'non-None placeholder ' + f
@@ -1073,6 +1073,7 @@ class AsyncFilter(ABC):
         pass
 
 
+    # version, tx, leased?, other session
     CheckTxResult = Tuple[int, Optional[TransactionMetadata], bool, Optional[str]]
 
     @abstractmethod

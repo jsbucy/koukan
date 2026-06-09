@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import time
 import logging
 from threading import Lock, Condition
@@ -259,7 +259,9 @@ class Service:
             endpoint_yaml = self.get_endpoint_yaml)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
-            partial(self._handle_new_tx, writer, chain, endpoint_yaml),
+            partial(self._handle_new_tx,
+                    partial(writer.release_transaction_cursor, 0),
+                    chain, endpoint_yaml),
             0)
         if block_upstream and fut is None:
             # XXX leaves db tx leased?
@@ -285,12 +287,29 @@ class Service:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.rest_id_factory,
-            endpoint_yaml = self.get_endpoint_yaml)
+            endpoint_yaml = self.get_endpoint_yaml,
+            tx_handler = self._schedule_extra_rcpt_tx,
+            create_leased=True)
 
-    def _handle_new_tx(self, writer : StorageWriterFilter,
+    def _schedule_extra_rcpt_tx(
+            self, sender : Sender,
+            tx_cursor : Callable[[], Optional[TransactionCursor]]) -> bool:
+        if (endp := self.filter_chain_factory.build_filter_chain(
+                sender)) is None:
+            return None
+        chain, endpoint_yaml = endp
+
+        fut = self.output_executor.submit(
+            partial(self._handle_new_tx, tx_cursor, chain, endpoint_yaml),
+            0)
+        return fut is not None
+
+    def _handle_new_tx(self,
+                       writer : Callable[[], Optional[TransactionCursor]],
+                       #StorageWriterFilter,
                        chain : FilterChain,
                        endpoint_yaml : dict):
-        tx_cursor = writer.release_transaction_cursor()
+        tx_cursor = writer()
         if tx_cursor is None:
             logging.info('RouterService._handle_new_tx writer %s, '
                          'rest_id is None, downstream error?', writer)

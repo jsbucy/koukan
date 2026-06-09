@@ -15,8 +15,6 @@ from fastapi import (
     Request as FastApiRequest,
     Response as FastApiResponse )
 
-from httpx import Response as HttpxResponse
-
 from koukan.blob import InlineBlob
 from koukan.rest_handler import RestHandler
 from koukan.fake_endpoints import MockAsyncFilter

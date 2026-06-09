@@ -140,7 +140,7 @@ class TransactionCursor:
             if self.blobs:
                 self.tx.body.set_blobs(self.blobs)
 
-    def _update_version_cache(self, leased : Optional[bool]):
+    def _update_version_cache(self, leased : Optional[bool] = None):
         assert ((self.db_id is not None) and
                 (self.rest_id is not None) and
                 (self.version is not None))
@@ -166,7 +166,8 @@ class TransactionCursor:
     def create(self,
                rest_id : str,
                tx : TransactionMetadata,
-               create_leased : bool = False):
+               create_leased : bool = False,
+               parent_db_id : Optional[int] = None):
         parent = self.parent
         inflight_session_id = None
         with self.parent.begin_transaction() as db_tx:
@@ -183,6 +184,9 @@ class TransactionCursor:
                 creation_session_id = self.parent.session_id,
             ).returning(self.parent.tx_table.c.id,
                         self.parent.tx_table.c.creation)
+
+            if parent_db_id:
+                ins = ins.values(parent_id = parent_db_id)
 
             if create_leased:
                 inflight_session_id = self.parent.session_id
@@ -297,7 +301,7 @@ class TransactionCursor:
         self._update_version_cache(leased = False if finalize_attempt else None)
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata,
-                          group_tx_ids : List['TransactionCursor'] = []
+                          group_cursors : List['TransactionCursor'] = []
                           ) -> bool:  # blobs done
         assert self.rest_id is not None
         blob_specs : List[BlobSpec]
@@ -365,7 +369,7 @@ class TransactionCursor:
                    "tx_rest_id": tx_cursor.rest_id,
                    "blob_id": blob_cursor.db_id,
                    "rest_id": blob_uri.blob }
-                 for tx_cursor in [self] + group_tx_ids])
+                 for tx_cursor in [self] + group_cursors])
 
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
@@ -376,6 +380,10 @@ class TransactionCursor:
             res = db_tx.execute(ins)
 
         self.blobs = blobs
+        logging.debug(blobs)
+        for cursor in group_cursors:
+            cursor.blobs = [b.clone() for b in blobs]
+            logging.debug(cursor.blobs)
 
         if not blobs_done:
             return False
@@ -655,7 +663,7 @@ class TransactionCursor:
                 return None
 
         if self.db_id is not None:
-            assert row[0] == self.db_id
+            assert row[0] == self.db_id, '%d %d' % (row[0], self.db_id)
         if self.rest_id is not None:
             assert row[1] == self.rest_id
 
@@ -907,23 +915,16 @@ class TransactionGroup:
     parent : 'Storage'
     tx_cursors : List[TransactionCursor]
     parent_tx_id : Optional[int] = None
-    create_leased = False
 
-    def __init__(self, parent):
+    def __init__(self, parent, tx_cursor = None):
         self.parent = parent
         self.tx_cursors = []
-
-    def create(self, rest_id : str,
-               tx : TransactionMetadata,
-               create_leased : bool = False):
-        self.create_leased = create_leased
-        tx_cursor = self.parent.get_transaction_cursor()
-        tx_cursor.create(rest_id, tx, create_leased)
-        self.tx_cursors.append(tx_cursor)
+        if tx_cursor:
+            self.tx_cursors.append(tx_cursor)
 
     # TODO need reload vs load from scratch?
     def load(self, tx_rest_id : Optional[str] = None,
-             tx_id : Optional[int] = None):
+             tx_id : Optional[int] = None) -> bool:
         assert self.parent.tx_table is not None
         assert self.parent.attempt_table is not None
 
@@ -985,17 +986,28 @@ class TransactionGroup:
                 join(sel_tx_subq,
                      attempt_subq,
                      sel_tx_subq.c.id == attempt_subq.c.transaction_id,
-                     isouter=True))
+                     isouter=True)
+            ).order_by(sel_tx_subq.c.id)
 
             res = db_tx.execute(sel)
             logging.debug(res)
+            cursor_by_id = { c.db_id : c for c in self.tx_cursors }
+            logging.debug(cursor_by_id)
             for row in res:
                 if self.parent_tx_id is None:
                     self.parent_tx_id = row[0]
                 logging.debug('%s', row)
-                cursor = TransactionCursor(self.parent, tx_id, tx_rest_id)
+                if (cursor := cursor_by_id.get(row[0], None)) is None:
+                    cursor = TransactionCursor(self.parent, row[0], row[1])
+                    self.tx_cursors.append(cursor)
                 cursor._load_db(db_tx, join_row=row)
-                self.tx_cursors.append(cursor)
+            logging.debug(self.tx_cursors)
+
+            if not self.tx_cursors:
+                return False
+
+            self.tx_cursors[0]._load_blobs(db_tx)
+            return True
 
     # create #0
     # add rcpt to #0
@@ -1003,7 +1015,7 @@ class TransactionGroup:
     # blob stuff (all)
     # read (all)
 
-    def clone_tx(self, delta : TransactionMetadata):
+    def clone_tx(self, delta : TransactionMetadata, create_leased : bool):
         assert self.parent.tx_table is not None
 
         tcols = self.parent.tx_table.c
@@ -1017,22 +1029,26 @@ class TransactionGroup:
         # xxx create without rest_id?
         # TODO insert multiple (moot without smtp pipelining)
         cursor.create(secrets.token_urlsafe(8), tx,
-                      create_leased=self.create_leased)
+                      create_leased=create_leased,
+                      parent_db_id=self.tx_cursors[0].db_id)
         self.tx_cursors.append(cursor)
 
 
     def update_all(self, tx_delta : Optional[TransactionMetadata] = None,
-                   input_done : Optional[bool] = None):
+                   input_done : Optional[bool] = None,
+                   ping_tx : Optional[bool] = None,
+                   final_attempt_reason : Optional[str] = None):
         assert self.parent.tx_table is not None
-
+        assert not ping_tx, 'unimplemented'
         assert not tx_delta or not tx_delta.rcpt_to
 
         with self.parent.begin_transaction() as db_tx:
             tcols = self.parent.tx_table.c
 
-            new_version = []
+            params = []
             cursor_by_id = {}
             update_json = False
+            db_id_version = {}
             if tx_delta is not None:
                 tx_delta = tx_delta.copy()
                 assert len(self.tx_cursors) >= 1
@@ -1040,7 +1056,7 @@ class TransactionGroup:
                 if tx_delta.body:
                     self.tx_cursors[0]._maybe_write_blob(
                         db_tx, TransactionMetadata(body=tx_delta.body),
-                        group_tx_ids=self.tx_cursors[1:])
+                        group_cursors=self.tx_cursors[1:])
                     tx_delta.body = None
                     pass
 
@@ -1050,17 +1066,19 @@ class TransactionGroup:
             for c in self.tx_cursors:
                 cursor_by_id[c.db_id] = c
                 assert c.version is not None
+                new_version = c.version + 1
                 d = {'db_id': c.db_id,
-                     'version': c.version + 1}
+                     'version': new_version}
+                db_id_version[c.db_id] = new_version
                 if tx_delta:
                     update_json = True
                     assert c.tx is not None
                     updated = c.tx.copy()
                     assert updated.merge_from(tx_delta) is not None
                     d['json'] = updated.to_json(WhichJson.DB)
-                new_version.append(d)
+                params.append(d)
 
-            logging.debug(new_version)
+            logging.debug(params)
 
             # NOTE: it would be nice to do this version check as a
             # subquery in the WHERE of the UPDATE but it gets
@@ -1074,7 +1092,7 @@ class TransactionGroup:
                         tcols.parent_id == self.parent_tx_id)))
             for row in res:
                 db_id, version = row
-                assert cursor_by_id[db_id].version == version
+                assert cursor_by_id[db_id].version == version, '%d %d' % (cursor_by_id[db_id].version, version)
 
             upd = update(self.parent.tx_table).where(
                 tcols.id == bindparam('db_id')
@@ -1086,12 +1104,21 @@ class TransactionGroup:
                 upd = upd.values(json = bindparam('json'))
             if input_done:
                 upd = upd.values(input_done = True)
+                for c in self.tx_cursors:
+                    c.input_done = True
+            if final_attempt_reason:
+                #self.final_attempt_reason = final_attempt_reason
+                upd = upd.values(
+                    final_attempt_reason = final_attempt_reason)
 
-            res = db_tx.execute(upd, new_version)
+            res = db_tx.execute(upd, params)
             logging.debug(res)
             # for row in res:
             #     logging.debug(row)
-
+        for cursor in self.tx_cursors:
+            cursor.version = db_id_version[cursor.db_id]
+            # xxx leased=
+            cursor._update_version_cache()
 
 class BlobCursor(Blob, WritableBlob):
     db_id = None  # Blob.id
@@ -1326,7 +1353,6 @@ class BlobCursor(Blob, WritableBlob):
             return True, db_length, content_length, None
 
         cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
-
         cached = cursor.try_cache()
         if not cached:
             cursor._load_db(db_tx)

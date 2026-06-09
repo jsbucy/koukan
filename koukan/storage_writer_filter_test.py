@@ -65,16 +65,54 @@ class StorageWriterFilterTest(unittest.TestCase):
         t.join(timeout=timeout)
         self.assertFalse(t.is_alive())
 
-    def test_create(self):
+    def test_smoke(self):
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True)
         tx = TransactionMetadata(
+            sender=Sender('ingress'),
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
-        cursor = filter.release_transaction_cursor()
-        self.assertEqual(cursor.rest_id, 'tx_rest_id')
+        upstream_cursor = filter.release_transaction_cursor(0)
+        self.assertEqual(upstream_cursor.rest_id, 'tx_rest_id')
+
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id = 'tx_rest_id',
+            create_leased = True)
+        prev = filter.get()
+        tx = prev.copy()
+        tx.rcpt_to = [Mailbox('bob@example.com')]
+        filter.update(tx, prev.delta(tx))
+
+        upstream_sender = None
+        upstream_cursor2 = None
+        def upstream(sender, cursor):
+            nonlocal upstream_sender, upstream_cursor2
+            upstream_sender = sender
+            upstream_cursor2 = cursor
+            return True
+
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id = 'tx_rest_id',
+            create_leased = True,
+            tx_handler = upstream)
+        prev = filter.get()
+        logging.debug(prev.sender)
+        tx = prev.copy()
+        tx.rcpt_to.append(Mailbox('bob2@example.com'))
+        filter.update(tx, prev.delta(tx))
+
+        tx = filter.get()
+        self.assertEqual(
+            ['bob@example.com', 'bob2@example.com'],
+            [r.mailbox for r in tx.rcpt_to])
+        self.assertIsNotNone(upstream_sender)
+        self.assertIsNotNone(u2 := upstream_cursor2())
+        self.assertEqual(['bob2@example.com'],
+                         [r.mailbox for r in u2.tx.rcpt_to])
 
     def test_body_blob(self):
         # from creation, gets handed off to OH
@@ -101,7 +139,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         blob_writer.append_data(chunk1, d[chunk1:], len(d))
 
         tx = upstream_filter.get()
-        self.assertTrue(upstream_filter.tx_cursor.input_done)
+        self.assertTrue(upstream_filter.tx_group.tx_cursors[0].input_done)
 
     def test_cancel(self):
         filter = StorageWriterFilter(
@@ -142,6 +180,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertIsNone(orig_tx_cursor.tx.cancelled)
 
     # representative of Exploder which writes body_blob=BlobReader
+    # Exploder going away but what about add_route?
     def test_body_blob_reader(self):
         orig_tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -165,7 +204,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = TransactionMetadata(sender=Sender('exploder'))
         filter.update(tx, tx.copy())
 
-        upstream_cursor = filter.release_transaction_cursor()
+        upstream_cursor = filter.release_transaction_cursor(0)
         upstream_cursor.start_attempt()
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
@@ -230,7 +269,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         d2 = b'world!'
         appended, length, content_length = blob_writer.append_data(
-            blob_writer.length, d2, blob_writer.length + len(d2))
+            blob_writer.len(), d2, blob_writer.len() + len(d2))
         self.assertTrue(appended)
         self.assertEqual(length, content_length)
 

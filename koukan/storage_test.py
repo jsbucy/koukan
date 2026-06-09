@@ -169,11 +169,11 @@ class StorageTestBase(unittest.TestCase):
         logging.debug(self.s.debug_dump())
 
     def test_transaction_group(self):
-        group = TransactionGroup(self.s)
-        group.create(
+        tx0_cursor = self.s.get_transaction_cursor()
+        tx0_cursor.create(
             'tx_rest_id',
             TransactionMetadata(mail_from=Mailbox('alice')))
-        tx_id = group.tx_cursors[0].db_id
+        tx_id = tx0_cursor.db_id
 
         upstream_cursor = self.s.get_transaction_cursor()
         assert upstream_cursor.load(rest_id='tx_rest_id')
@@ -183,14 +183,15 @@ class StorageTestBase(unittest.TestCase):
             TransactionMetadata(mail_response=Response(250)))
 
         group = TransactionGroup(self.s)
-        group.load(tx_id=tx_id)
+        group.load(tx_rest_id='tx_rest_id')
         group.tx_cursors[0].write_envelope(
             TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
 
         group = TransactionGroup(self.s)
         group.load(tx_id=tx_id)
         group.clone_tx(
-            TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]))
+            TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]),
+            create_leased = False)
 
         group.update_all(
             TransactionMetadata(body = BlobSpec(create_tx_body=True)))
@@ -198,6 +199,7 @@ class StorageTestBase(unittest.TestCase):
 
         group = TransactionGroup(self.s)
         group.load(tx_id=tx_id)
+        self.assertEqual(2, len(group.tx_cursors))
 
         blob_writer = group.tx_cursors[0].get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))

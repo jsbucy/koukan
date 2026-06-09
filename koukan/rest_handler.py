@@ -32,8 +32,6 @@ from fastapi.responses import (
 HttpRequest = FastApiRequest
 HttpResponse = FastApiResponse
 
-from httpx import Client, Response as HttpxResponse
-
 from koukan.deadline import Deadline
 from koukan.response import Response as MailResponse
 from koukan.blob import Blob, InlineBlob, WritableBlob
@@ -78,8 +76,6 @@ class RestHandler(Handler):
     endpoint_yaml : dict
     session_url : Optional[str] = None
     service_url : Optional[str] = None
-    HTTP_CLIENT = Callable[[str], HttpxResponse]
-    client : HTTP_CLIENT
     sender : Optional[Sender] = None
 
     def __init__(self,
@@ -92,7 +88,6 @@ class RestHandler(Handler):
                  endpoint_yaml : Optional[dict] = None,
                  session_url : Optional[str] = None,
                  service_url : Optional[str] = None,
-                 client : Optional[HTTP_CLIENT] = None,
                  sender : Optional[Sender] = None):
         assert service_url is not None
         self.executor = executor
@@ -107,8 +102,6 @@ class RestHandler(Handler):
             self.endpoint_yaml = {}
         self.session_url = session_url
         self.service_url = service_url
-        if client is not None:
-            self.client = client
         self.sender = sender
 
     def blob_rest_id(self):
@@ -116,7 +109,7 @@ class RestHandler(Handler):
 
     def response(self,
                  code : int = 200,
-                 msg : Optional[str] = None,
+                 msg : str = '',
                  resp_json : Optional[dict] = None,
                  headers : Optional[List[Tuple[str,str]]] = None,
                  etag : Optional[str] = None
@@ -126,13 +119,19 @@ class RestHandler(Handler):
             headers_dict.update({k:str(v) for k,v in headers})
         if etag is not None:
             headers_dict['etag'] = etag
+        resp : Optional[HttpResponse] = None
         if resp_json is not None:
-            return FastApiJsonResponse(
+            resp = FastApiJsonResponse(
                 status_code=code,
                 content=resp_json,
                 headers=headers_dict)
-        return PlainTextResponse(
-            status_code=code, content=msg, headers=headers_dict)
+        else:
+            logging.debug(msg)
+            resp = PlainTextResponse(
+                status_code=code, content=msg, headers=headers_dict)
+        logging.debug(headers_dict)
+        logging.debug(resp)
+        return resp
 
     def _handle_async(self, request, fn):
         try:
@@ -229,14 +228,16 @@ class RestHandler(Handler):
             return err
 
         upstream = self.async_filter.update(tx, tx.copy())
-        cached = self.async_filter.check_cache()
-        # the factory path up to router_service fails if the OH
-        # couldn't be scheduled so if we got here, it should be leased
-        assert cached is not None
-        version, cached_tx, local, remote = cached
+        cached_tx = self.async_filter.get()
         assert cached_tx is not None
-        if upstream is None or tx.rest_id is None:
-            return self.response(code=400, msg='bad request')
+        # cached = self.async_filter.check_cache()
+        # # the factory path up to router_service fails if the OH
+        # # couldn't be scheduled so if we got here, it should be leased
+        # assert cached is not None
+        # version, cached_tx, local, remote = cached
+        # assert cached_tx is not None
+        # if upstream is None or tx.rest_id is None:
+        #     return self.response(code=400, msg='bad request')
         version = self.async_filter.version
         assert version is not None
         self._tx_rest_id = tx.rest_id
@@ -393,7 +394,7 @@ class RestHandler(Handler):
         fresh_etag = etag is not None and self._check_etag(etag, version)
         if timeout is None or not is_local or not fresh_etag:
             if fresh_etag:
-                return self.response(code=304, msg='unchanged',
+                return self.response(code=304, msg='',
                                      headers=[('etag', self._etag(version))])
             # do a full read every time with no etag
             if tx is None or etag is None:
@@ -413,7 +414,7 @@ class RestHandler(Handler):
             version, deadline.deadline_left())
 
         if not wait_result:
-            return self.response(code=304, msg='unchanged',
+            return self.response(code=304, msg='',
                                  headers=[('etag', etag)])
 
         if tx is None:
@@ -485,6 +486,7 @@ class RestHandler(Handler):
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
         except VersionConflictException:
+            logging.exception('VersionConflictException')
             return self.response(code=412, msg='update conflict')
         if upstream_delta is None:
             return self.response(
@@ -718,7 +720,6 @@ class RestHandlerFactory(HandlerFactory):
     service_url : Optional[str] = None
     rest_id_factory : Callable[[], str]
     chunk_size : Optional[int] = None
-    client : Client
 
     def __init__(self, executor,
                  endpoint_factory,
@@ -732,7 +733,6 @@ class RestHandlerFactory(HandlerFactory):
         self.session_url = session_url
         self.service_url = service_url
         self.chunk_size = chunk_size
-        self.client = Client(follow_redirects=True)
 
     def create_tx(self, path_sender_name, tag) -> RestHandler:
         res = self.endpoint_factory.create(Sender(path_sender_name, tag))
@@ -750,7 +750,6 @@ class RestHandlerFactory(HandlerFactory):
             endpoint_yaml = yaml,
             session_url = self.session_url,
             service_url = self.service_url,
-            client = self.client.get,
             sender = sender,
             **kwargs)
 
@@ -766,5 +765,4 @@ class RestHandlerFactory(HandlerFactory):
             rest_id_factory=self.rest_id_factory,
             session_url = self.session_url,
             service_url = self.service_url,
-            client = self.client.get,
             **kwargs)
