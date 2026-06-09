@@ -25,7 +25,9 @@ from koukan.filter_chain import FilterChain
 from koukan.filter import (
     AsyncFilter,
     TransactionMetadata )
-from koukan.storage_writer_filter import StorageWriterFilter
+from koukan.storage_writer_filter import (
+    StorageWriterFilter,
+    Timeouts as SWFTimeouts)
 from koukan.deadline import Deadline
 from koukan.sender import Sender
 
@@ -62,7 +64,7 @@ class Service:
     http_server : Optional[uvicorn_main.Server] = None
     _rest_id_entropy : int = 16
     root_yaml : Optional[dict] = None
-
+    swf_timeouts : SWFTimeouts
 
     def __init__(self, root_yaml=None):
         self.lock = Lock()
@@ -72,6 +74,8 @@ class Service:
 
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300)
+
+        self.swf_timeouts = SWFTimeouts()
 
     def wait_shutdown(self, timeout : float, executor : Executor) -> bool:
         deadline = Deadline(timeout)
@@ -256,7 +260,8 @@ class Service:
             rest_id_factory=self.rest_id_factory,
             create_leased=True,
             sender = sender,
-            endpoint_yaml = self.get_endpoint_yaml)
+            endpoint_yaml = self.get_endpoint_yaml,
+            timeouts = self.swf_timeouts)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
             partial(self._handle_new_tx,
@@ -289,16 +294,21 @@ class Service:
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx,
-            create_leased=True)
+            create_leased=True,
+            timeouts = self.swf_timeouts)
 
     def _schedule_extra_rcpt_tx(
             self, sender : Sender,
             tx_cursor : Callable[[], Optional[TransactionCursor]]) -> bool:
+        assert self.filter_chain_factory is not None
         if (endp := self.filter_chain_factory.build_filter_chain(
                 sender)) is None:
-            return None
+            logging.warning('failed to build_filter_chain for sender %s',
+                            sender)
+            return False
         chain, endpoint_yaml = endp
 
+        assert self.output_executor is not None
         fut = self.output_executor.submit(
             partial(self._handle_new_tx, tx_cursor, chain, endpoint_yaml),
             0)
@@ -322,7 +332,8 @@ class Service:
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=False)
+            create_leased=False,
+            timeouts = self.swf_timeouts)
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,

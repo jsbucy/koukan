@@ -6,6 +6,7 @@ import logging
 import secrets
 from functools import partial, reduce
 from threading import Lock, Condition
+import time
 
 from koukan.backoff import backoff
 from koukan.storage import (
@@ -30,6 +31,21 @@ from koukan.sender import Sender
 EndpointYamlProvider = Callable[[Sender], Optional[dict]]
 TxHandler = Callable[[Sender, Callable[[], Optional[TransactionCursor]]], bool]
 
+class Status:
+    # corresponds to downstream tx.rcpt_response: have we returned an
+    # s&f response for each rcpt?
+    rcpts : List[bool]
+    timeout : int  # time.monotonic_ns()
+    def __init__(self, timeout):
+        self.rcpts = []
+        self.timeout = timeout
+
+class Timeouts:
+    # TODO BEFORE MERGE gc/retirement
+    tx_status : Dict[int, Status]
+    def __init__(self):
+        self.tx_status = {}
+
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
     tx_cursor : Optional[TransactionCursor] = None
@@ -45,6 +61,7 @@ class StorageWriterFilter(AsyncFilter):
     endpoint_yaml : Optional[EndpointYamlProvider] = None
     sender : Optional[Sender] = None
     tx_handler : Optional[TxHandler]
+    timeouts : Optional[Timeouts] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -52,7 +69,8 @@ class StorageWriterFilter(AsyncFilter):
                  create_leased : bool = False,
                  sender : Optional[Sender] = None,
                  endpoint_yaml : Optional[EndpointYamlProvider] = None,
-                 tx_handler : Optional[TxHandler] = None):
+                 tx_handler : Optional[TxHandler] = None,
+                 timeouts : Optional[Timeouts] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -63,15 +81,13 @@ class StorageWriterFilter(AsyncFilter):
         self.endpoint_yaml = endpoint_yaml
         self.tx_handler = tx_handler
         self.upstream_cursor = []
+        self.timeouts = timeouts
 
     def incremental(self):
-        # self.endpoint_yaml['store_and_forward_mode'] is not None
-        return True
-
         assert self.endpoint_yaml is not None
         yaml = self.endpoint_yaml(self.sender)
         assert yaml is not None
-        return yaml['chain'][-1]['filter'] == 'exploder'
+        return 'sf_mode' in yaml
 
     # AsyncFilter
     def wait(self, version, timeout
@@ -178,7 +194,7 @@ class StorageWriterFilter(AsyncFilter):
             self.cv.notify_all()
 
     # xxx _maybe_load()?
-    def _load(self) -> None:
+    def _load(self) -> bool:
         tx = None
         if self.tx_group is None:
             self.tx_group = TransactionGroup(self.storage)
@@ -187,12 +203,13 @@ class StorageWriterFilter(AsyncFilter):
         #     logging.debug(tx)
         # else:
         if not self.tx_group.load(tx_rest_id=self.rest_id):
-            return None
+            return False
         # if not self.tx_group.tx_cursors:  # 404 e.g. after GC
         #     return
         if self.sender is None:
             assert self.tx_group.tx_cursors[0].tx is not None
             self.sender = self.tx_group.tx_cursors[0].tx.sender
+        return True
 
     @staticmethod
     def reduce_data_response(
@@ -229,52 +246,120 @@ class StorageWriterFilter(AsyncFilter):
         for c in self.tx_group.tx_cursors:
             logging.debug(c.tx)
         for cursor in self.tx_group.tx_cursors[1:]:
+            assert cursor.tx is not None
             tx.rcpt_to.extend(cursor.tx.rcpt_to)
             tx.rcpt_response.extend(cursor.tx.rcpt_response)
         logging.debug(tx)
 
-        # sf_mode = self.endpoint_yaml['store_and_forward_mode']
-        # assert sf_mode in ['upstream_unavailability', 'mixed_data_response']
-        # sf_unavail = sf_mode == 'upstream_unavailability'  ~submission
+        assert self.endpoint_yaml is not None
+        assert self.sender is not None
+        endpoint_yaml = self.endpoint_yaml(self.sender)
+        sf_mode = None
+        if endpoint_yaml is not None:
+            sf_mode = endpoint_yaml.get('sf_mode', None)
+            if sf_mode:
+                assert sf_mode in ['upstream_unavailability',  # ~submission
+                                   'mixed_data_response']      # ~interchange
+            else:
+                assert len(self.tx_group.tx_cursors) <= 1
+        sf_unavail = sf_mode == 'upstream_unavailability'
 
-        # for i,rcpt in enumerate(tx.rcpt_to)
-        #    rcpt = tx.rcpt_to[i]
-        #    rcpt_resp = tx.rcpt_response[i] if i < len(tx.rcpt_response) else None
-        #    _update() needs to determine rcpt timeouts and save somewhere
-        #    if sf_unavail: (submission)
-        #        lower "opportunistic cut-through" value 10-30s
-        #    else  (interchange)
-        #        ~rfc5321 4.5.3.2.3 RCPT Command: 5 Minutes
-        #    for wait() to early return success
+        timeout = False
+        # TODO Normally, output flow returns a timeout response if the
+        # upstream timed out however it could be e.g. terminated by an
+        # exception in which case it's nicer behavior to return a
+        # response downstream rather than hanging.
+        upstream_bug_timeout = False
 
-        #    rcpt_timeout = False
-        #    rcpt_temp = rcpt_resp is not None and rcpt_resp.temp()
-        #     if sf_unavail:
-        #         if rcpt_timeout or rcpt_temp:
-        #             tx.rcpt_response[i] = Response(250, 'SWF store and forward')
-        #     elif rcpt_timeout:
-        #         tx.rcpt_response[i] = Response(450, 'SWF upstream timeout')
+        if sf_unavail:
+            now = time.monotonic_ns()
+            assert self.tx_group.tx_cursors[0].db_id is not None
+            tx_status = None
+            if (self.timeouts is not None and
+                ((tx_status := self.timeouts.tx_status.get(
+                    self.tx_group.tx_cursors[0].db_id, None)) is not None)):
+                timeout = now > tx_status.timeout
+
+            if tx.mail_from is not None:
+                mail_temp = (tx.mail_response is not None and
+                             tx.mail_response.temp())
+                if (timeout and tx.mail_response is None) or mail_temp:
+                    tx.mail_response = Response(
+                        250, 'mail ok (SWF store and forward)')
+
+            tx.rcpt_response.extend(
+                [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
+            if tx_status is not None:
+                tx_status.rcpts.extend(
+                    [False] * (len(tx.rcpt_to) - len(tx_status.rcpts)))
+            for i,rcpt in enumerate(tx.rcpt_to):
+               rcpt_resp = None
+               rcpt_resp = tx.rcpt_response[i]
+
+               rcpt_temp = rcpt_resp is not None and rcpt_resp.temp()
+               if (tx_status is not None and
+                   (tx_status.rcpts[i] or
+                    (timeout and rcpt_resp is None) or
+                    rcpt_temp)):
+                   tx_status.rcpts[i] = True
+                   tx.rcpt_response[i] = Response(
+                       250, 'rcpt ok (SWF store and forward)')
+
+                # elif rcpt_resp is None and upstream_bug_timeout:
+                #   tx.rcpt_response[i] = Response(450, 'SWF upstream timeout')
 
         r : Sequence[Optional[TransactionCursor]] = self.tx_group.tx_cursors
 
         data_resp_cursor : Optional[TransactionCursor] = reduce(
             StorageWriterFilter.reduce_data_response, r)
         logging.debug(data_resp_cursor.tx if data_resp_cursor else None)
-
+        data_resp = None
         if data_resp_cursor is not None:
             assert data_resp_cursor.tx is not None
-            if data_resp_cursor.tx.data_response is not None:
+            data_resp = data_resp_cursor.tx.data_response
+        if data_resp and not (sf_unavail and data_resp.temp()):
+            if len(self.tx_group.tx_cursors) > 1:
                 tx.data_response = Response(
-                    data_resp_cursor.tx.data_response.code,
-                    data_resp_cursor.tx.data_response.message +
-                    ' (SWF Exploder same response)')
+                    data_resp.code,
+                    data_resp.message + ' (SWF Exploder same response)')
+            else:
+                tx.data_response = data_resp
+            return tx
 
-        # transaction coordinator thing waits for temp error or "opportunistic
-        # cut-through timeout" and then enables retries per sf_mode
+        if (tx.body is None) or not tx._body_last():  # XXX
+            return tx
 
-        # else if all cursors have a final response or retries
-        # enabled, return 250 accepted store&forward
+        # if upstream_bug_timeout and data_resp is None:
+        #     tx.data_response = Response(450, 'SWF upstream timeout')
 
+        elif (sf_unavail and
+              (timeout or (data_resp is not None and data_resp.temp()))):
+            sf_cursors = []
+            for cursor in self.tx_group.tx_cursors:
+                rr = None
+                assert cursor.tx is not None
+                if cursor.tx.rcpt_response:
+                    rr = cursor.tx.rcpt_response[0]
+                dr = cursor.tx.data_response
+                if rr is None or (not rr.perm()) or dr is None or not dr.ok():
+                    if (cursor.tx.retry is None or
+                        cursor.tx.notification is None):
+                        sf_cursors.append(cursor)
+
+            # NOTE there is a bit of a "if a tree falls in a
+            # forest..." flavor to this: we don't actually enable
+            # retries until the client does a GET that returns the 250
+            # s&f response. Formally, the update to input_done would
+            # start a timer that triggers this.
+            if sf_cursors:
+                self.tx_group.update_all(
+                    TransactionMetadata(
+                        retry = {},
+                        notification={}),
+                    cursors=sf_cursors)
+
+            tx.data_response = Response(
+                250, 'message accepted (SWF store and forward)')
 
         return tx
 
@@ -351,7 +436,8 @@ class StorageWriterFilter(AsyncFilter):
             # TODO do this in a batch if we get multiple (moot
             # without pipelining)
             assert self.tx_group.tx_cursors[0].tx is not None
-            if downstream_delta.rcpt_to and not self.tx_group.tx_cursors[0].tx.rcpt_to:
+            if (downstream_delta.rcpt_to and
+                not self.tx_group.tx_cursors[0].tx.rcpt_to):
                 rcpt = downstream_delta.rcpt_to[0]
                 assert rcpt is not None
                 self.tx_group.tx_cursors[0].write_envelope(TransactionMetadata(
@@ -397,13 +483,24 @@ class StorageWriterFilter(AsyncFilter):
 
         logging.debug('input tx %s', tx)
 
+        assert self.endpoint_yaml is not None
+        assert self.sender is not None
+        if ((self.timeouts is not None) and
+            ((endpoint_yaml := self.endpoint_yaml(self.sender)) is not None) and
+            (endpoint_yaml.get('sf_mode', None) == 'upstream_unavailability')):
+            timeout = endpoint_yaml.get('sf_timeout', 10)
+            assert self.tx_group.tx_cursors[0].db_id is not None
+            self.timeouts.tx_status[self.tx_group.tx_cursors[0].db_id] = (
+                Status(time.monotonic_ns() + timeout * int(1e9)))
+
         # TODO how often is the cursor in this SWF reused after return
         # from this call?
         if created and self.create_leased:
             logging.debug(self.upstream_cursor)
             logging.debug(self.tx_group.tx_cursors)
             with self.mu:
-                for i in range(len(self.upstream_cursor), len(self.tx_group.tx_cursors)):
+                for i in range(len(self.upstream_cursor),
+                               len(self.tx_group.tx_cursors)):
                     cursor = self.tx_group.tx_cursors[i]
                     self.upstream_cursor.append(cursor)
                     self.tx_group.tx_cursors[i] = cursor.clone()
@@ -427,6 +524,7 @@ class StorageWriterFilter(AsyncFilter):
                         ) -> Tuple[bool, int, Optional[int]]:
             appended, length, content_length = self.blob.append_data(
                 offset, d, content_length=content_length, update_tx=False)
+            # reset timeout
             if appended and length == content_length:
                 self.parent.blob_done(self)
             return appended, length, content_length
@@ -496,7 +594,8 @@ class StorageWriterFilter(AsyncFilter):
         return (self.tx_cursor.version, tx, True, None)
 
     def check(self) -> Optional[AsyncFilter.CheckTxResult]:
-        self._load()
+        if not self._load():
+            return None
 
         assert self.tx_group is not None
         res = self.tx_group.tx_cursors[0].check()

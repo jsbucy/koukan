@@ -739,6 +739,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
         def exp_mail(tx, tx_delta):
+            logging.debug(tx)
             prev = tx.copy()
             if tx_delta.mail_from:
                 tx.mail_response = Response(201, 'upstream mail ok')
@@ -747,7 +748,7 @@ class RouterServiceTest(unittest.TestCase):
 
         logging.info('testExploderMultiRcpt start tx')
         delta = TransactionMetadata(
-            sender=Sender(name='submission', tag='smtp-msa'),
+            sender=Sender(name='submission_sf', tag='smtp-msa'),
             mail_from=Mailbox('alice@example.com'),
             remote_host=HostPort('1.2.3.4', 12345))
         tx.merge_from(delta)

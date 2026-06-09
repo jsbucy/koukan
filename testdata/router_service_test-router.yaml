@@ -32,9 +32,9 @@ sender:
   retry: output_chain
   tag:
   - name: smtp-msa
-    output_chain: submission
+    output_chain: submission_sf
     upstream_tag: smtp-msa-upstream
-    retry: null
+    #retry: null
   - name: smtp-msa-upstream
     retry: null
   - name: submission-sync-sor
@@ -52,15 +52,25 @@ rest_endpoint:
   sender: router
 
 endpoint:
-- name: submission_exploder
+- name: submission_sf
+  sf_mode: upstream_unavailability
   output_handler:
     downstream_timeout: 10
     upstream_refresh: 10
+    notification:
+        sender: submission
+        tag: notification
+    retry_params:
+      backoff_factor: 0
+      bug_retry: 1
+      deadline: 300
+      max_attempt_time: 1
+      max_attempts: 3
+      min_attempt_time: 1
+    upstream_refresh: 10
   chain:
-  - data_timeout: 10
-    filter: exploder
-    msa: true
-    rcpt_timeout: 10
+  - filter: message_builder
+  - filter: sync
 
 - name: submission
   output_handler:

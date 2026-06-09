@@ -911,6 +911,8 @@ class TransactionCursor:
         return all_done
 
 
+# This is a special-purpose interface for StorageWriterFilter to
+# operate on all of the tx for a multi-rcpt smtp transaction.
 class TransactionGroup:
     parent : 'Storage'
     tx_cursors : List[TransactionCursor]
@@ -1037,10 +1039,14 @@ class TransactionGroup:
     def update_all(self, tx_delta : Optional[TransactionMetadata] = None,
                    input_done : Optional[bool] = None,
                    ping_tx : Optional[bool] = None,
-                   final_attempt_reason : Optional[str] = None):
+                   final_attempt_reason : Optional[str] = None,
+                   cursors : Optional[List[TransactionCursor]] = None):
         assert self.parent.tx_table is not None
         assert not ping_tx, 'unimplemented'
         assert not tx_delta or not tx_delta.rcpt_to
+
+        if cursors is None:
+            cursors = self.tx_cursors
 
         with self.parent.begin_transaction() as db_tx:
             tcols = self.parent.tx_table.c
@@ -1058,12 +1064,11 @@ class TransactionGroup:
                         db_tx, TransactionMetadata(body=tx_delta.body),
                         group_cursors=self.tx_cursors[1:])
                     tx_delta.body = None
-                    pass
 
             if not bool(tx_delta) and not input_done:
                 return
 
-            for c in self.tx_cursors:
+            for c in cursors:
                 cursor_by_id[c.db_id] = c
                 assert c.version is not None
                 new_version = c.version + 1
@@ -1092,7 +1097,8 @@ class TransactionGroup:
                         tcols.parent_id == self.parent_tx_id)))
             for row in res:
                 db_id, version = row
-                assert cursor_by_id[db_id].version == version, '%d %d' % (cursor_by_id[db_id].version, version)
+                assert cursor_by_id[db_id].version == version, '%s %s' % (
+                    cursor_by_id[db_id].version, version)
 
             upd = update(self.parent.tx_table).where(
                 tcols.id == bindparam('db_id')
@@ -1104,7 +1110,7 @@ class TransactionGroup:
                 upd = upd.values(json = bindparam('json'))
             if input_done:
                 upd = upd.values(input_done = True)
-                for c in self.tx_cursors:
+                for c in cursors:
                     c.input_done = True
             if final_attempt_reason:
                 #self.final_attempt_reason = final_attempt_reason
