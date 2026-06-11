@@ -516,7 +516,7 @@ class TransactionMetadata:
     filter_output_dict_json : Optional[Dict[str, Any]] = None
     ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
-    def __init__(self, 
+    def __init__(self,
                  local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
@@ -759,7 +759,12 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v_js = [{}] * len(v)
                 else:
-                    v_js = [vv.to_json(which_js) for vv in v]
+                    v_js = []
+                    for vv in v:
+                        assert vv is not None, '%s %s' % (name, v)
+                        vv_js = vv.to_json(which_js)
+                        v_js.append(vv_js)
+
                 offset = getattr(self, field.list_offset(), None)
                 if which_js == WhichJson.REST_UPDATE and offset:
                     json[field.list_offset()] = offset

@@ -12,6 +12,7 @@ import atexit
 from contextlib import nullcontext
 import copy
 import secrets
+import asyncio
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection, CursorResult, Engine, Transaction
@@ -924,6 +925,13 @@ class TransactionGroup:
         if tx_cursor:
             self.tx_cursors.append(tx_cursor)
 
+    def db_ids(self):
+        out = []
+        for c in self.tx_cursors:
+            assert c.db_id is not None
+            out.append(c.db_id)
+        return out
+
     # TODO need reload vs load from scratch?
     def load(self, tx_rest_id : Optional[str] = None,
              tx_id : Optional[int] = None) -> bool:
@@ -936,12 +944,13 @@ class TransactionGroup:
 
             sel_tx = select(*TransactionCursor.select_tx_cols(self.parent))
 
-            if tx_id is not None:
+            if tx_id is not None or self.parent_tx_id is not None:
+                if tx_id is None:
+                    tx_id = self.parent_tx_id
                 sel_tx = sel_tx.where(or_(
                     and_(tcols.parent_id == None,  # necessary?
                          tcols.id == tx_id),
                     tcols.parent_id == tx_id))
-
             elif tx_rest_id is not None:
                 subq = select(tcols.id).where(
                     tcols.rest_id == tx_rest_id).subquery()
@@ -1011,12 +1020,6 @@ class TransactionGroup:
             self.tx_cursors[0]._load_blobs(db_tx)
             return True
 
-    # create #0
-    # add rcpt to #0
-    # clone #0 for more rcpts
-    # blob stuff (all)
-    # read (all)
-
     def clone_tx(self, delta : TransactionMetadata, create_leased : bool):
         assert self.parent.tx_table is not None
 
@@ -1035,12 +1038,12 @@ class TransactionGroup:
                       parent_db_id=self.tx_cursors[0].db_id)
         self.tx_cursors.append(cursor)
 
-
     def update_all(self, tx_delta : Optional[TransactionMetadata] = None,
                    input_done : Optional[bool] = None,
                    ping_tx : Optional[bool] = None,
                    final_attempt_reason : Optional[str] = None,
                    cursors : Optional[List[TransactionCursor]] = None):
+        assert self.parent_tx_id is not None
         assert self.parent.tx_table is not None
         assert not ping_tx, 'unimplemented'
         assert not tx_delta or not tx_delta.rcpt_to
@@ -1078,9 +1081,8 @@ class TransactionGroup:
                 if tx_delta:
                     update_json = True
                     assert c.tx is not None
-                    updated = c.tx.copy()
-                    assert updated.merge_from(tx_delta) is not None
-                    d['json'] = updated.to_json(WhichJson.DB)
+                    assert c.tx.merge_from(tx_delta) is not None
+                    d['json'] = c.tx.to_json(WhichJson.DB)
                 params.append(d)
 
             logging.debug(params)
@@ -1118,13 +1120,44 @@ class TransactionGroup:
                     final_attempt_reason = final_attempt_reason)
 
             res = db_tx.execute(upd, params)
-            logging.debug(res)
-            # for row in res:
-            #     logging.debug(row)
         for cursor in self.tx_cursors:
             cursor.version = db_id_version[cursor.db_id]
             # xxx leased=
             cursor._update_version_cache()
+
+    # waits for at least one cursor to update, returns the updated
+    # cursor on success, None on timeout
+    async def wait_async(self, timeout : Optional[int] = None
+                         # cursor that succeeded, cloned?
+                         ) -> Optional[Tuple[TransactionCursor, bool]]:
+        aws = [ asyncio.create_task(
+                    c.wait_async(timeout=timeout, clone=True))
+                for c in self.tx_cursors ]
+        done, pending = await asyncio.wait(
+            aws, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            success, cloned = task.result()
+            assert success
+            for i,a in enumerate(aws):
+                if a == task:
+                    return self.tx_cursors[i], cloned
+        return None
+
+
+    def try_cache(self, db_ids : List[int]) -> bool:
+        logging.debug('TransactionGroup.try_cache %s', db_ids)
+        for i,db_id in enumerate(db_ids):
+            cursor = self.parent.get_transaction_cursor(db_id = db_id)
+            if not cursor.try_cache():
+                logging.debug('no tx %d', db_id)
+                return False
+            if i == 0:
+                self.parent_tx_id = db_id
+            self.tx_cursors.append(cursor)
+        logging.debug('ok')
+        return True
 
 class BlobCursor(Blob, WritableBlob):
     db_id = None  # Blob.id

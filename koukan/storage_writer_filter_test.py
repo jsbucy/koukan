@@ -65,7 +65,12 @@ class StorageWriterFilterTest(unittest.TestCase):
         t.join(timeout=timeout)
         self.assertFalse(t.is_alive())
 
+    # TODO coverage:
+    # check_cache()
+    # check()
+
     def test_smoke(self):
+        timeouts = Timeouts()
         endpoint_yaml = {
             'sf_mode': 'upstream_unavailability'
         }
@@ -74,7 +79,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True,
             sender=Sender('ingress'),
-            endpoint_yaml = lambda sender: endpoint_yaml)
+            endpoint_yaml = lambda sender: endpoint_yaml,
+	    timeouts = timeouts)
         tx = TransactionMetadata(
             sender=Sender('ingress'),
             mail_from=Mailbox('alice'))
@@ -86,8 +92,10 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id = 'tx_rest_id',
             create_leased = True,
-            endpoint_yaml = lambda sender: endpoint_yaml)
+            endpoint_yaml = lambda sender: endpoint_yaml,
+	    timeouts = timeouts)
         prev = filter.get()
+        self.assertIsNotNone(prev)
         tx = prev.copy()
         tx.rcpt_to = [Mailbox('bob@example.com')]
         filter.update(tx, prev.delta(tx))
@@ -105,7 +113,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id = 'tx_rest_id',
             create_leased = True,
             tx_handler = upstream,
-            endpoint_yaml = lambda sender: endpoint_yaml)
+            endpoint_yaml = lambda sender: endpoint_yaml,
+	    timeouts = timeouts)
         prev = filter.get()
         logging.debug(prev.sender)
         tx = prev.copy()

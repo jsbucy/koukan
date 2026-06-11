@@ -35,7 +35,7 @@ def tearDownModule():
     postgres_test_utils.tearDownModule()
 
 
-class StorageTestBase(unittest.TestCase):
+class StorageTestBase(unittest.IsolatedAsyncioTestCase):
     sqlite : bool
 
     def setUp(self):
@@ -168,7 +168,7 @@ class StorageTestBase(unittest.TestCase):
 
         logging.debug(self.s.debug_dump())
 
-    def test_transaction_group(self):
+    async def test_transaction_group(self) -> None:
         tx0_cursor = self.s.get_transaction_cursor()
         tx0_cursor.create(
             'tx_rest_id',
@@ -203,8 +203,35 @@ class StorageTestBase(unittest.TestCase):
 
         blob_writer = group.tx_cursors[0].get_blob_for_append(
             BlobUri(tx_id='tx_rest_id', tx_body=True))
-        blob_writer.append_data(0, b'hello, world!', last=True, update_tx=False)
+        assert isinstance(blob_writer, BlobCursor)
+        b = b'hello, world!'
+        blob_writer.append_data(0, b, len(b), update_tx=False)
         group.update_all(input_done=True)
+
+        logging.debug('wait -> timeout')
+        self.assertIsNone(await group.wait_async(1))
+        time.sleep(1)
+        logging.debug('wait done')
+
+        assert upstream_cursor.load()
+        logging.debug(upstream_cursor.tx)
+        logging.debug(upstream_cursor.version)
+        upstream_cursor.write_envelope(
+            TransactionMetadata(),
+            attempt_delta=TransactionMetadata(rcpt_response=[Response(201)]))
+        logging.debug(upstream_cursor.version)
+
+        logging.debug([c.version for c in group.tx_cursors])
+        self.assertEqual((group.tx_cursors[0], False),
+                         await group.wait_async(1))
+        logging.debug([c.version for c in group.tx_cursors])
+        group.load()
+        def code(resp):
+            assert resp is not None
+            return resp.code
+        assert group.tx_cursors[0].tx is not None
+        self.assertEqual(
+            [201], [code(r) for r in group.tx_cursors[0].tx.rcpt_response])
 
 
     def test_mixed_notify_retry(self):

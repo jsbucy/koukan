@@ -272,7 +272,7 @@ class RouterServiceTest(unittest.TestCase):
             rest_endpoint.get(deadline)
         else:
             self.fail('expected tx')
-        #self.assertEqual(0, self.service.storage._tx_reads - prev_reads)
+        self.assertEqual(0, self.service.storage._tx_reads - prev_reads)
 
         self.root_yaml['storage']['gc_interval'] = 1
         self.service.daemon_executor.submit(
@@ -798,6 +798,9 @@ class RouterServiceTest(unittest.TestCase):
         self.assertRcptCodesEqual([203, 204], tx.rcpt_response)
         self.assertEqual('upstream rcpt 1', tx.rcpt_response[1].message)
         logging.debug('env done')
+
+
+        logging.debug(self.service.storage.debug_dump())
 
         logging.info('testExploderMultiRcpt patch body')
 

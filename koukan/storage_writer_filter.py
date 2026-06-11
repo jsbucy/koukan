@@ -43,8 +43,12 @@ class Status:
 class Timeouts:
     # TODO BEFORE MERGE gc/retirement
     tx_status : Dict[int, Status]
+    # rest id -> db id for all transactions in TransactionGroup
+    # TODO is there a better place for this?
+    groups : Dict[str, List[int]]
     def __init__(self):
         self.tx_status = {}
+        self.groups = {}
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
@@ -111,25 +115,16 @@ class StorageWriterFilter(AsyncFilter):
     # AsyncFilter
     async def wait_async(self, version, timeout
                          ) -> Tuple[bool, Optional[TransactionMetadata]]:
-        tx = self.get()
-        if version != self.version:
-            return True, tx
-        return False, None
+        assert self.tx_group is not None
+        if self.version != version:
+            return True, None
 
-        assert self.tx_cursor is not None
-        assert self.tx_cursor.version is not None
-        logging.debug('%s %s', version, self.tx_cursor.version)
-        if self.tx_cursor.version == version:
-            rv, clone = await self.tx_cursor.wait_async(timeout, clone=True)
-        else:
-            rv = True
-
-        tx_out = None
-        if rv and clone:
-            assert self.tx_cursor.tx is not None
-            tx_out = self.tx_cursor.tx.copy()
-
-        return rv, tx_out
+        res = await self.tx_group.wait_async(timeout)
+        if res is None:
+            return False, None
+        success, cloned = res
+        assert success
+        return True, self._get() if cloned else None
 
     def release_transaction_cursor(
             self, i : int) -> Optional[TransactionCursor]:
@@ -151,11 +146,6 @@ class StorageWriterFilter(AsyncFilter):
 
     @property
     def version(self) -> Optional[int]:
-        # assert self.tx_cursor is not None
-        # if self.tx_cursor is None:
-        #     return None
-        # return self.tx_cursor.version
-
         if self.tx_group is None:
             return None
         version = 0
@@ -198,14 +188,19 @@ class StorageWriterFilter(AsyncFilter):
         tx = None
         if self.tx_group is None:
             self.tx_group = TransactionGroup(self.storage)
-        # if self.tx_cursor.try_cache() and self.tx_cursor.tx is not None:
-        #     tx = self.tx_cursor.tx
-        #     logging.debug(tx)
-        # else:
-        if not self.tx_group.load(tx_rest_id=self.rest_id):
+            assert self.timeouts is not None
+            assert self.rest_id is not None
+            if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is not None:
+                if self.tx_group.try_cache(group_db_ids):
+                    tx = self._get()
+                    logging.debug(tx)
+
+        if not self.tx_group.tx_cursors:
+            if not self.tx_group.load(tx_rest_id=self.rest_id):
+                return False
+
+        if not self.tx_group.tx_cursors:  # 404 e.g. after GC
             return False
-        # if not self.tx_group.tx_cursors:  # 404 e.g. after GC
-        #     return
         if self.sender is None:
             assert self.tx_group.tx_cursors[0].tx is not None
             self.sender = self.tx_group.tx_cursors[0].tx.sender
@@ -239,7 +234,11 @@ class StorageWriterFilter(AsyncFilter):
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
-        self._load()
+        if not self._load():
+            return None
+        return self._get()
+
+    def _get(self) -> Optional[TransactionMetadata]:
         assert self.tx_group is not None
         assert self.tx_group.tx_cursors[0].tx is not None
         tx = self.tx_group.tx_cursors[0].tx.copy()
@@ -249,9 +248,17 @@ class StorageWriterFilter(AsyncFilter):
             assert cursor.tx is not None
             tx.rcpt_to.extend(cursor.tx.rcpt_to)
             tx.rcpt_response.extend(cursor.tx.rcpt_response)
+
+        if self.timeouts is not None:
+            assert tx.rest_id is not None
+            self.timeouts.groups[tx.rest_id] = self.tx_group.db_ids()
         logging.debug(tx)
 
         assert self.endpoint_yaml is not None
+        if self.sender is None:
+            assert self.tx_group.tx_cursors[0].tx is not None
+            self.sender = self.tx_group.tx_cursors[0].tx.sender
+
         assert self.sender is not None
         endpoint_yaml = self.endpoint_yaml(self.sender)
         sf_mode = None
@@ -307,6 +314,14 @@ class StorageWriterFilter(AsyncFilter):
 
                 # elif rcpt_resp is None and upstream_bug_timeout:
                 #   tx.rcpt_response[i] = Response(450, 'SWF upstream timeout')
+
+            # rcpt_response must be returned in order
+            for i,rr in enumerate(tx.rcpt_response):
+                if rr is None:
+                    tx.rcpt_response = tx.rcpt_response[0:i]
+                    break
+            assert None not in tx.rcpt_response
+
 
         r : Sequence[Optional[TransactionCursor]] = self.tx_group.tx_cursors
 
@@ -399,8 +414,9 @@ class StorageWriterFilter(AsyncFilter):
             assert self.tx_group is not None
             for i in range(0,5):
                 try:
-                    # storage has special-case logic to noop if
-                    # tx has final_attempt_reason
+                    # XXX TransactionGroup doesn't yet replicate
+                    # TxCursor special-case logic to noop if tx has
+                    # final_attempt_reason
                     self.tx_group.update_all(
                         tx_delta, final_attempt_reason='downstream cancelled')
                     break
@@ -472,7 +488,8 @@ class StorageWriterFilter(AsyncFilter):
                 else:
                     created = True
                 logging.debug(sched)
-
+            assert self.timeouts is not None
+            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 # caller handles VersionConflictException
@@ -522,8 +539,9 @@ class StorageWriterFilter(AsyncFilter):
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:
-            appended, length, content_length = self.blob.append_data(
+            res = self.blob.append_data(
                 offset, d, content_length=content_length, update_tx=False)
+            appended, length, content_length = res
             # reset timeout
             if appended and length == content_length:
                 self.parent.blob_done(self)
@@ -560,7 +578,7 @@ class StorageWriterFilter(AsyncFilter):
                 try:
                     body = self.tx_group.tx_cursors[0].tx.body
                     if isinstance(body, WritableBlob):
-                        return body
+                        return StorageWriterFilter.BlobWriter(self, body)
                     else:
                         assert body is None
                     self.tx_group.update_all(
@@ -581,17 +599,19 @@ class StorageWriterFilter(AsyncFilter):
 
 
     def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
-        return None
+        if self.tx_group is None:
+            assert self.timeouts is not None
+            assert self.rest_id is not None
+            if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is None:
+                return None
+            self.tx_group = TransactionGroup(self.storage)
+            if not self.tx_group.try_cache(group_db_ids):
+                return None
 
-        if self.tx_cursor is None:
-            self.tx_cursor = self.storage.get_transaction_cursor(
-                rest_id=self.rest_id)
-        if not self.tx_cursor.try_cache():
-            return None
-        assert self.tx_cursor.tx is not None
-        assert self.tx_cursor.version is not None
-        tx = self.tx_cursor.tx.copy()
-        return (self.tx_cursor.version, tx, True, None)
+        tx = self._get()
+        v = self.version
+        assert v is not None
+        return (v, tx, True, None)
 
     def check(self) -> Optional[AsyncFilter.CheckTxResult]:
         if not self._load():

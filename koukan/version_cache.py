@@ -118,10 +118,12 @@ class IdVersion:
             self.cv.notify_all()
 
             def done(afut, version, cursor):
-                logging.debug('async wakeup done')
-                # XXX currently throws InvalidStateError after waiter
-                # timed out? this is benign?
-                afut.set_result((version, cursor))
+                logging.debug('async wakeup done %d', cursor.db_id)
+                # InvalidStateError is ~expected after waiter timed out?
+                try:
+                    afut.set_result((version, cursor))
+                except asyncio.exceptions.InvalidStateError:
+                    pass
 
             for loop,future,waiter_version in self.async_waiters:
                 assert version > waiter_version
@@ -137,14 +139,13 @@ class IdVersion:
                          version : int,
                          timeout : Optional[float],
                          cursor_out : Optional[Any] = None
+                         # false if timed out, true if cloned
                          ) -> Tuple[bool, bool]:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 
         with self.lock:
             if self.version > version:
-                logging.debug('cache version %d version %d',
-                              self.version, version)
                 return True, False
             self.async_waiters.append((loop, afut, version))
 
@@ -158,7 +159,7 @@ class IdVersion:
                 cursor_out.copy_from(cursor)
                 clone = True
             return True, clone
-        except TimeoutError:
+        except (TimeoutError, asyncio.CancelledError) as e:
             with self.lock:
                 for i,(loop,fut,version) in enumerate(self.async_waiters):
                     if fut == afut:
