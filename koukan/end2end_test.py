@@ -246,6 +246,7 @@ class End2EndTest(unittest.TestCase):
             'hello, world!')
         self.assertEqual(550, rcpt_resp[0][0])
         self.assertEqual(250, rcpt_resp[1][0])
+        self.assertEqual(250, final_resp[0])
 
         for handler in self.fake_smtpd.handlers:
             # smtpd machinery constructs extra handlers during startup?

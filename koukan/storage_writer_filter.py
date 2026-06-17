@@ -340,6 +340,9 @@ class StorageWriterFilter(AsyncFilter):
             else:
                 tx.data_response = data_resp
             return tx
+        if data_resp is None:
+            tx.data_response = None
+            return tx
 
         if (tx.body is None) or not tx._body_last():  # XXX
             return tx

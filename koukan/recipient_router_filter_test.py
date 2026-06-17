@@ -47,7 +47,7 @@ class RecipientRouterFilterTest(unittest.TestCase):
             b'hello\r\n')
         tx.sender = Sender('ingress', 'smtp-mx')
         delta = prev.delta(tx)
-
+        logging.debug(delta)
         router.on_update(delta)
         logging.debug(router.downstream_tx)
         logging.debug(router.upstream_tx)
