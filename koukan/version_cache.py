@@ -118,7 +118,7 @@ class IdVersion:
             self.cv.notify_all()
 
             def done(afut, version, cursor):
-                logging.debug('async wakeup done %d', cursor.db_id)
+                logging.debug('async wakeup done')  # %s', cursor.db_id if cursor else None)
                 # InvalidStateError is ~expected after waiter timed out?
                 try:
                     afut.set_result((version, cursor))
@@ -146,6 +146,9 @@ class IdVersion:
 
         with self.lock:
             if self.version > version:
+                # if cursor_out is not None and self.cursor is not None:
+                #     cursor_out.copy_from(self.cursor)
+                #     return True, True
                 return True, False
             self.async_waiters.append((loop, afut, version))
 

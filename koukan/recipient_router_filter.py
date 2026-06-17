@@ -54,6 +54,7 @@ class RecipientRouterFilter(ProxyFilter):
     policy : Optional[RoutingPolicy] = None
     static_dest : Optional[Destination] = None
     dry_run : bool
+    downstream_mail : Optional[Mailbox] = None
 
     def __init__(self, policy : Optional[RoutingPolicy], dry_run = False,
                  static_dest : Optional[Destination] = None):
@@ -111,9 +112,24 @@ class RecipientRouterFilter(ProxyFilter):
         return None, True
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
-        tx_delta.rcpt_to = []
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
+
+        if (tx_delta.mail_from is not None) and (tx_delta.mail_response is None) and not tx_delta.rcpt_to:
+            logging.debug('save mail')
+            self.downstream_mail = tx_delta.mail_from
+            tx_delta.mail_from = None
+            self.upstream_tx.merge_from(tx_delta)
+            return FilterResult(TransactionMetadata(
+                mail_response = Response(250, 'mail ok (rcpt router noop)')))
+
+        if self.downstream_mail is not None and tx_delta.rcpt_to:
+            logging.debug('restore mail')
+            tx_delta.mail_from = self.downstream_mail
+            self.downstream_mail = None
+
+        tx_delta.rcpt_to = []
+
         self.upstream_tx.merge_from(tx_delta)
 
         for i,rcpt in enumerate(self.downstream_tx.rcpt_to):

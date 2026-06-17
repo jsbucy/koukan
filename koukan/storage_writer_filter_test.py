@@ -6,6 +6,7 @@ import unittest
 import logging
 from threading import Thread
 import time
+from enum import IntEnum
 
 from koukan.storage import Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
@@ -22,6 +23,30 @@ import koukan.sqlite_test_utils as sqlite_test_utils
 from koukan.message_builder import MessageBuilderSpec
 from koukan.sender import Sender
 
+class Stage(IntEnum):
+    MAIL,
+    RCPT,
+    DATA
+
+class Result(IntEnum):
+    TEMP,
+    PERM,
+    TIMEOUT
+
+class Recipient:
+    stage : Stage
+    result : Result
+
+class Test:
+    recipients : List[Recipient]
+    stage : Stage
+    result : Result
+    sf_mode : str  # unavail | mixed
+    # stage is max across rcpts
+    # - if sf_unavail and temp/timeout -> 250 s&f
+    # - if timeout -> 450 upstream temp
+    # - if all same major -> return that
+    # - else mixed: return 250 s&f
 
 class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):
