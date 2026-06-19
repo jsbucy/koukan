@@ -146,15 +146,15 @@ class IdVersion:
 
         with self.lock:
             if self.version > version:
-                # if cursor_out is not None and self.cursor is not None:
-                #     cursor_out.copy_from(self.cursor)
-                #     return True, True
+                if cursor_out is not None and self.cursor is not None:
+                    cursor_out.copy_from(self.cursor)
+                    return True, True
                 return True, False
             self.async_waiters.append((loop, afut, version))
 
         try:
             new_version, cursor = await asyncio.wait_for(afut, timeout)
-            logging.debug('new_version %d version %d', new_version, version)
+            logging.debug('new_version %d version %d cursor %s', new_version, version, cursor)
             assert new_version > version
             clone = False
             if cursor is not None and cursor_out is not None:
@@ -192,6 +192,7 @@ class IdVersionMap:
         self.ttl = ttl
 
     def gc(self):
+        logging.debug(self.ttl)
         if self.ttl is None:
             return
         now = time.monotonic()

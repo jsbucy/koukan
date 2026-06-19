@@ -222,7 +222,7 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         logging.debug(upstream_cursor.version)
 
         logging.debug([c.version for c in group.tx_cursors])
-        self.assertEqual((group.tx_cursors[0], False),
+        self.assertEqual((group.tx_cursors[0], True),
                          await group.wait_async(1))
         logging.debug([c.version for c in group.tx_cursors])
         group.load()

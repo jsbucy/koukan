@@ -155,7 +155,7 @@ class FilterChainWiring:
         if 'sender' not in yaml:
             return None
         assert self.filter_chain_factory is not None
-        if yaml.get('store_and_forward', None):
+        if yaml.get('store_and_forward', None):  # async/SWF
             # we configure AsyncFilterWrapper *not* to toggle
             # retry/notify upstream; it gets that from the upstream
             # chain
@@ -165,7 +165,7 @@ class FilterChainWiring:
                     'filter': 'exploder_upstream',
                     'rcpt_timeout': 0,
                     'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
-                    'store_and_forward': True,
+                    'store_and_forward': False,
                     'block_upstream': False,
                     'notify': False,
                     'retry': False
@@ -177,7 +177,7 @@ class FilterChainWiring:
                     Sender(yaml['sender']), upstream_yaml)
             assert res is not None
             add_route, unused_yaml = res
-        else:
+        else:  # sync
             output = self.filter_chain_factory.build_filter_chain(
                 Sender(yaml['sender'], yaml.get('tag', None)))
             if output is None:
@@ -201,6 +201,7 @@ class FilterChainWiring:
                 client = c[1]
                 break
         else:
+            # http_client
             client = RestEndpointClientProvider(**client_args)
             self.rest_endpoint_clients.append((client_args, client))
 

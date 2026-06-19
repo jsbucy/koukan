@@ -929,6 +929,7 @@ class TransactionGroup:
         out = []
         for c in self.tx_cursors:
             assert c.db_id is not None
+            assert c.db_id not in out
             out.append(c.db_id)
         return out
 
@@ -1083,6 +1084,8 @@ class TransactionGroup:
                     assert c.tx is not None
                     assert c.tx.merge_from(tx_delta) is not None
                     d['json'] = c.tx.to_json(WhichJson.DB)
+                    if c.tx.notification is not None:
+                        d['notification'] = True
                 params.append(d)
 
             logging.debug(params)
@@ -1148,14 +1151,17 @@ class TransactionGroup:
 
     def try_cache(self, db_ids : List[int]) -> bool:
         logging.debug('TransactionGroup.try_cache %s', db_ids)
+        cursor_by_id = { c.db_id : c for c in self.tx_cursors }
         for i,db_id in enumerate(db_ids):
-            cursor = self.parent.get_transaction_cursor(db_id = db_id)
+            if (cursor := cursor_by_id.get(db_id)) is None:
+                cursor = self.parent.get_transaction_cursor(db_id = db_id)
+                self.tx_cursors.append(cursor)
+            if i == 0:
+                self.parent_tx_id = db_id
             if not cursor.try_cache():
                 logging.debug('no tx %d', db_id)
                 return False
-            if i == 0:
-                self.parent_tx_id = db_id
-            self.tx_cursors.append(cursor)
+
         logging.debug('ok')
         return True
 

@@ -14,7 +14,7 @@ from koukan.recipient_router_filter import (
 from koukan.filter import (
     HostPort,
     Resolution )
-from koukan.filter_chain import ProxyFilter
+from koukan.filter_chain import CoroutineProxyFilter
 from koukan.sender import Sender
 
 PolicyFactory = Callable[[dict], RoutingPolicy]
@@ -114,7 +114,8 @@ class RecipientRouterFactory:
             policy_yaml.get('prefixes', []),
             dest)
 
-    def build_router(self, yaml : dict, sender : Sender) -> ProxyFilter:
+    def build_router(self, yaml : dict, sender : Sender
+                     ) -> CoroutineProxyFilter:
         if policy_yaml := yaml.get('policy', None):
             policy_name = policy_yaml['name']
             policy = self.router_policies[policy_name](policy_yaml)

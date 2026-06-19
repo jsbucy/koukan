@@ -394,8 +394,8 @@ class RestHandler(Handler):
         fresh_etag = etag is not None and self._check_etag(etag, version)
         if timeout is None or not is_local or not fresh_etag:
             if fresh_etag:
-                return self.response(code=304, msg='',
-                                     headers=[('etag', self._etag(version))])
+                return self.response(
+                    code=304, headers=[('etag', self._etag(version))])
             # do a full read every time with no etag
             if tx is None or etag is None:
                 err, tx = await self._get_tx_async()
@@ -414,8 +414,7 @@ class RestHandler(Handler):
             version, deadline.deadline_left())
 
         if not wait_result:
-            return self.response(code=304, msg='',
-                                 headers=[('etag', etag)])
+            return self.response(code=304, headers=[('etag', etag)])
 
         if tx is None:
             err, tx = await self._get_tx_async()

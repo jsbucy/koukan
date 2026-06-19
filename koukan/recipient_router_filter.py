@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -16,7 +17,7 @@ from koukan.filter import (
     Mailbox,
     Resolution,
     TransactionMetadata )
-from koukan.filter_chain import ProxyFilter, FilterResult
+from koukan.filter_chain import CoroutineProxyFilter, FilterResult
 from koukan.sender import Sender
 
 class Destination:
@@ -50,17 +51,22 @@ class RoutingPolicy(ABC):
         raise NotImplementedError
 
 
-class RecipientRouterFilter(ProxyFilter):
+class RecipientRouterFilter(CoroutineProxyFilter):
     policy : Optional[RoutingPolicy] = None
     static_dest : Optional[Destination] = None
     dry_run : bool
     downstream_mail : Optional[Mailbox] = None
+
+    # upstream_tx.rcpt_to[i] == downstream_tx[rcpt_offset[i]]
+    # upstream -> downstream
+    rcpt_offset : List[int]
 
     def __init__(self, policy : Optional[RoutingPolicy], dry_run = False,
                  static_dest : Optional[Destination] = None):
         self.policy = policy
         self.dry_run = dry_run
         self.static_dest = static_dest
+        self.rcpt_offset = []
 
     def _route(self, mailbox) -> Tuple[Optional[Response], bool]:
         tx = self.downstream_tx
@@ -111,7 +117,10 @@ class RecipientRouterFilter(ProxyFilter):
 
         return None, True
 
-    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+    async def on_update(
+            self, tx_delta : TransactionMetadata,
+            upstream : Callable[[], Awaitable[TransactionMetadata]]
+    ) -> None:
         assert self.downstream_tx is not None
         assert self.upstream_tx is not None
 
@@ -120,10 +129,14 @@ class RecipientRouterFilter(ProxyFilter):
             self.downstream_mail = tx_delta.mail_from
             tx_delta.mail_from = None
             self.upstream_tx.merge_from(tx_delta)
-            return FilterResult(TransactionMetadata(
-                mail_response = Response(250, 'mail ok (rcpt router noop)')))
+            assert self.downstream_tx.merge_from(await upstream()) is not None
+            self.downstream_tx.mail_response = Response(
+                250, 'mail ok (rcpt router noop)')
+            return
 
+        buffered_mail = False
         if self.downstream_mail is not None and tx_delta.rcpt_to:
+            buffered_mail = True
             logging.debug('restore mail')
             tx_delta.mail_from = self.downstream_mail
             self.downstream_mail = None
@@ -144,4 +157,28 @@ class RecipientRouterFilter(ProxyFilter):
                 resp, rcpt.routed = self._route(rcpt)
             assert resp is None or resp.err()
             self.downstream_tx.rcpt_response.append(resp)
-        return FilterResult()
+            if resp is None:
+                self.rcpt_offset.append(i)
+                self.upstream_tx.rcpt_to.append(rcpt)
+
+        logging.debug(self.downstream_tx)
+
+        # xxx only if some rcpt succeeded
+        upstream_delta = await upstream()
+
+        logging.debug(self.upstream_tx)
+        logging.debug(upstream_delta)
+        for i in range(0, len(self.upstream_tx.rcpt_response)):
+            if self.downstream_tx.rcpt_response[self.rcpt_offset[i]] is not None:
+                continue
+            # if we previously sent a noop mail_response and then got a
+            # mail error from upstream, report that in rcpt_response.
+            if buffered_mail and (mail_resp := upstream_delta.mail_response) is not None and mail_resp.err():
+                self.downstream_tx.rcpt_response[self.rcpt_offset[i]] = mail_resp
+            else:
+                self.downstream_tx.rcpt_response[self.rcpt_offset[i]] = self.upstream_tx.rcpt_response[i]
+
+
+            upstream_delta.rcpt_response = []
+        assert self.downstream_tx.merge_from(upstream_delta) is not None
+        logging.debug(self.downstream_tx)

@@ -261,6 +261,7 @@ class Service:
             create_leased=True,
             sender = sender,
             endpoint_yaml = self.get_endpoint_yaml,
+            tx_handler = self._schedule_extra_rcpt_tx,
             timeouts = self.swf_timeouts)
         assert self.output_executor is not None
         fut = self.output_executor.submit(

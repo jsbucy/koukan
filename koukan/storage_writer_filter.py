@@ -118,11 +118,14 @@ class StorageWriterFilter(AsyncFilter):
         assert self.tx_group is not None
         if self.version != version:
             return True, None
-
+        logging.debug(version)
+        logging.debug([c.version for c in self.tx_group.tx_cursors])
         res = await self.tx_group.wait_async(timeout)
+        logging.debug(res)
         if res is None:
             return False, None
         success, cloned = res
+        logging.debug([c.version for c in self.tx_group.tx_cursors])
         assert success
         return True, self._get() if cloned else None
 
@@ -157,11 +160,16 @@ class StorageWriterFilter(AsyncFilter):
 
     def _create(self, tx : TransactionMetadata):
         # TODO handle
-        assert len(tx.rcpt_to) <= 1
+        # assert len(tx.rcpt_to) <= 1
         tx_cursor = self.storage.get_transaction_cursor()
         assert self.rest_id_factory is not None
         rest_id = self.rest_id_factory()
         storage_tx = tx.copy()
+        rcpt_to = None
+        if len(storage_tx.rcpt_to) > 1:
+            rcpt_to = storage_tx.rcpt_to
+            storage_tx.rcpt_to = rcpt_to[0:1]
+            rcpt_to = rcpt_to[1:]
         for i in range(0,1):
             if self.endpoint_yaml is None:
                 break
@@ -179,8 +187,16 @@ class StorageWriterFilter(AsyncFilter):
         tx_cursor.create(rest_id, storage_tx,
                          create_leased=self.create_leased)
         self.tx_group = TransactionGroup(self.storage, tx_cursor)
+
+        self.rest_id = rest_id  # XXX locking below?
+
+        if rcpt_to:
+            prev = storage_tx.copy()
+            storage_tx.rcpt_to.extend(rcpt_to)
+            self._update(storage_tx, prev.delta(storage_tx))
+
         with self.mu:
-            self.rest_id = rest_id
+            # self.rest_id = rest_id
             self.cv.notify_all()
 
     # xxx _maybe_load()?
@@ -188,14 +204,14 @@ class StorageWriterFilter(AsyncFilter):
         tx = None
         if self.tx_group is None:
             self.tx_group = TransactionGroup(self.storage)
-            assert self.timeouts is not None
-            assert self.rest_id is not None
-            if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is not None:
-                if self.tx_group.try_cache(group_db_ids):
-                    tx = self._get()
-                    logging.debug(tx)
+        assert self.timeouts is not None
+        assert self.rest_id is not None
+        if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is not None:
+            if self.tx_group.try_cache(group_db_ids):
+                tx = self._get()
+                logging.debug(tx)
 
-        if not self.tx_group.tx_cursors:
+        if tx is None:  #not self.tx_group.tx_cursors:
             if not self.tx_group.load(tx_rest_id=self.rest_id):
                 return False
 
@@ -268,7 +284,7 @@ class StorageWriterFilter(AsyncFilter):
                 assert sf_mode in ['upstream_unavailability',  # ~submission
                                    'mixed_data_response']      # ~interchange
             else:
-                assert len(self.tx_group.tx_cursors) <= 1
+                assert len(self.tx_group.tx_cursors) <= 1, [c.db_id for c in self.tx_group.tx_cursors]
         sf_unavail = sf_mode == 'upstream_unavailability'
 
         timeout = False
@@ -340,9 +356,15 @@ class StorageWriterFilter(AsyncFilter):
             else:
                 tx.data_response = data_resp
             return tx
+        def _data_resp(c):
+            assert c.tx is not None
+            return c.tx.data_response
+
         if data_resp is None:
-            tx.data_response = None
-            return tx
+            # xxx cleanup: sf_mode == mixed_data_resp
+            if not sf_unavail and any([_data_resp(c) is None for c in self.tx_group.tx_cursors]):
+                tx.data_response = None
+                return tx
 
         if (tx.body is None) or not tx._body_last():  # XXX
             return tx
@@ -351,15 +373,21 @@ class StorageWriterFilter(AsyncFilter):
         #     tx.data_response = Response(450, 'SWF upstream timeout')
 
         elif (sf_unavail and
-              (timeout or (data_resp is not None and data_resp.temp()))):
+              (timeout or (data_resp is not None and data_resp.temp()))) or (
+                  # xxx cleanup: sf_mode == mixed_data_resp
+                  not any([_data_resp(c) is None for c in self.tx_group.tx_cursors])):
             sf_cursors = []
             for cursor in self.tx_group.tx_cursors:
                 rr = None
                 assert cursor.tx is not None
                 if cursor.tx.rcpt_response:
+                    assert len(cursor.tx.rcpt_response) == 1
                     rr = cursor.tx.rcpt_response[0]
                 dr = cursor.tx.data_response
-                if rr is None or (not rr.perm()) or dr is None or not dr.ok():
+                if (sf_unavail and (rr is None or (not rr.perm()) or dr is None or not dr.ok())) or (
+                # xxx cleanup: sf_mode == mixed_data_resp
+                not sf_unavail and (rr is not None and rr.ok() and dr is not None and not dr.ok())):
+                    logging.debug(cursor.tx)
                     if (cursor.tx.retry is None or
                         cursor.tx.notification is None):
                         sf_cursors.append(cursor)
@@ -485,9 +513,11 @@ class StorageWriterFilter(AsyncFilter):
                     cursor = self.tx_group.tx_cursors[-1]
                     # TODO combine these writes?
                     cursor.start_attempt()
+                    # TODO option to s&f on this err?
                     cursor.write_envelope(TransactionMetadata(
-                        rcpt_response=[Response(450, 'busy SWF')]),
+                        rcpt_response=[Response(451, '4.5.3 too many recipients (SWF could not schedule upstream)')]),
                         finalize_attempt=True)
+                    # xxx final_attempt_reason=?
                 else:
                     created = True
                 logging.debug(sched)

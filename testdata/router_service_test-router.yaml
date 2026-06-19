@@ -24,7 +24,7 @@ sender:
   output_chain: ingress
   tag:
   - name: smtp-mx
-    output_chain: ingress_exploder
+    output_chain: ingress_sf
     upstream_tag: smtp-mx-upstream
   - name: smtp-mx-upstream
 - name: submission
@@ -90,15 +90,31 @@ endpoint:
   - filter: message_builder
   - filter: sync
 
-- name: ingress_exploder
+- name: ingress_sf
+  sf_mode: mixed_data_response
   output_handler:
     downstream_timeout: 1
     upstream_refresh: 1
   chain:
-  - data_timeout: 10
-    filter: exploder
-    msa: false
-    rcpt_timeout: 10
+  - filter: router
+    policy:
+      destination:
+        endpoint: sink
+        options:
+          receive_parsing: {}
+      domains:
+      - example.com
+      name: address_list
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
+  - filter: message_parser
+  - filter: sync
+
+  # - data_timeout: 10
+  #   filter: exploder
+  #   msa: false
+  #   rcpt_timeout: 10
 
 - name: ingress
   output_handler:
