@@ -924,6 +924,7 @@ class TransactionGroup:
         self.tx_cursors = []
         if tx_cursor:
             self.tx_cursors.append(tx_cursor)
+            self.parent_tx_id = tx_cursor.db_id
 
     def db_ids(self):
         out = []
@@ -933,8 +934,30 @@ class TransactionGroup:
             out.append(c.db_id)
         return out
 
-    # TODO need reload vs load from scratch?
+    def db_id_versions(self):
+        out = {}
+        for c in self.tx_cursors:
+            assert c.db_id is not None
+            assert c.db_id not in out
+            out[c.db_id] = c.version
+        return out
+
+
     def load(self, tx_rest_id : Optional[str] = None,
+             tx_id : Optional[int] = None) -> bool:
+        for i in range(0,5):
+            try:
+                return self._load(tx_rest_id, tx_id)
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    # unexpected to repeatedly conflict but if so,
+                    # will leave an open attempt?
+                    raise
+                backoff(i)
+        assert False, 'unreached'
+
+    def _load(self, tx_rest_id : Optional[str] = None,
              tx_id : Optional[int] = None) -> bool:
         assert self.parent.tx_table is not None
         assert self.parent.attempt_table is not None
@@ -1019,6 +1042,13 @@ class TransactionGroup:
                 return False
 
             self.tx_cursors[0]._load_blobs(db_tx)
+            blobs = self.tx_cursors[0].blobs
+            assert blobs is not None
+            for c in self.tx_cursors[1:]:
+                c.blobs = [b.clone() for b in blobs]
+            for c in self.tx_cursors:
+                c._update_version_cache(
+                    leased = (c.inflight_session_id == self.parent.session_id))
             return True
 
     def clone_tx(self, delta : TransactionMetadata, create_leased : bool):
@@ -1059,6 +1089,7 @@ class TransactionGroup:
             cursor_by_id = {}
             update_json = False
             db_id_version = {}
+            write_blob = False
             if tx_delta is not None:
                 tx_delta = tx_delta.copy()
                 assert len(self.tx_cursors) >= 1
@@ -1068,8 +1099,9 @@ class TransactionGroup:
                         db_tx, TransactionMetadata(body=tx_delta.body),
                         group_cursors=self.tx_cursors[1:])
                     tx_delta.body = None
+                    write_blob = True
 
-            if not bool(tx_delta) and not input_done:
+            if not bool(tx_delta) and not input_done and not write_blob:
                 return
 
             for c in cursors:
@@ -1102,8 +1134,8 @@ class TransactionGroup:
                         tcols.parent_id == self.parent_tx_id)))
             for row in res:
                 db_id, version = row
-                assert cursor_by_id[db_id].version == version, '%s %s' % (
-                    cursor_by_id[db_id].version, version)
+                if cursor_by_id[db_id].version != version:
+                    raise VersionConflictException()
 
             upd = update(self.parent.tx_table).where(
                 tcols.id == bindparam('db_id')
@@ -1124,9 +1156,21 @@ class TransactionGroup:
 
             res = db_tx.execute(upd, params)
         for cursor in self.tx_cursors:
+            # parity with tx_cursor._write(): RestHandler creation ->
+            # OH handoff tx needs to have the same effect as
+            # _load_blobs()
+            # if (cursor.blobs and
+            #     len(cursor.blobs) == 1 and
+            #     (blob_uri := cursor.blobs[0].blob_uri()) is not None and
+            #     blob_uri.tx_body):
+            #     cursor.tx.body = cursor.blobs[0]
+
+            logging.debug(
+                '%s: %s->%s',
+                cursor.db_id, cursor.version, db_id_version[cursor.db_id])
             cursor.version = db_id_version[cursor.db_id]
-            # xxx leased=
-            cursor._update_version_cache()
+            cursor._update_version_cache(
+                leased = (cursor.inflight_session_id == self.parent.session_id))
 
     # waits for at least one cursor to update, returns the updated
     # cursor on success, None on timeout
@@ -1164,6 +1208,32 @@ class TransactionGroup:
 
         logging.debug('ok')
         return True
+
+    def blob_done(self, blob):
+        bd = False
+        for i,c in enumerate(self.tx_cursors):
+            bdi = c._blob_done(blob)
+            logging.debug(c.blobs)
+            if i == 0:
+                bd = bdi
+            else:
+                assert bd == bdi
+        logging.debug(bd)
+        if not bd:
+            return
+        for i in range(0,5):
+            try:
+                self.update_all(TransactionMetadata(), input_done=True)
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                if not self.try_cache(self.db_ids()):
+                    backoff(i)
+                    self.load()
+                for c in self.tx_cursors:
+                    assert c._blob_done(blob)
+
 
 class BlobCursor(Blob, WritableBlob):
     db_id = None  # Blob.id

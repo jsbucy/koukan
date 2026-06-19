@@ -7,6 +7,7 @@ import logging
 from threading import Thread
 import time
 from enum import IntEnum
+from functools import partial
 
 from koukan.storage import Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
@@ -73,16 +74,17 @@ class StorageWriterFilterTest(unittest.TestCase):
                 upstream_delta = filter.update(tx, tx_delta)
                 self.assertTrue(len(upstream_delta.rcpt_response) <=
                                 len(tx.rcpt_to))
+                break
             except VersionConflictException:
                 logging.debug('VersionConflictException')
-                filter.get()
-                time.sleep(0.3)
                 if i == 4:
                     raise
+                time.sleep(0.3)
+                filter.get()
 
     def start_update(self, filter, tx, tx_delta):
         logging.debug('start_update')
-        fut = self.executor.submit(self.update(filter, tx, tx_delta))
+        fut = self.executor.submit(partial(self.update, filter, tx, tx_delta))
         time.sleep(0.1)  # xxx  still need this?
         return fut
 

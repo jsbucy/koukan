@@ -201,6 +201,7 @@ class StorageWriterFilter(AsyncFilter):
 
     # xxx _maybe_load()?
     def _load(self) -> bool:
+        logging.debug(self.rest_id)
         tx = None
         if self.tx_group is None:
             self.tx_group = TransactionGroup(self.storage)
@@ -209,11 +210,13 @@ class StorageWriterFilter(AsyncFilter):
         if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is not None:
             if self.tx_group.try_cache(group_db_ids):
                 tx = self._get()
-                logging.debug(tx)
 
         if tx is None:  #not self.tx_group.tx_cursors:
             if not self.tx_group.load(tx_rest_id=self.rest_id):
                 return False
+            tx = self._get()
+
+        logging.debug('%s %s %s', self.rest_id, self.tx_group.db_id_versions(), tx)
 
         if not self.tx_group.tx_cursors:  # 404 e.g. after GC
             return False
@@ -224,27 +227,25 @@ class StorageWriterFilter(AsyncFilter):
 
     @staticmethod
     def reduce_data_response(
-            lhs : Optional[TransactionCursor],
-            rhs : Optional[TransactionCursor]
-    ) -> Optional[TransactionCursor]:
+            lhs : Optional[TransactionMetadata],
+            rhs : Optional[TransactionMetadata]
+    ) -> Optional[TransactionMetadata]:
         if lhs is None:
             return None
         assert lhs is not None
-        assert lhs.tx is not None
-        if not lhs.tx.rcpt_response or lhs.tx.rcpt_response[0] is None:
+        if not lhs.rcpt_response or lhs.rcpt_response[0] is None:
             return None
         assert rhs is not None
-        assert rhs.tx is not None
-        if not rhs.tx.rcpt_response or rhs.tx.rcpt_response[0] is None:
+        if not rhs.rcpt_response or rhs.rcpt_response[0] is None:
             return None
-        if lhs.tx.rcpt_response[0].err():
+        if lhs.rcpt_response[0].err():
             return rhs
-        if rhs.tx.rcpt_response[0].err():
+        if rhs.rcpt_response[0].err():
             return lhs
-        if (lhs.tx.data_response is None) or (rhs.tx.data_response is None):
+        if (lhs.data_response is None) or (rhs.data_response is None):
             return None
-        if (lhs.tx.data_response.major_code() !=
-            rhs.tx.data_response.major_code()):
+        if (lhs.data_response.major_code() !=
+            rhs.data_response.major_code()):
             return None
         return lhs
 
@@ -257,18 +258,10 @@ class StorageWriterFilter(AsyncFilter):
     def _get(self) -> Optional[TransactionMetadata]:
         assert self.tx_group is not None
         assert self.tx_group.tx_cursors[0].tx is not None
-        tx = self.tx_group.tx_cursors[0].tx.copy()
-        for c in self.tx_group.tx_cursors:
-            logging.debug(c.tx)
-        for cursor in self.tx_group.tx_cursors[1:]:
-            assert cursor.tx is not None
-            tx.rcpt_to.extend(cursor.tx.rcpt_to)
-            tx.rcpt_response.extend(cursor.tx.rcpt_response)
 
         if self.timeouts is not None:
-            assert tx.rest_id is not None
-            self.timeouts.groups[tx.rest_id] = self.tx_group.db_ids()
-        logging.debug(tx)
+            assert self.rest_id is not None
+            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
 
         assert self.endpoint_yaml is not None
         if self.sender is None:
@@ -287,122 +280,95 @@ class StorageWriterFilter(AsyncFilter):
                 assert len(self.tx_group.tx_cursors) <= 1, [c.db_id for c in self.tx_group.tx_cursors]
         sf_unavail = sf_mode == 'upstream_unavailability'
 
+        def copy_tx(c):
+            assert c.tx is not None
+            return c.tx.copy()
+        group_tx = [copy_tx(c) for c in self.tx_group.tx_cursors]
+
+        now = time.monotonic_ns()
+        assert self.tx_group.tx_cursors[0].db_id is not None
         timeout = False
+        if (self.timeouts is not None and
+            ((tx_status := self.timeouts.tx_status.get(
+                self.tx_group.tx_cursors[0].db_id, None)) is not None)):
+            timeout = now > tx_status.timeout
+
+        # convert upstream timeout/temp err to 250 s&f resp
+        sf_cursor = []
+        if sf_unavail:
+            def unavail(resp):
+                return (timeout and resp is None) or (resp is not None and resp.temp())
+            for i,tx in enumerate(group_tx):
+                logging.debug(tx)
+                sf = False
+                if tx.mail_from is not None and unavail(tx.mail_response):
+                    tx.mail_response = Response(250, 'mail ok (SWF store and forward)')
+                    sf = True
+                tx.rcpt_response.extend(
+                    [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
+                for j,rcpt in enumerate(tx.rcpt_response):
+                    if sf or unavail(rcpt):
+                        tx.rcpt_response[j] = Response(250, 'rcpt ok (SWF store and forward)')
+                        sf = True
+                if tx.body is not None and tx._body_last() and (sf or unavail(tx.data_response)):
+                    tx.data_response = Response(250, 'message accepted (SWF store and forward)')
+                    sf = True
+                if sf:
+                    sf_cursor.append(self.tx_group.tx_cursors[i])
+                logging.debug(tx)
+
+        tx = group_tx[0]
+        for cursor in self.tx_group.tx_cursors[1:]:
+            assert cursor.tx is not None
+            tx.rcpt_to.extend(cursor.tx.rcpt_to)
+            tx.rcpt_response.extend(cursor.tx.rcpt_response)
+        logging.debug(tx)
+
         # TODO Normally, output flow returns a timeout response if the
         # upstream timed out however it could be e.g. terminated by an
         # exception in which case it's nicer behavior to return a
         # response downstream rather than hanging.
-        upstream_bug_timeout = False
+        # upstream_bug_timeout = False
 
-        if sf_unavail:
-            now = time.monotonic_ns()
-            assert self.tx_group.tx_cursors[0].db_id is not None
-            tx_status = None
-            if (self.timeouts is not None and
-                ((tx_status := self.timeouts.tx_status.get(
-                    self.tx_group.tx_cursors[0].db_id, None)) is not None)):
-                timeout = now > tx_status.timeout
+        # rcpt_response must be returned in order
+        for i,rr in enumerate(tx.rcpt_response):
+            if rr is None:
+                tx.rcpt_response = tx.rcpt_response[0:i]
+                break
+        assert None not in tx.rcpt_response
 
-            if tx.mail_from is not None:
-                mail_temp = (tx.mail_response is not None and
-                             tx.mail_response.temp())
-                if (timeout and tx.mail_response is None) or mail_temp:
-                    tx.mail_response = Response(
-                        250, 'mail ok (SWF store and forward)')
-
-            tx.rcpt_response.extend(
-                [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
-            if tx_status is not None:
-                tx_status.rcpts.extend(
-                    [False] * (len(tx.rcpt_to) - len(tx_status.rcpts)))
-            for i,rcpt in enumerate(tx.rcpt_to):
-               rcpt_resp = None
-               rcpt_resp = tx.rcpt_response[i]
-
-               rcpt_temp = rcpt_resp is not None and rcpt_resp.temp()
-               if (tx_status is not None and
-                   (tx_status.rcpts[i] or
-                    (timeout and rcpt_resp is None) or
-                    rcpt_temp)):
-                   tx_status.rcpts[i] = True
-                   tx.rcpt_response[i] = Response(
-                       250, 'rcpt ok (SWF store and forward)')
-
-                # elif rcpt_resp is None and upstream_bug_timeout:
-                #   tx.rcpt_response[i] = Response(450, 'SWF upstream timeout')
-
-            # rcpt_response must be returned in order
-            for i,rr in enumerate(tx.rcpt_response):
-                if rr is None:
-                    tx.rcpt_response = tx.rcpt_response[0:i]
-                    break
-            assert None not in tx.rcpt_response
-
-
-        r : Sequence[Optional[TransactionCursor]] = self.tx_group.tx_cursors
-
-        data_resp_cursor : Optional[TransactionCursor] = reduce(
-            StorageWriterFilter.reduce_data_response, r)
-        logging.debug(data_resp_cursor.tx if data_resp_cursor else None)
-        data_resp = None
-        if data_resp_cursor is not None:
-            assert data_resp_cursor.tx is not None
-            data_resp = data_resp_cursor.tx.data_response
-        if data_resp and not (sf_unavail and data_resp.temp()):
+        data_resp_tx = reduce(
+            StorageWriterFilter.reduce_data_response, group_tx)
+        logging.debug(data_resp_tx)
+        data_resp = data_resp_tx.data_response if data_resp_tx else None
+        if data_resp is not None:
             if len(self.tx_group.tx_cursors) > 1:
-                tx.data_response = Response(
+                data_resp = Response(
                     data_resp.code,
                     data_resp.message + ' (SWF Exploder same response)')
-            else:
-                tx.data_response = data_resp
-            return tx
-        def _data_resp(c):
-            assert c.tx is not None
-            return c.tx.data_response
+        tx.data_resp = data_resp
 
-        if data_resp is None:
-            # xxx cleanup: sf_mode == mixed_data_resp
-            if not sf_unavail and any([_data_resp(c) is None for c in self.tx_group.tx_cursors]):
-                tx.data_response = None
-                return tx
+        if tx._body_last() and tx.data_resp is None:
+            for i,tx in enumerate(group_tx):
+                cursor = self.tx_group.tx_cursors[i]
+                if cursor in sf_cursor:
+                    continue
+                def ok(r):
+                    return r is not None and r.ok()
+                if ok(tx.mail_response) and not any([not ok(r) for r in tx.rcpt_response]) and not ok(tx.data_response):
+                    sf_cursor.append(cursor)
 
-        if (tx.body is None) or not tx._body_last():  # XXX
-            return tx
-
-        # if upstream_bug_timeout and data_resp is None:
-        #     tx.data_response = Response(450, 'SWF upstream timeout')
-
-        elif (sf_unavail and
-              (timeout or (data_resp is not None and data_resp.temp()))) or (
-                  # xxx cleanup: sf_mode == mixed_data_resp
-                  not any([_data_resp(c) is None for c in self.tx_group.tx_cursors])):
-            sf_cursors = []
-            for cursor in self.tx_group.tx_cursors:
-                rr = None
-                assert cursor.tx is not None
-                if cursor.tx.rcpt_response:
-                    assert len(cursor.tx.rcpt_response) == 1
-                    rr = cursor.tx.rcpt_response[0]
-                dr = cursor.tx.data_response
-                if (sf_unavail and (rr is None or (not rr.perm()) or dr is None or not dr.ok())) or (
-                # xxx cleanup: sf_mode == mixed_data_resp
-                not sf_unavail and (rr is not None and rr.ok() and dr is not None and not dr.ok())):
-                    logging.debug(cursor.tx)
-                    if (cursor.tx.retry is None or
-                        cursor.tx.notification is None):
-                        sf_cursors.append(cursor)
-
-            # NOTE there is a bit of a "if a tree falls in a
-            # forest..." flavor to this: we don't actually enable
-            # retries until the client does a GET that returns the 250
-            # s&f response. Formally, the update to input_done would
-            # start a timer that triggers this.
-            if sf_cursors:
-                self.tx_group.update_all(
-                    TransactionMetadata(
-                        retry = {},
-                        notification={}),
-                    cursors=sf_cursors)
+        # NOTE there is a bit of a "if a tree falls in a
+        # forest..." flavor to this: we don't actually enable
+        # retries until the client does a GET that returns the 250
+        # s&f response. Formally, the update to input_done would
+        # start a timer that triggers this.
+        if sf_cursor:
+            self.tx_group.update_all(
+                TransactionMetadata(
+                    retry = {},
+                    notification={}),
+                cursors=sf_cursor)
 
             tx.data_response = Response(
                 250, 'message accepted (SWF store and forward)')
@@ -437,7 +403,7 @@ class StorageWriterFilter(AsyncFilter):
         # the delta from the final cursor.tx, it's possible the
         # version conflict retry paths could pick up upstream deltas?
         logging.debug('StorageWriterFilter._update tx %s %s',
-                      self.rest_id, tx)
+                      self.rest_id, tx, stack_info=True)
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
@@ -483,6 +449,7 @@ class StorageWriterFilter(AsyncFilter):
             # TODO do this in a batch if we get multiple (moot
             # without pipelining)
             assert self.tx_group.tx_cursors[0].tx is not None
+            logging.debug(self.tx_group.tx_cursors[0].tx)
             if (downstream_delta.rcpt_to and
                 not self.tx_group.tx_cursors[0].tx.rcpt_to):
                 rcpt = downstream_delta.rcpt_to[0]
@@ -576,30 +543,22 @@ class StorageWriterFilter(AsyncFilter):
                 offset, d, content_length=content_length, update_tx=False)
             appended, length, content_length = res
             # reset timeout
+            # xxx: need this condition?
             if appended and length == content_length:
                 self.parent.blob_done(self)
             return appended, length, content_length
 
 
     def blob_done(self, writer):
-        bd = False
-        for i,c in enumerate(self.tx_group.tx_cursors):
-            bdi = c._blob_done(writer.blob)
-            if i == 0:
-                bd = bdi
-            else:
-                assert bd == bdi
-
-        logging.debug(bd)
-        if bd:
-            self.tx_group.update_all(TransactionMetadata(), input_done=True)
+        self.tx_group.blob_done(writer.blob)
 
     def get_blob_writer(self,
                         create : bool,
                         blob_rest_id : Optional[str] = None,
                         tx_body : Optional[bool] = None
                         ) -> Optional[WritableBlob]:
-        self._load()
+        if not self._load():
+            return None
         assert self.tx_group is not None
         assert self.tx_group.tx_cursors[0].tx is not None
         assert self.rest_id is not None

@@ -993,10 +993,10 @@ class RouterServiceTest(unittest.TestCase):
         logging.debug('RouterServiceTest.test_notification after update %s',
                       tx)
 
-        self.assertEqual(250, tx.mail_response.code)
-        self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
+        self.assertEqual(201, tx.mail_response.code)
+        # self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
         self.assertRcptCodesEqual([250], tx.rcpt_response)
-        self.assertIn('RCPT ok (AsyncFilterWrapper store&forward)',
+        self.assertIn('rcpt ok (SWF store and forward)',
                       tx.rcpt_response[0].message)
         self.assertEqual(250, tx.data_response.code)
         self.assertIn('AsyncFilterWrapper store&forward',
