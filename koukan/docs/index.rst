@@ -11,6 +11,10 @@ Koukan: Cloud-Native Email Transport
 - SRE wants something that runs on k8s
 - Everyone wants to be agnostic to SaaS vs on-prem/self-hosted
 
+Koukan lets your app send and receive email using simple modern web
+requests, while it handles all the messy, old-fashioned email plumbing
+behind the scenes — and tells you immediately when something goes wrong.
+
 Github `project home <https://github.com/jsbucy/koukan>`__
 
 Contents
