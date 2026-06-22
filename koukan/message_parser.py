@@ -60,7 +60,7 @@ class MessageParser:
             'content-disposition': self._parse_parameter_header,
             'content-type': self._parse_parameter_header,
 
-            # TODO default HeaderRegistery doesn't map in-reply-to to
+            # TODO default HeaderRegistry doesn't map in-reply-to to
             # MessageIDHeader
             #'in-reply-to': self._parse_messageid_header,
 

@@ -36,9 +36,9 @@ If you want the Koukan smtp gateway to terminate port 25/587 connections
 directly from the public internet, you will need to arrange for it to
 be able to bind privileged ports. On Linux, you can do this with ``capsh`` per this Stack Overflow `answer <https://stackoverflow.com/questions/413807/is-there-a-way-for-non-root-processes-to-bind-to-privileged-ports-on-linux>`__
 
-Alternatively, you use a front proxy such as `Envoy
+Alternatively, you can use a front proxy such as `Envoy
 <https://envoyproxy.io>`__ to terminate port 25 and let the gateway
-listen on an unprivilged port. Note that Envoy cannot currently
+listen on an unprivileged port. Note that Envoy cannot currently
 terminate SMTP STARTTLS but there has been some work in this area
 `bug`_.
 

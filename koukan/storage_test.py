@@ -689,7 +689,7 @@ class StorageTestBase(unittest.TestCase):
     # upstream/OutputHandler
     # one does a write
     # the other verifies it reads it back from the cache
-    # then a 3rd cursor reads it from the db and verfies it got the
+    # then a 3rd cursor reads it from the db and verifies it got the
     # same thing as the cache
     def test_handoff(self):
         prev_reads = self.s._tx_reads

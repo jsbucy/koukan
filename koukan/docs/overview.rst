@@ -2,7 +2,7 @@
 Overview
 ========
 
-Koukan is an Cloud-Native email transport stack. Koukan provides a
+Koukan is a Cloud-Native email transport stack. Koukan provides a
 rich http/json rest api for new-build applications to send and receive
 email. The rest api includes rfc822/MIME message formatting, DKIM
 signing, etc. The rest api also reports many errors immediately rather
@@ -140,7 +140,7 @@ Storage → OutputHandler → FilterChain → ...Exploder → Storage
 
 Storage → OutputHandler → ...
 
-where the Exploder fans out a separate upstream transaction for reach
+where the Exploder fans out a separate upstream transaction for each
 rcpt of the downstream transaction and fans the upstream responses
 back in.
 

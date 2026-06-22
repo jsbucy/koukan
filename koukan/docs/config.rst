@@ -484,7 +484,7 @@ authentication. Replaces ``relay_auth`` filter
 num_rcpts: matches if the number of rcpts prior to this rcpt with a
 success response is >= yaml max_rcpts
 
-invalid_mail_from: matches if the mail_from mailbox is in invalid
+invalid_mail_from: matches if the mail_from mailbox is invalid
 
 invalid_rcpt_to: PER_RCPT matcher that matches if the rcpt_to mailbox is invalid
 
