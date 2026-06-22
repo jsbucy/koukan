@@ -365,7 +365,7 @@ class OutputHandler:
         # append body/blob data will probably not fail even if the
         # upstream transaction
         # has permfailed since:
-        # - Exploder doesn't check for upstream errors after it it has
+        # - Exploder doesn't check for upstream errors after it has
         # decided to store&forward
         # - downstream StorageWriterFilter/RestHandler stack doesn't
         # have the logic to fail the PUT in that case

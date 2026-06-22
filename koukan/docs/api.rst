@@ -208,7 +208,7 @@ Koukan will return a URL to PUT the blob to::
     POST /senders/submission/transactions HTTP/1.1
     Content-type: application/json
     {"mail_from": {"m": "alice@example.com"},
-     "rcpt_to": {"m": "bob@example.com"}}}}
+     "rcpt_to": {"m": "bob@example.com"}}
 
     201 created
     Location: /transactions/xyz
@@ -289,7 +289,7 @@ upload the rfc822 message::
 additionally, if you enable message parsing in the output chain::
 
     PUT /transactions/<tx id>/message_builder HTTP/1.1
-    PUT /transactions<tx id>/blob/<blob id> HTTP/1.1
+    PUT /transactions/<tx id>/blob/<blob id> HTTP/1.1
 
 for each blob in the message builder spec json
 

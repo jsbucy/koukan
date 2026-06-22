@@ -34,7 +34,7 @@ Yes
 
 - You have an application that sends/receives email and don't like your current
   solution such that you're interested in porting it to a new email api.
-- You have have experience running an MTA on the public internet.
+- You have experience running an MTA on the public internet.
 - You have some experience with http/rest apis.
 - You're willing to get your hands dirty with Python.
 

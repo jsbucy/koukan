@@ -13,7 +13,7 @@ from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
 from koukan.backoff import backoff
 
-# AsyncFilterWrapper provdes store&forward business logic on top of
+# AsyncFilterWrapper provides store&forward business logic on top of
 # StorageWriterFilter for Exploder and related workflows
 # (AddRouteFilter). This consists of ~4 things:
 # 1: version conflict retries
