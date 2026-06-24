@@ -343,6 +343,7 @@ class TransactionCursor:
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob_spec.blob:
+                    assert blob_spec.blob.finalized()
                     blob_cursor.append_blob(blob_spec.blob)
                 if not blob_spec.create_id and not blob_spec.create_tx_body:
                     create_id = str(i)
@@ -1061,6 +1062,9 @@ class TransactionGroup:
         assert self.tx_cursors[0].tx is not None
         tx = self.tx_cursors[0].tx.copy()
         tx.rcpt_to = []
+        tx.sf_rcpt_timeout = []
+        tx.downstream_rcpt_response = []
+
         assert tx.merge_from(delta)
         # xxx create without rest_id?
         # TODO insert multiple (moot without smtp pipelining)
@@ -1085,7 +1089,7 @@ class TransactionGroup:
         with self.parent.begin_transaction() as db_tx:
             tcols = self.parent.tx_table.c
 
-            params = []
+            params : List[dict[str, Any]] = []
             cursor_by_id = {}
             update_json = False
             db_id_version = {}
@@ -1111,13 +1115,15 @@ class TransactionGroup:
                 d = {'db_id': c.db_id,
                      'version': new_version}
                 db_id_version[c.db_id] = new_version
+                assert c.tx is not None
                 if tx_delta:
                     update_json = True
-                    assert c.tx is not None
                     assert c.tx.merge_from(tx_delta) is not None
                     d['json'] = c.tx.to_json(WhichJson.DB)
                     if c.tx.notification is not None:
                         d['notification'] = True
+                if final_attempt_reason:
+                    d['no_final_notification'] = not bool(c.tx.notification)
                 params.append(d)
 
             logging.debug(params)
@@ -1209,7 +1215,9 @@ class TransactionGroup:
         logging.debug('ok')
         return True
 
-    def blob_done(self, blob):
+    def blob_done(self, blob, tx_delta : Optional[TransactionMetadata] = None):
+        if tx_delta is None:
+            tx_delta = TransactionMetadata()
         bd = False
         for i,c in enumerate(self.tx_cursors):
             bdi = c._blob_done(blob)
@@ -1223,7 +1231,7 @@ class TransactionGroup:
             return
         for i in range(0,5):
             try:
-                self.update_all(TransactionMetadata(), input_done=True)
+                self.update_all(tx_delta, input_done=True)
             except VersionConflictException:
                 logging.debug('VersionConflictException')
                 if i == 4:
@@ -1390,11 +1398,13 @@ class BlobCursor(Blob, WritableBlob):
 
         return True, db_length, self._content_length
 
-    def _append_data(self, db_tx, offset: int, d : bytes,
-                    content_length : Optional[int] = None,
-                    # last: set content_length to offset + len(d)
-                    last : Optional[bool] = None,
-                    update_tx : bool = True):
+    def _append_data(
+            self, db_tx, offset: int, d : bytes,
+            content_length : Optional[int] = None,
+            # last: set content_length to offset + len(d)
+            last : Optional[bool] = None,
+            update_tx : bool = True
+    ) -> Tuple[bool, int, Optional[int], Optional[TransactionCursor]]:
         for i in range(0,2):
             upd = (update(self.parent.blob_table)
                    .where(self.parent.blob_table.c.id == self.db_id)

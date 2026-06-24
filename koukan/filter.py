@@ -178,6 +178,7 @@ class TxField:
     is_list : bool = False
     is_dict : bool = False
     copy : Optional[Copy] = None
+    pod = False  # Plain Old Data, can be serialized to json directly
 
     def __init__(self,
                  json_field : str,
@@ -187,7 +188,8 @@ class TxField:
                  rest_placeholder : bool = False,
                  is_list : bool = False,
                  is_dict : bool = False,
-                 copy : Optional[Copy] = None):
+                 copy : Optional[Copy] = None,
+                 pod : bool = False):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -199,6 +201,7 @@ class TxField:
         self.is_list = is_list
         self.is_dict = is_dict
         self.copy = copy
+        self.pod = pod
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -460,6 +463,29 @@ _tx_fields = [
             is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
     TxField('ephemeral_filter_output', validity=None, is_dict=True),
+
+    # private to StorageWriterFilter for store-and-forward/smtp transactions
+    TxField('sf_mail_timeout',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('sf_rcpt_timeout',
+            is_list=True,
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('sf_data_timeout',
+            validity=set([WhichJson.DB]),
+            pod=True),
+
+    TxField('downstream_mail_response',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('downstream_rcpt_response',
+            is_list=True,
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('downstream_data_response',
+            validity=set([WhichJson.DB]),
+            pod=True)
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -516,6 +542,13 @@ class TransactionMetadata:
     filter_output_dict_json : Optional[Dict[str, Any]] = None
     ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
+    sf_mail_timeout : Optional[int] = None
+    sf_rcpt_timeout : List[int]
+    sf_data_timeout : Optional[int] = None
+    downstream_mail_response : Optional[int] = None
+    downstream_rcpt_response : List[int]
+    downstream_data_response : Optional[int] = None
+
     def __init__(self,
                  local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
@@ -548,6 +581,8 @@ class TransactionMetadata:
         self.resolution = resolution
         self.rest_id = rest_id
         self.sender = sender
+        self.sf_rcpt_timeout = []
+        self.downstream_rcpt_response = []
 
     def __repr__(self):
         out = ''
@@ -625,6 +660,8 @@ class TransactionMetadata:
                     v = [None for v in js_v]
                 elif field.from_json is not None:
                     v = [field.from_json(v, which_js) for v in js_v]
+                elif field.pod:
+                    v = list(js_v)
                 else:
                     raise ValueError()
                 if field.list_offset() in tx_json and (
@@ -762,7 +799,12 @@ class TransactionMetadata:
                     v_js = []
                     for vv in v:
                         assert vv is not None, '%s %s' % (name, v)
-                        vv_js = vv.to_json(which_js)
+                        if field.to_json:
+                            vv_js = field.to_json(vv, which_js)
+                        elif not field.pod:
+                            vv_js = vv.to_json(which_js, which_js)
+                        else:
+                            vv_js = vv
                         v_js.append(vv_js)
 
                 offset = getattr(self, field.list_offset(), None)
@@ -889,7 +931,7 @@ class TransactionMetadata:
             return
         if (old_v is not None) and (new_v is None):
            logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
-           assert False, (which_json, old_v, new_v)
+           assert False, (which_json, f, old_v, new_v)
         if (old_v is None) and (new_v is not None):
             setattr(out, f, new_v)
             return
@@ -942,7 +984,7 @@ class TransactionMetadata:
             if old_v[i] is not None and new_v[i] is None:
                 assert False, 'tx.delta ' + f + ' ->None'
             if old_v[i] != new_v[i]:
-                assert False, 'tx.delta ' + f + ' !='
+                assert False, 'tx.delta ' + f + ' ' + str(old_v[i]) + ' != ' + str(new_v[i])
         setattr(out, f, new_v[old_len:])
         setattr(out, json_field.list_offset(), old_len)
 

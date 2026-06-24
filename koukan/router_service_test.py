@@ -971,8 +971,10 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual([m.mailbox for m in tx.rcpt_to],
                              ['bob@example.com'])
             prev = tx.copy()
-            tx.mail_response = Response(201)
-            tx.rcpt_response = [Response(402)]
+            if tx_delta.mail_from:
+                tx.mail_response = Response(201)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response = [Response(402)]
             return prev.delta(tx)
         upstream_endpoint = FakeFilter()
         for i in range(0, 3):
@@ -996,10 +998,10 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(201, tx.mail_response.code)
         # self.assertEqual('MAIL ok (exploder noop)', tx.mail_response.message)
         self.assertRcptCodesEqual([250], tx.rcpt_response)
-        self.assertIn('rcpt ok (SWF store and forward)',
+        self.assertIn('StorageWriterFilter store&forward',
                       tx.rcpt_response[0].message)
-        self.assertEqual(250, tx.data_response.code)
-        self.assertIn('AsyncFilterWrapper store&forward',
+        self.assertEqual(250, tx.data_response.code, msg=tx)
+        self.assertIn('StorageWriterFilter store&forward',
                       tx.data_response.message)
 
         for i in range(0,2):
@@ -1469,6 +1471,7 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, mail_code)
         self.assertRcptCodesEqual([rcpt_code], tx.rcpt_response)
+        self.assertIsNotNone(tx.data_response, msg=tx)
         self.assertEqual(tx.data_response.code, data_code)
 
     def test_add_route_sync_success(self):
@@ -1478,6 +1481,9 @@ class RouterServiceTest(unittest.TestCase):
             Response(206),
             201, 203, 205)
 
+    # Currently failing because no data_response. There may be a subtle
+    # ordering change where RestEndpoint in the test notices the
+    # upstream rcpt error and doesn't send the body?
     def test_add_route_sync_err(self):
         self._test_add_route_sync(
             Response(402),

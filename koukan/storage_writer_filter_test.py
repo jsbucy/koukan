@@ -34,7 +34,8 @@ from koukan.executor import Executor
 # class Result(IntEnum):
 #     TEMP,
 #     PERM,
-#     TIMEOUT
+#     TIMEOUT,
+#     SUCCESS
 
 # class Recipient:
 #     stage : Stage
@@ -190,13 +191,11 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual([250], [r.code for r in tx.rcpt_response])
 
         prev = tx.copy()
-        tx.body = InlineBlob(b'Hello, world!')
+        tx.body = InlineBlob(b'Hello, world!', last=True)
         filter.update(tx, prev.delta(tx))
         tx = filter.get()
-        self.assertIsNone(tx.data_response)
-        time.sleep(1)
-        tx = filter.get()
         self.assertEqual(250, tx.data_response.code)
+        self.assertIn('store&forward', tx.data_response.message)
 
         cursor = self.storage.get_transaction_cursor()
         tx = cursor.load(rest_id='tx_rest_id')
@@ -465,7 +464,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             'test_message_builder_blob')
 
 
-    def testTimeoutMail(self):
+    def test_timeout_mail(self):
         timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
@@ -480,7 +479,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.join(t, 3)
         self.assertIsNone(tx.mail_response)
 
-    def testTimeoutRcpt(self):
+    def test_timeout_rcpt(self):
         timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
@@ -491,7 +490,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter._create(TransactionMetadata())
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'),
-                                 rcpt_to = [Mailbox('bob')])
+                                 rcpt_to = [Mailbox('bob')],
+                                 body=InlineBlob(b'hello, world!', last=True))
         t = self.start_update(filter, tx, tx)
 
         tx_cursor = self.storage.load_one()
@@ -512,6 +512,13 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = filter.get()
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual(tx.rcpt_response, [])
+
+        time.sleep(1)
+        tx = filter.get()
+        logging.debug(tx)
+        self.assertEqual(tx.mail_response.code, 201)
+        self.assertEqual(tx.rcpt_response, [])
+
 
     def test_tx_body_inline_reuse(self):
         timeouts = Timeouts()
