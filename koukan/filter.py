@@ -680,13 +680,14 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
-    def _body_last(self):
+    def _body_last(self) -> bool:
         if isinstance(self.body, BlobSpec):
             return self.body.finalized
-        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+        elif isinstance(self.body, Blob) or isinstance(self.body, MessageBuilderSpec):
             return self.body.finalized()
         elif self.body is not None:
             raise ValueError()
+        return False
 
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx

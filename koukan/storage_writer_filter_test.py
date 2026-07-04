@@ -190,6 +190,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = filter.get()
         self.assertEqual([250], [r.code for r in tx.rcpt_response])
 
+        # add body, rcpt s&f -> immediate data s&f
         prev = tx.copy()
         tx.body = InlineBlob(b'Hello, world!', last=True)
         filter.update(tx, prev.delta(tx))

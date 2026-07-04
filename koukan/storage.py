@@ -1203,7 +1203,7 @@ class TransactionGroup:
         logging.debug('TransactionGroup.try_cache %s', db_ids)
         cursor_by_id = { c.db_id : c for c in self.tx_cursors }
         for i,db_id in enumerate(db_ids):
-            if (cursor := cursor_by_id.get(db_id)) is None:
+            if (cursor := cursor_by_id.get(db_id, None)) is None:
                 cursor = self.parent.get_transaction_cursor(db_id = db_id)
                 self.tx_cursors.append(cursor)
             if i == 0:

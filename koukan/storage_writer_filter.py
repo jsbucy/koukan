@@ -352,7 +352,6 @@ class StorageWriterFilter(AsyncFilter):
                     tx.data_response = Response(450, 'placeholder')
 
                 if (not tx.downstream_data_response and
-                    tx.body is not None and
                     tx._body_last() and
                     unavail(tx, tx.data_response, tx.sf_data_timeout)):
                     sf = True
