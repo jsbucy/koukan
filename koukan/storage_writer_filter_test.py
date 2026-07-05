@@ -26,31 +26,41 @@ from koukan.sender import Sender
 from koukan.deadline import Deadline
 from koukan.executor import Executor
 
-# class Stage(IntEnum):
-#     MAIL,
-#     RCPT,
-#     DATA
+class Stage(IntEnum):
+    MAIL = 0
+    RCPT = 1
+    DATA = 2
 
-# class Result(IntEnum):
-#     TEMP,
-#     PERM,
-#     TIMEOUT,
-#     SUCCESS
+class Result(IntEnum):
+    TEMP = 0
+    PERM = 1
+    TIMEOUT = 2
+    SUCCESS = 3  # only for DATA
 
-# class Recipient:
-#     stage : Stage
-#     result : Result
+class Recipient:
+    stage : Stage
+    result : Result
+    def __init__(self, s, r):
+        self.stage = s
+        self.result = r
 
-# class Test:
-#     recipients : List[Recipient]
-#     stage : Stage
-#     result : Result
-#     sf_mode : str  # unavail | mixed
-#     # stage is max across rcpts
-#     # - if sf_unavail and temp/timeout -> 250 s&f
-#     # - if timeout -> 450 upstream temp
-#     # - if all same major -> return that
-#     # - else mixed: return 250 s&f
+class Test:
+    rcpt : List[Recipient]
+    stage : Stage
+    result : Result
+    sf_mode : str  # unavail | mixed
+
+    def __init__(self, rcpt, stage, result, sf_mode):
+        self.rcpt = rcpt
+        self.stage = stage
+        self.result = result
+        self.sf_mode = sf_mode
+
+    # stage is max across rcpts
+    # - if sf_unavail and temp/timeout -> 250 s&f
+    # - if timeout -> 450 upstream temp
+    # - if all same major -> return that
+    # - else mixed: return 250 s&f
 
 class StorageWriterFilterTest(unittest.TestCase):
     def setUp(self):
@@ -568,6 +578,153 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter.update(tx, tx.copy())
 
         self.assertIsNone(self.storage.load_one())
+
+    def _run_test(self, t : Test):
+        timeouts = Timeouts()
+        endpoint_yaml = {
+            'sf_mode': t.sf_mode
+        }
+        filter = StorageWriterFilter(
+            self.storage,
+            rest_id_factory = lambda: 'tx_rest_id',
+            create_leased = True,
+            sender=Sender('ingress'),
+            endpoint_yaml = lambda sender: endpoint_yaml,
+	    timeouts = timeouts)
+
+        def to_response(r : Result):
+            if r == Result.TEMP:
+                return Response(450)
+            elif r == Result.PERM:
+                return Response(550)
+            elif r == Result.SUCCESS:
+                return Response(250)
+            return None
+
+        def stage_resp(s, ss, r):
+            return to_response(r if s == ss else Result.SUCCESS)
+
+        def upstream(cursor, rcpt):
+            tx = cursor.load()
+            logging.debug(tx)
+            attempt_delta = TransactionMetadata()
+            if tx.mail_from and not tx.mail_response:
+                attempt_delta.mail_response = stage_resp(
+                    Stage.MAIL, rcpt.stage, rcpt.result)
+            if tx.rcpt_to and not tx.rcpt_response:
+                attempt_delta.rcpt_response = [
+                    stage_resp(Stage.RCPT, rcpt.stage, rcpt.result)]
+            if tx._body_last() and not tx.data_response:
+                attempt_delta.data_response = stage_resp(
+                    Stage.DATA, rcpt.stage, rcpt.result)
+            logging.debug(attempt_delta)
+            cursor.write_envelope(TransactionMetadata(),
+                                  attempt_delta=attempt_delta)
+
+        tx = TransactionMetadata(
+            sender=Sender('ingress'),
+            mail_from=Mailbox('alice'))
+        filter.update(tx, tx.copy())
+
+        cursor = filter.release_transaction_cursor(0)
+        cursor.start_attempt()
+        upstream_cursors = [cursor]
+        upstream(cursor, t.rcpt[0])
+
+        def get_downstream():
+            for i in range(0,10):
+                tx = filter.get()
+                logging.debug(tx)
+                if not tx.req_inflight():
+                    return tx
+                time.sleep(0.3)
+            else:
+                self.fail('upstream timeout')
+
+        tx = get_downstream()
+
+        for i,rcpt in enumerate(t.rcpt):
+            prev = tx.copy()
+            tx.rcpt_to.append(Mailbox('bob%d' % i))
+            filter.update(tx, prev.delta(tx))
+            if i > 0:
+                cursor = filter.release_transaction_cursor(i)
+                cursor.start_attempt()
+                upstream_cursors.append(cursor)
+            else:
+                cursor = upstream_cursors[0]
+            upstream(cursor, rcpt)
+
+        tx = filter.get()
+        prev = tx.copy()
+        tx.body = InlineBlob(b'hello, world!', last=True)
+        filter.update(tx, prev.delta(tx))
+        tx = get_downstream()
+
+        for i,rcpt in enumerate(t.rcpt):
+            upstream(upstream_cursors[i], rcpt)
+
+        tx = get_downstream()
+
+        def check_resp(exp, r):
+            self.assertEqual(exp is None, r is None)
+            if exp is not None:
+                self.assertEqual(exp.code, r.code)
+
+        check_resp(
+            stage_resp(Stage.MAIL, t.stage, t.result),
+            tx.mail_response)
+        for i,r in enumerate(
+            [stage_resp(Stage.RCPT, r.stage, r.result) for r in t.rcpt]):
+            check_resp(r, tx.rcpt_response[i])
+        check_resp(
+            stage_resp(Stage.DATA, t.stage, t.result),
+            tx.data_response)
+
+
+    # mail temp -> sf
+    def test_single_rcpt_mail_temp(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.MAIL, Result.TEMP)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+    # mail perm -> perm
+    def test_single_rcpt_mail_perm(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.MAIL, Result.PERM)],
+            stage = Stage.MAIL,
+            result = Result.PERM,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+    # mail timeout -> sf
+    def test_single_rcpt_mail_timeout(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.MAIL, Result.TIMEOUT)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+    # rcpt temp -> sf
+    # rcpt perm -> perm
+    # rcpt timeout -> sf
+    # data temp -> sf
+    # data perm -> perm
+    # data timeout -> sf
+
+
+
+    def test_single_rcpt_success(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
 
 if __name__ == '__main__':
     unittest.main()
