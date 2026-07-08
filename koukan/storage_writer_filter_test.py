@@ -39,10 +39,12 @@ class Result(IntEnum):
 
 class Recipient:
     stage : Stage
-    result : Result
-    def __init__(self, s, r):
+    upstream_result : Result
+    downstream_result : Result
+    def __init__(self, s, ru, rd):
         self.stage = s
-        self.result = r
+        self.upstream_result = ru
+        self.downstream_result = rd
 
 class Test:
     rcpt : List[Recipient]
@@ -592,7 +594,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             endpoint_yaml = lambda sender: endpoint_yaml,
 	    timeouts = timeouts)
 
-        def to_response(r : Result):
+        def to_response(r : Result) -> Optional[Response]:
             if r == Result.TEMP:
                 return Response(450)
             elif r == Result.PERM:
@@ -601,8 +603,13 @@ class StorageWriterFilterTest(unittest.TestCase):
                 return Response(250)
             return None
 
-        def stage_resp(s, ss, r):
-            return to_response(r if s == ss else Result.SUCCESS)
+        # actual, expectation
+        def stage_resp(s, ss, r) -> Optional[Response]:
+            if s < ss:  # XXX or prev s&f
+                return to_response(Result.SUCCESS)
+            elif s == ss:
+                return to_response(r)
+            return None
 
         def upstream(cursor, rcpt):
             tx = cursor.load()
@@ -610,13 +617,13 @@ class StorageWriterFilterTest(unittest.TestCase):
             attempt_delta = TransactionMetadata()
             if tx.mail_from and not tx.mail_response:
                 attempt_delta.mail_response = stage_resp(
-                    Stage.MAIL, rcpt.stage, rcpt.result)
-            if tx.rcpt_to and not tx.rcpt_response:
+                    Stage.MAIL, rcpt.stage, rcpt.upstream_result)
+            if tx.rcpt_to and not tx.rcpt_response and rcpt.stage >= Stage.RCPT and (rcpt.stage > Stage.RCPT or rcpt.upstream_result != Result.TIMEOUT):
                 attempt_delta.rcpt_response = [
-                    stage_resp(Stage.RCPT, rcpt.stage, rcpt.result)]
+                    stage_resp(Stage.RCPT, rcpt.stage, rcpt.upstream_result)]
             if tx._body_last() and not tx.data_response:
                 attempt_delta.data_response = stage_resp(
-                    Stage.DATA, rcpt.stage, rcpt.result)
+                    Stage.DATA, rcpt.stage, rcpt.upstream_result)
             logging.debug(attempt_delta)
             cursor.write_envelope(TransactionMetadata(),
                                   attempt_delta=attempt_delta)
@@ -627,12 +634,13 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter.update(tx, tx.copy())
 
         cursor = filter.release_transaction_cursor(0)
+        assert cursor is not None
         cursor.start_attempt()
         upstream_cursors = [cursor]
         upstream(cursor, t.rcpt[0])
 
         def get_downstream():
-            for i in range(0,10):
+            for i in range(0,20):
                 tx = filter.get()
                 logging.debug(tx)
                 if not tx.req_inflight():
@@ -649,17 +657,19 @@ class StorageWriterFilterTest(unittest.TestCase):
             filter.update(tx, prev.delta(tx))
             if i > 0:
                 cursor = filter.release_transaction_cursor(i)
+                assert cursor is not None
                 cursor.start_attempt()
                 upstream_cursors.append(cursor)
             else:
                 cursor = upstream_cursors[0]
             upstream(cursor, rcpt)
 
-        tx = filter.get()
+        txx = filter.get()
+        assert txx is not None
+        tx = txx
         prev = tx.copy()
         tx.body = InlineBlob(b'hello, world!', last=True)
         filter.update(tx, prev.delta(tx))
-        tx = get_downstream()
 
         for i,rcpt in enumerate(t.rcpt):
             upstream(upstream_cursors[i], rcpt)
@@ -674,9 +684,13 @@ class StorageWriterFilterTest(unittest.TestCase):
         check_resp(
             stage_resp(Stage.MAIL, t.stage, t.result),
             tx.mail_response)
-        for i,r in enumerate(
-            [stage_resp(Stage.RCPT, r.stage, r.result) for r in t.rcpt]):
-            check_resp(r, tx.rcpt_response[i])
+        if t.stage >= Stage.RCPT:
+            for i,r in enumerate(
+                [stage_resp(Stage.RCPT, r.stage, r.upstream_result)
+                 for r in t.rcpt]):
+                check_resp(r, tx.rcpt_response[i])
+        # XXX else not(tx.rcpt_response) ?
+
         check_resp(
             stage_resp(Stage.DATA, t.stage, t.result),
             tx.data_response)
@@ -685,7 +699,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     # mail temp -> sf
     def test_single_rcpt_mail_temp(self):
         self._run_test(Test(
-            rcpt = [Recipient(Stage.MAIL, Result.TEMP)],
+            rcpt = [Recipient(Stage.MAIL, Result.TEMP, Result.SUCCESS)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
@@ -694,7 +708,7 @@ class StorageWriterFilterTest(unittest.TestCase):
     # mail perm -> perm
     def test_single_rcpt_mail_perm(self):
         self._run_test(Test(
-            rcpt = [Recipient(Stage.MAIL, Result.PERM)],
+            rcpt = [Recipient(Stage.MAIL, Result.PERM, Result.PERM)],
             stage = Stage.MAIL,
             result = Result.PERM,
             sf_mode = 'upstream_unavailability'
@@ -703,24 +717,69 @@ class StorageWriterFilterTest(unittest.TestCase):
     # mail timeout -> sf
     def test_single_rcpt_mail_timeout(self):
         self._run_test(Test(
-            rcpt = [Recipient(Stage.MAIL, Result.TIMEOUT)],
+            rcpt = [Recipient(Stage.MAIL, Result.TIMEOUT, Result.SUCCESS)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
         ))
 
     # rcpt temp -> sf
+    def test_single_rcpt_rcpt_temp(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.RCPT, Result.TEMP, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
     # rcpt perm -> perm
+    def test_single_rcpt_rcpt_perm(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.RCPT, Result.PERM, Result.PERM)],
+            stage = Stage.RCPT,
+            result = Result.PERM,
+            sf_mode = 'upstream_unavailability'
+        ))
+
     # rcpt timeout -> sf
+    def test_single_rcpt_rcpt_timeout(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.RCPT, Result.TIMEOUT, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
     # data temp -> sf
+    def test_single_rcpt_data_temp(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.TEMP, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
     # data perm -> perm
+    def test_single_rcpt_data_perm(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.PERM, Result.PERM)],
+            stage = Stage.DATA,
+            result = Result.PERM,
+            sf_mode = 'upstream_unavailability'
+        ))
+
     # data timeout -> sf
-
-
+    def test_single_rcpt_data_timeout(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.TIMEOUT, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
 
     def test_single_rcpt_success(self):
         self._run_test(Test(
-            rcpt = [Recipient(Stage.DATA, Result.SUCCESS)],
+            rcpt = [Recipient(Stage.DATA, Result.SUCCESS, Result.SUCCESS)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'

@@ -264,6 +264,102 @@ class StorageWriterFilter(AsyncFilter):
             return None
         return self._get()
 
+    def _do_sf_unavail(self, group_tx) -> List[TransactionCursor]:
+        assert self.tx_group is not None
+        now = time.time_ns()/1e6
+
+        def any_rcpt_ok(rcpts : List[Optional[Response]]) -> bool:
+            return any([r is not None and r.ok() for r in rcpts])
+        def unavail(tx, resp : Optional[Response], timeout : int) -> bool:
+            logging.debug('%d %s %s %s', now, timeout, now > timeout, resp)
+            res = (resp is None and now > timeout) or (
+                resp is not None and resp.temp())
+            logging.debug(res)
+            return res
+        sf_cursor = []
+        for i,tx in enumerate(group_tx):
+            prev = tx.copy()
+            logging.debug(tx)
+            sf_mail = False
+
+            if (not tx.downstream_mail_response and
+                tx.mail_from is not None and
+                unavail(tx, tx.mail_response, tx.sf_mail_timeout)):
+                sf_mail = True
+                tx.downstream_mail_response = DownstreamResponse.SF
+            if tx.downstream_mail_response:
+                tx.mail_response = downstream_responses[
+                    tx.downstream_mail_response]
+                tx.rcpt_response.extend(
+                    [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
+            upstream_rcpt_ok = any_rcpt_ok(tx.rcpt_response)
+            sf_rcpt = False
+            for j,rcpt in enumerate(tx.rcpt_to):
+                if j >= len(tx.rcpt_response):
+                    rcpt_resp = None
+                else:
+                    rcpt_resp = tx.rcpt_response[j]
+                logging.debug(rcpt_resp)
+                if ((j >= len(tx.downstream_rcpt_response) or
+                     not tx.downstream_rcpt_response[j]) and
+                    (sf_mail or unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j]))):
+                    sf_rcpt = True
+                    tx.downstream_rcpt_response.extend(
+                        [DownstreamResponse.NONE] *
+                        (len(tx.rcpt_to) -
+                         len(tx.downstream_rcpt_response)))
+                    tx.downstream_rcpt_response[j] = DownstreamResponse.SF
+                # convert DownstreamResponse enum to Response
+                if (j < len(tx.downstream_rcpt_response) and
+                    tx.downstream_rcpt_response[j] is not None):
+                    tx.rcpt_response.extend(
+                        [None] * (j - len(tx.rcpt_response) + 1))
+                    tx.rcpt_response[j] = downstream_responses[
+                        tx.downstream_rcpt_response[j]]
+            assert (DownstreamResponse.NONE not in
+                    tx.downstream_rcpt_response), tx
+
+            # if any rcpt_resp is SF then data_resp is SF
+            sf_data = False
+            if tx.downstream_data_response is None:
+                if (sf_rcpt and tx._body_last()):
+                    tx.downstream_data_response = DownstreamResponse.SF
+                elif (not tx.downstream_data_response and
+                      tx._body_last() and
+                      unavail(tx, tx.data_response, tx.sf_data_timeout)):
+                    sf_data = True
+                    tx.downstream_data_response = DownstreamResponse.SF
+            logging.debug(tx.downstream_data_response)
+            if tx.downstream_data_response:
+                tx.data_response = downstream_responses[
+                    tx.downstream_data_response]
+
+            prev_downstream_resp = TransactionMetadata()
+            downstream_resp = TransactionMetadata()
+
+            # compute the delta of just the downstream resp fields to write
+            # prev -> prev_downstream_resp
+            # tx -> downstream_resp
+            for t,dr in (prev,prev_downstream_resp),(tx,downstream_resp):
+                dr.downstream_mail_response = t.downstream_mail_response
+                dr.downstream_rcpt_response = t.downstream_rcpt_response
+                dr.downstream_data_response = t.downstream_data_response
+            downstream_resp_delta = prev_downstream_resp.delta(
+                downstream_resp)
+
+            if downstream_resp_delta:
+                if (downstream_resp_delta.downstream_data_response ==
+                    DownstreamResponse.SF):
+                    downstream_resp_delta.retry = {}
+                    downstream_resp_delta.notification = {}
+                self.tx_group.tx_cursors[i].write_envelope(
+                    downstream_resp_delta)
+
+            if sf_data:
+                sf_cursor.append(self.tx_group.tx_cursors[i])
+            logging.debug(tx)
+        return sf_cursor
+
     def _get(self) -> Optional[TransactionMetadata]:
         assert self.tx_group is not None
         assert self.tx_group.tx_cursors[0].tx is not None
@@ -295,95 +391,12 @@ class StorageWriterFilter(AsyncFilter):
             return c.tx.copy()
         group_tx = [copy_tx(c) for c in self.tx_group.tx_cursors]
 
-        now = time.time_ns()/1e6
         assert self.tx_group.tx_cursors[0].db_id is not None
-
-        def any_rcpt_ok(rcpts):
-            return any([r is not None and r.ok() for r in rcpts])
 
         # convert upstream timeout/temp err to 250 s&f resp
         sf_cursor = []
         if sf_unavail:
-            def unavail(tx, resp, timeout):
-                logging.debug('%d %s', now, timeout)
-                return (resp is None and now > timeout) or (
-                    resp is not None and resp.temp())
-            for i,tx in enumerate(group_tx):
-                prev = tx.copy()
-                logging.debug(tx)
-                sf = False
-
-                if (not tx.downstream_mail_response and
-                    tx.mail_from is not None and
-                    unavail(tx, tx.mail_response, tx.sf_mail_timeout)):
-                    sf = True
-                    tx.downstream_mail_response = DownstreamResponse.SF
-                if tx.downstream_mail_response:
-                    tx.mail_response = downstream_responses[
-                        tx.downstream_mail_response]
-                    tx.rcpt_response.extend(
-                        [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
-                upstream_rcpt_ok = any_rcpt_ok(tx.rcpt_response)
-                for j,rcpt_resp in enumerate(tx.rcpt_response):
-                    if ((j >= len(tx.downstream_rcpt_response) or
-                         not tx.downstream_rcpt_response[j]) and
-                        unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j])):
-                        sf = True
-                        tx.downstream_rcpt_response.extend(
-                            [DownstreamResponse.NONE] *
-                            (len(tx.rcpt_to) -
-                             len(tx.downstream_rcpt_response)))
-                        tx.downstream_rcpt_response[j] = DownstreamResponse.SF
-                    if (j < len(tx.downstream_rcpt_response) and
-                        tx.downstream_rcpt_response[j]):
-                        tx.rcpt_response[j] = downstream_responses[
-                            tx.downstream_rcpt_response[j]]
-                assert (DownstreamResponse.NONE not in
-                        tx.downstream_rcpt_response), tx
-
-                # if any rcpt_resp.ok() then data_resp is upstream
-                # else 503 failed precondition
-                downstream_rcpt_ok = any_rcpt_ok(tx.rcpt_response)
-                if (not upstream_rcpt_ok and
-                    downstream_rcpt_ok and
-                    tx.body is not None and
-                    tx._body_last()):
-                    # this will immediately be converted to s&f below
-                    tx.data_response = Response(450, 'placeholder')
-
-                if (not tx.downstream_data_response and
-                    tx._body_last() and
-                    unavail(tx, tx.data_response, tx.sf_data_timeout)):
-                    sf = True
-                    tx.downstream_data_response = DownstreamResponse.SF
-                if tx.downstream_data_response:
-                    tx.data_response = downstream_responses[
-                        tx.downstream_data_response]
-
-                prev_downstream_resp = TransactionMetadata()
-                downstream_resp = TransactionMetadata()
-
-                # compute the delta of just the downstream resp fields to write
-                # prev -> prev_downstream_resp
-                # tx -> downstream_resp
-                for t,dr in (prev,prev_downstream_resp),(tx,downstream_resp):
-                    dr.downstream_mail_response = t.downstream_mail_response
-                    dr.downstream_rcpt_response = t.downstream_rcpt_response
-                    dr.downstream_data_response = t.downstream_data_response
-                downstream_resp_delta = prev_downstream_resp.delta(
-                    downstream_resp)
-
-                if downstream_resp_delta:
-                    if (downstream_resp_delta.downstream_data_response ==
-                        DownstreamResponse.SF):
-                        downstream_resp_delta.retry = {}
-                        downstream_resp_delta.notification = {}
-                    self.tx_group.tx_cursors[i].write_envelope(
-                        downstream_resp_delta)
-
-                if sf:
-                    sf_cursor.append(self.tx_group.tx_cursors[i])
-                logging.debug(tx)
+            sf_cursor = self._do_sf_unavail(group_tx)
 
         tx = group_tx[0].copy()
         # TODO upstream mail response is most likely 250 noop from rcpt
@@ -397,6 +410,7 @@ class StorageWriterFilter(AsyncFilter):
         tx.data_response = None
         # xxx final_attempt_reason
         logging.debug(tx)
+        logging.debug(group_tx)
 
         # TODO Normally, output flow returns a timeout response if the
         # upstream timed out however it could be e.g. terminated by an
@@ -413,6 +427,12 @@ class StorageWriterFilter(AsyncFilter):
 
         if not tx._body_last() or any(
                 [t.data_response is None for t in group_tx]):
+            logging.debug('still waiting data_response')
+            return tx
+
+        if len(group_tx) == 1 and len(group_tx[0].rcpt_to) == 1:
+            tx.data_response = group_tx[0].data_response
+            logging.debug('single rcpt data resp')
             return tx
 
         data_resp_tx = reduce(
