@@ -303,7 +303,6 @@ class StorageWriterFilter(AsyncFilter):
                 if ((j >= len(tx.downstream_rcpt_response) or
                      not tx.downstream_rcpt_response[j]) and
                     (sf_mail or unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j]))):
-                    sf_rcpt = True
                     tx.downstream_rcpt_response.extend(
                         [DownstreamResponse.NONE] *
                         (len(tx.rcpt_to) -
@@ -314,8 +313,11 @@ class StorageWriterFilter(AsyncFilter):
                     tx.downstream_rcpt_response[j] is not None):
                     tx.rcpt_response.extend(
                         [None] * (j - len(tx.rcpt_response) + 1))
-                    tx.rcpt_response[j] = downstream_responses[
-                        tx.downstream_rcpt_response[j]]
+                    drr = tx.downstream_rcpt_response[j]
+                    tx.rcpt_response[j] = downstream_responses[drr]
+                    if drr == DownstreamResponse.SF:
+                        sf_rcpt = True
+
             assert (DownstreamResponse.NONE not in
                     tx.downstream_rcpt_response), tx
 
