@@ -412,7 +412,7 @@ class StorageWriterFilter(AsyncFilter):
         tx.data_response = None
         # xxx final_attempt_reason
         logging.debug(tx)
-        logging.debug(group_tx)
+        # logging.debug(group_tx)
 
         # TODO Normally, output flow returns a timeout response if the
         # upstream timed out however it could be e.g. terminated by an
@@ -450,17 +450,17 @@ class StorageWriterFilter(AsyncFilter):
         tx.data_response = data_resp
 
         if tx.data_response is None:  # mixed
-            for i,tx in enumerate(group_tx):
+            for i,txi in enumerate(group_tx):
                 cursor = self.tx_group.tx_cursors[i]
                 if cursor in sf_cursor:
                     continue
                 def ok(r):
                     assert r is not None
                     return r.ok()
-                txdr = tx.data_response
+                txdr = txi.data_response
                 if (ok(tx.mail_response) and
                     any([not ok(r) for r in tx.rcpt_response])
-                    or not ok(tx.data_response)):
+                    or not ok(txi.data_response)):
                     sf_cursor.append(cursor)
 
         # NOTE there is a bit of a "if a tree falls in a
@@ -471,7 +471,9 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug([c.tx for c in sf_cursor])
         def needs_retry(c):
             assert c.tx is not None
-            return c.tx.data_response is None and (
+            # would have early-returned if still waiting for timeout (above)
+            assert c.tx.data_response is not None
+            return not c.tx.data_response.ok() and (
                 not c.tx.notification or not c.tx.retrty)
         sf_cursor = [c for c in sf_cursor if needs_retry(c) ]
         if sf_cursor:
@@ -484,6 +486,7 @@ class StorageWriterFilter(AsyncFilter):
 
             tx.data_response = Response(
                 250, 'message accepted (SWF store&forward mixed upstream)')
+        logging.debug(tx)
         return tx
 
     # AsyncFilter

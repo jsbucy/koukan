@@ -582,6 +582,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         self.assertIsNone(self.storage.load_one())
 
+    # XXX: verify notify/retry on db tx
     def _run_test(self, t : Test):
         timeouts = Timeouts()
         endpoint_yaml = {
@@ -593,7 +594,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             create_leased = True,
             sender=Sender('ingress'),
             endpoint_yaml = lambda sender: endpoint_yaml,
-	    timeouts = timeouts)
+	    timeouts = timeouts,
+            tx_handler = lambda x,y: True)
 
         def to_response(r : Result) -> Optional[Response]:
             if r == Result.TEMP:
@@ -783,6 +785,25 @@ class StorageWriterFilterTest(unittest.TestCase):
     def test_single_rcpt_success(self):
         self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.SUCCESS)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+    def test_multi_rcpt_mixed_data(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.SUCCESS),
+                    Recipient(Stage.DATA, Result.PERM)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+
+    def test_multi_rcpt_success(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.SUCCESS),
+                    Recipient(Stage.DATA, Result.SUCCESS)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'

@@ -1098,7 +1098,7 @@ class RouterServiceTest(unittest.TestCase):
             self.assertEqual(202, r.code)
             self.assertEqual('ok', r.message)
         self.assertEqual(250, tx.data_response.code)
-        self.assertIn('message accepted (SWF store and forward)',
+        self.assertIn('message accepted (SWF store&forward mixed upstream)',
                       tx.data_response.message)
 
         # no_final_notification OutputHandler handler for the rcpt that failed

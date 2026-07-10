@@ -1140,6 +1140,10 @@ class TransactionGroup:
                         tcols.parent_id == self.parent_tx_id)))
             for row in res:
                 db_id, version = row
+                # cursors may be a subset of self.tx_cursors
+                # could limit the above select to those IDs?
+                if db_id not in cursor_by_id:
+                    continue
                 if cursor_by_id[db_id].version != version:
                     raise VersionConflictException()
 
@@ -1161,7 +1165,7 @@ class TransactionGroup:
                     final_attempt_reason = final_attempt_reason)
 
             res = db_tx.execute(upd, params)
-        for cursor in self.tx_cursors:
+        for cursor in cursors:
             # parity with tx_cursor._write(): RestHandler creation ->
             # OH handoff tx needs to have the same effect as
             # _load_blobs()
