@@ -54,7 +54,7 @@ class Timeouts:
 
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
-    tx_cursor : Optional[TransactionCursor] = None
+    # tx_cursor : Optional[TransactionCursor] = None
     tx_group : Optional[TransactionGroup] = None
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
@@ -100,19 +100,20 @@ class StorageWriterFilter(AsyncFilter):
              ) -> Tuple[bool, Optional[TransactionMetadata]]:
         # cursor can be None after first update() to create with the
         # cutthrough/handoff workflow
-        if self.tx_cursor is None:
-            self._load()
-            assert self.tx_cursor is not None
-        clone = False
-        if self.tx_cursor.version == version:
-            rv, clone = self.tx_cursor.wait(timeout, clone=True)
-        else:
-            rv = True
-        tx_out = None
-        if rv and clone:
-            assert self.tx_cursor.tx is not None
-            tx_out = self.tx_cursor.tx.copy()
-        return rv, tx_out
+
+        assert self.tx_group is not None
+        if self.version != version:
+            return True, None
+        assert len(self.tx_group.tx_cursors) == 1
+        res = self.tx_group.tx_cursors[0].wait(timeout)
+        logging.debug(res)
+        if res is None:
+            return False, None
+        success, cloned = res
+        logging.debug([c.version for c in self.tx_group.tx_cursors])
+        assert success
+        return True, self._get() if cloned else None
+
 
     # AsyncFilter
     async def wait_async(self, version, timeout
@@ -498,8 +499,9 @@ class StorageWriterFilter(AsyncFilter):
         try:
             upstream_delta = self._update(tx, tx_delta)
             assert upstream_delta is not None
-            if self.tx_cursor is not None:
-                assert self.tx_cursor.version is not None
+            # xxx update to tx_group
+            # if self.tx_cursor is not None:
+            #     assert self.tx_cursor.version is not None
             return upstream_delta
         finally:
             if needs_create and self.upstream_cursor is None:
@@ -541,8 +543,9 @@ class StorageWriterFilter(AsyncFilter):
             return TransactionMetadata()
 
         if not tx_delta:  # heartbeat
-            assert self.tx_cursor is not None
-            self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
+            raise NotImplementedError()
+            # assert self.tx_cursor is not None
+            # self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
             return TransactionMetadata()
 
         downstream_tx = tx.copy()

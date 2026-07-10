@@ -711,17 +711,14 @@ class TransactionCursor:
             attempt_row = res.fetchone()
 
         if attempt_row is not None:
-            resp_json = None
-            attempt_id = None
-            if attempt_row is not None:
-                attempt_id = attempt_row[0]
-                assert self.tx is not None  # set above
-                self.tx.attempt_count = attempt_id
-                resp_json = attempt_row[1]
-                if resp_json is not None:
-                    responses = TransactionMetadata.from_json(
-                        resp_json, WhichJson.DB_ATTEMPT)
-                    assert self.tx.merge_from(responses)
+            logging.debug(attempt_row)
+            attempt_id, resp_json = attempt_row
+            assert self.tx is not None  # set above
+            self.tx.attempt_count = attempt_id
+            if resp_json is not None:
+                responses = TransactionMetadata.from_json(
+                    resp_json, WhichJson.DB_ATTEMPT)
+                assert self.tx.merge_from(responses)
 
             logging.debug('TransactionCursor._load_db %d %s version=%d tx %s '
                           'attempt %s %s',

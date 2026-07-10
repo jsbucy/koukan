@@ -55,6 +55,12 @@ py_test(name='filter_chain_test',
         deps=[':filter_chain',
               ':blob'])
 
+py_library(name='async_filter_adapter',
+           srcs=['async_filter_adapter.py'],
+           deps=[':deadline',
+                 ':filter',
+                 ':filter_chain'])
+
 py_library(name='async_filter_wrapper',
            srcs=['async_filter_wrapper.py'],
            deps=[':backoff',
@@ -561,6 +567,7 @@ py_test(name='policy_factory_test',
 py_library(name='filter_chain_wiring',
            srcs=['filter_chain_wiring.py'],
            deps=[':add_route_filter',
+                 ':async_filter_adapter',
                  ':async_filter_wrapper',
                  ':dkim_check_filter',
                  ':dkim_sign_filter',

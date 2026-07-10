@@ -1421,8 +1421,8 @@ class RouterServiceTest(unittest.TestCase):
 
     def _test_add_route_sync(
             self,
-            mail_resp, rcpt_resp, data_resp,
-            mail_code, rcpt_code, data_code):
+            mail_resp, rcpt_resp, data_resp,  # upstream responses
+            mail_code, rcpt_code, data_code):  # expected downstream resp codes
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
@@ -1471,8 +1471,9 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint.on_update(delta)
         self.assertEqual(tx.mail_response.code, mail_code)
         self.assertRcptCodesEqual([rcpt_code], tx.rcpt_response)
-        self.assertIsNotNone(tx.data_response, msg=tx)
-        self.assertEqual(tx.data_response.code, data_code)
+        self.assertEqual(data_code is None, tx.data_response is None)
+        if data_code is not None:
+            self.assertEqual(tx.data_response.code, data_code)
 
     def test_add_route_sync_success(self):
         self._test_add_route_sync(
@@ -1481,15 +1482,15 @@ class RouterServiceTest(unittest.TestCase):
             Response(206),
             201, 203, 205)
 
-    # Currently failing because no data_response. There may be a subtle
-    # ordering change where RestEndpoint in the test notices the
-    # upstream rcpt error and doesn't send the body?
+    # Behavior change: SWF now not returning data_response if
+    # !tx._data_last() when it did before. RestEndpoint in the test
+    # stops waiting because all rcpts failed -> !tx.req_inflight()
     def test_add_route_sync_err(self):
         self._test_add_route_sync(
             Response(402),
             Response(404),
             Response(406),
-            402, 404, 503)
+            402, 404, None)
 
     def test_add_route_sync_data_err(self):
         self._test_add_route_sync(

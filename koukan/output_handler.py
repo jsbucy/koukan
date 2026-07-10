@@ -115,6 +115,7 @@ class OutputHandler:
             if not cloned:
                 self.cursor.load()
             tx = self.cursor.tx
+            logging.debug(tx)
             assert tx is not None
             now = time.monotonic()
             assert self.cursor.version is not None

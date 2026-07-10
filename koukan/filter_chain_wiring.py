@@ -23,10 +23,11 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Resolution )
-from koukan.filter_chain import BaseFilter, FilterChain
+from koukan.filter_chain import BaseFilter, Filter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
+from koukan.async_filter_adapter import AsyncFilterAdapter
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
@@ -85,6 +86,7 @@ class FilterChainWiring:
         factory.add_filter('message_validation', self.message_validation)
         factory.add_filter('spf_check', self.spf_check)
         factory.add_filter('dkim_check', self.dkim_check)
+        factory.add_filter('storage_writer', self.storage_writer)
 
     def exploder_upstream(self, sender : Sender,
                           rcpt_timeout : float,
@@ -101,6 +103,21 @@ class FilterChainWiring:
         return AsyncFilterWrapper(
             upstream, rcpt_timeout, store_and_forward=store_and_forward,
             notify=notify, retry=retry)
+
+    def storage_writer(self, yaml : dict, sender : Sender) -> Optional[Filter]:
+                       # sender : Sender,
+                       # rcpt_timeout : float,
+                       # data_timeout : float,
+                       # store_and_forward : bool,
+                       # block_upstream : bool,
+                       # notify : bool,
+                       # retry : bool):
+        assert self.exploder_output_factory is not None
+        upstream : Optional[AsyncFilter] = self.exploder_output_factory(
+            sender, True)  # xxx block_upstream
+        if upstream is None:
+            return None
+        return AsyncFilterAdapter(upstream, yaml.get('timeout', 30))
 
     def exploder(self, yaml, sender : Sender):
         assert sender.yaml is not None
@@ -156,19 +173,16 @@ class FilterChainWiring:
             return None
         assert self.filter_chain_factory is not None
         if yaml.get('store_and_forward', None):  # async/SWF
-            # we configure AsyncFilterWrapper *not* to toggle
-            # retry/notify upstream; it gets that from the upstream
-            # chain
             upstream_yaml = {
                 'chain': [{
                     'sender': yaml['sender'],
-                    'filter': 'exploder_upstream',
-                    'rcpt_timeout': 0,
-                    'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
-                    'store_and_forward': False,
-                    'block_upstream': False,
-                    'notify': False,
-                    'retry': False
+                    'filter': 'storage_writer',
+                    # 'rcpt_timeout': 0,
+                    # 'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
+                    # 'store_and_forward': False,
+                    # 'block_upstream': False,
+                    # 'notify': False,
+                    # 'retry': False
                 }]
             }
             if tag := yaml.get('tag', None):
@@ -183,6 +197,10 @@ class FilterChainWiring:
             if output is None:
                 return None
             add_route, output_yaml = output
+        # TODO indirect add_route:
+        # lambda: build_filter_chain()
+        # so we don't construct it if the tx fails before this filter
+        # is ever invoked?
         return AddRouteFilter(add_route, yaml['sender'], yaml.get('tag', None))
 
     def rest_output(self, yaml, sender : Sender):
