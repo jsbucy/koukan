@@ -22,7 +22,6 @@ from werkzeug.datastructures import ContentRange
 import werkzeug.http
 
 from koukan.rest_schema import BlobUri, parse_blob_uri
-import koukan.postgres_test_utils as postgres_test_utils
 from koukan.router_service import Service
 from koukan.rest_endpoint import RestEndpoint, RestEndpointClientProvider
 from koukan.response import Response
@@ -36,8 +35,6 @@ from koukan.filter import (
 from koukan.executor import Executor
 from koukan.deadline import Deadline
 
-import koukan.sqlite_test_utils as sqlite_test_utils
-
 from koukan.message_builder import MessageBuilderSpec
 
 from koukan.storage_schema import BlobSpec
@@ -45,23 +42,15 @@ from koukan.sender import Sender
 
 from examples.send_message.send_message import Sender as RestSender
 
-def setUpModule():
-    postgres_test_utils.setUpModule()
-
-def tearDownModule():
-    postgres_test_utils.tearDownModule()
-
-
 class RouterServiceTest(unittest.TestCase):
+    service : Optional[Service] = None
     lock : Lock
     cv : Condition
     endpoints : List[FakeFilter]
-    use_postgres = True
     client_provider : RestEndpointClientProvider
 
     def __init__(self, *args, **kwargs):
-        super(RouterServiceTest, self).__init__(*args, **kwargs)
-
+        super().__init__(*args, **kwargs)
         self.endpoints = []
 
     def get_endpoint(self, yaml, sender : Sender):
@@ -98,11 +87,12 @@ class RouterServiceTest(unittest.TestCase):
 
         return router_url, service
 
+    def _setup_storage(self):
+        raise NotImplementedError()
+
     def setUp(self):
-        logging.basicConfig(
-            level=logging.DEBUG,  # WARNING
-            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
-            '%(message)s')
+        if self.__class__ == RouterServiceTest:
+            raise unittest.SkipTest("Skipping base class tests")
         logging.config.dictConfig({'version': 1,
              'loggers': {
                  'hpack': {
@@ -113,10 +103,8 @@ class RouterServiceTest(unittest.TestCase):
         self.lock = Lock()
         self.cv = Condition(self.lock)
 
-        if self.use_postgres:
-            self.pg, self.storage_url = postgres_test_utils.setup_postgres()
-        else:
-            self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
+        self._setup_storage()
+
 
         # find a free port
         self.router_base_url, self.service = self._setup_router()
@@ -1597,18 +1585,3 @@ class RouterServiceTest(unittest.TestCase):
         self._dequeue(1)
         check_response()
 
-
-class RouterServiceTestFastApi(RouterServiceTest):
-    pass
-
-class RouterServiceTestSqlite(RouterServiceTest):
-    use_postgres = False
-
-    # having multiple routers accessing the same sqlite causes
-    # concurrency errors, probably not a useful configuration
-    def test_multi_node(self):
-        pass
-
-if __name__ == '__main__':
-    unittest.removeHandler()
-    unittest.main(catchbreak=False)

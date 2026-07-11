@@ -25,24 +25,19 @@ from koukan.rest_schema import BlobUri
 
 from koukan.message_builder import MessageBuilderSpec
 
-import koukan.postgres_test_utils as postgres_test_utils
-import koukan.sqlite_test_utils as sqlite_test_utils
-
-def setUpModule():
-    postgres_test_utils.setUpModule()
-
-def tearDownModule():
-    postgres_test_utils.tearDownModule()
-
-
-class StorageTestBase(unittest.IsolatedAsyncioTestCase):
-    sqlite : bool
+class StorageTestBase:
+    s : Optional[Storage] = None
 
     def setUp(self):
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
-            '%(message)s')
+        if self.__class__ == StorageTestBase:
+            raise unittest.SkipTest("Skipping base class tests")
+
+    def assertEqual(self, x, y):
+        raise NotImplementedError()
+    def assertIsNone(self, x):
+        raise NotImplementedError()
+    def assertIsNotNone(self, x):
+        raise NotImplementedError()
 
     def tearDown(self):
         self.s._del_session()
@@ -169,6 +164,7 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         logging.debug(self.s.debug_dump())
 
     async def test_transaction_group(self) -> None:
+        assert self.s is not None
         tx0_cursor = self.s.get_transaction_cursor()
         tx0_cursor.create(
             'tx_rest_id',
@@ -206,7 +202,7 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         assert isinstance(blob_writer, BlobCursor)
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b), update_tx=False)
-        group.update_all(input_done=True)
+        group.update_all(tx_delta=TransactionMetadata(), input_done=True)
 
         logging.debug('wait -> timeout')
         self.assertIsNone(await group.wait_async(1))
@@ -921,36 +917,3 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.s._tx_reads - prev_reads)
         prev_reads = self.s._tx_reads
 
-
-class StorageTestSqlite(StorageTestBase):
-    def setUp(self):
-        super().setUp()
-        self.dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.s = self._connect()
-
-    def tearDown(self):
-        self.dir.cleanup()
-
-    def _connect(self):
-        return Storage.connect(self.db_url, session_uri='http://storage-test')
-
-
-class StorageTestPostgres(StorageTestBase):
-    pg : Optional[object] = None
-    storage_yaml : Optional[dict] = None
-
-    def setUp(self):
-        super().setUp()
-
-        self.s = self._connect()
-
-    def _connect(self):
-        if self.pg is None:
-            self.storage_yaml = {}
-            self.pg, self.pg_url = postgres_test_utils.setup_postgres()
-
-        return Storage.connect(self.pg_url, session_uri='http://storage-test')
-
-
-if __name__ == '__main__':
-    unittest.main()
