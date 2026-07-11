@@ -25,19 +25,12 @@ from koukan.rest_schema import BlobUri
 
 from koukan.message_builder import MessageBuilderSpec
 
-class StorageTestBase:
+class StorageTestBase(unittest.IsolatedAsyncioTestCase):
     s : Optional[Storage] = None
 
     def setUp(self):
         if self.__class__ == StorageTestBase:
             raise unittest.SkipTest("Skipping base class tests")
-
-    def assertEqual(self, x, y):
-        raise NotImplementedError()
-    def assertIsNone(self, x):
-        raise NotImplementedError()
-    def assertIsNotNone(self, x):
-        raise NotImplementedError()
 
     def tearDown(self):
         self.s._del_session()

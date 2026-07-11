@@ -5,7 +5,7 @@ from koukan.storage_test import StorageTestBase
 
 import koukan.sqlite_test_utils as sqlite_test_utils
 
-class StorageTestSqlite(unittest.IsolatedAsyncioTestCase, StorageTestBase):
+class StorageTestSqlite(StorageTestBase):
     def setUp(self):
         super().setUp()
         self.dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()

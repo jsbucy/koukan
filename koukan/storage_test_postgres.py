@@ -12,7 +12,7 @@ def setUpModule():
 def tearDownModule():
     postgres_test_utils.tearDownModule()
 
-class StorageTestPostgres(unittest.IsolatedAsyncioTestCase, StorageTestBase):
+class StorageTestPostgres(StorageTestBase):
     pg : Optional[object] = None
     storage_yaml : Optional[dict] = None
 
