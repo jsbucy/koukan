@@ -519,7 +519,7 @@ class StorageWriterFilter(AsyncFilter):
         # the delta from the final cursor.tx, it's possible the
         # version conflict retry paths could pick up upstream deltas?
         logging.debug('StorageWriterFilter._update tx %s %s',
-                      self.rest_id, tx)
+                      self.rest_id, tx, stack_info=True)
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
@@ -575,6 +575,8 @@ class StorageWriterFilter(AsyncFilter):
                 delta.sf_rcpt_timeout = [self._timeout(30)] * len(delta.rcpt_to)
                 self.tx_group.tx_cursors[0].write_envelope(delta)
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
+                # xxx rcpt_to_list_offset?
+
             for rcpt in downstream_delta.rcpt_to:
                 assert rcpt is not None
                 # This creates the db tx before we know if the

@@ -1070,11 +1070,44 @@ class TransactionGroup:
                       parent_db_id=self.tx_cursors[0].db_id)
         self.tx_cursors.append(cursor)
 
-    def update_all(self, tx_delta : Optional[TransactionMetadata] = None,
-                   input_done : Optional[bool] = None,
+    def update_all(self, tx_delta : TransactionMetadata,
+                   input_done : Optional[bool] = False,
                    ping_tx : Optional[bool] = None,
                    final_attempt_reason : Optional[str] = None,
                    cursors : Optional[List[TransactionCursor]] = None):
+        assert self.parent_tx_id is not None
+        assert self.parent.tx_table is not None
+        assert not ping_tx, 'unimplemented'
+        assert not tx_delta or not tx_delta.rcpt_to
+
+        if cursors is None:
+            cursors = self.tx_cursors
+
+        with self.parent.begin_transaction() as db_tx:
+            if tx_delta.body:
+                self.tx_cursors[0]._maybe_write_blob(
+                    db_tx, TransactionMetadata(body=tx_delta.body),
+                    group_cursors=self.tx_cursors[1:])
+                tx_delta.body = None
+                write_blob = True
+
+            for c in cursors:
+                c._write(db_tx = db_tx,
+                         tx_delta = tx_delta,
+                         final_attempt_reason = final_attempt_reason,
+                         input_done = input_done)
+        for c in cursors:
+            c._update_version_cache()
+            # xxx shouldn't toggle leased?
+            #leased = (cursor.inflight_session_id == self.parent.session_id))
+
+    # TODO this seems to have a concurrency control bug
+    def update_all_vectorized(
+            self, tx_delta : Optional[TransactionMetadata] = None,
+            input_done : Optional[bool] = None,
+            ping_tx : Optional[bool] = None,
+            final_attempt_reason : Optional[str] = None,
+            cursors : Optional[List[TransactionCursor]] = None):
         assert self.parent_tx_id is not None
         assert self.parent.tx_table is not None
         assert not ping_tx, 'unimplemented'
@@ -1221,6 +1254,7 @@ class TransactionGroup:
             tx_delta = TransactionMetadata()
         bd = False
         for i,c in enumerate(self.tx_cursors):
+            logging.debug(c.blobs)
             bdi = c._blob_done(blob)
             logging.debug(c.blobs)
             if i == 0:

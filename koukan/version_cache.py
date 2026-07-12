@@ -104,7 +104,9 @@ class IdVersion:
                           self.leased, leased)
             if version < self.version:
                 raise VersionConflictException()
+            # xxx document when this is expected
             if version == self.version:
+                logging.debug('same version noop')
                 return
             self.last_update = time.monotonic()
             self.version = version

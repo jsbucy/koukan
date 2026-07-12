@@ -169,7 +169,9 @@ class FilterChainWiring:
             yaml['retry'])
 
     def add_route(self, yaml, sender : Sender):
-        if 'sender' not in yaml:
+        logging.debug(sender)
+        logging.debug(yaml)
+        if 'sender' not in yaml:  # xxx noop?
             return None
         assert self.filter_chain_factory is not None
         if yaml.get('store_and_forward', None):  # async/SWF
@@ -187,8 +189,11 @@ class FilterChainWiring:
             }
             if tag := yaml.get('tag', None):
                 upstream_yaml['tag'] = tag
+            add_route_sender = Sender(yaml['sender'])
+            logging.debug(add_route_sender)
+            logging.debug(upstream_yaml)
             res = self.filter_chain_factory.build_filter_chain(
-                    Sender(yaml['sender']), upstream_yaml)
+                add_route_sender, upstream_yaml)
             assert res is not None
             add_route, unused_yaml = res
         else:  # sync

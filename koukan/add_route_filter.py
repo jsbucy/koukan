@@ -90,7 +90,9 @@ class AddRouteFilter(Filter):
             add_route_delta.sender = Sender(self.sender, self.tag)
         assert self.add_route.tx is not None
         self.add_route.tx.merge_from(add_route_delta)
+        logging.debug(self.add_route.tx)
         self.add_route.update()
+        logging.debug(self.add_route.tx)
         self._resp_err()
         # NOTE this returns any error from the add route
         # downstream verbatim, it's possible this might contain

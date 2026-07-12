@@ -54,9 +54,9 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoints = []
 
     def get_endpoint(self, yaml, sender : Sender):
-        logging.debug('RouterServiceTest.get_endpoint')
+        logging.debug('RouterServiceTest.get_endpoint %s', sender, stack_info=True)
         with self.lock:
-            self.cv.wait_for(lambda: bool(self.endpoints))
+            #self.cv.wait_for(lambda: bool(self.endpoints))
             return self.endpoints.pop(0)
 
     def add_endpoint(self, endpoint):
@@ -1487,7 +1487,7 @@ class RouterServiceTest(unittest.TestCase):
             Response(406),
             201, 203, 406)
 
-    def test_add_route_sf_success(self):
+    def test_add_route_sf_success(self) -> None:
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url,
             timeout_start=5, timeout_data=5)
@@ -1500,37 +1500,45 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
-        def exp_add_route(tx, tx_delta):
+        def exp_add_route(tx, tx_delta) -> TransactionMetadata:
             logging.debug(tx)
             self.assertEqual('sor', tx.sender.name)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(202),
-                rcpt_response=[Response(204)],
-                data_response=Response(206))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(202)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(204)]
+            if tx_delta._body_last():
+                tx.data_response=Response(206)
+            return prev.delta(tx)
         add_route_endpoint = FakeFilter()
-        add_route_endpoint.add_expectation(exp_add_route)
+        for i in range(0,2):
+            add_route_endpoint.add_expectation(exp_add_route)
         self.add_endpoint(add_route_endpoint)
 
-        def exp_upstream(tx, tx_delta):
+        def exp_upstream(tx, tx_delta) -> TransactionMetadata:
             logging.debug(tx)
             self.assertEqual('submission', tx.sender.name)
             self.assertEqual('submission-sf-sor', tx.sender.tag)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(203)],
-                data_response=Response(205))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(201)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(203)]
+            if tx_delta._body_last():
+                tx.data_response=Response(205)
+            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp_upstream)
+        for i in range(0,2):
+            upstream_endpoint.add_expectation(exp_upstream)
         self.add_endpoint(upstream_endpoint)
 
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
-        self.assertEqual(tx.mail_response.code, 201)
+        assert tx.mail_response is not None
+        self.assertEqual(tx.mail_response.code, 201, tx)
         self.assertRcptCodesEqual([203], tx.rcpt_response)
+        assert tx.data_response is not None
         self.assertEqual(tx.data_response.code, 205)
 
         # self._dequeue(1)
