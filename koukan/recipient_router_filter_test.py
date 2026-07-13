@@ -48,10 +48,13 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
         tx.sender = Sender('ingress', 'smtp-mx')
         delta = prev.delta(tx)
         logging.debug(delta)
+        async def upstream():
+            return TransactionMetadata()
         await router.on_update(delta, upstream)
         logging.debug(router.downstream_tx)
         logging.debug(router.upstream_tx)
-        self.assertFalse(router.upstream_tx.rcpt_to)
+        self.assertEqual(
+            ['good'], [m.mailbox for m in router.upstream_tx.rcpt_to])
         self.assertEqual(router.upstream_tx.rest_endpoint,
                          'http://localhost:8001')
         self.assertEqual(router.downstream_tx.sender, router.upstream_tx.sender)
@@ -60,7 +63,7 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
                          [HostPort('example.com', 1234)])
 
 
-    def test_failure(self):
+    async def test_failure(self):
         router = RecipientRouterFilter(Policy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
@@ -75,8 +78,10 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'\r\n'
             b'hello\r\n')
         delta = prev.delta(tx)
-
-        router.on_update(delta)
+        async def upstream():
+            return TransactionMetadata()
+        await router.on_update(delta, upstream)
+        self.assertFalse(router.upstream_tx.rcpt_to)
         self.assertEqual([500], [r.code for r in tx.rcpt_response])
 
     async def test_buffer_mail_err(self):
@@ -122,7 +127,7 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
         logging.debug(dtx)
         self.assertEqual([501], [r.code for r in dtx.rcpt_response])
 
-    def test_mixed(self):
+    async def test_mixed(self):
         router = RecipientRouterFilter(Policy())
         tx = TransactionMetadata()
         router.wire_downstream(tx)
@@ -138,9 +143,12 @@ class RecipientRouterFilterTest(unittest.IsolatedAsyncioTestCase):
             b'\r\n'
             b'hello\r\n')
         delta = prev.delta(tx)
-
-        router.on_update(delta)
+        async def upstream():
+            return TransactionMetadata()
+        await router.on_update(delta, upstream)
         logging.debug(tx)
+        self.assertEqual(
+            ['good'], [m.mailbox for m in router.upstream_tx.rcpt_to])
         self.assertEqual(500, tx.rcpt_response[0].code)
         self.assertTrue(len(tx.rcpt_response) < 2 or
                         tx.rcpt_response[1] is None)
