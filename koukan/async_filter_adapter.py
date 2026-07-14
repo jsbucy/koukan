@@ -58,6 +58,10 @@ class AsyncFilterAdapter(Filter):
                 assert upstream_tx is not None
                 tx = upstream_tx
                 logging.debug(tx)
-            upstream_delta = prev.delta(tx)
+            # xxx hack cf end of tx_cursor._write() to swap tx.body
+            # with one that was slow-path written e.g. if CompositeBlob
+            tx_no_body = tx.copy()
+            prev.body = tx_no_body.body = None
+            upstream_delta = prev.delta(tx_no_body)
             self.downstream_tx.merge_from(upstream_delta)
         return FilterResult()

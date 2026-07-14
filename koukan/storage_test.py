@@ -101,6 +101,10 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(blob_writer.last)
         del blob_writer
 
+        # blob -> tx input_done orchestration moving to SWF
+        downstream.load()
+        downstream.write_envelope(TransactionMetadata(), input_done = True)
+
         downstream.load()
         downstream.write_envelope(
             TransactionMetadata(
@@ -411,6 +415,8 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
+        old_tx.write_envelope(TransactionMetadata(), input_done=True)
+
         # don't cleanup the session
         old_session.session_id = None
         try:
@@ -803,6 +809,8 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         b = b'hello, world!'
         blob_writer.append_data(0, b, last=True)
 
+        downstream.write_envelope(TransactionMetadata(), input_done=True)
+
         self.assertTrue(upstream.try_cache())
         self.assertEqual(len(b), upstream.tx.body.content_length())
         self.assertEqual(0, self.s._tx_reads - prev_reads)
@@ -863,6 +871,9 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         b1 = b'hello blob1'
         blob1_writer.append_data(0, b1, last=True)
 
+        downstream._blob_done(blob1_writer)
+        downstream.write_envelope(TransactionMetadata(), ping_tx=True)
+
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]
         self.assertEqual('blob1', blob1_reader.blob_uri().blob)
@@ -888,6 +899,8 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
             BlobUri('tx_rest_id', tx_body=False, blob='blob2'))
         b2 = b'hello blob2'
         blob2_writer.append_data(0, b2, last=True)
+
+        downstream.write_envelope(TransactionMetadata(), input_done=True)
 
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]

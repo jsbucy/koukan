@@ -104,7 +104,11 @@ class IdVersion:
                           self.leased, leased)
             if version < self.version:
                 raise VersionConflictException()
-            # xxx document when this is expected
+            # Same version is expected if another read gets in between
+            # the db update and the cache update:
+            # t1: db tx -> v4
+            # t2: read v4; update version cache
+            # t1: update version cache v4
             if version == self.version:
                 logging.debug('same version noop')
                 return

@@ -169,7 +169,7 @@ class OutputHandlerTest(unittest.TestCase):
                     tx_cursor.write_envelope(delta)
                     break
                 except VersionConflictException:
-                    pass
+                    time.sleep(0.1)
 
             # read rcpt resp
             for j in range(0,5):
@@ -199,8 +199,8 @@ class OutputHandlerTest(unittest.TestCase):
                 data_response = Response(204))
             tx.merge_from(upstream_delta)
             return upstream_delta
-        endpoint.add_expectation(exp_body)
-        endpoint.add_expectation(exp_body)
+        for i in range(0,2):
+            endpoint.add_expectation(exp_body)
 
         # write blob
         for i in range(0, 3):
@@ -213,6 +213,7 @@ class OutputHandlerTest(unittest.TestCase):
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         blob_writer.append_data(0, body, last=True)
+        tx_cursor.write_envelope(TransactionMetadata(), input_done=True)
 
         # read data resp
         for j in range(0,5):

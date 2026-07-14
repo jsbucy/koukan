@@ -519,7 +519,7 @@ class StorageWriterFilter(AsyncFilter):
         # the delta from the final cursor.tx, it's possible the
         # version conflict retry paths could pick up upstream deltas?
         logging.debug('StorageWriterFilter._update tx %s %s',
-                      self.rest_id, tx, stack_info=True)
+                      self.rest_id, tx)
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
@@ -567,11 +567,13 @@ class StorageWriterFilter(AsyncFilter):
             # without pipelining)
             assert self.tx_group.tx_cursors[0].tx is not None
             logging.debug(self.tx_group.tx_cursors[0].tx)
+            # xxx there was a bug in AsyncFilterAdapter where it was
+            # retrying after it succeeded the first time... possibly
+            # this should keep a copy of the downstream multi-rcpt tx
+            # to make sure the deltas make sense
             if (downstream_delta.rcpt_to and
                 not self.tx_group.tx_cursors[0].tx.rcpt_to):
-                rcpt = downstream_delta.rcpt_to[0]
-                assert rcpt is not None
-                delta = TransactionMetadata(rcpt_to=[rcpt])
+                delta = tx_delta.copy()
                 delta.sf_rcpt_timeout = [self._timeout(30)] * len(delta.rcpt_to)
                 self.tx_group.tx_cursors[0].write_envelope(delta)
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
@@ -656,21 +658,24 @@ class StorageWriterFilter(AsyncFilter):
         return TransactionMetadata()
 
     class BlobWriter(WritableBlob):
+        blob : WritableBlob
+        parent : 'StorageWriterFilter'
         def __init__(self, parent, blob):
+            assert blob is not None
             self.parent = parent
             self.blob = blob
-        def len(self):
+        def len(self) -> int:
             return self.blob.len()
-        def rest_id(self):
+        def rest_id(self) -> Optional[str]:
             return self.blob.rest_id()
-        def session_url(self):
+        def session_url(self) -> Optional[str]:
             return self.blob.session_uri()
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
                         ) -> Tuple[bool, int, Optional[int]]:
             res = self.blob.append_data(
-                offset, d, content_length=content_length, update_tx=False)
+                offset, d, content_length=content_length)
             appended, length, content_length = res
             # reset timeout
             # xxx: need this condition?
@@ -679,10 +684,11 @@ class StorageWriterFilter(AsyncFilter):
             return appended, length, content_length
 
 
-    def blob_done(self, writer):
+    def blob_done(self, writer) -> None:
         delta = TransactionMetadata()
         # xxx refactor
         delta.sf_data_timeout = self._timeout(30)
+        assert self.tx_group is not None
         self.tx_group.blob_done(writer.blob, delta)
 
     def get_blob_writer(self,
@@ -716,11 +722,12 @@ class StorageWriterFilter(AsyncFilter):
                     backoff(i)
                     self.tx_group.load()
 
-        return StorageWriterFilter.BlobWriter(
-            self,
-            self.tx_group.tx_cursors[0].get_blob_for_append(
-                BlobUri(tx_id=self.rest_id, blob=blob_rest_id,
-                        tx_body=tx_body if tx_body else False)))
+        blob_writer = self.tx_group.tx_cursors[0].get_blob_for_append(
+            BlobUri(tx_id=self.rest_id, blob=blob_rest_id,
+                    tx_body=tx_body if tx_body else False))
+        if blob_writer is None:
+            return None
+        return StorageWriterFilter.BlobWriter(self, blob_writer)
 
 
     def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:

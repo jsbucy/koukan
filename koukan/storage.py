@@ -211,7 +211,8 @@ class TransactionCursor:
         self._update_version_cache(True if create_leased else None)
         self.created = True
 
-    def _reuse_blob(self, db_tx : Connection, blob_uris : List[BlobUri]
+    def _reuse_blob(self, db_tx : Connection, blob_uris : List[BlobUri],
+                    require_finalized = True
                     ) -> List['BlobCursor']:
         assert self.rest_id is not None
         if not blob_uris:
@@ -268,8 +269,9 @@ class TransactionCursor:
             blob_id, blob_rest_id, length, content_length, last_update = row
             ids.add(blob_rest_id)
 
-            if content_length is None or length != content_length:
-                raise ValueError()  # not finalized
+            if require_finalized and (
+                    content_length is None or length != content_length):
+                raise ValueError()
             blob_cursor = BlobCursor(self.parent)
             blob_cursor.init(self.rest_id, blob_id, blob_rest_id,
                              content_length, last_update, length)
@@ -302,7 +304,7 @@ class TransactionCursor:
         self._update_version_cache(leased = False if finalize_attempt else None)
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata,
-                          group_cursors : List['TransactionCursor'] = []
+                          require_finalized = True
                           ) -> bool:  # blobs done
         assert self.rest_id is not None
         blob_specs : List[BlobSpec]
@@ -340,6 +342,9 @@ class TransactionCursor:
             elif (blob_spec.create_id or
                   blob_spec.create_tx_body or
                   isinstance(blob_spec.blob, Blob)):
+                # xxx cf end of _write(), in some cases the blobs in
+                # the tx are swapped with the ones created here at the
+                # end
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
                 blob_cursor._create(db_tx)
                 if blob_spec.blob:
@@ -358,7 +363,8 @@ class TransactionCursor:
             else:
                 raise ValueError()
 
-        blobs.extend(self._reuse_blob(db_tx, reuse_uris))
+        blobs.extend(self._reuse_blob(
+            db_tx, reuse_uris, require_finalized=require_finalized))
 
         blobrefs = []
         blobs_done = True
@@ -366,12 +372,11 @@ class TransactionCursor:
             assert (blob_uri := blob_cursor.blob_uri()) is not None
             if not blob_cursor.finalized():
                 blobs_done = False
-            blobrefs.extend(
-                [{ "transaction_id": tx_cursor.db_id,
-                   "tx_rest_id": tx_cursor.rest_id,
+            blobrefs.append(
+                { "transaction_id": self.db_id,
+                   "tx_rest_id": self.rest_id,
                    "blob_id": blob_cursor.db_id,
-                   "rest_id": blob_uri.blob }
-                 for tx_cursor in [self] + group_cursors])
+                   "rest_id": blob_uri.blob })
 
 
         logging.debug('TransactionCursor._write_blob %d %s all done %s',
@@ -383,9 +388,6 @@ class TransactionCursor:
 
         self.blobs = blobs
         logging.debug(blobs)
-        for cursor in group_cursors:
-            cursor.blobs = [b.clone() for b in blobs]
-            logging.debug(cursor.blobs)
 
         if not blobs_done:
             return False
@@ -405,7 +407,8 @@ class TransactionCursor:
                # only for upcalls from BlobWriter
                input_done = False,
                ping_tx = False,
-               attempt_delta : Optional[TransactionMetadata] = None):
+               attempt_delta : Optional[TransactionMetadata] = None,
+               require_finalized_blob = True):
         assert self.version is not None
         # XXX body doesn't have DB validity?
         body = tx_delta.body
@@ -521,7 +524,8 @@ class TransactionCursor:
                              next_attempt_time = next_attempt_time)
 
         if tx_delta.body is not None:
-            input_done |= self._maybe_write_blob(db_tx, tx_delta)
+            input_done |= self._maybe_write_blob(
+                db_tx, tx_delta, require_finalized=require_finalized_blob)
 
         body = tx_delta.body
         if isinstance(body, MessageBuilderSpec):
@@ -550,6 +554,11 @@ class TransactionCursor:
 
         # RestHandler creation -> OH handoff tx needs to have the
         # same effect as _load_blobs()
+
+        # XXX this should only mutate the clone of the tx in
+        # _update_verison_cache() and not self.tx; the way this is, if
+        # you take a delta of successive versions of cursor.tx before
+        # and after this, you will get a bad delta/assert
         if (self.blobs and
             len(self.blobs) == 1 and
             (blob_uri := self.blobs[0].blob_uri()) is not None and
@@ -1077,25 +1086,28 @@ class TransactionGroup:
                    cursors : Optional[List[TransactionCursor]] = None):
         assert self.parent_tx_id is not None
         assert self.parent.tx_table is not None
-        assert not ping_tx, 'unimplemented'
         assert not tx_delta or not tx_delta.rcpt_to
 
         if cursors is None:
             cursors = self.tx_cursors
 
-        with self.parent.begin_transaction() as db_tx:
-            if tx_delta.body:
-                self.tx_cursors[0]._maybe_write_blob(
-                    db_tx, TransactionMetadata(body=tx_delta.body),
-                    group_cursors=self.tx_cursors[1:])
-                tx_delta.body = None
-                write_blob = True
+        create_body = tx_delta.body is not None and isinstance(tx_delta.body, BlobSpec) and tx_delta.body.create_tx_body
 
-            for c in cursors:
+        delta = tx_delta.copy()
+        with self.parent.begin_transaction() as db_tx:
+            for i,c in enumerate(cursors):
                 c._write(db_tx = db_tx,
-                         tx_delta = tx_delta,
+                         tx_delta = delta,
                          final_attempt_reason = final_attempt_reason,
-                         input_done = input_done)
+                         ping_tx = ping_tx,
+                         input_done = input_done,
+                         require_finalized_blob = not create_body)
+                # xxx this still depends on the hack at the end of
+                # _write() to swap body with BlobCursor
+                if i == 0 and create_body:
+                    assert c.tx is not None
+                    delta.body = c.tx.body
+
         for c in cursors:
             c._update_version_cache()
             # xxx shouldn't toggle leased?
@@ -1129,9 +1141,10 @@ class TransactionGroup:
                 assert len(self.tx_cursors) >= 1
 
                 if tx_delta.body:
+                    raise NotImplementedError()
                     self.tx_cursors[0]._maybe_write_blob(
-                        db_tx, TransactionMetadata(body=tx_delta.body),
-                        group_cursors=self.tx_cursors[1:])
+                        db_tx, TransactionMetadata(body=tx_delta.body))
+                        #xxx group_cursors=self.tx_cursors[1:])
                     tx_delta.body = None
                     write_blob = True
 
@@ -1252,21 +1265,26 @@ class TransactionGroup:
     def blob_done(self, blob, tx_delta : Optional[TransactionMetadata] = None):
         if tx_delta is None:
             tx_delta = TransactionMetadata()
-        bd = False
+        blobs_done = False
         for i,c in enumerate(self.tx_cursors):
             logging.debug(c.blobs)
-            bdi = c._blob_done(blob)
+            blobs_donei = c._blob_done(blob)
             logging.debug(c.blobs)
             if i == 0:
-                bd = bdi
+                blobs_done = blobs_donei
             else:
-                assert bd == bdi
-        logging.debug(bd)
-        if not bd:
-            return
+                assert blobs_done == blobs_donei
+        logging.debug(blobs_done)
+        kwargs : Dict[str, Any] = {}
+        if blobs_done:
+            kwargs['input_done'] = True
+        else:
+            # note: this will update the tx/version every time and
+            # wakeup the upstream, etc. debounce?
+            kwargs['ping_tx'] = True  # ping last_update
         for i in range(0,5):
             try:
-                self.update_all(tx_delta, input_done=True)
+                self.update_all(tx_delta, **kwargs)
             except VersionConflictException:
                 logging.debug('VersionConflictException')
                 if i == 4:
@@ -1367,7 +1385,8 @@ class BlobCursor(Blob, WritableBlob):
                     content_length : Optional[int] = None,
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None,
-                    update_tx = True
+                    # xxx remove, SWF orchestrates this now
+                    update_tx = False
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d [%s] '
                      'offset=%d self.length=%d d.len=%d '
@@ -1438,7 +1457,8 @@ class BlobCursor(Blob, WritableBlob):
             content_length : Optional[int] = None,
             # last: set content_length to offset + len(d)
             last : Optional[bool] = None,
-            update_tx : bool = True
+            # xxx remove, SWF orchestrates this now
+            update_tx : bool = False
     ) -> Tuple[bool, int, Optional[int], Optional[TransactionCursor]]:
         for i in range(0,2):
             upd = (update(self.parent.blob_table)
@@ -1526,6 +1546,8 @@ class BlobCursor(Blob, WritableBlob):
         if input_done:
             kwargs['input_done'] = True
         else:
+            # note: this will update the tx/version every time and
+            # wakeup the upstream, etc.
             kwargs['ping_tx'] = True  # ping last_update
         logging.debug('BlobWriter.append_data tx %s %s',
                       self.update_tx, kwargs)
