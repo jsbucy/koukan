@@ -228,8 +228,6 @@ class RestHandler(Handler):
             return err
 
         upstream = self.async_filter.update(tx, tx.copy())
-        cached_tx = self.async_filter.get()
-        assert cached_tx is not None
         cached = self.async_filter.check_cache()
         # the factory path up to router_service fails if the OH
         # couldn't be scheduled so if we got here, it should be leased
