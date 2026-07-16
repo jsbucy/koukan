@@ -966,6 +966,7 @@ class TransactionGroup:
 
     def _load(self, tx_rest_id : Optional[str] = None,
              tx_id : Optional[int] = None) -> bool:
+        assert tx_rest_id is not None or tx_id is not None or self.parent_tx_id is not None
         assert self.parent.tx_table is not None
         assert self.parent.attempt_table is not None
 
@@ -1035,6 +1036,7 @@ class TransactionGroup:
             logging.debug(res)
             cursor_by_id = { c.db_id : c for c in self.tx_cursors }
             logging.debug(cursor_by_id)
+            loaded = set()
             for row in res:
                 if self.parent_tx_id is None:
                     self.parent_tx_id = row[0]
@@ -1043,6 +1045,13 @@ class TransactionGroup:
                     cursor = TransactionCursor(self.parent, row[0], row[1])
                     self.tx_cursors.append(cursor)
                 cursor._load_db(db_tx, join_row=row)
+                loaded.add(row[0])
+            # most likely some of the tx have been gc'd already, treat
+            # the whole thing as nonexistent in that case
+            # TODO should gc ensure that all of the tx in the group
+            # are gc'd atomically?
+            if loaded < cursor_by_id.keys():
+                return False
             logging.debug(self.tx_cursors)
 
             if not self.tx_cursors:
@@ -1246,20 +1255,19 @@ class TransactionGroup:
         return None
 
 
-    def try_cache(self, db_ids : List[int]) -> bool:
+    def try_cache(self, db_ids : Optional[List[int]] = None) -> bool:
         logging.debug('TransactionGroup.try_cache %s', db_ids)
-        cursor_by_id = { c.db_id : c for c in self.tx_cursors }
-        for i,db_id in enumerate(db_ids):
-            if (cursor := cursor_by_id.get(db_id, None)) is None:
+
+        if db_ids:
+            assert not self.tx_cursors
+            self.parent_tx_id = db_ids[0]
+            for db_id in db_ids:
                 cursor = self.parent.get_transaction_cursor(db_id = db_id)
                 self.tx_cursors.append(cursor)
-            if i == 0:
-                self.parent_tx_id = db_id
-            if not cursor.try_cache():
-                logging.debug('no tx %d', db_id)
-                return False
 
-        logging.debug('ok')
+        for c in self.tx_cursors:
+            if not c.try_cache():
+                return False
         return True
 
     def blob_done(self, blob, tx_delta : Optional[TransactionMetadata] = None):
@@ -1286,10 +1294,10 @@ class TransactionGroup:
             try:
                 self.update_all(tx_delta, **kwargs)
             except VersionConflictException:
-                logging.debug('VersionConflictException')
+                logging.debug('VersionConflictException %d', i)
                 if i == 4:
                     raise
-                if not self.try_cache(self.db_ids()):
+                if not self.try_cache():
                     backoff(i)
                     self.load()
                 for c in self.tx_cursors:

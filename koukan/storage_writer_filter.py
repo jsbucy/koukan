@@ -204,6 +204,9 @@ class StorageWriterFilter(AsyncFilter):
             prev = storage_tx.copy()
             storage_tx.rcpt_to.extend(rcpt_to)
             self._update(storage_tx, prev.delta(storage_tx))
+        else:
+            assert self.timeouts is not None
+            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
 
         with self.mu:
             # self.rest_id = rest_id
@@ -213,11 +216,16 @@ class StorageWriterFilter(AsyncFilter):
     def _load(self) -> bool:
         logging.debug(self.rest_id)
         tx = None
+        group_db_ids = None
+        created = False
         if self.tx_group is None:
             self.tx_group = TransactionGroup(self.storage)
-        assert self.timeouts is not None
-        assert self.rest_id is not None
-        if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is not None:
+            assert self.timeouts is not None
+            assert self.rest_id is not None
+            group_db_ids = self.timeouts.groups.get(self.rest_id, None)
+            created = True
+
+        if not created or (created and group_db_ids is not None):
             if self.tx_group.try_cache(group_db_ids):
                 tx = self._get()
 
@@ -538,7 +546,8 @@ class StorageWriterFilter(AsyncFilter):
                     if i == 4:
                         raise
                     backoff(i)
-                    self.tx_group.load()
+                    if not self.tx_group.try_cache():
+                        self.tx_group.load()
             assert self.tx_group is not None
             return TransactionMetadata()
 
@@ -720,7 +729,8 @@ class StorageWriterFilter(AsyncFilter):
                     if i == 4:
                         raise
                     backoff(i)
-                    self.tx_group.load()
+                    if not self.tx_group.try_cache():
+                        self.tx_group.load()
 
         blob_writer = self.tx_group.tx_cursors[0].get_blob_for_append(
             BlobUri(tx_id=self.rest_id, blob=blob_rest_id,

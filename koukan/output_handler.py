@@ -305,7 +305,8 @@ class OutputHandler:
                         if i == 4:
                             raise
                         backoff(i)
-                        self.cursor.load()
+                        if not self.cursor.try_cache():
+                            self.cursor.load()
 
                 if done and not self.tx.cancelled:
                     self.tx.cancelled = True
