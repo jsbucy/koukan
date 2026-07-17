@@ -54,7 +54,7 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoints = []
 
     def get_endpoint(self, yaml, sender : Sender):
-        logging.debug('RouterServiceTest.get_endpoint %s', sender, stack_info=True)
+        logging.debug('RouterServiceTest.get_endpoint %s', sender)  # stack_info=True)
         with self.lock:
             #self.cv.wait_for(lambda: bool(self.endpoints))
             return self.endpoints.pop(0)
@@ -1052,28 +1052,38 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
 
-        def exp_rcpt(tx, tx_delta):
+        def exp_rcpt1(tx, tx_delta):
             logging.debug(tx)
             prev = tx.copy()
             if tx_delta.mail_from:
                 tx.mail_response=Response(201, 'mail ok (upstream)')
             if tx_delta.rcpt_to:
-                rcpt = tx_delta.rcpt_to[0].mailbox
-                self.assertIn(rcpt, ['bob1@example.com', 'bob2@example.com'])
+                self.assertEqual(
+                    ['bob1@example.com'], [r.mailbox for r in tx.rcpt_to])
                 tx.rcpt_response=[Response(202)]
             if tx_delta.body and tx_delta.body.finalized():
-                if tx.rcpt_to[0].mailbox == 'bob2@example.com':
-                    tx.data_response = Response(503)
-                else:
-                    tx.data_response = Response(203)
+                tx.data_response = Response(203)
             return prev.delta(tx)
 
+        def exp_rcpt2(tx, tx_delta):
+            logging.debug(tx)
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(201, 'mail ok (upstream)')
+            if tx_delta.rcpt_to:
+                self.assertEqual(
+                    ['bob2@example.com'], [r.mailbox for r in tx.rcpt_to])
+                tx.rcpt_response=[Response(202)]
+            if tx_delta.body and tx_delta.body.finalized():
+                    tx.data_response = Response(503)
+            return prev.delta(tx)
+        exp_rcpt = [exp_rcpt1, exp_rcpt2]
         # output for each of rcpt1, rcpt2
         for j in range(0,2):
             upstream = FakeFilter()
             logging.debug(id(upstream))
             for k in range(0,3):  # cancellation
-                upstream.add_expectation(exp_rcpt)
+                upstream.add_expectation(exp_rcpt[j])
             self.add_endpoint(upstream)
         tx.merge_from(delta)
         rest_endpoint.on_update(delta, 10)
@@ -1089,9 +1099,15 @@ class RouterServiceTest(unittest.TestCase):
         self.assertIn('message accepted (SWF store&forward mixed upstream)',
                       tx.data_response.message)
 
+        def exp_no_final_notification(tx, tx_delta):
+            logging.debug(tx)
+            self.assertTrue(tx.cancelled)
+            return TransactionMetadata()
+
         # no_final_notification OutputHandler handler for the rcpt that failed
         for i in range(0,1):
             unused_upstream_endpoint = FakeFilter()
+            unused_upstream_endpoint.add_expectation(exp_no_final_notification)
             logging.debug(id(unused_upstream_endpoint))
             self.add_endpoint(unused_upstream_endpoint)
 
@@ -1101,18 +1117,20 @@ class RouterServiceTest(unittest.TestCase):
             logging.error(tx)
             self.assertEqual('', tx.mail_from.mailbox)
             self.assertEqual('alice@example.com', tx.rcpt_to[0].mailbox)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(250),
-                rcpt_response=[Response(250)])
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(250)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(250)]
 
-            if tx.body and tx.body.finalized():
+            if tx_delta.body and tx_delta.body.finalized():
                 dsn = tx.body.pread(0)
                 logging.debug('test_notification %s', dsn)
                 self.assertIn(b'subject: Delivery Status Notification', dsn)
-                upstream_delta.data_response=Response(250)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        dsn_endpoint.add_expectation(exp_dsn)
+                tx.data_response=Response(250)
+            return prev.delta(tx)
+        for i in range(0,2):
+            dsn_endpoint.add_expectation(exp_dsn)
         self.add_endpoint(dsn_endpoint)
 
         # no_final_notification(bob2) + dsn output

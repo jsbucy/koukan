@@ -173,6 +173,8 @@ class StorageWriterFilter(AsyncFilter):
         rest_id = self.rest_id_factory()
         storage_tx = tx.copy()
         rcpt_to = None
+        if self.sender is None:
+            self.sender = tx.sender
         if len(storage_tx.rcpt_to) > 1:
             rcpt_to = storage_tx.rcpt_to
             storage_tx.rcpt_to = rcpt_to[0:1]
@@ -363,8 +365,19 @@ class StorageWriterFilter(AsyncFilter):
                     DownstreamResponse.SF):
                     downstream_resp_delta.retry = {}
                     downstream_resp_delta.notification = {}
-                self.tx_group.tx_cursors[i].write_envelope(
-                    downstream_resp_delta)
+                for j in range(0,5):
+                    try:
+                        self.tx_group.tx_cursors[i].write_envelope(
+                            downstream_resp_delta)
+                        break
+                    except VersionConflictException:
+                        logging.debug('VersionConflictException')
+                        if j == 4:
+                            raise
+                        backoff(j)
+                        if not self.tx_group.try_cache():
+                            self.tx_group.load()
+
 
             if sf_data:
                 sf_cursor.append(self.tx_group.tx_cursors[i])

@@ -127,7 +127,7 @@ class FakeFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if not self.expectation:
-            raise IndexError()
+            raise IndexError(id(self))
         exp = self.expectation[0]
         self.expectation.pop(0)
         assert self.downstream_tx is not None

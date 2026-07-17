@@ -950,11 +950,92 @@ class TransactionGroup:
         return out
 
 
+    def load_group(self,
+                   db_tx : Connection,
+                   tx_rest_id : Optional[str] = None,
+                   tx_id : Optional[int] = None) -> Optional[List[int]]:
+        assert self.parent.tx_table is not None
+        tcols = self.parent.tx_table.c
+
+        sel_tx = select(tcols.id, tcols.parent_id)
+
+        if tx_id is not None or self.parent_tx_id is not None:
+            if tx_id is None:
+                tx_id = self.parent_tx_id
+            sel_tx = sel_tx.where(or_(
+                and_(tcols.parent_id == None,  # necessary?
+                     tcols.id == tx_id),
+                tcols.parent_id == tx_id))
+        elif tx_rest_id is not None:
+            subq = select(tcols.id).where(
+                tcols.rest_id == tx_rest_id).subquery()
+            sel_tx = sel_tx.select_from(
+                join(self.parent.tx_table,
+                     subq,
+                     or_(tcols.id == subq.c.id,
+                         tcols.parent_id == subq.c.id)))
+        else:
+            assert False, 'bad params'
+
+        sel_tx = sel_tx.order_by(tcols.id)
+
+        res = db_tx.execute(sel_tx)
+        out : List[int] = []
+        if res is None:
+            return None
+        for row in res:
+            tx_id, parent_id = row
+            # TODO this doesn't currently read them all in a
+            # single db tx. If this raced with update_all() some
+            # of these point reads could land before and some
+            # after.
+            if not out and parent_id is not None:
+                return None
+            out.append(row[0])
+        return out
+
+    def _load(self, db_tx : Connection,
+              tx_rest_id : Optional[str] = None,
+              tx_id : Optional[int] = None) -> bool:
+        # The hot path always hands off through VersionCache. Just
+        # load the ids every time here to be extra defensive.
+        db_ids = self.load_group(db_tx, tx_rest_id, tx_id)
+        if not db_ids:
+            return False
+        self.parent_tx_id = db_ids[0]
+        if not self.tx_cursors:
+            for db_id in db_ids:
+                self.tx_cursors.append(
+                    self.parent.get_transaction_cursor(db_id=db_id))
+        else:
+            assert db_ids == [c.db_id for c in self.tx_cursors]
+        for c in self.tx_cursors:
+            if not c._load_db(db_tx):
+                return False
+        return True
+
     def load(self, tx_rest_id : Optional[str] = None,
              tx_id : Optional[int] = None) -> bool:
         for i in range(0,5):
             try:
-                return self._load(tx_rest_id, tx_id)
+                with self.parent.begin_transaction() as db_tx:
+                    if not self._load(db_tx, tx_rest_id, tx_id):
+                        return False
+                for c in self.tx_cursors:
+                    c._update_version_cache()
+                return True
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                backoff(i)
+        assert False, 'unreachable'
+
+    def load_vectorized(self, tx_rest_id : Optional[str] = None,
+                        tx_id : Optional[int] = None) -> bool:
+        for i in range(0,5):
+            try:
+                return self._load_vectorized(tx_rest_id, tx_id)
             except VersionConflictException:
                 logging.debug('VersionConflictException')
                 if i == 4:
@@ -964,7 +1045,7 @@ class TransactionGroup:
                 backoff(i)
         assert False, 'unreached'
 
-    def _load(self, tx_rest_id : Optional[str] = None,
+    def _load_vectorized(self, tx_rest_id : Optional[str] = None,
              tx_id : Optional[int] = None) -> bool:
         assert tx_rest_id is not None or tx_id is not None or self.parent_tx_id is not None
         assert self.parent.tx_table is not None
@@ -1293,6 +1374,7 @@ class TransactionGroup:
         for i in range(0,5):
             try:
                 self.update_all(tx_delta, **kwargs)
+                break
             except VersionConflictException:
                 logging.debug('VersionConflictException %d', i)
                 if i == 4:

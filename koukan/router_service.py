@@ -334,6 +334,7 @@ class Service:
             self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=False,
+            endpoint_yaml = self.get_endpoint_yaml,
             timeouts = self.swf_timeouts)
 
     def handle_tx(self, storage_tx : TransactionCursor,
