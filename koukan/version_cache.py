@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from threading import (
     Condition,
     Lock )
@@ -185,6 +185,8 @@ class IdVersionMap:
     # rest_id -> IdVersion
     rest_id_map : WeakValueDictionary[str, IdVersion]
 
+    tx_groups : Dict[int, Set[int]]
+
     ttl_refs : Set[IdVersion]
     last_gc : float
     ttl : Optional[int] = None
@@ -192,6 +194,7 @@ class IdVersionMap:
     def __init__(self, ttl=None):
         self.id_version_map = WeakValueDictionary()
         self.rest_id_map = WeakValueDictionary()
+        self.tx_groups = {}
         self.lock = Lock()
         self.ttl_refs = set()
         self.last_gc = time.monotonic()
@@ -207,10 +210,25 @@ class IdVersionMap:
         self.last_gc = now
         to_delete = []
         for i in self.ttl_refs:
-            if i.expired():
-                to_delete.append(i)
+            if not i.expired():
+                continue
+            to_delete.append(i)
+            if i.cursor:
+                group_parent = i.cursor.parent_db_id()
+                group = self.tx_groups.get(group_parent, None)
+                if group is not None:
+                    group.remove(i.cursor.db_id)
+                    if not group:
+                        del self.tx_groups[group_parent]
         for i in to_delete:
             self.ttl_refs.remove(i)
+
+    def get_group(self, db_id : int) -> Optional[List[int]]:
+        with self.lock:
+            logging.debug(self.tx_groups)
+            if (group_ids := self.tx_groups.get(db_id, None)) is None:
+                return None
+        return sorted(group_ids)
 
     def insert_or_update(self, db_id : int, rest_id : str, version : int,
                          cursor : Optional[Any] = None,
@@ -228,6 +246,14 @@ class IdVersionMap:
                 self.rest_id_map[rest_id] = id_version
             else:
                 id_version.update(version, cursor, leased)
+            if cursor is not None:
+                group_parent = cursor.parent_db_id()
+                logging.debug('%d %s', db_id, group_parent)
+                if (group_ids := self.tx_groups.get(group_parent, None)) is None:
+                    group_ids = set()
+                    self.tx_groups[group_parent] = group_ids
+                group_ids.add(db_id)
+                logging.debug(self.tx_groups)
             if self.ttl is not None:
                 self.ttl_refs.add(id_version)
             return id_version

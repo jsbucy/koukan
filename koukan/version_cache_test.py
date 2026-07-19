@@ -11,7 +11,13 @@ from koukan.version_cache import IdVersionMap
 
 class FakeCursor:
     tx = None
-    def __init__(self, version, final_attempt_reason = None):
+    db_id : int
+
+    def parent_db_id(self):
+        return self.db_id
+
+    def __init__(self, db_id, version, final_attempt_reason = None):
+        self.db_id = db_id
         self.version = version
         self.final_attempt_reason = final_attempt_reason
     def copy_from(self, rhs):
@@ -32,9 +38,9 @@ class VersionCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_smoke(self):
         version_cache = IdVersionMap(ttl=1)
         id_version = version_cache.insert_or_update(
-            db_id=2, rest_id="rest_id", version=2, cursor=FakeCursor(2),
+            db_id=2, rest_id="rest_id", version=2, cursor=FakeCursor(2, 2),
             leased=True)
-        tx_out = FakeCursor(1)
+        tx_out = FakeCursor(2, 1)
         self.assertTrue(id_version.wait(0, 0, tx_out))
         self.assertEqual(2, tx_out.version)
         self.assertEqual((True, False), await id_version.wait_async(
@@ -58,19 +64,21 @@ class VersionCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((False, False), id_version.wait(3, 0))
         idv = version_cache.insert_or_update(
             db_id=2, rest_id="rest_id", version=4,
-            cursor=FakeCursor(4, final_attempt_reason='final'), leased=False)
+            cursor=FakeCursor(2, 4, final_attempt_reason='final'), leased=False)
         self.assertTrue(idv is id_version)
 
-        cursor_out = FakeCursor(0)
+        cursor_out = FakeCursor(2, 0)
         self.assertEqual((True, True), id_version.wait(3, 0, cursor_out))
         self.assertEqual(4, cursor_out.version)
         self.assertEqual('final', cursor_out.final_attempt_reason)
 
         idv = version_cache.get(db_id=2)
+        self.assertEqual([2], version_cache.get_group(db_id=2))
         self.assertTrue(idv is id_version)
         time.sleep(2)
         idv = version_cache.get(db_id=2)
         self.assertIsNone(idv)
+        self.assertIsNone(version_cache.get_group(db_id=2))
 
 if __name__ == '__main__':
     unittest.main()

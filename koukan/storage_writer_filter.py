@@ -43,15 +43,6 @@ downstream_responses = {
         450, 'StorageWriterFilter upstream timeout')
 }
 
-class Timeouts:
-    # xxx this should get saved in the cached tx? will need this for
-    # cross-tx coordination (e.g. spam reject)
-    # so load the rest id from the cache and then the rest hang off of that?
-    groups : Dict[str, List[int]]
-    def __init__(self):
-        # self.tx_status = {}
-        self.groups = {}
-
 class StorageWriterFilter(AsyncFilter):
     storage : Storage
     # tx_cursor : Optional[TransactionCursor] = None
@@ -67,7 +58,6 @@ class StorageWriterFilter(AsyncFilter):
     endpoint_yaml : Optional[EndpointYamlProvider] = None
     sender : Optional[Sender] = None
     tx_handler : Optional[TxHandler]
-    timeouts : Optional[Timeouts] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -75,8 +65,7 @@ class StorageWriterFilter(AsyncFilter):
                  create_leased : bool = False,
                  sender : Optional[Sender] = None,
                  endpoint_yaml : Optional[EndpointYamlProvider] = None,
-                 tx_handler : Optional[TxHandler] = None,
-                 timeouts : Optional[Timeouts] = None):
+                 tx_handler : Optional[TxHandler] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -87,7 +76,6 @@ class StorageWriterFilter(AsyncFilter):
         self.endpoint_yaml = endpoint_yaml
         self.tx_handler = tx_handler
         self.upstream_cursor = []
-        self.timeouts = timeouts
 
     def incremental(self):
         assert self.endpoint_yaml is not None
@@ -206,9 +194,6 @@ class StorageWriterFilter(AsyncFilter):
             prev = storage_tx.copy()
             storage_tx.rcpt_to.extend(rcpt_to)
             self._update(storage_tx, prev.delta(storage_tx))
-        else:
-            assert self.timeouts is not None
-            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
 
         with self.mu:
             # self.rest_id = rest_id
@@ -218,18 +203,11 @@ class StorageWriterFilter(AsyncFilter):
     def _load(self) -> bool:
         logging.debug(self.rest_id)
         tx = None
-        group_db_ids = None
-        created = False
         if self.tx_group is None:
-            self.tx_group = TransactionGroup(self.storage)
-            assert self.timeouts is not None
-            assert self.rest_id is not None
-            group_db_ids = self.timeouts.groups.get(self.rest_id, None)
-            created = True
+            self.tx_group = TransactionGroup(self.storage, rest_id=self.rest_id)
 
-        if not created or (created and group_db_ids is not None):
-            if self.tx_group.try_cache(group_db_ids):
-                tx = self._get()
+        if self.tx_group.try_cache():
+            tx = self._get()
 
         if tx is None:  #not self.tx_group.tx_cursors:
             if not self.tx_group.load(tx_rest_id=self.rest_id):
@@ -387,10 +365,6 @@ class StorageWriterFilter(AsyncFilter):
     def _get(self) -> Optional[TransactionMetadata]:
         assert self.tx_group is not None
         assert self.tx_group.tx_cursors[0].tx is not None
-
-        if self.timeouts is not None:
-            assert self.rest_id is not None
-            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
 
         assert self.endpoint_yaml is not None
         if self.sender is None:
@@ -639,8 +613,6 @@ class StorageWriterFilter(AsyncFilter):
                 else:
                     created = True
                 logging.debug(sched)
-            assert self.timeouts is not None
-            self.timeouts.groups[self.rest_id] = self.tx_group.db_ids()
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 if downstream_delta.body is not None and downstream_delta._body_last():
@@ -656,13 +628,6 @@ class StorageWriterFilter(AsyncFilter):
 
         assert self.endpoint_yaml is not None
         assert self.sender is not None
-        if ((self.timeouts is not None) and
-            ((endpoint_yaml := self.endpoint_yaml(self.sender)) is not None) and
-            (endpoint_yaml.get('sf_mode', None) == 'upstream_unavailability')):
-            timeout = endpoint_yaml.get('sf_timeout', 10)
-            assert self.tx_group.tx_cursors[0].db_id is not None
-            # self.timeouts.tx_status[self.tx_group.tx_cursors[0].db_id] = (
-            #     Status(time.monotonic_ns() + timeout * int(1e9)))
 
         # TODO how often is the cursor in this SWF reused after return
         # from this call?
@@ -755,12 +720,9 @@ class StorageWriterFilter(AsyncFilter):
 
     def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
         if self.tx_group is None:
-            assert self.timeouts is not None
             assert self.rest_id is not None
-            if (group_db_ids := self.timeouts.groups.get(self.rest_id, None)) is None:
-                return None
-            self.tx_group = TransactionGroup(self.storage)
-            if not self.tx_group.try_cache(group_db_ids):
+            self.tx_group = TransactionGroup(self.storage, rest_id=self.rest_id)
+            if not self.tx_group.try_cache():
                 return None
 
         tx = self._get()

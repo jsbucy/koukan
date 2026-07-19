@@ -17,7 +17,7 @@ from koukan.rest_schema import BlobUri
 
 from koukan.blob import Blob, InlineBlob
 
-from koukan.storage_writer_filter import StorageWriterFilter, Timeouts
+from koukan.storage_writer_filter import StorageWriterFilter
 
 import koukan.sqlite_test_utils as sqlite_test_utils
 
@@ -111,7 +111,6 @@ class StorageWriterFilterTest(unittest.TestCase):
     # check()
 
     def test_smoke(self):
-        timeouts = Timeouts()
         endpoint_yaml = {
             'sf_mode': 'upstream_unavailability'
         }
@@ -120,8 +119,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True,
             sender=Sender('ingress'),
-            endpoint_yaml = lambda sender: endpoint_yaml,
-	    timeouts = timeouts)
+            endpoint_yaml = lambda sender: endpoint_yaml)
         tx = TransactionMetadata(
             sender=Sender('ingress'),
             mail_from=Mailbox('alice'))
@@ -133,8 +131,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id = 'tx_rest_id',
             create_leased = True,
-            endpoint_yaml = lambda sender: endpoint_yaml,
-	    timeouts = timeouts)
+            endpoint_yaml = lambda sender: endpoint_yaml)
         prev = filter.get()
         self.assertIsNotNone(prev)
         tx = prev.copy()
@@ -154,8 +151,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id = 'tx_rest_id',
             create_leased = True,
             tx_handler = upstream,
-            endpoint_yaml = lambda sender: endpoint_yaml,
-	    timeouts = timeouts)
+            endpoint_yaml = lambda sender: endpoint_yaml)
         prev = filter.get()
         logging.debug(prev.sender)
         tx = prev.copy()
@@ -172,7 +168,6 @@ class StorageWriterFilterTest(unittest.TestCase):
                          [r.mailbox for r in u2.tx.rcpt_to])
 
     def test_store_and_forward_unavailability(self):
-        timeouts = Timeouts()
         endpoint_yaml = {
             'sf_timeout': 1,
             'sf_mode': 'upstream_unavailability'
@@ -182,8 +177,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True,
             endpoint_yaml = lambda sender: endpoint_yaml,
-            sender=Sender('ingress'),
-            timeouts=timeouts)
+            sender=Sender('ingress'))
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
@@ -217,15 +211,13 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     def test_body_blob(self):
         # from creation, gets handed off to OH
-        timeouts = Timeouts()
         # create/handoff to upstream
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased = True,
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         filter.update(tx, tx.copy())
@@ -238,8 +230,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id = 'tx_rest_id',
             sender = Sender('ingress'),
             create_leased = False,
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         blob_writer = filter.get_blob_writer(
             create=True, tx_body=True)
         d = b'hello, world!'
@@ -253,8 +244,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id = 'tx_rest_id',
             sender = Sender('ingress'),
             create_leased = False,
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
 
         blob_writer = filter.get_blob_writer(
             create=False, tx_body=True)
@@ -266,13 +256,11 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertTrue(upstream_cursor.input_done)
 
     def test_cancel(self):
-        timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'tx_rest_id',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
 
         tx = TransactionMetadata(sender=Sender('gateway'))
         filter.update(tx, tx.copy())
@@ -286,7 +274,6 @@ class StorageWriterFilterTest(unittest.TestCase):
     # XXX failing because TxGroup doesn't replicate the noop
     # behavior from TxCursor
     def disabled_test_cancel_noop(self):
-        timeouts = Timeouts()
         orig_tx_cursor = self.storage.get_transaction_cursor()
         orig_tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -304,8 +291,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id='tx_rest_id',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         tx = filter.get()
         self.assertIsNotNone(tx.final_attempt_reason)
         prev = tx.copy()
@@ -317,7 +303,6 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     # representative of add_route which writes body_blob=BlobCursor
     def test_body_blob_cursor(self):
-        timeouts = Timeouts()
         orig_tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
             rcpt_to = [Mailbox('bob')])
@@ -330,8 +315,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'orig_tx_rest_id',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: endpoint_yaml,
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: endpoint_yaml)
 
         orig_filter.update(orig_tx, orig_tx.copy())
         blob_writer = orig_filter.get_blob_writer(
@@ -345,8 +329,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: 'tx_rest_id',
             create_leased=True,
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: endpoint_yaml,
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: endpoint_yaml)
         tx = TransactionMetadata(sender=Sender('exploder'))
         filter.update(tx, tx.copy())
 
@@ -441,7 +424,6 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(tx.data_response.code, 203)
 
     def test_message_builder_blob_reuse(self):
-        timeouts = Timeouts()
         message_builder_json = {
             "text_body": [{
                 "content_type": "text/plain",
@@ -453,8 +435,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'test_message_builder',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         orig_tx = TransactionMetadata()
         orig_tx.body = MessageBuilderSpec(message_builder_json)
         orig_tx.body.parse_blob_specs()
@@ -475,8 +456,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'test_message_builder_reuse',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         message_builder_json['text_body'][0]['content'] = {'reuse_uri': '/transactions/test_message_builder/blob/test_message_builder_blob'}
         tx = TransactionMetadata(
             mail_from = Mailbox('alice'),
@@ -494,13 +474,11 @@ class StorageWriterFilterTest(unittest.TestCase):
 
 
     def test_timeout_mail(self):
-        timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: str(time.time()),
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         filter._create(TransactionMetadata())
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
@@ -510,13 +488,11 @@ class StorageWriterFilterTest(unittest.TestCase):
 
 
     def test_tx_body_inline_reuse(self):
-        timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'inline',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         b = b'hello, world!'
         tx = TransactionMetadata(
             body = InlineBlob(b, last=True))
@@ -529,8 +505,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             self.storage,
             rest_id_factory = lambda: 'reuse',
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
         tx2 = TransactionMetadata(
                 body = BlobSpec(reuse_uri=BlobUri('inline', tx_body=True)))
         # create w/ body blob uri
@@ -542,14 +517,12 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(tx_reader.tx.body.pread(0), b)
 
     def test_create_leased(self):
-        timeouts = Timeouts()
         filter = StorageWriterFilter(
             self.storage,
             rest_id_factory = lambda: 'inline',
             create_leased=True,
             sender = Sender('ingress'),
-            endpoint_yaml = lambda sender: {},
-            timeouts=timeouts)
+            endpoint_yaml = lambda sender: {})
 
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'))
@@ -559,7 +532,6 @@ class StorageWriterFilterTest(unittest.TestCase):
 
     # XXX: verify notify/retry on db tx
     def _run_test(self, t : Test):
-        timeouts = Timeouts()
         endpoint_yaml = {
             'sf_mode': t.sf_mode
         }
@@ -569,7 +541,6 @@ class StorageWriterFilterTest(unittest.TestCase):
             create_leased = True,
             sender=Sender('ingress'),
             endpoint_yaml = lambda sender: endpoint_yaml,
-	    timeouts = timeouts,
             tx_handler = lambda x,y: True)
 
         def to_response(r : Result) -> Optional[Response]:

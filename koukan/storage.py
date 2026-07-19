@@ -81,6 +81,7 @@ class TransactionCursor:
     session_uri : Optional[str] = None
 
     blobs : Optional[List['BlobCursor']] = None
+    parent_tx_id : Optional[int] = None
 
     def __init__(self, storage,
                  db_id : Optional[int] = None,
@@ -93,6 +94,11 @@ class TransactionCursor:
                 self.db_id, self.rest_id)
             if self.id_version is not None:
                 self.version = self.id_version.version
+
+    def parent_db_id(self) -> int:
+        if self.parent_db_id is not None:
+            return self.parent_db_id
+        return self.db_id
 
     def clone(self, for_cache=False) -> 'TransactionCursor':
         out = TransactionCursor(self.parent, self.db_id, self.rest_id)
@@ -140,6 +146,7 @@ class TransactionCursor:
         if self.tx and isinstance(self.tx.body, MessageBuilderSpec):
             if self.blobs:
                 self.tx.body.set_blobs(self.blobs)
+        self.parent_tx_id = rhs.parent_tx_id
 
     def _update_version_cache(self, leased : Optional[bool] = None):
         assert ((self.db_id is not None) and
@@ -188,6 +195,7 @@ class TransactionCursor:
 
             if parent_db_id:
                 ins = ins.values(parent_id = parent_db_id)
+                self.parent_tx_id = parent_db_id
 
             if create_leased:
                 inflight_session_id = self.parent.session_id
@@ -634,17 +642,19 @@ class TransactionCursor:
 
     @staticmethod
     def select_tx_cols(parent):
-        return (parent.tx_table.c.id,
-                parent.tx_table.c.rest_id,
-                parent.tx_table.c.creation,
-                parent.tx_table.c.json,
-                parent.tx_table.c.version,
-                parent.tx_table.c.input_done,
-                parent.tx_table.c.final_attempt_reason,
-                parent.tx_table.c.message_builder,
-                parent.tx_table.c.no_final_notification,
-                parent.tx_table.c.inflight_session_id,
-                parent.tx_table.c.inflight_session_live)
+        tcols = parent.tx_table.c
+        return (tcols.id,
+                tcols.rest_id,
+                tcols.creation,
+                tcols.json,
+                tcols.version,
+                tcols.input_done,
+                tcols.final_attempt_reason,
+                tcols.message_builder,
+                tcols.no_final_notification,
+                tcols.inflight_session_id,
+                tcols.inflight_session_live,
+                tcols.parent_id)
 
     def _load_db(self, db_tx : Connection,
                  join_row : Optional[Any] = None,
@@ -688,7 +698,8 @@ class TransactionCursor:
          self.message_builder,
          self.no_final_notification,
          self.inflight_session_id,
-         session_live) = row
+         session_live,
+         self.parent_tx_id) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
@@ -925,13 +936,18 @@ class TransactionGroup:
     parent : 'Storage'
     tx_cursors : List[TransactionCursor]
     parent_tx_id : Optional[int] = None
+    rest_id : Optional[str] = None
 
-    def __init__(self, parent, tx_cursor = None):
+    def __init__(self, parent, tx_cursor = None,
+                 rest_id : Optional[str] = None):
         self.parent = parent
         self.tx_cursors = []
         if tx_cursor:
             self.tx_cursors.append(tx_cursor)
             self.parent_tx_id = tx_cursor.db_id
+            self.rest_id = tx_cursor.rest_id
+        if rest_id:
+            self.rest_id = rest_id
 
     def db_ids(self):
         out = []
@@ -1162,11 +1178,11 @@ class TransactionGroup:
         tx.downstream_rcpt_response = []
 
         assert tx.merge_from(delta)
-        # xxx create without rest_id?
-        # TODO insert multiple (moot without smtp pipelining)
+        # xxx create without rest_id? actually VersionCache requires?
         cursor.create(secrets.token_urlsafe(8), tx,
                       create_leased=create_leased,
                       parent_db_id=self.tx_cursors[0].db_id)
+        assert cursor.parent_tx_id == self.tx_cursors[0].db_id
         self.tx_cursors.append(cursor)
 
     def update_all(self, tx_delta : TransactionMetadata,
@@ -1336,19 +1352,25 @@ class TransactionGroup:
         return None
 
 
-    def try_cache(self, db_ids : Optional[List[int]] = None) -> bool:
-        logging.debug('TransactionGroup.try_cache %s', db_ids)
+    def try_cache(self) -> bool:
+        if not self.rest_id:
+            return False
+        if not self.tx_cursors:
+            c = self.parent.get_transaction_cursor(rest_id=self.rest_id)
+            if not c.try_cache() or c.db_id is None:
+                return False
+            self.tx_cursors.append(c)
+            if (group_ids := self.parent.tx_versions.get_group(c.db_id)) is None:
+                return False
+            for db_id in group_ids[1:]:
+                self.tx_cursors.append(self.parent.get_transaction_cursor(db_id=db_id))
 
-        if db_ids:
-            assert not self.tx_cursors
-            self.parent_tx_id = db_ids[0]
-            for db_id in db_ids:
-                cursor = self.parent.get_transaction_cursor(db_id = db_id)
-                self.tx_cursors.append(cursor)
 
         for c in self.tx_cursors:
             if not c.try_cache():
                 return False
+        if self.tx_cursors:
+            self.parent_tx_id = self.tx_cursors[0].db_id
         return True
 
     def blob_done(self, blob, tx_delta : Optional[TransactionMetadata] = None):

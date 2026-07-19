@@ -25,9 +25,7 @@ from koukan.filter_chain import FilterChain
 from koukan.filter import (
     AsyncFilter,
     TransactionMetadata )
-from koukan.storage_writer_filter import (
-    StorageWriterFilter,
-    Timeouts as SWFTimeouts)
+from koukan.storage_writer_filter import StorageWriterFilter
 from koukan.deadline import Deadline
 from koukan.sender import Sender
 
@@ -64,7 +62,6 @@ class Service:
     http_server : Optional[uvicorn_main.Server] = None
     _rest_id_entropy : int = 16
     root_yaml : Optional[dict] = None
-    swf_timeouts : SWFTimeouts
 
     def __init__(self, root_yaml=None):
         self.lock = Lock()
@@ -75,7 +72,6 @@ class Service:
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300)
 
-        self.swf_timeouts = SWFTimeouts()
 
     def wait_shutdown(self, timeout : float, executor : Executor) -> bool:
         deadline = Deadline(timeout)
@@ -261,8 +257,7 @@ class Service:
             create_leased=True,
             sender = sender,
             endpoint_yaml = self.get_endpoint_yaml,
-            tx_handler = self._schedule_extra_rcpt_tx,
-            timeouts = self.swf_timeouts)
+            tx_handler = self._schedule_extra_rcpt_tx)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
             partial(self._handle_new_tx,
@@ -295,8 +290,7 @@ class Service:
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx,
-            create_leased=True,
-            timeouts = self.swf_timeouts)
+            create_leased=True)
 
     def _schedule_extra_rcpt_tx(
             self, sender : Sender,
@@ -334,8 +328,7 @@ class Service:
             self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=False,
-            endpoint_yaml = self.get_endpoint_yaml,
-            timeouts = self.swf_timeouts)
+            endpoint_yaml = self.get_endpoint_yaml)
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,
