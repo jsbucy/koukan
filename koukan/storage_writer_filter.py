@@ -124,7 +124,8 @@ class StorageWriterFilter(AsyncFilter):
             self, i : int) -> Optional[TransactionCursor]:
         with self.mu:
             if not self.cv.wait_for(
-                    lambda: len(self.upstream_cursor) > i and self.upstream_cursor[i] is not None or
+                    lambda: len(self.upstream_cursor) > i and
+                    self.upstream_cursor[i] is not None or
                     self.create_err, 3):
                 logging.debug(self.upstream_cursor)
                 logging.warning(
@@ -150,8 +151,21 @@ class StorageWriterFilter(AsyncFilter):
         return version
 
 
-    def _timeout(self, secs):
-        return int(time.time_ns()/1e6 + 1000)  # xxx secs * 1e3)
+    def _timeout(self, delta : TransactionMetadata) -> int:
+        assert self.endpoint_yaml is not None
+        assert self.sender is not None
+        endpoint_yaml = self.endpoint_yaml(self.sender)
+        assert endpoint_yaml is not None
+        yaml = endpoint_yaml.get('downstream', {})
+        secs = 0
+        if delta.mail_from:
+            secs += yaml.get('mail_timeout', 30)
+        if delta.rcpt_to:
+            secs += yaml.get('rcpt_timeout', 30)
+        if delta._body_last():
+            secs += yaml.get('data_timeout', 60)
+
+        return int(time.time_ns()/1e6 + secs * 1e3)
 
     def _create(self, tx : TransactionMetadata):
         # TODO handle
@@ -180,7 +194,7 @@ class StorageWriterFilter(AsyncFilter):
                     storage_tx.retry = {}
                 if self.sender.yaml.get('notification', None) == 'output_chain':
                     storage_tx.notification = {}
-        to = self._timeout(30)
+        to = self._timeout(tx)
         storage_tx.sf_mail_timeout = to
         if storage_tx.rcpt_to:
             storage_tx.sf_rcpt_timeout = [to] * len(storage_tx.rcpt_to)
@@ -570,7 +584,7 @@ class StorageWriterFilter(AsyncFilter):
             if (downstream_delta.rcpt_to and
                 not self.tx_group.tx_cursors[0].tx.rcpt_to):
                 delta = tx_delta.copy()
-                delta.sf_rcpt_timeout = [self._timeout(30)] * len(delta.rcpt_to)
+                delta.sf_rcpt_timeout = [self._timeout(delta)] * len(delta.rcpt_to)
                 self.tx_group.tx_cursors[0].write_envelope(delta)
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
                 # xxx rcpt_to_list_offset?
@@ -586,7 +600,7 @@ class StorageWriterFilter(AsyncFilter):
                 # sparse as a result of this.
                 delta = TransactionMetadata(rcpt_to=[rcpt])
                 # xxx refactor
-                to = self._timeout(30)
+                to = self._timeout(delta)
                 delta.sf_mail_timeout = to
                 delta.sf_rcpt_timeout = [to]
                 self.tx_group.clone_tx(delta,
@@ -616,7 +630,7 @@ class StorageWriterFilter(AsyncFilter):
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 if downstream_delta.body is not None and downstream_delta._body_last():
-                    downstream_delta.sf_data_timeout = self._timeout(30)
+                    downstream_delta.sf_data_timeout = self._timeout(downstream_delta)
 
                 # caller handles VersionConflictException
                 self.tx_group.update_all(downstream_delta)
@@ -673,8 +687,8 @@ class StorageWriterFilter(AsyncFilter):
 
     def blob_done(self, writer) -> None:
         delta = TransactionMetadata()
-        # xxx refactor
-        delta.sf_data_timeout = self._timeout(30)
+        delta.sf_data_timeout = self._timeout(
+            TransactionMetadata(body=writer.blob))
         assert self.tx_group is not None
         self.tx_group.blob_done(writer.blob, delta)
 

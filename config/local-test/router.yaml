@@ -451,6 +451,10 @@ endpoint:
 
 
 - name: ingress
+  downstream:
+    mail_timeout: 5
+    rcpt_timeout: 5
+    data_timeout: 10
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1

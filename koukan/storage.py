@@ -81,7 +81,7 @@ class TransactionCursor:
     session_uri : Optional[str] = None
 
     blobs : Optional[List['BlobCursor']] = None
-    parent_tx_id : Optional[int] = None
+    _parent_db_id : Optional[int] = None
 
     def __init__(self, storage,
                  db_id : Optional[int] = None,
@@ -96,8 +96,9 @@ class TransactionCursor:
                 self.version = self.id_version.version
 
     def parent_db_id(self) -> int:
-        if self.parent_db_id is not None:
-            return self.parent_db_id
+        if self._parent_db_id is not None:
+            return self._parent_db_id
+        assert self.db_id is not None
         return self.db_id
 
     def clone(self, for_cache=False) -> 'TransactionCursor':
@@ -146,7 +147,7 @@ class TransactionCursor:
         if self.tx and isinstance(self.tx.body, MessageBuilderSpec):
             if self.blobs:
                 self.tx.body.set_blobs(self.blobs)
-        self.parent_tx_id = rhs.parent_tx_id
+        self._parent_db_id = rhs._parent_db_id
 
     def _update_version_cache(self, leased : Optional[bool] = None):
         assert ((self.db_id is not None) and
@@ -195,7 +196,7 @@ class TransactionCursor:
 
             if parent_db_id:
                 ins = ins.values(parent_id = parent_db_id)
-                self.parent_tx_id = parent_db_id
+                self._parent_db_id = parent_db_id
 
             if create_leased:
                 inflight_session_id = self.parent.session_id
@@ -692,7 +693,7 @@ class TransactionCursor:
          self.no_final_notification,
          self.inflight_session_id,
          session_live,
-         self.parent_tx_id) = row
+         self._parent_db_id) = row
 
         self.tx = TransactionMetadata.from_json(trans_json, WhichJson.DB)
         if self.tx is None:
@@ -926,7 +927,7 @@ class TransactionCursor:
 class TransactionGroup:
     parent : 'Storage'
     tx_cursors : List[TransactionCursor]
-    parent_tx_id : Optional[int] = None
+    _parent_db_id : Optional[int] = None
     rest_id : Optional[str] = None
 
     def __init__(self, parent, tx_cursor = None,
@@ -935,7 +936,7 @@ class TransactionGroup:
         self.tx_cursors = []
         if tx_cursor:
             self.tx_cursors.append(tx_cursor)
-            self.parent_tx_id = tx_cursor.db_id
+            self._parent_db_id = tx_cursor.db_id
             self.rest_id = tx_cursor.rest_id
         if rest_id:
             self.rest_id = rest_id
@@ -966,9 +967,9 @@ class TransactionGroup:
 
         sel_tx = select(tcols.id, tcols.parent_id)
 
-        if tx_id is not None or self.parent_tx_id is not None:
+        if tx_id is not None or self._parent_db_id is not None:
             if tx_id is None:
-                tx_id = self.parent_tx_id
+                tx_id = self._parent_db_id
             sel_tx = sel_tx.where(or_(
                 and_(tcols.parent_id == None,  # necessary?
                      tcols.id == tx_id),
@@ -1009,7 +1010,7 @@ class TransactionGroup:
         db_ids = self.load_group(db_tx, tx_rest_id, tx_id)
         if not db_ids:
             return False
-        self.parent_tx_id = db_ids[0]
+        self._parent_db_id = db_ids[0]
         if not self.tx_cursors:
             for db_id in db_ids:
                 self.tx_cursors.append(
@@ -1056,7 +1057,7 @@ class TransactionGroup:
         cursor.create(secrets.token_urlsafe(8), tx,
                       create_leased=create_leased,
                       parent_db_id=self.tx_cursors[0].db_id)
-        assert cursor.parent_tx_id == self.tx_cursors[0].db_id
+        assert cursor._parent_db_id == self.tx_cursors[0].db_id
         self.tx_cursors.append(cursor)
 
     def update_all(self, tx_delta : TransactionMetadata,
@@ -1064,7 +1065,7 @@ class TransactionGroup:
                    ping_tx : Optional[bool] = None,
                    final_attempt_reason : Optional[str] = None,
                    cursors : Optional[List[TransactionCursor]] = None):
-        assert self.parent_tx_id is not None
+        assert self._parent_db_id is not None
         assert self.parent.tx_table is not None
         assert not tx_delta or not tx_delta.rcpt_to
 
@@ -1132,7 +1133,7 @@ class TransactionGroup:
             if not c.try_cache():
                 return False
         if self.tx_cursors:
-            self.parent_tx_id = self.tx_cursors[0].db_id
+            self._parent_db_id = self.tx_cursors[0].db_id
         return True
 
     def blob_done(self, blob, tx_delta : Optional[TransactionMetadata] = None):
@@ -1303,6 +1304,9 @@ class BlobCursor(Blob, WritableBlob):
         self.length = db_length
         self._content_length = content_length
         self.last = (self.length == self._content_length)
+
+        if not update_tx:
+            return True, db_length, self._content_length
 
         if cursor is None and self.update_tx is not None:
             cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
