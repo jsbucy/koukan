@@ -640,24 +640,7 @@ class TransactionCursor:
                 backoff(i)
         assert False, 'unreachable'
 
-    @staticmethod
-    def select_tx_cols(parent):
-        tcols = parent.tx_table.c
-        return (tcols.id,
-                tcols.rest_id,
-                tcols.creation,
-                tcols.json,
-                tcols.version,
-                tcols.input_done,
-                tcols.final_attempt_reason,
-                tcols.message_builder,
-                tcols.no_final_notification,
-                tcols.inflight_session_id,
-                tcols.inflight_session_live,
-                tcols.parent_id)
-
     def _load_db(self, db_tx : Connection,
-                 join_row : Optional[Any] = None,
                  load_attempt : bool = True
                  ) -> Optional[TransactionMetadata]:
         where = None
@@ -665,23 +648,33 @@ class TransactionCursor:
 
         self.parent.inc_tx_reads()
 
-        if join_row is not None:
-            row = join_row[0:11]
+        tcols = self.parent.tx_table.c
+        sel = select(
+            tcols.id,
+            tcols.rest_id,
+            tcols.creation,
+            tcols.json,
+            tcols.version,
+            tcols.input_done,
+            tcols.final_attempt_reason,
+            tcols.message_builder,
+            tcols.no_final_notification,
+            tcols.inflight_session_id,
+            tcols.inflight_session_live,
+            tcols.parent_id)
+
+        # TODO WHERE version != self.version ?
+
+        if self.db_id is not None:
+            sel = sel.where(self.parent.tx_table.c.id == self.db_id)
+        elif self.rest_id is not None:
+            sel = sel.where(self.parent.tx_table.c.rest_id == self.rest_id)
         else:
-            sel = select(*self.select_tx_cols(self.parent))
-
-            # TODO WHERE version != self.version ?
-
-            if self.db_id is not None:
-                sel = sel.where(self.parent.tx_table.c.id == self.db_id)
-            elif self.rest_id is not None:
-                sel = sel.where(self.parent.tx_table.c.rest_id == self.rest_id)
-            else:
-                raise ValueError
-            res = db_tx.execute(sel)
-            row = res.fetchone()
-            if not row:
-                return None
+            raise ValueError
+        res = db_tx.execute(sel)
+        row = res.fetchone()
+        if not row:
+            return None
 
         if self.db_id is not None:
             assert row[0] == self.db_id, '%d %d' % (row[0], self.db_id)
@@ -718,9 +711,7 @@ class TransactionCursor:
         # TODO join this with the tx read to get it all in one round-trip?
 
         attempt_row = None
-        if join_row is not None:
-            attempt_row = join_row[11:13]
-        elif load_attempt or self.no_final_notification:
+        if load_attempt or self.no_final_notification:
             # TODO if in_attempt, query on attempt_id?? (cf assert below)
             sel = (select(self.parent.attempt_table.c.attempt_id,
                           self.parent.attempt_table.c.responses)
@@ -1047,123 +1038,6 @@ class TransactionGroup:
                 backoff(i)
         assert False, 'unreachable'
 
-    def load_vectorized(self, tx_rest_id : Optional[str] = None,
-                        tx_id : Optional[int] = None) -> bool:
-        for i in range(0,5):
-            try:
-                return self._load_vectorized(tx_rest_id, tx_id)
-            except VersionConflictException:
-                logging.debug('VersionConflictException')
-                if i == 4:
-                    # unexpected to repeatedly conflict but if so,
-                    # will leave an open attempt?
-                    raise
-                backoff(i)
-        assert False, 'unreached'
-
-    def _load_vectorized(self, tx_rest_id : Optional[str] = None,
-             tx_id : Optional[int] = None) -> bool:
-        assert tx_rest_id is not None or tx_id is not None or self.parent_tx_id is not None
-        assert self.parent.tx_table is not None
-        assert self.parent.attempt_table is not None
-
-        with self.parent.begin_transaction() as db_tx:
-            tcols = self.parent.tx_table.c
-            acols = self.parent.attempt_table.c
-
-            sel_tx = select(*TransactionCursor.select_tx_cols(self.parent))
-
-            if tx_id is not None or self.parent_tx_id is not None:
-                if tx_id is None:
-                    tx_id = self.parent_tx_id
-                sel_tx = sel_tx.where(or_(
-                    and_(tcols.parent_id == None,  # necessary?
-                         tcols.id == tx_id),
-                    tcols.parent_id == tx_id))
-            elif tx_rest_id is not None:
-                subq = select(tcols.id).where(
-                    tcols.rest_id == tx_rest_id).subquery()
-                sel_tx = sel_tx.select_from(
-                    join(self.parent.tx_table,
-                         subq,
-                         or_(tcols.id == subq.c.id,
-                             tcols.parent_id == subq.c.id)))
-            else:
-                assert False, 'bad params'
-
-            sel_tx_subq = sel_tx.order_by(tcols.id).subquery()
-
-            max_attempt_subq = select(
-                acols.transaction_id,
-                func.max(acols.attempt_id).label('max_attempt')
-            ).group_by(acols.transaction_id).subquery()
-
-            attempt_subq = select(
-                acols.transaction_id,
-                acols.attempt_id,
-                acols.responses).select_from(join(
-                    self.parent.attempt_table,
-                    max_attempt_subq,
-                    and_(acols.transaction_id == max_attempt_subq.c.transaction_id,
-                         acols.attempt_id == max_attempt_subq.c.max_attempt)
-                )).subquery()
-
-            sel = select(
-                sel_tx_subq.c.id,
-                sel_tx_subq.c.rest_id,
-                sel_tx_subq.c.creation,
-                sel_tx_subq.c.json,
-                sel_tx_subq.c.version,
-                sel_tx_subq.c.input_done,
-                sel_tx_subq.c.final_attempt_reason,
-                sel_tx_subq.c.message_builder,
-                sel_tx_subq.c.no_final_notification,
-                sel_tx_subq.c.inflight_session_id,
-                sel_tx_subq.c.inflight_session_live,
-                attempt_subq.c.attempt_id,
-                attempt_subq.c.responses
-            ).select_from(
-                join(sel_tx_subq,
-                     attempt_subq,
-                     sel_tx_subq.c.id == attempt_subq.c.transaction_id,
-                     isouter=True)
-            ).order_by(sel_tx_subq.c.id)
-
-            res = db_tx.execute(sel)
-            logging.debug(res)
-            cursor_by_id = { c.db_id : c for c in self.tx_cursors }
-            logging.debug(cursor_by_id)
-            loaded = set()
-            for row in res:
-                if self.parent_tx_id is None:
-                    self.parent_tx_id = row[0]
-                logging.debug('%s', row)
-                if (cursor := cursor_by_id.get(row[0], None)) is None:
-                    cursor = TransactionCursor(self.parent, row[0], row[1])
-                    self.tx_cursors.append(cursor)
-                cursor._load_db(db_tx, join_row=row)
-                loaded.add(row[0])
-            # most likely some of the tx have been gc'd already, treat
-            # the whole thing as nonexistent in that case
-            # TODO should gc ensure that all of the tx in the group
-            # are gc'd atomically?
-            if loaded < cursor_by_id.keys():
-                return False
-            logging.debug(self.tx_cursors)
-
-            if not self.tx_cursors:
-                return False
-
-            self.tx_cursors[0]._load_blobs(db_tx)
-            blobs = self.tx_cursors[0].blobs
-            assert blobs is not None
-            for c in self.tx_cursors[1:]:
-                c.blobs = [b.clone() for b in blobs]
-            for c in self.tx_cursors:
-                c._update_version_cache(
-                    leased = (c.inflight_session_id == self.parent.session_id))
-            return True
-
     def clone_tx(self, delta : TransactionMetadata, create_leased : bool):
         assert self.parent.tx_table is not None
 
@@ -1218,118 +1092,6 @@ class TransactionGroup:
             c._update_version_cache()
             # xxx shouldn't toggle leased?
             #leased = (cursor.inflight_session_id == self.parent.session_id))
-
-    # TODO this seems to have a concurrency control bug
-    def update_all_vectorized(
-            self, tx_delta : Optional[TransactionMetadata] = None,
-            input_done : Optional[bool] = None,
-            ping_tx : Optional[bool] = None,
-            final_attempt_reason : Optional[str] = None,
-            cursors : Optional[List[TransactionCursor]] = None):
-        assert self.parent_tx_id is not None
-        assert self.parent.tx_table is not None
-        assert not ping_tx, 'unimplemented'
-        assert not tx_delta or not tx_delta.rcpt_to
-
-        if cursors is None:
-            cursors = self.tx_cursors
-
-        with self.parent.begin_transaction() as db_tx:
-            tcols = self.parent.tx_table.c
-
-            params : List[dict[str, Any]] = []
-            cursor_by_id = {}
-            update_json = False
-            db_id_version = {}
-            write_blob = False
-            if tx_delta is not None:
-                tx_delta = tx_delta.copy()
-                assert len(self.tx_cursors) >= 1
-
-                if tx_delta.body:
-                    raise NotImplementedError()
-                    self.tx_cursors[0]._maybe_write_blob(
-                        db_tx, TransactionMetadata(body=tx_delta.body))
-                        #xxx group_cursors=self.tx_cursors[1:])
-                    tx_delta.body = None
-                    write_blob = True
-
-            if not bool(tx_delta) and not input_done and not write_blob:
-                return
-
-            for c in cursors:
-                cursor_by_id[c.db_id] = c
-                assert c.version is not None
-                new_version = c.version + 1
-                d = {'db_id': c.db_id,
-                     'version': new_version}
-                db_id_version[c.db_id] = new_version
-                assert c.tx is not None
-                if tx_delta:
-                    update_json = True
-                    assert c.tx.merge_from(tx_delta) is not None
-                    d['json'] = c.tx.to_json(WhichJson.DB)
-                    if c.tx.notification is not None:
-                        d['notification'] = True
-                if final_attempt_reason:
-                    d['no_final_notification'] = not bool(c.tx.notification)
-                params.append(d)
-
-            logging.debug(params)
-
-            # NOTE: it would be nice to do this version check as a
-            # subquery in the WHERE of the UPDATE but it gets
-            # evaluated for every row which is already not great and
-            # then it fails for every row after the first is updated.
-            res = db_tx.execute(
-                select(tcols.id, tcols.version).where(
-                    or_(
-                        and_(tcols.parent_id == None,  # necessary?
-                             tcols.id == self.parent_tx_id),
-                        tcols.parent_id == self.parent_tx_id)))
-            for row in res:
-                db_id, version = row
-                # cursors may be a subset of self.tx_cursors
-                # could limit the above select to those IDs?
-                if db_id not in cursor_by_id:
-                    continue
-                if cursor_by_id[db_id].version != version:
-                    raise VersionConflictException()
-
-            upd = update(self.parent.tx_table).where(
-                tcols.id == bindparam('db_id')
-            ).values(
-                version = bindparam('version')
-            )  #.returning(tcols.id, tcols.version)
-
-            if update_json:
-                upd = upd.values(json = bindparam('json'))
-            if input_done:
-                upd = upd.values(input_done = True)
-                for c in cursors:
-                    c.input_done = True
-            if final_attempt_reason:
-                #self.final_attempt_reason = final_attempt_reason
-                upd = upd.values(
-                    final_attempt_reason = final_attempt_reason)
-
-            res = db_tx.execute(upd, params)
-        for cursor in cursors:
-            # parity with tx_cursor._write(): RestHandler creation ->
-            # OH handoff tx needs to have the same effect as
-            # _load_blobs()
-            # if (cursor.blobs and
-            #     len(cursor.blobs) == 1 and
-            #     (blob_uri := cursor.blobs[0].blob_uri()) is not None and
-            #     blob_uri.tx_body):
-            #     cursor.tx.body = cursor.blobs[0]
-
-            logging.debug(
-                '%s: %s->%s',
-                cursor.db_id, cursor.version, db_id_version[cursor.db_id])
-            cursor.version = db_id_version[cursor.db_id]
-            cursor._update_version_cache(
-                leased = (cursor.inflight_session_id == self.parent.session_id))
 
     # waits for at least one cursor to update, returns the updated
     # cursor on success, None on timeout
