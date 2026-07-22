@@ -15,9 +15,9 @@ from functools import partial
 from koukan.blob import Blob
 from koukan.storage import (
     BlobCursor,
+    GroupCursor,
     Storage,
-    TransactionCursor,
-    TransactionGroup )
+    TransactionCursor )
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
@@ -175,22 +175,26 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         upstream_cursor.write_envelope(
             TransactionMetadata(mail_response=Response(250)))
 
-        group = TransactionGroup(self.s)
+        group = GroupCursor(self.s)
         group.load(tx_rest_id='tx_rest_id')
+        assert group.tx_cursors[0].tx is not None
+        self.assertEqual(0, group.tx_cursors[0].tx.group_index)
         group.tx_cursors[0].write_envelope(
             TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
 
-        group = TransactionGroup(self.s)
+        group = GroupCursor(self.s)
         group.load(tx_id=tx_id)
         group.clone_tx(
             TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]),
             create_leased = False)
+        assert group.tx_cursors[1].tx is not None
+        self.assertEqual(1, group.tx_cursors[1].tx.group_index)
 
         group.update_all(
             TransactionMetadata(body = BlobSpec(create_tx_body=True)))
         logging.debug('reload')
 
-        group = TransactionGroup(self.s)
+        group = GroupCursor(self.s)
         group.load(tx_id=tx_id)
         self.assertEqual(2, len(group.tx_cursors))
 

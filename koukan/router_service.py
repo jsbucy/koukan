@@ -357,24 +357,25 @@ class Service:
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         assert self.storage is not None
-        storage_tx = self.storage.load_one()
+
+        tx_cursor = self.storage.load_one()
         if deq is not None:
             with self.lock:
-                deq[0] = storage_tx is not None
+                deq[0] = tx_cursor is not None
                 self.cv.notify_all()
 
-        if storage_tx is None:
+        if tx_cursor is None:
             return False
-        assert storage_tx.tx is not None
+        assert tx_cursor.tx is not None
         assert self.filter_chain_factory is not None
-        assert storage_tx.tx.sender is not None
-        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.sender)
+        assert tx_cursor.tx.sender is not None
+        res = self.filter_chain_factory.build_filter_chain(tx_cursor.tx.sender)
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
-                      storage_tx.db_id, storage_tx.rest_id)
+                      tx_cursor.db_id, tx_cursor.rest_id)
 
-        self.handle_tx(storage_tx, chain, endpoint_yaml)
+        self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
         return True
 

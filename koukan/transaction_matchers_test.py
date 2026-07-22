@@ -1,9 +1,14 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
+from typing import Callable, List, Optional
 import logging
 import unittest
 
-from koukan.filter import HostPort, Mailbox, TransactionMetadata
+from koukan.filter import (
+    HostPort,
+    Mailbox,
+    TransactionGroup,
+    TransactionMetadata )
 from koukan.transaction_matchers import (
     match_invalid_mail_from,
     match_invalid_rcpt_to,
@@ -13,6 +18,7 @@ from koukan.transaction_matchers import (
     match_smtp_tls )
 from koukan.matcher_result import MatcherResult
 from koukan.response import Response
+from koukan.fake_endpoints import FakeTxGroup
 
 class NetworkAddressMatcherTest(unittest.TestCase):
     def test_smoke(self):
@@ -55,26 +61,53 @@ class SmtpAuthMatcherTest(unittest.TestCase):
             match_smtp_auth({}, TransactionMetadata(smtp_meta={'auth': True}),
                             rcpt_num=None))
 
+
 class NumRcptsMatcherTest(unittest.TestCase):
-    def test_smoke(self):
+    def test_smoke(self) -> None:
+        tx0 = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'),
+            mail_response=Response(550),
+            rcpt_to=[Mailbox('bob0@example.com')],
+            rcpt_response=[None],  # inflight
+            group_index=0)
+        tx1 = TransactionMetadata(
+            rcpt_to=[Mailbox('bob1@example.com')],
+            rcpt_response=[None],
+            group_index=1)
+        tx2 = TransactionMetadata(
+            rcpt_to=[Mailbox('bob2@example.com')],
+            rcpt_response=[None],
+            group_index=1)
+
+        # retries: no group
         self.assertEqual(
             MatcherResult.NO_MATCH,
-            match_num_rcpts(
-                {'max_rcpts', 1},
-                TransactionMetadata(
-                    rcpt_to=[Mailbox('bob@example.com'),
-                             Mailbox('bob2@example.com')],
-                    rcpt_response=[Response(500), None]),
-                1))
+            match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num = 0))
+
+        tx0.group = tx1.group = FakeTxGroup([tx0, tx1, tx2])
+
+        # prev tx err
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num = 0))
+        tx0.mail_response = Response()
+
+        # prev rcpt still inflight
+        self.assertEqual(
+            MatcherResult.PRECONDITION_UNMET,
+            match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num = 0))
+
+        # prev rcpt err
+        tx0.rcpt_response[0] = Response(500)
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num = 0))
+
+        # prev rcpt success
+        tx0.rcpt_response[0] = Response()
         self.assertEqual(
             MatcherResult.MATCH,
-            match_num_rcpts(
-                {'max_rcpts': 1},
-                TransactionMetadata(
-                    rcpt_to=[Mailbox('bob@example.com'),
-                             Mailbox('bob2@example.com')],
-                    rcpt_response=[Response(), None]),
-                1))
+            match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num=0))
 
 class MatchInvalidMailFromTest(unittest.TestCase):
     def test_smoke(self):

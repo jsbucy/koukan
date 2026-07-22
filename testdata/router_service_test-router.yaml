@@ -15,6 +15,7 @@ global:
 storage:
   gc_interval: null
   gc_ttl: 0
+  cache_ttl: 5
   session_refresh_interval: 1
 
 rest_listener: {}

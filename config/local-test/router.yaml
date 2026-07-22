@@ -345,21 +345,6 @@ endpoint:
     tag: max_rcpts
     code: 451
     message: 4.5.3 too many recipients
-
-  - filter: policy_action
-    match:
-        matcher: address_list
-        which_addr: rcpt_to
-        prefixes:
-        - bob2
-        domains:
-        - example.com  
-    tag: reject_bob2
-    mode: PER_RCPT
-    action: REJECT
-    code: 550
-    message: mailbox disabled
-
   - filter: router
     policy:
       name: address_list

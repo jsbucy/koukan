@@ -535,12 +535,14 @@ py_library(name='recipient_router_factory',
 py_library(name='transaction_matchers',
            srcs=['transaction_matchers.py'],
            deps=[':address',
+                 ':deadline',
                  ':filter',
                  ':matcher_result'])
 
 py_test(name='transaction_matchers_test',
         srcs=['transaction_matchers_test.py'],
-        deps=[':filter',
+        deps=[':fake_endpoints',
+              ':filter',
               ':matcher_result',
               ':response',
               ':transaction_matchers'])

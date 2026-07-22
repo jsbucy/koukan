@@ -141,6 +141,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter.update(tx, tx.copy())
         upstream_cursor = filter.release_transaction_cursor(0)
         self.assertEqual(upstream_cursor.rest_id, 'tx_rest_id')
+        self.assertIsNotNone(upstream_cursor.tx.group)
 
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
         prev = filter.get()
@@ -407,7 +408,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         orig_tx.body.parse_blob_specs()
         orig_filter.update(orig_tx, orig_tx.copy())
 
-        logging.debug(orig_filter.tx_group.tx_cursors[0].blobs)
+        logging.debug(orig_filter.group_cursor.tx_cursors[0].blobs)
         blob_writer = orig_filter.get_blob_writer(
             create=False, blob_rest_id='test_message_builder_blob')
         b1 = b'hello, '

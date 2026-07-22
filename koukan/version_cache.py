@@ -189,9 +189,11 @@ class IdVersionMap:
 
     ttl_refs : Set[IdVersion]
     last_gc : float
+    # TODO does this need to be baked in? could just be passed to gc()?
     ttl : Optional[int] = None
 
     def __init__(self, ttl=None):
+        assert ttl is not None
         self.id_version_map = WeakValueDictionary()
         self.rest_id_map = WeakValueDictionary()
         self.tx_groups = {}

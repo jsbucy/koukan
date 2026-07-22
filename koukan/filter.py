@@ -14,6 +14,7 @@ from typing import (
 from abc import ABC, abstractmethod
 import logging
 import copy
+from threading import Lock
 
 from koukan.response import Response
 
@@ -485,7 +486,12 @@ _tx_fields = [
             pod=True),
     TxField('downstream_data_response',
             validity=set([WhichJson.DB]),
-            pod=True)
+            pod=True),
+    TxField('group_index',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('group',
+            validity=set([]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -549,13 +555,18 @@ class TransactionMetadata:
     downstream_rcpt_response : List[int]
     downstream_data_response : Optional[int] = None
 
+    # index of this tx in group
+    group_index : Optional[int] = None
+
+    group : Optional['TransactionGroup'] = None
+
     def __init__(self,
                  local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  mail_response : Optional[Response] = None,
                  rcpt_to : Optional[Sequence[Mailbox]] = None,
-                 rcpt_response : Optional[Sequence[Response]] = None,
+                 rcpt_response : Optional[Sequence[Optional[Response]]] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
@@ -564,8 +575,8 @@ class TransactionMetadata:
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
                  rest_id : Optional[str] = None,
-                 sender : Optional[Sender] = None
-                 ):
+                 sender : Optional[Sender] = None,
+                 group_index : Optional[int] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -583,6 +594,7 @@ class TransactionMetadata:
         self.sender = sender
         self.sf_rcpt_timeout = []
         self.downstream_rcpt_response = []
+        self.group_index = group_index
 
     def __repr__(self):
         out = ''
@@ -1069,6 +1081,38 @@ class TransactionMetadata:
         return self.ephemeral_filter_output.get(f, None)
 
 
+class TransactionGroup:
+    tx_cursors : List[Any]  # 'TransactionCursor']
+    mu : Lock
+
+    def __init__(self, cursors):
+        self.tx_cursors = cursors
+        self.mu = Lock()
+
+    def __enter__(self):
+        self.mu.acquire()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.mu.release()
+
+    def tx(self) -> List[TransactionMetadata]:
+        def _tx(cursor):
+            assert cursor.tx is not None
+            return cursor.tx
+        return [_tx(c) for c in self.tx_cursors]
+
+    def wait_tx(self, i, pred : Callable[[TransactionMetadata], bool],
+                deadline : Deadline) -> Optional[TransactionMetadata]:
+        tx_cursor = self.tx_cursors[i]
+        while not (matched := pred(tx_cursor.tx)) and deadline.remaining():
+            if tx_cursor.wait(deadline.deadline_left())[0]:
+                if not tx_cursor.try_cache():
+                    tx_cursor.load()
+        if matched:
+            return tx_cursor.tx
+        return None
+
+
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not
 # program execution.
@@ -1112,7 +1156,8 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : Optional[float]) -> Tuple[bool, Optional[TransactionMetadata]]:
+    def wait(self, version : int, timeout : Optional[float]
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
     @abstractmethod
@@ -1122,7 +1167,8 @@ class AsyncFilter(ABC):
 
 
     # version, tx, leased?, other session
-    CheckTxResult = Tuple[int, Optional[TransactionMetadata], bool, Optional[str]]
+    CheckTxResult = Tuple[
+        int, Optional[TransactionMetadata], bool, Optional[str]]
 
     @abstractmethod
     def check_cache(self) -> Optional[CheckTxResult]:

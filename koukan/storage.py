@@ -182,6 +182,9 @@ class TransactionCursor:
         with self.parent.begin_transaction() as db_tx:
             self.version = 0
 
+            # xxx do this to a copy for cache?
+            if tx.group_index is None:
+                tx.group_index = 0
             db_json = tx.to_json(WhichJson.DB)
             logging.debug('TxCursor.create %s %s', rest_id, db_json)
             ins = insert(self.parent.tx_table).values(
@@ -210,6 +213,7 @@ class TransactionCursor:
             self.creation = row[1]
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
+            self.tx.group = tx.group  # XXX
 
             self._write(db_tx, tx)
             self.tx.rest_id = rest_id
@@ -869,6 +873,8 @@ class TransactionCursor:
 
     def wait(self, timeout : Optional[float] = None, clone = False
              ) -> Tuple[bool, bool]:
+        if self.inflight_session_id is None:
+            return False, False
         assert self.id_version is not None
         assert self.version is not None
         rv, cloned = self.id_version.wait(
@@ -877,6 +883,8 @@ class TransactionCursor:
 
     async def wait_async(self, timeout : Optional[float], clone = False
                          ) -> Tuple[bool, bool]:
+        if self.inflight_session_id is None:
+            return False, False
         assert self.id_version is not None
         assert self.version is not None
         return await self.id_version.wait_async(
@@ -924,7 +932,7 @@ class TransactionCursor:
 
 # This is a special-purpose interface for StorageWriterFilter to
 # operate on all of the tx for a multi-rcpt smtp transaction.
-class TransactionGroup:
+class GroupCursor:
     parent : 'Storage'
     tx_cursors : List[TransactionCursor]
     _parent_db_id : Optional[int] = None
@@ -1051,6 +1059,7 @@ class TransactionGroup:
         tx.rcpt_to = []
         tx.sf_rcpt_timeout = []
         tx.downstream_rcpt_response = []
+        tx.group_index = len(self.tx_cursors)
 
         assert tx.merge_from(delta)
         # xxx create without rest_id? actually VersionCache requires?
@@ -1108,7 +1117,8 @@ class TransactionGroup:
             task.cancel()
         for task in done:
             success, cloned = task.result()
-            assert success
+            if not success:
+                continue
             for i,a in enumerate(aws):
                 if a == task:
                     return self.tx_cursors[i], cloned

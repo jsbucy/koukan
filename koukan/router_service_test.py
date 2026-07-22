@@ -69,7 +69,6 @@ class RouterServiceTest(unittest.TestCase):
             self.root_yaml = root_yaml = yaml.load(
                 yaml_file, Loader=yaml.CLoader)
         root_yaml['storage']['url'] = self.storage_url
-        root_yaml['storage']['cache_ttl'] = None
 
         # find a free port
         with socketserver.TCPServer(("localhost", 0), lambda x,y,z: None) as s:
@@ -266,7 +265,7 @@ class RouterServiceTest(unittest.TestCase):
         self.service.daemon_executor.submit(
             partial(self.service.gc, self.service.daemon_executor))
 
-        for i in range(0,5):
+        for i in range(0,10):
             if rest_endpoint.get_json(timeout=2) is None:
                 break
             time.sleep(1)
@@ -604,14 +603,20 @@ class RouterServiceTest(unittest.TestCase):
 
         def exp_body2(tx, tx_delta):
             self.assertEqual(data, tx.body.pread(0))
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+            self.assertIsNone(tx.group)
+            prev = tx.copy()
+            if tx.cancelled:
+                return TransactionMetadata()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(201)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(202)]
+            if tx._body_last():
+                tx.data_response=Response(203)
+            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp_body2)
+        for i in range(0,2):
+            upstream_endpoint.add_expectation(exp_body2)
         self.add_endpoint(upstream_endpoint)
 
         logging.debug(self.service.storage.debug_dump())
@@ -621,7 +626,8 @@ class RouterServiceTest(unittest.TestCase):
             tx_json = rest_endpoint.get_json()
             logging.debug(tx_json)
 
-            if 'blob_status' not in tx_json['body'] or 'uri' not in tx_json['body']['blob_status']:
+            if ('blob_status' not in tx_json['body'] or
+                'uri' not in tx_json['body']['blob_status']):
                 continue
             del tx_json['body']['blob_status']['uri']
 

@@ -10,6 +10,7 @@ from koukan.response import Response, Esmtp
 from koukan.filter import (
     AsyncFilter,
     Mailbox,
+    TransactionGroup,
     TransactionMetadata )
 from koukan.filter_chain import FilterResult, Filter
 
@@ -133,3 +134,25 @@ class FakeFilter(Filter):
         assert self.downstream_tx is not None
         exp(self.downstream_tx, tx_delta)
         return FilterResult()
+
+
+class FakeTxGroup(TransactionGroup):
+    _tx : List[TransactionMetadata]
+    def __init__(self, tx):
+        self._tx = tx
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def tx(self) -> List[TransactionMetadata]:
+        return self._tx
+
+    def wait_tx(self, i, pred : Callable[[TransactionMetadata], bool],
+                deadline) -> Optional[TransactionMetadata]:
+        tx = self._tx[i]
+        if pred(tx):
+            return tx
+        return None
