@@ -340,7 +340,7 @@ endpoint:
     mode: PER_RCPT
     match:
       matcher: num_rcpts
-      max_rcpts: 1
+      max_rcpts: 2
     action: REJECT
     tag: max_rcpts
     code: 451
@@ -396,7 +396,7 @@ endpoint:
   - filter: dkim_check
   - filter: policy_action
     match:
-      matcher: koukan.remote_host_filter.DkimCheckFilter
+      matcher: koukan.dkim_check_filter.DkimCheckFilter
     tag: dkim_smoke
     action: LOG
   - filter: policy_action

@@ -14,7 +14,7 @@ from typing import (
 from abc import ABC, abstractmethod
 import logging
 import copy
-from threading import Lock
+from threading import Condition, Lock
 
 from koukan.response import Response
 
@@ -1080,14 +1080,26 @@ class TransactionMetadata:
             return None
         return self.ephemeral_filter_output.get(f, None)
 
+class _GroupResult:
+    tx_index : int
+    done : bool
+    def __init__(self, tx_index):
+        self.tx_index = tx_index
+        self.done = False
 
+# Coordinates parallel upstream/output flows for transactions for each
+# rcpt of a multi-rcpt downstream smtp transaction.
 class TransactionGroup:
     tx_cursors : List[Any]  # 'TransactionCursor']
+    inflight : Dict[str, _GroupResult]
     mu : Lock
+    cv : Condition
 
     def __init__(self, cursors):
         self.tx_cursors = cursors
+        self.inflight = {}
         self.mu = Lock()
+        self.cv = Condition(self.mu)
 
     def __enter__(self):
         self.mu.acquire()
@@ -1101,7 +1113,8 @@ class TransactionGroup:
             return cursor.tx
         return [_tx(c) for c in self.tx_cursors]
 
-    def wait_tx(self, i, pred : Callable[[TransactionMetadata], bool],
+    # Blocks up to deadline or until pred returns true for the ith cursor
+    def wait_tx(self, i : int, pred : Callable[[TransactionMetadata], bool],
                 deadline : Deadline) -> Optional[TransactionMetadata]:
         tx_cursor = self.tx_cursors[i]
         while not (matched := pred(tx_cursor.tx)) and deadline.remaining():
@@ -1112,6 +1125,57 @@ class TransactionGroup:
             return tx_cursor.tx
         return None
 
+    # inflight waiting for filter_output:
+    # if (inflight_index := group.maybe_start_inflight(
+    #       'my_filter', tx.group_index)) == tx.group_index
+    #   tx.set_filter_output('my_filter', MyFilterOutput())
+    #   group.set_done('my_filter')
+    # else:
+    #   success = group.wait_inflight('my_filter', timeout)
+    #   if success:
+    #     group.wait_tx(inflight_index, lambda tx: ...)
+    #     filter_output = group.tx()[inflight_index].get_filter_output(
+    #       'my_filter')
+
+    # if filter_name (get_filter_output, etc) is already inflight,
+    # returns the group_index. Otherwise, if tx_index is not None,
+    # marks it inflight.
+    def maybe_start_inflight(self, filter_name : str,
+                             tx_index : Optional[int] = None
+                             ) -> Optional[int]:
+        with self.mu:
+            logging.debug(filter_name)
+            result = self.inflight.get(filter_name, None)
+            if result is None:
+                if tx_index is not None:
+                    self.inflight[filter_name] = _GroupResult(tx_index)
+                    return tx_index
+                else:
+                    return None
+            logging.debug('%s %s', result.tx_index, result.done)
+
+            # assert result.tx_index != tx_index
+            return result.tx_index
+
+    # precondition: maybe_start_inflight previously returned a
+    # non-None group_index. Waits up to timeout for the upstream where
+    # it's inflight to set_done(). Returns True on success, false on timeout.
+    def wait_inflight(self, filter_name : str, timeout : Optional[float]
+                      ) -> bool:
+        logging.debug(filter_name)
+        with self.mu:
+            result = self.inflight.get(filter_name, None)
+            assert result is not None
+            rv = self.cv.wait_for(lambda: result.done, timeout)
+            logging.debug('%s %s', filter_name, rv)
+            return rv and result.done
+
+    def set_done(self, filter_name : str):
+        with self.mu:
+            result = self.inflight.get(filter_name, None)
+            assert result is not None
+            result.done = True
+            self.cv.notify_all()
 
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not

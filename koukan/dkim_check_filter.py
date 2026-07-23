@@ -10,6 +10,7 @@ import dkim.util
 import publicsuffix2
 
 from koukan.address import domain_from_address
+from koukan.deadline import Deadline
 from koukan.filter import TransactionMetadata
 from koukan.filter_chain import Filter, FilterResult
 from koukan.filter_output import FilterOutput
@@ -120,20 +121,22 @@ class DkimCheckFilter(Filter):
             if h in result.tags:
                 del result.tags[h]
 
-    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
-        if (body := tx_delta.maybe_body_blob()) is None or not body.finalized():
-            return FilterResult()
-
-        tx = self.downstream_tx
-        assert tx is not None
-
+    def _verify(self, tx, body):
         b = body.pread(0)
-        verifier = dkim.DKIM(b)
 
         out = tx.get_filter_output(self.fullname())
         if out is None:
             out = DkimCheckFilterOutput()
             tx.add_filter_output(self.fullname(), out)
+
+        try:
+            verifier = dkim.DKIM(b)
+        except Exception as e:
+            # TODO append to out.results in this case? You would
+            # probably have message_validation_filter chained before
+            # this and failing that check is a better signal?
+            logging.debug('%s %s', e.__class__.__name__, e)
+            return
 
         i = 0
         for k,v in verifier.headers:
@@ -179,5 +182,41 @@ class DkimCheckFilter(Filter):
             res.status = status
             out.results.append(res)
             i += 1
+
+
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        if (body := tx_delta.maybe_body_blob()) is None or not body.finalized():
+            return FilterResult()
+
+        tx = self.downstream_tx
+        assert tx is not None
+
+        group = tx.group
+        if group is None:
+            self._verify(tx, body)
+            return FilterResult()
+
+        assert tx.group_index is not None
+        if (inflight_index := group.maybe_start_inflight(
+                self.fullname(), tx.group_index)) != tx.group_index:
+            assert inflight_index is not None
+            if group.wait_inflight(self.fullname(), 30):
+                with group:
+                    out = None
+                    def pred(tx):
+                        nonlocal out
+                        out = tx.get_filter_output(self.fullname())
+                        return out is not None
+                    group.wait_tx(inflight_index, pred, Deadline(30))
+                    if out is not None:
+                        logging.debug(inflight_index)
+                        tx.add_filter_output(self.fullname(), out)
+                        return FilterResult()
+
+        try:
+            self._verify(tx, body)
+        finally:
+            if inflight_index == tx.group_index:
+                group.set_done(self.fullname())
 
         return FilterResult()

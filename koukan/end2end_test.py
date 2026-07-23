@@ -304,12 +304,15 @@ class End2EndTest(unittest.TestCase):
         self._configure_and_run()
         rcpt_resp, final_resp = send_smtp(
             'localhost', self.gateway_mx_port, 'localhost',
-            'alice@example.com', ['bob@example.com', 'bob2@example.com'],
+            'alice@example.com', ['bob@example.com',
+                                  'bob2@example.com',
+                                  'bob3@example.com'],
             'hello, world!')
 
         self.assertEqual(250, rcpt_resp[0][0])
-        self.assertEqual(451, rcpt_resp[1][0])
-        self.assertIn(b'4.5.3 too many recipients', rcpt_resp[1][1])
+        self.assertEqual(250, rcpt_resp[1][0])
+        self.assertEqual(451, rcpt_resp[2][0])
+        self.assertIn(b'4.5.3 too many recipients', rcpt_resp[2][1])
         self.assertEqual(250, final_resp[0])
 
 

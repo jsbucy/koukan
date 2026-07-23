@@ -139,6 +139,7 @@ class FakeFilter(Filter):
 class FakeTxGroup(TransactionGroup):
     _tx : List[TransactionMetadata]
     def __init__(self, tx):
+        super().__init__([])
         self._tx = tx
 
     def __enter__(self):
