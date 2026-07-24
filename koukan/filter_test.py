@@ -186,8 +186,8 @@ class FilterTest(unittest.TestCase):
             mail_from=Mailbox('alice'),
             rcpt_to = [Mailbox('bob1'), Mailbox('bob2')],
             body=InlineBlob(b'hello', last=True))
-        tx.fill_inflight_responses(Response(123))
-        self.assertEqual(tx.mail_response.code, 123)
+        tx.fill_inflight_responses(Response(456))
+        self.assertEqual(tx.mail_response.code, 456)
         self.assertEqual([r.code for r in tx.rcpt_response], [503,503])
         self.assertEqual(tx.data_response.code, 503)
 

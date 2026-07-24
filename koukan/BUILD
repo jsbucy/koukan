@@ -15,7 +15,8 @@ py_test(name='blob_test',
               ':filter'])
 
 py_library(name='response',
-           srcs=['response.py'])
+           srcs=['response.py'],
+           deps=[':rest_schema'])
 
 py_library(name='sender',
            srcs=['sender.py'],

@@ -211,8 +211,7 @@ class DkimCheckFilterTest(unittest.TestCase):
             body=InlineBlob(b'Hello, world!', last=True))))
 
         filter_output = DkimCheckFilterOutput()
-        tx0.add_filter_output(f1.fullname(), filter_output)
-        group.set_done(f1.fullname())
+        group.set_done(f1.fullname(), filter_output)
 
         fut.result()
         out1 = tx1.get_filter_output(f1.fullname())

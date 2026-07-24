@@ -121,7 +121,7 @@ class DkimCheckFilter(Filter):
             if h in result.tags:
                 del result.tags[h]
 
-    def _verify(self, tx, body):
+    def _verify(self, tx, body) -> Optional[DkimCheckFilterOutput]:
         b = body.pread(0)
 
         out = tx.get_filter_output(self.fullname())
@@ -136,7 +136,7 @@ class DkimCheckFilter(Filter):
             # probably have message_validation_filter chained before
             # this and failing that check is a better signal?
             logging.debug('%s %s', e.__class__.__name__, e)
-            return
+            return None
 
         i = 0
         for k,v in verifier.headers:
@@ -182,7 +182,7 @@ class DkimCheckFilter(Filter):
             res.status = status
             out.results.append(res)
             i += 1
-
+        return out
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if (body := tx_delta.maybe_body_blob()) is None or not body.finalized():
@@ -197,26 +197,30 @@ class DkimCheckFilter(Filter):
             return FilterResult()
 
         assert tx.group_index is not None
-        if (inflight_index := group.maybe_start_inflight(
-                self.fullname(), tx.group_index)) != tx.group_index:
-            assert inflight_index is not None
-            if group.wait_inflight(self.fullname(), 30):
-                with group:
-                    out = None
-                    def pred(tx):
-                        nonlocal out
-                        out = tx.get_filter_output(self.fullname())
-                        return out is not None
-                    group.wait_tx(inflight_index, pred, Deadline(30))
-                    if out is not None:
-                        logging.debug(inflight_index)
-                        tx.add_filter_output(self.fullname(), out)
-                        return FilterResult()
+        deadline = Deadline(30)
+        out = None
+        # if deadline runs out and we still haven't reused an inflight
+        # result, just compute it ourselves
+        while deadline.remaining() or out is None:
+            inflight_index = None
+            if deadline.remaining() and (
+                    (inflight_index := group.maybe_start_inflight(
+                        self.fullname(), tx.group_index)) != tx.group_index):
+                assert inflight_index is not None
+                out = group.wait_inflight(
+                    self.fullname(), deadline.deadline_left())
+                if out is None:  # inflight failed to produce output
+                    continue
+                logging.debug(inflight_index)
+                tx.add_filter_output(self.fullname(), out)
+                return FilterResult()
 
-        try:
-            self._verify(tx, body)
-        finally:
-            if inflight_index == tx.group_index:
-                group.set_done(self.fullname())
+            try:
+                out = None
+                out = self._verify(tx, body)
+                break
+            finally:
+                if inflight_index == tx.group_index:
+                    group.set_done(self.fullname(), out)
 
         return FilterResult()

@@ -455,6 +455,15 @@ class StorageWriterFilter(AsyncFilter):
                 break
         assert None not in tx.rcpt_response
 
+        data_resp = None
+        for t in group_tx:
+            # could do a consistency check vs the other data_responses here
+            if t.data_response is not None and t.data_response.group_reject:
+                tx.data_response = Response(
+                    t.data_response.code,
+                    t.data_response.message + ' (SWF group reject)')
+                return tx
+
         if not tx._body_last() or any(
                 [t.data_response is None for t in group_tx]):
             logging.debug('still waiting data_response')

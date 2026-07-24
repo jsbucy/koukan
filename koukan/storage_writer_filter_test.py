@@ -44,6 +44,7 @@ class Result(IntEnum):
     PERM = 1
     TIMEOUT = 2
     SUCCESS = 3  # only for DATA
+    GROUP_REJECT = 4
 
 class Recipient:
     stage : Stage
@@ -496,6 +497,8 @@ class StorageWriterFilterTest(unittest.TestCase):
                 return Response(550)
             elif r == Result.SUCCESS:
                 return Response(250)
+            elif r == Result.GROUP_REJECT:
+                return Response(550, group_reject=True)
             return None
 
         # actual, expectation
@@ -691,6 +694,14 @@ class StorageWriterFilterTest(unittest.TestCase):
             sf_mode = 'upstream_unavailability'
         ))
 
+    def test_multi_rcpt_group_reject(self):
+        self._run_test(Test(
+            rcpt = [Recipient(Stage.DATA, Result.GROUP_REJECT),
+                    Recipient(Stage.DATA, Result.TIMEOUT)],
+            stage = Stage.DATA,
+            result = Result.PERM,
+            sf_mode = 'upstream_unavailability'
+        ))
 
     def test_multi_rcpt_success(self):
         self._run_test(Test(

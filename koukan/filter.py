@@ -1082,10 +1082,9 @@ class TransactionMetadata:
 
 class _GroupResult:
     tx_index : int
-    done : bool
+    filter_output : Optional[FilterOutput] = None
     def __init__(self, tx_index):
         self.tx_index = tx_index
-        self.done = False
 
 # Coordinates parallel upstream/output flows for transactions for each
 # rcpt of a multi-rcpt downstream smtp transaction.
@@ -1152,29 +1151,42 @@ class TransactionGroup:
                     return tx_index
                 else:
                     return None
-            logging.debug('%s %s', result.tx_index, result.done)
+            logging.debug('%s %s', result.tx_index, result.filter_output)
 
             # assert result.tx_index != tx_index
             return result.tx_index
 
-    # precondition: maybe_start_inflight previously returned a
-    # non-None group_index. Waits up to timeout for the upstream where
-    # it's inflight to set_done(). Returns True on success, false on timeout.
+    # Waits up to timeout for filter_name to have a non-none result or
+    # filter_name to not be inflight (due to an error). Returns the
+    # FilterOutput on success, None on timeout or no longer inflight.
     def wait_inflight(self, filter_name : str, timeout : Optional[float]
-                      ) -> bool:
+                      ) -> Optional[FilterOutput]:
         logging.debug(filter_name)
         with self.mu:
-            result = self.inflight.get(filter_name, None)
-            assert result is not None
-            rv = self.cv.wait_for(lambda: result.done, timeout)
+            if filter_name not in self.inflight:
+                return None
+            result = None
+            def pred():
+                nonlocal result
+                result = self.inflight.get(filter_name, None)
+                return result is None or result.filter_output is not None
+            rv = self.cv.wait_for(pred, timeout)
             logging.debug('%s %s', filter_name, rv)
-            return rv and result.done
+            if not rv or result is None:
+                return None
+            return result.filter_output
 
-    def set_done(self, filter_name : str):
+    # if filter_output is None, removes filter_name from inflight set
+    # to signal an error.
+    def set_done(self, filter_name : str,
+                 filter_output : Optional[FilterOutput]):
         with self.mu:
             result = self.inflight.get(filter_name, None)
             assert result is not None
-            result.done = True
+            if filter_output is None:
+                del self.inflight[filter_name]
+                return
+            result.filter_output = filter_output
             self.cv.notify_all()
 
 # interface from RestHandler to StorageWriterFilter

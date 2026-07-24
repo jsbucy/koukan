@@ -108,6 +108,8 @@ class PolicyActionFilter(ProxyFilter):
         matcher_name = yaml['matcher']
         matcher_yaml = dict(yaml)
         del matcher_yaml['matcher']
+        # XXX this needs a registry of matchers so it can fail if
+        # there's a typo in the yaml!
         if matcher := self.matchers.get(matcher_name, None):
             return matcher(matcher_yaml, tx, rcpt_num)
 
@@ -193,7 +195,14 @@ class PolicyActionFilter(ProxyFilter):
                 assert len(tx.rcpt_response) == rcpt_num
                 tx.rcpt_response.append(Response(code, err))
             else:
-                tx.fill_inflight_responses(Response(code, err))
+                # Note: this always sets group_reject for non-rcpt
+                # policies so if a policy rejects at data for a
+                # multi-rcpt smtp transaction, it will fail the entire
+                # downstream smtp tx. Otherwise, you could end up
+                # returning mixed downstream data_responses which
+                # leads to accept&bounce.
+                tx.fill_inflight_responses(
+                    Response(code, err, group_reject=True))
         elif action == 'LOG':
             out._add_rule(self.rule_name)
         elif action == 'MATCH':

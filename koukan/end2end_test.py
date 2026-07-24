@@ -641,7 +641,8 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual(250, rcpt_resp[0][0])
         self.assertEqual(550, data_resp[0])
         self.assertEqual(
-            b'5.6.0 message rejected message_validation', data_resp[1])
+            b'5.6.0 message rejected message_validation (SWF group reject)',
+            data_resp[1])
 
 
 
