@@ -69,6 +69,7 @@ class SyncFilterAdapterTest(unittest.TestCase):
         sync_filter_adapter.update(tx, delta)
         for i in range(0,3):
             sync_filter_adapter.wait(version, 1)
+            version = sync_filter_adapter.version
             tx = sync_filter_adapter.get()
             logging.debug(tx)
             if [r.code for r in tx.rcpt_response] == [202]:
