@@ -644,13 +644,15 @@ py_library(name='router_service_test',
                  '@pypi//pyyaml',
                  '@pypi//werkzeug'],
            data=['//testdata:multipart.msg',
-                 '//testdata:router_service_test-router.yaml'])
+                 '//testdata:router_service_test-router.yaml',
+                 '//testdata:router_service_test-router-exploder.yaml'])
 
 py_test(name='router_service_test_fastapi',
         srcs=['router_service_test_fastapi.py'],
         main='router_service_test_fastapi.py',
         deps=[':postgres_test_utils',
-              'router_service_test'])
+              'router_service_test',
+              '@pypi//parameterized'])
 
 py_test(name='router_service_test_sqlite',
         srcs=['router_service_test_sqlite.py'],
@@ -801,6 +803,7 @@ py_library(name='sqlite_test_utils',
 py_test(name='end2end_test',
         srcs=['end2end_test.py'],
         data=['//config/local-test:router.yaml',
+              '//config/local-test:router-exploder.yaml',
               '//config/local-test:gateway.yaml',
               '//examples/send_message:body.txt',
               '//testdata:8bit_headers.msg',
@@ -821,6 +824,7 @@ py_test(name='end2end_test',
               '//examples/receiver:receiver',
               '//examples/receiver:fastapi_receiver',
               '@pypi//dkimpy',
+              '@pypi//parameterized',
               '@pypi//pyyaml'])
 
 py_binary(name='router',

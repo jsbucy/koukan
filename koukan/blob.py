@@ -1,12 +1,13 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import List, Optional, Tuple
+import logging
 from abc import ABC, abstractmethod
-import os
-from io import IOBase
+import copy
+from io import BytesIO, IOBase
 import os
 
-from koukan.rest_schema import BlobUri
+from koukan.rest_schema import BlobUri, WhichJson
 
 class Blob(ABC):
     @abstractmethod
@@ -38,6 +39,9 @@ class Blob(ABC):
     # returns True if rhs is a proper superset of self,
     # False if they are the same, else None
     def delta(self, rhs, which_json) -> Optional[bool]:
+        raise NotImplementedError()
+
+    def clone(self) -> 'Blob':
         raise NotImplementedError()
 
 class WritableBlob(ABC):
@@ -102,6 +106,7 @@ class WritableBlob(ABC):
 # b.pread(0) -> 'hello, world!'
 # b.trim_front(7)
 # b.pread(7) -> 'world!'
+# TODO this is a hack. CompositeBlob would be a better vehicle for fifo.
 class InlineBlob(Blob, WritableBlob):
     d : bytes
     _content_length : Optional[int] = None
@@ -118,6 +123,9 @@ class InlineBlob(Blob, WritableBlob):
         self._content_length = len(d) if last else content_length
         self._rest_id = rest_id
 
+    def clone(self):
+        return copy.copy(self)
+
     def blob_uri(self):
         return self._blob_uri
 
@@ -127,11 +135,19 @@ class InlineBlob(Blob, WritableBlob):
     def delta(self, rhs, which_json) -> Optional[bool]:
         if not isinstance(rhs, InlineBlob):
             return None
-        # leading edge of self may have moved forward
-        if rhs._offset > self._offset:
+        if rhs.len() < self.len():
             return None
-        off = self._offset - rhs._offset
-        if not rhs.d[off:].startswith(self.d):
+        # TODO this is only here to catch bugs; we never expect to
+        # return None at runtime which results in tx.delta/merge
+        # throwing. Possibly this should only be enabled in some debug mode?
+        self_off = max(rhs._offset - self._offset, 0)
+        rhs_off = max(self._offset - rhs._offset, 0)
+        self_overlap = self.d[self_off:]
+        rhs_overlap = rhs.d[rhs_off:]
+        min_len = min(len(self_overlap), len(rhs_overlap))
+        self_overlap = self_overlap[0:min_len]
+        rhs_overlap = rhs_overlap[0:min_len]
+        if self_overlap != rhs_overlap:
             return None
         return rhs.len() > self.len()
 
@@ -162,8 +178,8 @@ class InlineBlob(Blob, WritableBlob):
             self._content_length = self._offset + len(self.d)
 
     def __repr__(self):
-        return 'length=%d content_length=%s offset=%d' % (
-            self.len(), self.content_length(), self._offset)
+        return '%d length=%d content_length=%s offset=%d' % (
+            id(self), self.len(), self.content_length(), self._offset)
 
     # WritableBlob
     # precondition: offset == blob.len()
@@ -208,6 +224,12 @@ class FileLikeBlob(Blob, WritableBlob):
             stat = os.stat(f.fileno())
             self._len = stat.st_size
             self._content_length = self._len
+
+    def clone(self):
+        out = FileLikeBlob(os.fdopen(os.dup(self.f.fileno())))
+        out._content_length = self._content_length
+        out._rest_id = self._rest_id
+        return out
 
     # this is currently only used in MessageBuilderFilter which writes
     # it to completion when it renders the message so upstream won't
@@ -283,7 +305,17 @@ class CompositeBlob(Blob):
     def __init__(self):
         self.chunks = []
 
-    def append(self, blob, blob_offset, length, last : Optional[bool] = False):
+    def clone(self):
+        out = CompositeBlob()
+        out.chunks = [ Chunk(c.blob.clone(), c.offset, c.blob_offset, c.length)
+                       for c in self.chunks ]
+        out.last = self.last
+        return out
+
+    def append(self, blob = None, blob_offset = None, length = None,
+               last : Optional[bool] = False):
+        if blob is None:
+            return
         assert not self.last
         if last:
             self.last = True
@@ -335,8 +367,14 @@ class CompositeBlob(Blob):
     # received_header_filter, if one wanted to trickle out the body,
     # this needs a real implementation.
     def delta(self, rhs, which_json):
-        if not isinstance(rhs, CompositeBlob) or rhs is not self:
+        if not isinstance(rhs, CompositeBlob):
             return None
+        if len(rhs.chunks) < len(self.chunks):
+            return None
+        if len(rhs.chunks) > len(self.chunks):
+            return True
+        if rhs.chunks[-1].blob.len() > self.chunks[-1].blob.len():
+            return True
         return False
 
 

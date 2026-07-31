@@ -12,6 +12,7 @@ from dkim import dknewkey
 import tempfile
 import yaml
 from urllib.parse import urljoin
+from parameterized import parameterized_class
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
@@ -38,6 +39,8 @@ def _get_router_endpoint_yaml(router_yaml : dict, name : str
             return endpoint
     return None
 
+@parameterized_class(('router_yaml_name',), [
+    ('router.yaml',), ('router-exploder.yaml',)])
 class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
@@ -92,11 +95,10 @@ class End2EndTest(unittest.TestCase):
     def _update_dkim(self, chain):
         last = 0
         dkim = None
-        for i,f in enumerate(chain):
-            if f['filter'] == 'dkim_sign':
-                dkim = i
-                break
-        filter_yaml = chain[dkim]
+        filter_yaml = next(
+            (f for f in chain if f['filter'] == 'dkim_sign'), None)
+        if filter_yaml is None:
+            return
         if not self.dkim_tempdir:
             self.dkim_tempdir = tempfile.TemporaryDirectory()
         dir = self.dkim_tempdir.name
@@ -137,7 +139,7 @@ class End2EndTest(unittest.TestCase):
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
         self.router_submission_url = urljoin(self.router_base_url, '/senders/submission/transactions')
-        with open('config/local-test/router.yaml', 'r') as f:
+        with open('config/local-test/' + self.router_yaml_name, 'r') as f:
             self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
 
         router_yaml = self.router_yaml
@@ -202,6 +204,9 @@ class End2EndTest(unittest.TestCase):
             ('localhost', self.receiver_rest_port),
             self.executor.ping_watchdog)
         self.executor.submit(self.http_server.run)
+
+    def exploder(self):
+        return 'exploder' in self.router_yaml_name
 
     def setUp(self):
         self.dead_socket = socketserver.TCPServer(
@@ -566,11 +571,14 @@ class End2EndTest(unittest.TestCase):
 
     def _test_add_route(self, filter_yaml):
         self._configure()
-        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'ingress_exploder')
+        chain = 'ingress' if self.exploder() else 'ingress_exploder'
+        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, chain)
 
         add_route_yaml = next(
-            y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route')
-        add_route_yaml.update(filter_yaml)
+            (y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route'),
+            None)
+        if add_route_yaml:
+            add_route_yaml.update(filter_yaml)
 
         self._run()
         time.sleep(1)
@@ -585,6 +593,7 @@ class End2EndTest(unittest.TestCase):
             if handler.ehlo is None:
                 logging.debug('empty handler? %s', handler)
                 continue
+            logging.debug(handler)
             self.assertEqual(handler.ehlo, 'localhost')
             self.assertEqual(handler.mail_from, 'alice@example.com')
             self.assertEqual(len(handler.mail_options), 1)
@@ -612,8 +621,12 @@ class End2EndTest(unittest.TestCase):
             if tx is None:
                 break
             storage_tx += 1
-        self.assertEqual(2 if 'store_and_forward' in filter_yaml else 1,
-                         storage_tx)
+        expected_storage_tx = 1
+        if 'store_and_forward' in filter_yaml:
+            expected_storage_tx += 1
+        if self.exploder():
+            expected_storage_tx += 1
+        self.assertEqual(expected_storage_tx, storage_tx)
 
     def test_add_route_sync(self):
         return self._test_add_route({'output_chain': 'sink'})

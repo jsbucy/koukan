@@ -532,8 +532,10 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
-            tx_cursor, chain,
-            notification_endpoint_factory=lambda: notification_endpoint,
+            tx_cursor,
+            chain,
+            notification_endpoint_factory=
+                (lambda sender: (notification_endpoint, sender)),
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_timeout=2,
             upstream_refresh=1,
@@ -625,7 +627,8 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertEqual(tx_cursor.rest_id, 'rest_tx_id')
         handler = OutputHandler(
             tx_cursor, chain,
-            notification_endpoint_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=
+                (lambda sender: (notification_endpoint, sender)),
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_timeout=2,
             upstream_refresh=1,
@@ -730,7 +733,8 @@ class OutputHandlerTest(unittest.TestCase):
         self.assertIsNotNone(tx_cursor)
         handler = OutputHandler(
             tx_cursor, chain,
-            notification_endpoint_factory=lambda: notification_endpoint,
+            notification_endpoint_factory=
+                (lambda sender: (notification_endpoint, sender)),
             mailer_daemon_mailbox='mailer-daemon@example.com',
             downstream_timeout=2,
             upstream_refresh=1,

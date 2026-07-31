@@ -61,7 +61,7 @@ class Rcpt:
     # ~fake OutputHandler for upstream
     def output(self, endpoint):
         logging.debug('output start')
-        self.cursor = cursor = endpoint.release_transaction_cursor()
+        self.cursor = cursor = endpoint.release_transaction_cursor(0)
         cursor.start_attempt()
         logging.debug(cursor.attempt_id)
         tx = cursor.tx
@@ -145,7 +145,10 @@ class ExploderTest(unittest.TestCase):
 
     def add_endpoint(self):
         endpoint = StorageWriterFilter(
-            self.storage, rest_id_factory=rest_id_factory, create_leased=True)
+            self.storage,
+            rest_id_factory=rest_id_factory,
+            create_leased=True,
+            endpoint_yaml_provider = lambda sender: {})
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
@@ -161,10 +164,11 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, test : Test):
         logging.debug('_test_one()', stack_info=True)
-        exploder = Exploder(Sender('submission', 'smtp-msa'),
-                            Sender('submission', 'smtp-msa-upstream'),
-                            partial(self.factory, msa),
-                            rcpt_timeout=5)
+        exploder = Exploder(
+            Sender('submission', 'smtp-msa', yaml={}),
+            Sender('submission', 'smtp-msa-upstream', yaml={}),
+            partial(self.factory, msa),
+            rcpt_timeout=5)
         tx = TransactionMetadata()
         exploder.wire_downstream(tx)
 

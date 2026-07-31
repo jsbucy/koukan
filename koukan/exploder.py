@@ -113,6 +113,7 @@ class Recipient:
         tt = t.copy()
         for ti in [orig, tt]:
             ti.body = None
+            ti.group = None
         assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
 

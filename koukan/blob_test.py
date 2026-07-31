@@ -8,11 +8,6 @@ from koukan.blob import BlobReader, InlineBlob, CompositeBlob
 from koukan.filter import WhichJson
 
 class BlobTest(unittest.TestCase):
-    def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
-
-
     def test_inline(self):
         b = InlineBlob(b'wxyz')
         self.assertEqual(b.pread(1,2), b'xy')
@@ -79,4 +74,8 @@ class BlobTest(unittest.TestCase):
         self.assertEqual(b'xyzcde', dest.pread(0))
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d %(message)s')
+
     unittest.main()

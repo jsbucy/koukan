@@ -461,7 +461,7 @@ class TransactionCursor:
             return True
 
         tx_to_db = self.tx.merge(tx_delta)
-        assert tx_to_db is not None
+        assert tx_to_db is not None, ('%s %s' % (self.tx, tx_delta))
         tx_to_db_json = tx_to_db.to_json(WhichJson.DB)
         attempt_json = None
         attempt_to_db = None

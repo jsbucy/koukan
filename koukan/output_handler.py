@@ -30,7 +30,7 @@ class OutputHandler:
     cursor : TransactionCursor
     filter_chain : FilterChain
     rest_id : str
-    notification_endpoint_factory : Callable[[], AsyncFilter]
+    notification_endpoint_factory : Callable[[Sender], Optional[Tuple[AsyncFilter, Sender]]]
     mailer_daemon_mailbox : Optional[str] = None
 
     prev_downstream : TransactionMetadata
@@ -277,6 +277,7 @@ class OutputHandler:
                         # to finally as it is?
                         continue
 
+            # XXX don't swallow exceptions here?
             except Exception as e:
                 logging.exception('uncaught exception in OutputHandler')
             finally:
@@ -448,15 +449,19 @@ class OutputHandler:
         # This expects to get retry params from the output chain
         # similar to rest submission: retries enabled, notifications disabled
         # cf FilterChainWiring.add_route()
+        sender = Sender(
+            self.notification_params['sender'],
+            tag=self.notification_params.get('tag', None))
+
+        res = self.notification_endpoint_factory(sender)
+        assert res is not None
+        notification_endpoint, sender = res
         notification_tx = TransactionMetadata(
-            sender=Sender(
-                self.notification_params['sender'],
-                tag=self.notification_params.get('tag', None)),
+            sender=sender,
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
             body = InlineBlob(dsn, last=True))
-        notification_endpoint = self.notification_endpoint_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)
         # should result in the parent retrying even if it was

@@ -45,9 +45,12 @@ def match_num_rcpts(
     if group is None:  # retries
         return MatcherResult.NO_MATCH
     with group:
-        for i,tx in enumerate(group.tx()):
+        for i,txi in enumerate(group.tx()):
             if i > group_index:
                 break
+            elif i == group_index:
+                # for our own group_index, the arg copy may have newer info
+                txi = tx
             if i != group_index:
                 mail_err = False
                 def pred(tx):
@@ -63,12 +66,11 @@ def match_num_rcpts(
                     return MatcherResult.PRECONDITION_UNMET
                 if mail_err:
                     continue
-                tx = updated_tx
-            for j,resp in enumerate(tx.rcpt_response):
+                txi = updated_tx
+            for j,resp in enumerate(txi.rcpt_response):
                 if i == group_index and j >= rcpt_num:
                     break
-                assert resp is not None
-                if resp.ok():
+                if resp is not None and resp.ok():
                     rcpts += 1
                     if rcpts >= yaml['max_rcpts']:
                         return MatcherResult.MATCH

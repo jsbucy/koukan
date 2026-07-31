@@ -1,0 +1,516 @@
+global:
+  dequeue: true
+  executor:
+    rest:
+      max_inflight: 10
+      watchdog_timeout: 10
+    output:
+      max_inflight: 100
+      watchdog_timeout: 60
+  mailer_daemon_mailbox: mailer-daemon@example.com
+  rest_id_entropy: 4
+
+rest_listener:
+  addr: ["localhost", 8000]
+  #cert: localhost.crt
+  #key: localhost.key
+
+  # base uri of this instance/replica to redirect clients for multi-node
+  session_uri: http://localhost:8000
+  # e.g. k8s service alias
+  #service_uri: http://localhost:8000
+
+sender:
+- name: ingress
+  output_chain: ingress
+  tag:
+  - name: smtp-mx
+    output_chain: ingress_exploder
+    upstream_tag: smtp-mx-upstream
+  - name: smtp-mx-upstream
+  - name: short_circuit
+    remote_host: 127.0.0.1
+    smtp_meta: {'ehlo_host': 'localhost'}
+
+- name: submission
+  output_chain: submission
+  retry: output_chain
+  tag:
+  - name: smtp-msa
+    output_chain: submission_exploder
+    upstream_tag: smtp-msa-upstream
+    retry: null
+  - name: smtp-msa-upstream
+    retry: null
+  - name: notification
+- name: sor
+  output_chain: sink
+
+rest_endpoint:
+- name: gateway
+  endpoint: http://localhost:8001/senders/router/transactions
+  sender: router
+  tag: outbound
+- name: sink
+  endpoint: http://localhost:8002/senders/router/transactions
+  sender: router
+  tag: sor
+  options:
+    send_filter_output: true
+- name: receiver
+  endpoint: http://localhost:8002/senders/router/transactions
+  sender: router
+  options:
+    send_filter_output: true
+- name: short_circuit
+  endpoint: http://localhost:8000/senders/ingress/transactions
+  sender: ingress
+  tag: short_circuit
+
+endpoint:
+# smtp downstream
+- name: submission_exploder
+  output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+  chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+      not:
+        matcher: smtp_auth
+    name: matcher_smoke_smtp_auth
+    tag: matcher_smoke
+    action: LOG
+  - filter: dns_resolution
+    suffix: ''  # match everything
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
+  - filter: policy_action
+    tag: dns_perm
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      rcpt_result: NX
+    mode: PER_RCPT
+    action: REJECT
+    code: 550
+    message: rcpt_to dns nxdomain/nullmx
+
+  # XXX does this rcpt router do anything?
+  - filter: router
+    dry_run: true
+    policy:
+      name: dest_domain
+      destination:
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
+  - filter: policy_action
+    match:
+      not:
+        matcher: smtp_tls
+    name: matcher_smoke_tls
+    tag: matcher_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      not:
+        matcher: network_address
+        cidr: 10.0.0.0/8
+    name: matcher_smoke_network_address
+    tag: matcher_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      not:
+        matcher: address_list
+        domains:
+        - example.com
+    name: matcher_smoke_address_list
+    tag: matcher_smoke
+    action: LOG
+  - filter: message_validation
+  - filter: policy_action
+    match:
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: HIGH
+    action: REJECT
+    tag: message_validation
+  - filter: exploder
+    output_chain: submission
+    msa: true
+    rcpt_timeout: 300
+    data_timeout: 300
+
+# first-class rest or smtp/exploder upstream
+- name: submission
+  output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+    notification:
+      sender: submission
+      tag: notification
+    retry_params:
+      max_attempts: 3
+      min_attempt_time: 2
+      max_attempt_time: 5
+      backoff_factor: 1.5
+      deadline: 30
+
+  chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  # chain before message_builder to not parse its output which we
+  # assume is good.
+  - filter: message_validation
+  - filter: policy_action
+    match:
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: HIGH
+    action: REJECT
+    tag: message_validation
+   
+  # message_builder must be chained before anything that wants to
+  # access/modify the message: received_header, dkim
+  - filter: message_builder
+  # TODO: option/default disable remote_host/from stanza in received header
+  # for submission?
+  - filter: received_header
+    received_hostname: gargantua1    
+  - filter: router
+    policy:
+      name: hello
+  # send my own domains directly to my ingress
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      - rest-application.example.com
+      destination:
+        endpoint: short_circuit
+  # send everything else to the rhs of the addr via the smtp gw
+  - filter: router
+    policy:
+      name: dest_domain
+      destination:
+        endpoint: gateway
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
+  - filter: dkim_sign
+    # key: config/local-test/dkim.key
+    domain: example.com
+    selector: sel
+  - filter: hello
+
+  - filter: dns_resolution
+    suffix: ''  # match everything
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
+
+  - filter: policy_action
+    tag: dns_perm
+    match:
+      # could also validate mail_result here but presumably we're
+      # limiting senders to our own domains that we know work, etc.
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      resolution_result: NX
+    action: REJECT
+    code: 550
+    message: rcpt_to dns nxdomain/nullmx
+  - filter: policy_action
+    tag: dns_temp
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      resolution_result: TEMP
+    action: REJECT
+    code: 450
+    message: rcpt_to dns temp
+
+  - filter: rest_output
+    verify: localhost.crt
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
+
+
+- name: ingress_exploder
+  output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+  chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    mode: PER_RCPT
+    match:
+      matcher: num_rcpts
+      max_rcpts: 2
+    action: REJECT
+    tag: max_rcpts
+    code: 451
+    message: 4.5.3 too many recipients
+  - filter: router
+    dry_run: true
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      #delimiter: '+'
+      #prefixes:
+      #- base: alice
+      destination:
+        endpoint: gateway
+        host_list:
+          - host: 'fake_smtpd'
+            port: 3025
+  - filter: router
+    dry_run: true
+    policy:
+      name: address_list
+      domains:
+      - rest-application.example.com
+      delimiter: '+'
+      prefixes:
+      - bob
+      destination:
+        endpoint: receiver
+        options:
+          receive_parsing:
+  - filter: router
+    dry_run: true
+    # no policy: match everything
+    # no dest: reject
+  - filter: remote_host
+  - filter: message_validation
+  - filter: dns_resolution
+    suffix: ''  # match everything
+  - filter: policy_action
+    tag: dns_nx
+    match:
+      matcher: koukan.mx_resolution.DnsResolutionFilter
+      mail_result: NX
+    action: LOG
+
+  - filter: spf_check
+  - filter: policy_action
+    match:
+      matcher: koukan.remote_host_filter.SpfCheckFilter
+    tag: spf_smoke
+    action: LOG
+  - filter: dkim_check
+  - filter: policy_action
+    match:
+      matcher: koukan.remote_host_filter.DkimCheckFilter
+    tag: dkim_smoke
+    action: LOG
+  - filter: policy_action
+    match:
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
+
+  - filter: policy_action
+    match:
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: MEDIUM
+    action: REJECT
+    tag: message_validation
+  - filter: exploder
+    msa: false
+    output_chain: ingress
+    rcpt_timeout: 300
+    data_timeout: 300
+
+- name: ingress
+  output_handler:
+    downstream_timeout: 5
+    upstream_refresh: 1
+
+    retry_params:
+      max_attempts: 3
+      min_attempt_time: 2
+      max_attempt_time: 5
+      backoff_factor: 1.5
+      deadline: 30
+    notification:
+      sender: submission
+      tag: notification
+  chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: remote_host
+  - filter: received_header
+    received_hostname: gargantua1    
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - example.com
+      #delimiter: '+'
+      #prefixes:
+      #- base: alice
+      destination:
+        endpoint: gateway
+        host_list:
+          - host: 'fake_smtpd'
+            port: 3025
+  - filter: router
+    policy:
+      name: address_list
+      domains:
+      - rest-application.example.com
+      delimiter: '+'
+      prefixes:
+      - bob
+      destination:
+        endpoint: receiver
+        options:
+          receive_parsing:
+  - filter: router
+    # no policy: match everything
+    # no dest: reject
+  - filter: message_validation
+  - filter: dkim_check
+
+  - filter: policy_action
+    match:
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
+
+  - filter: policy_action
+    match:
+      matcher: koukan.message_validation_filter.MessageValidationFilter
+      validity_threshold: MEDIUM
+    action: REJECT
+    tag: message_validation
+
+  - filter: add_route
+    sender: sor
+  - filter: message_parser
+  - filter: dns_resolution
+    literal: 'fake_smtpd'
+    static_hosts:
+      - host: 127.0.0.1
+        port: 3025
+    overwrite: true
+  - filter: rest_output
+    verify: localhost.crt
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
+
+- name: sink
+  chain:
+  - filter: policy_action
+    match:
+        matcher: invalid_mail_from
+    tag: valid_envelope
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: policy_action
+    match:
+        matcher: invalid_rcpt_to
+    tag: valid_envelope
+    mode: PER_RCPT
+    action: REJECT
+    code: 501
+    message: 5.1.3 Bad mailbox address syntax
+  - filter: router
+    policy:
+      name: address_list
+      prefixes: []
+      destination:
+        endpoint: sink
+        options:
+          receive_parsing:
+            max_inline: 0
+  - filter: message_parser
+  - filter: rest_output
+    rcpt_timeout: 300
+    data_timeout: 300
+    chunk_size: 1048576
+
+
+modules:
+  sync_filter:
+    hello: koukan.hello_filter
+  recipient_router_policy:
+    hello: koukan.hello_policy
+  transaction_matcher:
+    match_hello: koukan.hello_matcher:match
+
+storage:
+  # url: postgresql+psycopg://my-username@/my-database?host=/var/run/postgresql
+
+  gc_interval: 30
+  gc_ttl: 3600
+
+  session_refresh_interval: 1
+

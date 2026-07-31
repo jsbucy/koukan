@@ -127,15 +127,20 @@ class StorageWriterFilterTest(unittest.TestCase):
             rest_id_factory = lambda: create_id,
             rest_id = update_id,
             create_leased = True,
-            sender=Sender('ingress'),
-            endpoint_yaml = lambda sender: endpoint_yaml,
+            sender=Sender('ingress', yaml={}),
+            endpoint_yaml_provider = lambda sender: endpoint_yaml,
             tx_handler=handler)
 
     def test_smoke(self):
         endpoint_yaml = {
             'sf_mode': 'upstream_unavailability'
         }
+
+        filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
+        self.assertIsNone(filter.check_cache())
+        self.assertIsNone(filter.check())
         filter = self.create_filter(endpoint_yaml, create_id='tx_rest_id')
+
         tx = TransactionMetadata(
             sender=Sender('ingress'),
             mail_from=Mailbox('alice'))
@@ -143,6 +148,21 @@ class StorageWriterFilterTest(unittest.TestCase):
         upstream_cursor = filter.release_transaction_cursor(0)
         self.assertEqual(upstream_cursor.rest_id, 'tx_rest_id')
         self.assertIsNotNone(upstream_cursor.tx.group)
+
+        filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
+        self.assertIsNotNone(check_cache_result := filter.check_cache())
+        version, tx, leased, other_session = check_cache_result
+        self.assertEqual(1, version)
+        self.assertEqual('alice', tx.mail_from.mailbox)
+        self.assertTrue(leased)
+        self.assertIsNone(other_session)
+
+        self.assertIsNotNone(check_result := filter.check())
+        version, tx, leased, other_session = check_result
+        self.assertEqual(1, version)
+        self.assertIsNone(tx)
+        self.assertTrue(leased)
+        self.assertIsNone(other_session)
 
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
         prev = filter.get()
@@ -161,6 +181,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id',
                                     handler=upstream)
+
         prev = filter.get()
         logging.debug(prev.sender)
         tx = prev.copy()

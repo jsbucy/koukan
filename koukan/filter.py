@@ -337,7 +337,7 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
     raise ValueError()
 
 def _copy_body(b, which_js):
-    if isinstance(b, MessageBuilderSpec):
+    if isinstance(b, MessageBuilderSpec) or isinstance(b, Blob):
         return b.clone()
     else:
         return b
@@ -456,6 +456,8 @@ _tx_fields = [
             validity=set([
                 WhichJson.DB,
                 WhichJson.DB_ATTEMPT,
+                WhichJson.EXPLODER_CREATE,
+                WhichJson.EXPLODER_UPDATE,
                 WhichJson.REST_CREATE,
                 WhichJson.REST_UPDATE,
                 WhichJson.REST_READ,

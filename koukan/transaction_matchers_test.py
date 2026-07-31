@@ -84,7 +84,7 @@ class NumRcptsMatcherTest(unittest.TestCase):
             MatcherResult.NO_MATCH,
             match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num = 0))
 
-        tx0.group = tx1.group = FakeTxGroup([tx0, tx1, tx2])
+        tx0.group = tx1.group = tx2.group = FakeTxGroup([tx0, tx1, tx2])
 
         # prev tx err
         self.assertEqual(
@@ -108,6 +108,30 @@ class NumRcptsMatcherTest(unittest.TestCase):
         self.assertEqual(
             MatcherResult.MATCH,
             match_num_rcpts({'max_rcpts': 1}, tx1, rcpt_num=0))
+
+    # ~Exploder downstream
+    def test_single_tx(self) -> None:
+        logging.debug('no group')
+        tx0 = TransactionMetadata(
+            mail_from=Mailbox('alice@example.com'),
+            mail_response=Response(),
+            rcpt_to=[Mailbox('bob0@example.com'),
+                     Mailbox('bob1@example.com')],
+            rcpt_response=[None, None],  # inflight
+            group_index=0)
+        tx0.group = FakeTxGroup([tx0])
+
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_num_rcpts({'max_rcpts': 1}, tx0, rcpt_num = 0))
+        tx0.rcpt_response[0] = Response()
+        self.assertEqual(
+            MatcherResult.NO_MATCH,
+            match_num_rcpts({'max_rcpts': 1}, tx0, rcpt_num = 0))
+        self.assertEqual(
+            MatcherResult.MATCH,
+            match_num_rcpts({'max_rcpts': 1}, tx0, rcpt_num = 1))
+
 
 class MatchInvalidMailFromTest(unittest.TestCase):
     def test_smoke(self):

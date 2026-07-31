@@ -56,7 +56,10 @@ class StorageWriterFilter(AsyncFilter):
     create_err : bool = False
     mu : Lock
     cv : Condition
-    endpoint_yaml : Optional[EndpointYamlProvider] = None
+    endpoint_yaml_provider : Optional[EndpointYamlProvider] = None
+    endpoint_yaml : Optional[Dict[str, Any]] = None
+    sf_mode : Optional[str] = None
+    exploder : Optional[bool] = None
     sender : Optional[Sender] = None
     tx_handler : Optional[TxHandler]
 
@@ -67,7 +70,7 @@ class StorageWriterFilter(AsyncFilter):
                  rest_id : Optional[str] = None,
                  create_leased : bool = False,
                  sender : Optional[Sender] = None,
-                 endpoint_yaml : Optional[EndpointYamlProvider] = None,
+                 endpoint_yaml_provider : Optional[EndpointYamlProvider] = None,
                  tx_handler : Optional[TxHandler] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
@@ -75,22 +78,40 @@ class StorageWriterFilter(AsyncFilter):
         self.create_leased = create_leased
         self.mu = Lock()
         self.cv = Condition(self.mu)
-        self.sender = sender
-        self.endpoint_yaml = endpoint_yaml
+        self.endpoint_yaml_provider = endpoint_yaml_provider
         self.tx_handler = tx_handler
         self.upstream_cursor = []
+        self._maybe_load_endpoint_yaml(sender)
+
+    def _maybe_load_endpoint_yaml(
+            self, sender : Optional[Sender] = None) -> None:
+        if self.sender is not None or sender is None:
+            return
+        self.sender = sender
+        assert self.endpoint_yaml_provider is not None
+        if self.endpoint_yaml is not None:
+            return
+        self.endpoint_yaml = self.endpoint_yaml_provider(self.sender)
+        assert self.endpoint_yaml is not None
+        self.sf_mode = self.endpoint_yaml.get('sf_mode', None)
+        if self.sf_mode is not None:
+            assert self.sf_mode in [
+                'upstream_unavailability',  # ~submission
+                'mixed_data_response']      # ~interchange
+        chain = self.endpoint_yaml.get('chain', [])
+        self.exploder = chain[-1]['filter'] == 'exploder' if chain else False
 
     def incremental(self):
         assert self.endpoint_yaml is not None
-        yaml = self.endpoint_yaml(self.sender)
-        assert yaml is not None
-        return 'sf_mode' in yaml
+        return self.sf_mode is not None or self.exploder
 
     # AsyncFilter
     def wait(self, version, timeout
              ) -> Tuple[bool, Optional[TransactionMetadata]]:
         # cursor can be None after first update() to create with the
         # cutthrough/handoff workflow
+
+        # XXX timeout needs to be capped by s&f downstream timeout if any
 
         assert self.group_cursor is not None
         if self.version != version:
@@ -155,11 +176,9 @@ class StorageWriterFilter(AsyncFilter):
 
 
     def _timeout(self, delta : TransactionMetadata) -> int:
+        assert self.sf_mode is not None
         assert self.endpoint_yaml is not None
-        assert self.sender is not None
-        endpoint_yaml = self.endpoint_yaml(self.sender)
-        assert endpoint_yaml is not None
-        yaml = endpoint_yaml.get('downstream', {})
+        yaml = self.endpoint_yaml.get('downstream', {})
         secs = 0
         if delta.mail_from:
             secs += yaml.get('mail_timeout', 30)
@@ -170,7 +189,7 @@ class StorageWriterFilter(AsyncFilter):
 
         return int(time.time_ns()/1e6 + secs * 1e3)
 
-    def _create(self, tx : TransactionMetadata):
+    def _create(self, tx : TransactionMetadata) -> None:
         # TODO handle
         # assert len(tx.rcpt_to) <= 1
         tx_cursor = self.storage.get_transaction_cursor()
@@ -178,29 +197,24 @@ class StorageWriterFilter(AsyncFilter):
         rest_id = self.rest_id_factory()
         storage_tx = tx.copy()
         rcpt_to = None
-        if self.sender is None:
-            self.sender = tx.sender
         if len(storage_tx.rcpt_to) > 1:
             rcpt_to = storage_tx.rcpt_to
             storage_tx.rcpt_to = rcpt_to[0:1]
             rcpt_to = rcpt_to[1:]
-        for i in range(0,1):
-            if self.endpoint_yaml is None:
-                break
-            assert self.sender is not None
-            if (endpoint_yaml := self.endpoint_yaml(self.sender)) is None:
-                break
-            if (output_yaml := endpoint_yaml.get('output_handler', None)) is None:
-                break
-            if self.sender.yaml:
-                if self.sender.yaml.get('retry', None) == 'output_chain':
-                    storage_tx.retry = {}
-                if self.sender.yaml.get('notification', None) == 'output_chain':
-                    storage_tx.notification = {}
-        to = self._timeout(tx)
-        storage_tx.sf_mail_timeout = to
-        if storage_tx.rcpt_to:
-            storage_tx.sf_rcpt_timeout = [to] * len(storage_tx.rcpt_to)
+        self._maybe_load_endpoint_yaml()
+        assert self.endpoint_yaml is not None
+        output_yaml = self.endpoint_yaml.get('output_handler', {})
+        assert self.sender is not None
+        assert self.sender.yaml is not None
+        if self.sender.yaml.get('retry', None) == 'output_chain':
+            storage_tx.retry = {}
+        if self.sender.yaml.get('notification', None) == 'output_chain':
+            storage_tx.notification = {}
+        if self.sf_mode is not None:
+            timeout = self._timeout(tx)
+            storage_tx.sf_mail_timeout = timeout
+            if storage_tx.rcpt_to:
+                storage_tx.sf_rcpt_timeout = [timeout] * len(storage_tx.rcpt_to)
         assert self.tx_group is None
         self.tx_group = TransactionGroup([])
         storage_tx.group = self.tx_group
@@ -222,13 +236,15 @@ class StorageWriterFilter(AsyncFilter):
             self.cv.notify_all()
 
     # xxx _maybe_load()?
-    def _load(self) -> bool:
+    def _load(self, cache_only=False) -> bool:
         logging.debug(self.rest_id)
         tx = None
         if self.group_cursor is None:
             self.group_cursor = GroupCursor(self.storage, rest_id=self.rest_id)
 
         if not self.group_cursor.try_cache():
+            if cache_only:
+                return False
             if not self.group_cursor.load(tx_rest_id=self.rest_id):
                 return False
 
@@ -239,8 +255,9 @@ class StorageWriterFilter(AsyncFilter):
         tx0 = self.group_cursor.tx_cursors[0].tx
         assert tx0 is not None
         if self.sender is None:
-            self.sender = tx0.sender
-
+            if tx0.sender is None:
+                return False
+            self._maybe_load_endpoint_yaml(tx0.sender)
 
         if self.tx_group is None:
             if tx0.group is None:
@@ -399,22 +416,10 @@ class StorageWriterFilter(AsyncFilter):
         assert self.group_cursor.tx_cursors[0].tx is not None
 
         assert self.endpoint_yaml is not None
-        if self.sender is None:
-            assert self.group_cursor.tx_cursors[0].tx is not None
-            self.sender = self.group_cursor.tx_cursors[0].tx.sender
-
-        assert self.sender is not None
-        endpoint_yaml = self.endpoint_yaml(self.sender)
-        sf_mode = None
-        if endpoint_yaml is not None:
-            sf_mode = endpoint_yaml.get('sf_mode', None)
-            if sf_mode:
-                assert sf_mode in ['upstream_unavailability',  # ~submission
-                                   'mixed_data_response']      # ~interchange
-            else:
-                assert len(self.group_cursor.tx_cursors) <= 1, [
-                    c.db_id for c in self.group_cursor.tx_cursors]
-        sf_unavail = sf_mode == 'upstream_unavailability'
+        if self.sf_mode is None:
+            assert len(self.group_cursor.tx_cursors) <= 1, [
+                c.db_id for c in self.group_cursor.tx_cursors]
+        sf_unavail = self.sf_mode == 'upstream_unavailability'
 
         def copy_tx(c):
             assert c.tx is not None
@@ -559,6 +564,8 @@ class StorageWriterFilter(AsyncFilter):
         logging.debug('StorageWriterFilter._update tx_delta %s %s',
                       self.rest_id, tx_delta)
 
+        self._maybe_load_endpoint_yaml(tx.sender)
+
         if tx_delta.cancelled:
             assert self.group_cursor is not None
             for i in range(0,5):
@@ -577,9 +584,8 @@ class StorageWriterFilter(AsyncFilter):
             return TransactionMetadata()
 
         if not tx_delta:  # heartbeat
-            raise NotImplementedError()
-            # assert self.tx_cursor is not None
-            # self.tx_cursor.write_envelope(TransactionMetadata(), ping_tx=True)
+            assert self.group_cursor is not None
+            self.group_cursor.update_all(TransactionMetadata(), ping_tx=True)
             return TransactionMetadata()
 
         downstream_tx = tx.copy()
@@ -605,10 +611,16 @@ class StorageWriterFilter(AsyncFilter):
             # retrying after it succeeded the first time... possibly
             # this should keep a copy of the downstream multi-rcpt tx
             # to make sure the deltas make sense
-            if (downstream_delta.rcpt_to and
-                not self.group_cursor.tx_cursors[0].tx.rcpt_to):
+            if (self.sf_mode is None or
+                (downstream_delta.rcpt_to and
+                 not self.group_cursor.tx_cursors[0].tx.rcpt_to)):
                 delta = tx_delta.copy()
-                delta.sf_rcpt_timeout = [self._timeout(delta)] * len(delta.rcpt_to)
+                if self.sf_mode is None:
+                    downstream_delta = TransactionMetadata()
+                else:
+                    delta.sf_rcpt_timeout = [self._timeout(delta)] * len(delta.rcpt_to)
+                if delta.rcpt_to:
+                    delta.rcpt_to = [delta.rcpt_to[0]]
                 self.group_cursor.tx_cursors[0].write_envelope(delta)
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
                 # xxx rcpt_to_list_offset?
@@ -668,9 +680,6 @@ class StorageWriterFilter(AsyncFilter):
 
         logging.debug('input tx %s', tx)
 
-        assert self.endpoint_yaml is not None
-        assert self.sender is not None
-
         # TODO how often is the cursor in this SWF reused after return
         # from this call?
         if created and self.create_leased:
@@ -715,8 +724,9 @@ class StorageWriterFilter(AsyncFilter):
 
     def blob_done(self, writer) -> None:
         delta = TransactionMetadata()
-        delta.sf_data_timeout = self._timeout(
-            TransactionMetadata(body=writer.blob))
+        if self.sf_mode is not None:
+            delta.sf_data_timeout = self._timeout(
+                TransactionMetadata(body=writer.blob))
         assert self.group_cursor is not None
         self.group_cursor.blob_done(writer.blob, delta)
 
@@ -761,12 +771,8 @@ class StorageWriterFilter(AsyncFilter):
 
 
     def check_cache(self) -> Optional[AsyncFilter.CheckTxResult]:
-        if self.group_cursor is None:
-            assert self.rest_id is not None
-            self.group_cursor = GroupCursor(self.storage, rest_id=self.rest_id)
-            if not self.group_cursor.try_cache():
-                return None
-
+        if not self._load(cache_only=True):
+            return None
         tx = self._get()
         v = self.version
         assert v is not None

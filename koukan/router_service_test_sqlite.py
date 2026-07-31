@@ -5,6 +5,7 @@ from koukan.router_service_test import RouterServiceTest
 import koukan.sqlite_test_utils as sqlite_test_utils
 
 class RouterServiceTestSqlite(RouterServiceTest):
+    router_yaml = 'router_service_test-router.yaml'
     def _setup_storage(self):
         self.dir, self.storage_url = sqlite_test_utils.create_temp_sqlite_for_test()
 

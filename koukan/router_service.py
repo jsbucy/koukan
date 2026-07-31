@@ -256,7 +256,7 @@ class Service:
             rest_id_factory=self.rest_id_factory,
             create_leased=True,
             sender = sender,
-            endpoint_yaml = self.get_endpoint_yaml,
+            endpoint_yaml_provider = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
@@ -288,7 +288,7 @@ class Service:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.rest_id_factory,
-            endpoint_yaml = self.get_endpoint_yaml,
+            endpoint_yaml_provider = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx,
             create_leased=True)
 
@@ -323,12 +323,18 @@ class Service:
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
-    def _notification_endpoint(self):
+    def _notification_endpoint(self, sender : Sender
+                               ) -> Optional[Tuple[AsyncFilter, Sender]]:
+        assert self.filter_chain_factory is not None
+        if (s := self.filter_chain_factory.get_sender(sender)) is None:
+            return None
+        sender = s
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=False,
-            endpoint_yaml = self.get_endpoint_yaml)
+            sender = sender,
+            endpoint_yaml_provider = self.get_endpoint_yaml), sender
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,

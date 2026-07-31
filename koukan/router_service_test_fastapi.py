@@ -2,6 +2,7 @@ import logging
 import unittest
 from koukan.router_service_test import RouterServiceTest
 import koukan.postgres_test_utils as postgres_test_utils
+from parameterized import parameterized_class
 
 def setUpModule():
     postgres_test_utils.setUpModule()
@@ -9,7 +10,15 @@ def setUpModule():
 def tearDownModule():
     postgres_test_utils.tearDownModule()
 
+@parameterized_class(('router_yaml',), [
+    ('router_service_test-router.yaml',),
+    ('router_service_test-router-exploder.yaml',)])
 class RouterServiceTestFastApi(RouterServiceTest):
+    def setUp(self):
+        if self.__class__ == RouterServiceTestFastApi:
+            raise unittest.SkipTest("Skipping base class tests")
+        super().setUp()
+
     def _setup_storage(self):
         self.pg, self.storage_url = postgres_test_utils.setup_postgres()
 
