@@ -354,8 +354,6 @@ class Service:
             heartbeat=self.output_executor.ping_watchdog)
         try:
             handler.handle()
-        except Exception as e:
-            logging.exception('Service.handle_tx(): OutputHandler.handle')
         finally:
             if storage_tx.in_attempt:
                 logging.error(

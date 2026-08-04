@@ -277,9 +277,6 @@ class OutputHandler:
                         # to finally as it is?
                         continue
 
-            # XXX don't swallow exceptions here?
-            except Exception as e:
-                logging.exception('uncaught exception in OutputHandler')
             finally:
                 done = env_kwargs.get('finalize_attempt', False)
                 assert not self.cursor.input_done or done
@@ -312,7 +309,7 @@ class OutputHandler:
                 if done and not self.tx.cancelled:
                     self.tx.cancelled = True
                     self.filter_chain.update()
-        logging.debug('done %s', self.rest_id)
+                logging.debug('done %s', self.rest_id)
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:

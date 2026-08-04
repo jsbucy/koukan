@@ -89,6 +89,64 @@ class RouterServiceTest(unittest.TestCase):
     def _setup_storage(self):
         raise NotImplementedError()
 
+    def _exp(self, mail_resp : Optional[Response],
+             expected_mail_from : Optional[str],
+             rcpt_resp : Optional[Response],
+             expected_rcpt_to : Optional[str],
+             data_resp : Optional[Response],
+             expected_body : Optional[bytes],
+             expected_body_substr : Optional[bytes],
+             tx : TransactionMetadata,
+             tx_delta : TransactionMetadata
+             ) -> TransactionMetadata:
+        if tx.cancelled:
+            return TransactionMetadata()
+        prev = tx.copy()
+        if expected_mail_from is not None:
+            if tx_delta.mail_from is not None:
+                self.assertEqual(expected_mail_from, tx_delta.mail_from.mailbox)
+        if mail_resp is not None:
+            if tx_delta.mail_from is not None:
+                tx.mail_response = mail_resp
+
+        if expected_rcpt_to is not None:
+            if tx_delta.rcpt_to:
+                def mailbox(mailbox : Optional[Mailbox]) -> str:
+                    assert mailbox is not None
+                    return mailbox.mailbox
+                self.assertEqual([expected_rcpt_to],
+                                 [mailbox(r) for r in tx_delta.rcpt_to])
+
+        if rcpt_resp is not None:
+            if tx_delta.rcpt_to:
+                tx.rcpt_response = [rcpt_resp]
+        if data_resp is not None:
+            if tx_delta._body_last():
+                tx.data_response = data_resp
+                assert isinstance(tx.body, Blob)
+                if expected_body is not None:
+                    self.assertEqual(expected_body, tx.body.pread(0))
+                elif expected_body_substr is not None:
+                    body_bytes = tx.body.pread(0)
+                    assert body_bytes is not None
+                    self.assertIn(expected_body_substr, body_bytes)
+
+        return prev.delta(tx)
+
+    def add_expectation(self, endpoint,
+                        mail_response : Optional[Response] = None,
+                        rcpt_response : Optional[Response] = None,
+                        data_response : Optional[Response] = None,
+                        expected_mail_from : Optional[str] = None,
+                        expected_rcpt_to : Optional[str] = None,
+                        expected_body : Optional[bytes] = None,
+                        expected_body_substr : Optional[bytes] = None):
+        endpoint.add_expectation(
+            partial(self._exp, mail_response, expected_mail_from,
+                    rcpt_response, expected_rcpt_to,
+                    data_response,
+                    expected_body, expected_body_substr))
+
     def setUp(self):
         if self.__class__ == RouterServiceTest:
             raise unittest.SkipTest("Skipping base class tests")
@@ -113,25 +171,15 @@ class RouterServiceTest(unittest.TestCase):
         self.client_provider = RestEndpointClientProvider()
 
         # probe for startup
-        def exp(tx, tx_delta):
-            logging.debug(tx)
-            logging.debug(tx_delta)
-            if tx_delta.cancelled:
-                tx.fill_inflight_responses(Response(450))
-            if tx.cancelled:
-                return
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201, 'probe mail ok')
-            if tx_delta.rcpt_to:
-                tx.rcpt_response = [Response(202)]
 
         for i in range(0,10):
             logging.info('RouterServiceTest.setUp probe %d', i)
 
             upstream = FakeFilter()
-            upstream.add_expectation(exp)
-            upstream.add_expectation(exp)
-            upstream.add_expectation(exp)
+            for j in range(0, 3):
+                self.add_expectation(upstream,
+                                     Response(201, 'probe mail ok'),
+                                     Response(202), Response(203))
 
             self.add_endpoint(upstream)
 
@@ -227,22 +275,9 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(body, last=True))
         tx.merge_from(delta)
 
-        def exp(tx, tx_delta):
-            logging.debug(tx)
-            logging.debug(tx_delta)
-            # xxx verify mail/rcpt
-            if tx_delta.mail_from:
-                tx.mail_response=Response(201)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response=[Response(202)]
-            if tx.body and tx.body.finalized():
-                self.assertIn(body, tx.body.pread(0))
-                tx.data_response=Response(203)
-
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
-        upstream_endpoint.add_expectation(exp)
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0, 3):
+            self.add_expectation(upstream_endpoint, Response(201), Response(202), Response(203))
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(delta)
@@ -291,16 +326,9 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@example.com')])
             #inline_body=body)
 
-        def exp(tx, tx_delta):
-            time.sleep(1)
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0,3):
+            self.add_expectation(upstream_endpoint, Response(201), Response(202), Response(203))
         self.add_endpoint(upstream_endpoint)
 
         post_resp = rest_endpoint.client.post(
@@ -369,15 +397,9 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)],
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0,3):
+            self.add_expectation(upstream_endpoint, Response(201), Response(202), Response(203))
         self.add_endpoint(upstream_endpoint)
 
         tx.merge_from(delta)
@@ -423,14 +445,8 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        self.add_expectation(upstream_endpoint, Response(201), Response(202))
         self.add_endpoint(upstream_endpoint)
 
         tx.merge_from(delta)
@@ -438,12 +454,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0,2):
+            self.add_expectation(upstream_endpoint, data_response=Response(203))
 
 
         body = 200000 * b'hello, '
@@ -483,14 +495,8 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                mail_response=Response(201),
-                rcpt_response=[Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        self.add_expectation(upstream_endpoint, Response(201), Response(202))
         self.add_endpoint(upstream_endpoint)
 
         tx.merge_from(delta)
@@ -498,12 +504,8 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [202])
 
-        def exp(tx, tx_delta):
-            upstream_delta=TransactionMetadata(
-                data_response=Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0, 2):
+            self.add_expectation(upstream_endpoint, data_response=Response(203))
 
         def data():
             yield b'hello, '
@@ -557,16 +559,9 @@ class RouterServiceTest(unittest.TestCase):
             mail_from=Mailbox('alice@example.com'),
             rcpt_to=[Mailbox('bob@example.com')])
 
-        def exp(tx, tx_delta):
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response=[Response(402)]
-            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
         for i in range(0,2):
-            upstream_endpoint.add_expectation(exp)
+            self.add_expectation(upstream_endpoint, Response(201), Response(402))
         self.add_endpoint(upstream_endpoint)
 
         tx.merge_from(delta)
@@ -574,14 +569,7 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(tx.mail_response.code, 201)
         self.assertEqual([r.code for r in tx.rcpt_response], [402])
 
-        def exp_body(tx, tx_delta):
-            self.assertIsNotNone(tx.body)
-            upstream_delta = TransactionMetadata()
-            tx.fill_inflight_responses(Response(550), upstream_delta)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-
-        upstream_endpoint.add_expectation(exp_body)
+        self.add_expectation(upstream_endpoint, data_response=Response(550))
 
         body_url = rest_endpoint.rest_upstream_tx.body.reuse_uri.parsed_uri
 
@@ -607,22 +595,9 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(200, resp.status_code)
 
 
-        def exp_body2(tx, tx_delta):
-            self.assertEqual(data, tx.body.pread(0))
-            self.assertIsNone(tx.group)
-            prev = tx.copy()
-            if tx.cancelled:
-                return TransactionMetadata()
-            if tx_delta.mail_from:
-                tx.mail_response=Response(201)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response=[Response(202)]
-            if tx._body_last():
-                tx.data_response=Response(203)
-            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
         for i in range(0,2):
-            upstream_endpoint.add_expectation(exp_body2)
+            self.add_expectation(upstream_endpoint, Response(201), Response(202), Response(203), expected_body=data)
         self.add_endpoint(upstream_endpoint)
 
         logging.debug(self.service.storage.debug_dump())
@@ -669,25 +644,11 @@ class RouterServiceTest(unittest.TestCase):
                             body_filename=body_file.name)
 
         upstream_endpoint = FakeFilter()
-        def exp_env(tx, tx_delta):
-            upstream_delta = TransactionMetadata(
-                mail_response = Response(201),
-                rcpt_response = [Response(202)])
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        def exp_body(tx, tx_delta):
-            if tx.body is None or not tx.body.finalized():
-                return TransactionMetadata()
-            self.assertEqual(tx.body.pread(0), body_utf8)
-            upstream_delta = TransactionMetadata(
-                data_response = Response(203))
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream_endpoint.add_expectation(exp_env)
-        upstream_endpoint.add_expectation(exp_body)
-        upstream_endpoint.add_expectation(exp_body)
+        self.add_expectation(
+            upstream_endpoint, Response(201), Response(202))
+        for i in range(0, 2):
+            self.add_expectation(upstream_endpoint, data_response=Response(203))
         self.add_endpoint(upstream_endpoint)
-
 
         sender.send('bob@example.com')
 
@@ -697,22 +658,11 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(203, sender.tx_json['data_response']['code'])
 
         upstream_endpoint = FakeFilter()
-        def exp2(tx, tx_delta):
-            logging.debug(tx)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response = [Response(202)]
-
-            if tx_delta.body is not None:
-                self.assertTrue(isinstance(tx.body, Blob))
-                if tx_delta.body.finalized():
-                    self.assertEqual(tx.body.pread(0), body_utf8)
-                    tx.data_response = Response(203)
-            return prev.delta(tx)
-        upstream_endpoint.add_expectation(exp2)
-        upstream_endpoint.add_expectation(exp2)
+        for i in range(0, 2):
+            self.add_expectation(
+                upstream_endpoint,
+                Response(201), Response(202), Response(203),
+                expected_body=body_utf8)
         self.add_endpoint(upstream_endpoint)
 
         sender.force_reuse = True
@@ -741,13 +691,7 @@ class RouterServiceTest(unittest.TestCase):
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
         if not self.exploder():
-            def exp_mail(tx, tx_delta):
-                logging.debug(tx)
-                prev = tx.copy()
-                if tx_delta.mail_from:
-                    tx.mail_response = Response(201, 'upstream mail ok')
-                return prev.delta(tx)
-            upstream_endpoint.add_expectation(exp_mail)
+            self.add_expectation(upstream_endpoint, Response(201, 'upstream mail ok'))
 
         logging.info('testExploderMultiRcpt start tx')
         delta = TransactionMetadata(
@@ -757,25 +701,17 @@ class RouterServiceTest(unittest.TestCase):
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
 
-        self.check_mail_response(201, 'upstream mail ok', tx.mail_response)
-
-        def exp_rcpt(i, tx, tx_delta):
-            logging.debug(tx)
-            logging.debug(tx_delta)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201 + i)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response.append(
-                    Response(203 + i, 'upstream rcpt %d' % i))
-            if tx.body and tx.body.finalized():
-                self.assertEqual(tx.body.pread(0), b'Hello, World!')
-                tx.data_response = Response(
-                    205 + i, 'upstream data %d' % i)
-            return prev.delta(tx)
+        if self.exploder():
+            self.check_mail_response(250, 'MAIL ok (exploder noop)',
+                                     tx.mail_response)
+        else:
+            self.check_mail_response(201, 'upstream mail ok', tx.mail_response)
 
         for i in range(0,3):
-            upstream_endpoint.add_expectation(partial(exp_rcpt, 0))
+            self.add_expectation(upstream_endpoint,
+                                 Response(201, 'upstream mail ok'),
+                                 Response(203, 'upstream rcpt 0'),
+                                 Response(205))
 
         logging.info('testExploderMultiRcpt patch rcpt1')
         prev = tx.copy()
@@ -790,7 +726,11 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint2)
 
         for i in range(0, 3):
-            upstream_endpoint2.add_expectation(partial(exp_rcpt, 1))
+            self.add_expectation(
+                upstream_endpoint2, Response(202),
+                Response(204, 'upstream rcpt 1'),
+                Response(206))
+
 
         logging.info('testExploderMultiRcpt patch rcpt2')
         prev = tx.copy()
@@ -961,22 +901,14 @@ class RouterServiceTest(unittest.TestCase):
         rest_endpoint = self.create_endpoint(
             static_base_url=self.router_url)
 
-        def exp(tx, tx_delta):
-            logging.debug(tx)
-            if tx.cancelled:
-                return TransactionMetadata()
-            self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
-            self.assertEqual([m.mailbox for m in tx.rcpt_to],
-                             ['bob@example.com'])
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201, 'mail ok upstream')
-            if tx_delta.rcpt_to:
-                tx.rcpt_response = [Response(402)]
-            return prev.delta(tx)
         upstream_endpoint = FakeFilter()
         for i in range(0, 3):
-            upstream_endpoint.add_expectation(exp)
+            self.add_expectation(
+                upstream_endpoint,
+                mail_response=Response(201, 'mail ok upstream'),
+                expected_mail_from='alice@example.com',
+                rcpt_response=Response(402),
+                expected_rcpt_to='bob@example.com')
         self.add_endpoint(upstream_endpoint)
 
         logging.info('test_notification start tx')
@@ -1004,19 +936,14 @@ class RouterServiceTest(unittest.TestCase):
         for i in range(0,2):
             logging.debug('test_notification upstream tx %d', i)
             upstream_endpoint2 = FakeFilter()
-            def exp2(tx, tx_delta):
-                logging.debug(tx)
-                if tx.cancelled:
-                    return TransactionMetadata()
-                self.assertEqual(tx.mail_from.mailbox, 'alice@example.com')
-                self.assertEqual([m.mailbox for m in tx.rcpt_to],
-                                 ['bob@example.com'])
-                prev = tx.copy()
-                tx.mail_response = Response(201, 'mail ok (upstream)')
-                tx.rcpt_response = [Response(402)]
-                return prev.delta(tx)
             for j in range(0, 4):
-                upstream_endpoint2.add_expectation(exp2)
+                self.add_expectation(
+                    upstream_endpoint2,
+                    mail_response=Response(201, 'mail ok (upstream)'),
+                    expected_mail_from='alice@example.com',
+                    rcpt_response=Response(402),
+                    expected_rcpt_to='bob@example.com',
+                    data_response=Response(550))
 
             logging.debug('dequeue attempt')
             self.add_endpoint(upstream_endpoint2)
@@ -1025,22 +952,15 @@ class RouterServiceTest(unittest.TestCase):
             if i == 1:
                 logging.debug('expect dsn')
                 dsn_endpoint = FakeFilter()
-                def exp_dsn(tx, tx_delta):
-                    logging.debug(tx)
-                    self.assertEqual(tx.mail_from.mailbox, '')
-                    self.assertEqual([m.mailbox for m in tx.rcpt_to],
-                                     ['alice@example.com'])
-                    dsn = tx.body.pread(0)
-                    logging.debug('test_notification %s', dsn)
-                    self.assertIn(b'subject: Delivery Status Notification', dsn)
-
-                    prev = tx.copy()
-                    tx.mail_response = Response(203)
-                    tx.rcpt_response = [Response(204)]
-                    tx.data_response = Response(205)
-                    return prev.delta(tx)
                 for j in range(0,2):
-                    dsn_endpoint.add_expectation(exp_dsn)
+                    self.add_expectation(
+                        dsn_endpoint,
+                        mail_response=Response(203),
+                        expected_mail_from='',
+                        rcpt_response=Response(204),
+                        expected_rcpt_to='alice@example.com',
+                        data_response=Response(205),
+                        expected_body_substr=b'subject: Delivery Status Notification')
                 logging.debug('dequeue dsn')
                 self.add_endpoint(dsn_endpoint)
                 self._dequeue()
@@ -1061,39 +981,29 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(b'Hello, World!', last=True),
             remote_host=HostPort('1.2.3.4', 12345))
 
-        def exp_rcpt1(tx, tx_delta):
-            logging.debug(tx)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response=Response(201, 'mail ok (upstream)')
-            if tx_delta.rcpt_to:
-                self.assertEqual(
-                    ['bob1@example.com'], [r.mailbox for r in tx.rcpt_to])
-                tx.rcpt_response=[Response(202)]
-            if tx_delta.body and tx_delta.body.finalized():
-                tx.data_response = Response(203)
-            return prev.delta(tx)
+        upstream = FakeFilter()
+        logging.debug(id(upstream))
+        for i in range(0, 3):
+            self.add_expectation(
+                upstream,
+                mail_response=Response(201, 'mail ok (upstream)'),
+                expected_rcpt_to='bob1@example.com',
+                rcpt_response=Response(202),
+                data_response=Response(203))
+        self.add_endpoint(upstream)
 
-        def exp_rcpt2(tx, tx_delta):
-            logging.debug(tx)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response=Response(201, 'mail ok (upstream)')
-            if tx_delta.rcpt_to:
-                self.assertEqual(
-                    ['bob2@example.com'], [r.mailbox for r in tx.rcpt_to])
-                tx.rcpt_response=[Response(202)]
-            if tx_delta.body and tx_delta.body.finalized():
-                    tx.data_response = Response(503)
-            return prev.delta(tx)
-        exp_rcpt = [exp_rcpt1, exp_rcpt2]
-        # output for each of rcpt1, rcpt2
-        for j in range(0,2):
-            upstream = FakeFilter()
-            logging.debug(id(upstream))
-            for k in range(0,3):  # cancellation
-                upstream.add_expectation(exp_rcpt[j])
-            self.add_endpoint(upstream)
+        upstream = FakeFilter()
+        logging.debug(id(upstream))
+        for i in range(0, 3):
+            self.add_expectation(
+                upstream,
+                mail_response=Response(201, 'mail ok (upstream)'),
+                rcpt_response=Response(202),
+                expected_rcpt_to='bob2@example.com',
+                data_response=Response(503))
+        self.add_endpoint(upstream)
+
+
         tx.merge_from(delta)
         rest_endpoint.on_update(delta, 10)
         logging.debug('RouterServiceTest.test_notification after update %s',
@@ -1106,38 +1016,20 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(250, tx.data_response.code)
         self.assertIn('store&forward', tx.data_response.message)
 
-        def exp_no_final_notification(tx, tx_delta):
-            logging.debug(tx)
-            self.assertTrue(tx.cancelled)
-            return TransactionMetadata()
-
         # no_final_notification OutputHandler handler for the rcpt that failed
         for i in range(0,1):
             unused_upstream_endpoint = FakeFilter()
-            unused_upstream_endpoint.add_expectation(exp_no_final_notification)
+            self.add_expectation(unused_upstream_endpoint)
             logging.debug(id(unused_upstream_endpoint))
             self.add_endpoint(unused_upstream_endpoint)
 
         dsn_endpoint = FakeFilter()
         logging.debug(id(dsn_endpoint))
-        def exp_dsn(tx, tx_delta):
-            logging.error(tx)
-            self.assertEqual('', tx.mail_from.mailbox)
-            self.assertEqual('alice@example.com', tx.rcpt_to[0].mailbox)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response=Response(250)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response=[Response(250)]
-
-            if tx_delta.body and tx_delta.body.finalized():
-                dsn = tx.body.pread(0)
-                logging.debug('test_notification %s', dsn)
-                self.assertIn(b'subject: Delivery Status Notification', dsn)
-                tx.data_response=Response(250)
-            return prev.delta(tx)
         for i in range(0,2):
-            dsn_endpoint.add_expectation(exp_dsn)
+            self.add_expectation(
+                dsn_endpoint,
+                Response(250), Response(250), Response(250),
+                expected_body_substr=b'subject: Delivery Status Notification')
         self.add_endpoint(dsn_endpoint)
 
         # no_final_notification(bob2) + dsn output
@@ -1160,30 +1052,16 @@ class RouterServiceTest(unittest.TestCase):
         self.add_endpoint(upstream_endpoint)
 
         logging.info('test_message_builder start 1st tx')
-        read_body = False
-        def exp(tx, tx_delta):
-            logging.debug('test_message_builder.exp %s', tx)
-            self.assertEqual('alice@example.com', tx.mail_from.mailbox)
-            self.assertEqual(['bob1@example.com'],
-                             [m.mailbox for m in tx.rcpt_to])
-            upstream_delta = TransactionMetadata()
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(201)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response = [Response(202)]
-            if tx_delta.body is None or not tx_delta.body.finalized():
-                return prev.delta(tx)
-            body = tx.body.pread(0)
-            logging.debug(body)
-            self.assertIn(b'subject: hello\r\n', body)
-            tx.data_response = Response(203)
-            nonlocal read_body
-            read_body = True
-            return prev.delta(tx)
 
         for i in range(0,3):
-            upstream_endpoint.add_expectation(exp)
+            self.add_expectation(
+                upstream_endpoint,
+                mail_response=Response(201),
+                expected_mail_from='alice@example.com',
+                rcpt_response=Response(202),
+                expected_rcpt_to='bob1@example.com',
+                data_response=Response(203),
+                expected_body_substr=b'subject: hello\r\n')
 
         body_file = tempfile.NamedTemporaryFile()
         body = 'hello, world!'
@@ -1213,37 +1091,21 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(201, sender.tx_json['mail_response']['code'])
         self.assertEqual([202], [r['code'] for r in sender.tx_json['rcpt_response']])
         self.assertEqual(203, sender.tx_json['data_response']['code'])
-        self.assertTrue(read_body)
 
         logging.debug('start second tx')
 
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
 
-        read_body = False
-        def exp2(tx, tx_delta):
-            logging.debug('test_message_builder.exp2 %s', tx)
-            self.assertEqual('alice@example.com', tx.mail_from.mailbox)
-            self.assertEqual(['bob2@example.com'],
-                             [m.mailbox for m in tx.rcpt_to])
-            upstream_delta = TransactionMetadata()
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response = Response(204)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response = [Response(205)]
-            if tx_delta.body is None or not tx_delta.body.finalized():
-                return prev.delta(tx)
-            body = tx.body.pread(0)
-            logging.debug(body)
-            self.assertIn(b'subject: hello\r\n', body)
-            tx.data_response = Response(206)
-            nonlocal read_body
-            read_body = True
-            return prev.delta(tx)
-
         for i in range(0,2):
-            upstream_endpoint.add_expectation(exp2)
+            self.add_expectation(
+                upstream_endpoint,
+                mail_response=Response(204),
+                expected_mail_from='alice@example.com',
+                rcpt_response=Response(205),
+                expected_rcpt_to='bob2@example.com',
+                data_response=Response(206),
+                expected_body_substr=b'subject: hello\r\n')
 
         sender.force_reuse = True
         sender.send('bob2@example.com')
@@ -1251,7 +1113,6 @@ class RouterServiceTest(unittest.TestCase):
         self.assertEqual(204, sender.tx_json['mail_response']['code'])
         self.assertEqual([205], [r['code'] for r in sender.tx_json['rcpt_response']])
         self.assertEqual(206, sender.tx_json['data_response']['code'])
-        self.assertTrue(read_body)
 
     def test_receive_parsing(self):
         logging.info('RouterServiceTest.test_receive_parsing')
@@ -1448,24 +1309,17 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
-        def exp_add_route(tx, tx_delta):
-            logging.debug(tx)
-            #self.assertEqual('submission-sor', tx.host)
-            prev = tx.copy()
-            if tx.mail_from and not tx.mail_response:
-                tx.mail_response = mail_resp
-            if tx.rcpt_to and not tx.rcpt_response:
-                tx.rcpt_response = [rcpt_resp]
-            if tx.body and tx.body.finalized() and not tx.data_response:
-                tx.data_response = data_resp
-            return prev.delta(tx)
         add_route_endpoint = FakeFilter()
-        add_route_endpoint.add_expectation(exp_add_route)
-        add_route_endpoint.add_expectation(exp_add_route)
+        for i in range(0,3):
+            self.add_expectation(
+                add_route_endpoint, mail_resp, rcpt_resp, data_resp)
         self.add_endpoint(add_route_endpoint)
 
         def exp_upstream(tx, tx_delta):
             logging.debug(tx)
+            if tx.cancelled:
+                return TransactionMetadata()
+
             #self.assertEqual('sor', tx.host)
             prev = tx.copy()
             if tx.mail_from and not tx.mail_response:
@@ -1476,8 +1330,8 @@ class RouterServiceTest(unittest.TestCase):
                 tx.data_response = Response(205)
             return prev.delta(tx)
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp_upstream)
-        upstream_endpoint.add_expectation(exp_upstream)
+        for i in range(0,3):
+            upstream_endpoint.add_expectation(exp_upstream)
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.downstream_tx.merge_from(delta)
@@ -1526,6 +1380,8 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(body, last=True))
 
         def exp_add_route(tx, tx_delta) -> TransactionMetadata:
+            if tx.cancelled:
+                return TransactionMetadata()
             logging.debug(tx)
             self.assertEqual('sor', tx.sender.name)
             prev = tx.copy()
@@ -1537,11 +1393,13 @@ class RouterServiceTest(unittest.TestCase):
                 tx.data_response=Response(206)
             return prev.delta(tx)
         add_route_endpoint = FakeFilter()
-        for i in range(0,2):
+        for i in range(0,3):
             add_route_endpoint.add_expectation(exp_add_route)
         self.add_endpoint(add_route_endpoint)
 
         def exp_upstream(tx, tx_delta) -> TransactionMetadata:
+            if tx.cancelled:
+                return TransactionMetadata()
             logging.debug(tx)
             self.assertEqual('submission', tx.sender.name)
             self.assertEqual('submission-sf-sor', tx.sender.tag)
@@ -1554,7 +1412,7 @@ class RouterServiceTest(unittest.TestCase):
                 tx.data_response=Response(205)
             return prev.delta(tx)
         upstream_endpoint = FakeFilter()
-        for i in range(0,2):
+        for i in range(0,3):
             upstream_endpoint.add_expectation(exp_upstream)
         self.add_endpoint(upstream_endpoint)
 
@@ -1584,9 +1442,12 @@ class RouterServiceTest(unittest.TestCase):
             body=InlineBlob(body, last=True))
 
         def exp(tx, tx_delta):
+            logging.debug(tx)
+            logging.debug(tx_delta)
             raise ValueError('bad')
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0,3):
+            upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)
@@ -1613,8 +1474,11 @@ class RouterServiceTest(unittest.TestCase):
         check_response()
 
         upstream_endpoint = FakeFilter()
-        upstream_endpoint.add_expectation(exp)
+        for i in range(0,3):
+            upstream_endpoint.add_expectation(exp)
         self.add_endpoint(upstream_endpoint)
         self._dequeue(1)
         check_response()
 
+        self.assertTrue(self.service.output_executor.worker_exception)
+        self.service.output_executor.worker_exception = False
