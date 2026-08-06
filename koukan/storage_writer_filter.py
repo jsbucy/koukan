@@ -15,7 +15,7 @@ from koukan.storage import (
     GroupCursor,
     Storage,
     TransactionCursor )
-from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.storage_schema import BlobSpec
 from koukan.response import Response
 from koukan.filter import (
     AsyncFilter,
@@ -449,19 +449,8 @@ class StorageWriterFilter(AsyncFilter):
                     DownstreamResponse.SF):
                     downstream_resp_delta.retry = {}
                     downstream_resp_delta.notification = {}
-                for j in range(0,5):
-                    try:
-                        self.group_cursor.tx_cursors[i].write_envelope(
-                            downstream_resp_delta)
-                        break
-                    except VersionConflictException:
-                        logging.debug('VersionConflictException')
-                        if j == 4:
-                            raise
-                        backoff(j)
-                        if not self.group_cursor.try_cache():
-                            self.group_cursor.load()
-
+                self.group_cursor.tx_cursors[i].write_envelope(
+                    downstream_resp_delta)
 
             if sf_data:
                 sf_cursor.append(self.group_cursor.tx_cursors[i])
@@ -606,6 +595,7 @@ class StorageWriterFilter(AsyncFilter):
                     self.create_err = True
                     self.cv.notify_all()
 
+    # caller handles VersionConflictException -> http 412
     def _update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
@@ -623,24 +613,14 @@ class StorageWriterFilter(AsyncFilter):
 
         if tx_delta.cancelled:
             assert self.group_cursor is not None
-            for i in range(0,5):
-                try:
-                    self.group_cursor.update_all(
-                        tx_delta, final_attempt_reason='downstream cancelled')
-                    break
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    if i == 4:
-                        raise
-                    backoff(i)
-                    if not self.group_cursor.try_cache():
-                        self.group_cursor.load()
-            assert self.group_cursor is not None
+            self.group_cursor.update_all(
+                tx_delta, final_attempt_reason='downstream cancelled')
             return TransactionMetadata()
 
         if not tx_delta:  # heartbeat
             assert self.group_cursor is not None
-            self.group_cursor.update_all(TransactionMetadata(), ping_tx=True)
+            self.group_cursor.update_all(
+                TransactionMetadata(), ping_tx=True, max_conflict_retries=1)
             return TransactionMetadata()
 
         downstream_tx = tx.copy()
@@ -676,7 +656,8 @@ class StorageWriterFilter(AsyncFilter):
                     delta.sf_rcpt_timeout = [self._timeout(delta)] * len(delta.rcpt_to)
                 if delta.rcpt_to:
                     delta.rcpt_to = [delta.rcpt_to[0]]
-                self.group_cursor.tx_cursors[0].write_envelope(delta)
+                self.group_cursor.tx_cursors[0].write_envelope(
+                    delta, max_conflict_retries=1)
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
                 # xxx rcpt_to_list_offset?
 
@@ -713,11 +694,13 @@ class StorageWriterFilter(AsyncFilter):
                     # TODO combine these writes?
                     cursor.start_attempt()
                     # TODO option to s&f on this err?
-                    cursor.write_envelope(TransactionMetadata(
-                        rcpt_response=[
-                            Response(451, '4.5.3 too many recipients '
-                                     '(SWF could not schedule upstream)')]),
-                        finalize_attempt=True)
+                    cursor.write_envelope(
+                        TransactionMetadata(
+                            rcpt_response=[
+                                Response(451, '4.5.3 too many recipients '
+                                         '(SWF could not schedule upstream)')]),
+                        finalize_attempt=True,
+                        max_conflict_retries=1)
                     # xxx final_attempt_reason=?
                 else:
                     created = True
@@ -727,8 +710,8 @@ class StorageWriterFilter(AsyncFilter):
                 if downstream_delta.body is not None and downstream_delta._body_last():
                     downstream_delta.sf_data_timeout = self._timeout(downstream_delta)
 
-                # caller handles VersionConflictException
-                self.group_cursor.update_all(downstream_delta)
+                self.group_cursor.update_all(downstream_delta,
+                                             max_conflict_retries=1)
 
         logging.debug('StorageWriterFilter.update %s result %s',
                       self.rest_id, [c.tx for c in self.group_cursor.tx_cursors])
@@ -799,23 +782,13 @@ class StorageWriterFilter(AsyncFilter):
 
         if create:
             assert tx_body
-            for i in range(0,5):
-                try:
-                    body = self.group_cursor.tx_cursors[0].tx.body
-                    if isinstance(body, WritableBlob):
-                        return StorageWriterFilter.BlobWriter(self, body)
-                    else:
-                        assert body is None
-                    self.group_cursor.update_all(
-                        TransactionMetadata(body=BlobSpec(create_tx_body=True)))
-                    break
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    if i == 4:
-                        raise
-                    backoff(i)
-                    if not self.group_cursor.try_cache():
-                        self.group_cursor.load()
+            body = self.group_cursor.tx_cursors[0].tx.body
+            if isinstance(body, WritableBlob):
+                return StorageWriterFilter.BlobWriter(self, body)
+            else:
+                assert body is None
+            self.group_cursor.update_all(
+                TransactionMetadata(body=BlobSpec(create_tx_body=True)))
 
         blob_writer = self.group_cursor.tx_cursors[0].get_blob_for_append(
             BlobUri(tx_id=self.rest_id, blob=blob_rest_id,

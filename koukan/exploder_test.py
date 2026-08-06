@@ -14,7 +14,7 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 from koukan.storage_writer_filter import StorageWriterFilter
-from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.storage_schema import BlobSpec
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -80,15 +80,10 @@ class Rcpt:
 
             if env_delta:
                 logging.debug(env_delta)
-                try:
-                    # finalize_attempt=True if data_resp ??
-                    cursor.write_envelope(
-                        tx_delta=TransactionMetadata(),
-                        attempt_delta=env_delta)
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    time.sleep(0.3)
-                    cursor.load()
+                # finalize_attempt=True if data_resp ??
+                cursor.write_envelope(
+                    tx_delta=TransactionMetadata(),
+                    attempt_delta=env_delta)
                 err = False
                 for r in [self.mail_resp, self.rcpt_resp, data_resp]:
                     if (r is not None) and r.err():

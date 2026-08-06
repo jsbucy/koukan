@@ -303,18 +303,31 @@ class TransactionCursor:
                        notification_done : Optional[bool] = None,
                        ping_tx : bool = False,
                        attempt_delta : Optional[TransactionMetadata] = None,
-                       input_done = False,):
-        with self.parent.begin_transaction() as db_tx:
-            self._write(db_tx=db_tx,
-                        tx_delta=tx_delta,
-                        final_attempt_reason=final_attempt_reason,
-                        finalize_attempt=finalize_attempt,
-                        next_attempt_time = next_attempt_time,
-                        notification_done=notification_done,
-                        ping_tx=ping_tx,
-                        attempt_delta=attempt_delta,
-                        input_done=input_done)
-        self._update_version_cache(leased = False if finalize_attempt else None)
+                       input_done = False,
+                       max_conflict_retries=5) -> None:
+        for i in range(0, max_conflict_retries):
+            try:
+                with self.parent.begin_transaction() as db_tx:
+                    self._write(db_tx=db_tx,
+                                tx_delta=tx_delta,
+                                final_attempt_reason=final_attempt_reason,
+                                finalize_attempt=finalize_attempt,
+                                next_attempt_time = next_attempt_time,
+                                notification_done=notification_done,
+                                ping_tx=ping_tx,
+                                attempt_delta=attempt_delta,
+                                input_done=input_done)
+                self._update_version_cache(
+                    leased = False if finalize_attempt else None)
+                break
+            except VersionConflictException:
+                logging.debug('VersionConflictException %d', i)
+                if i == (max_conflict_retries - 1):
+                    raise
+                backoff(i)
+                if not self.try_cache():
+                    assert self.load()
+
 
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata,
                           require_finalized = True
@@ -1073,7 +1086,8 @@ class GroupCursor:
                    input_done : Optional[bool] = False,
                    ping_tx : Optional[bool] = None,
                    final_attempt_reason : Optional[str] = None,
-                   cursors : Optional[List[TransactionCursor]] = None):
+                   cursors : Optional[List[TransactionCursor]] = None,
+                   max_conflict_retries = 5):
         assert self._parent_db_id is not None
         assert self.parent.tx_table is not None
         assert not tx_delta or not tx_delta.rcpt_to
@@ -1081,27 +1095,40 @@ class GroupCursor:
         if cursors is None:
             cursors = self.tx_cursors
 
-        create_body = tx_delta.body is not None and isinstance(tx_delta.body, BlobSpec) and tx_delta.body.create_tx_body
+        create_body = (tx_delta.body is not None and
+                       isinstance(tx_delta.body, BlobSpec) and
+                       tx_delta.body.create_tx_body)
 
-        delta = tx_delta.copy()
-        with self.parent.begin_transaction() as db_tx:
-            for i,c in enumerate(cursors):
-                c._write(db_tx = db_tx,
-                         tx_delta = delta,
-                         final_attempt_reason = final_attempt_reason,
-                         ping_tx = ping_tx,
-                         input_done = input_done,
-                         require_finalized_blob = not create_body)
-                # xxx this still depends on the hack at the end of
-                # _write() to swap body with BlobCursor
-                if i == 0 and create_body:
-                    assert c.tx is not None
-                    delta.body = c.tx.body
+        for j in range(0, max_conflict_retries):
+            try:
+                delta = tx_delta.copy()
+                with self.parent.begin_transaction() as db_tx:
+                    for i,c in enumerate(cursors):
+                        c._write(db_tx = db_tx,
+                                 tx_delta = delta,
+                                 final_attempt_reason = final_attempt_reason,
+                                 ping_tx = ping_tx,
+                                 input_done = input_done,
+                                 require_finalized_blob = not create_body)
+                        # xxx this still depends on the hack at the end of
+                        # _write() to swap body with BlobCursor
+                        if i == 0 and create_body:
+                            assert c.tx is not None
+                            delta.body = c.tx.body
 
-        for c in cursors:
-            c._update_version_cache()
-            # xxx shouldn't toggle leased?
-            #leased = (cursor.inflight_session_id == self.parent.session_id))
+                for c in cursors:
+                    c._update_version_cache()
+                    # xxx shouldn't toggle leased?
+                    #leased = (cursor.inflight_session_id == self.parent.session_id))
+                break
+            except VersionConflictException:
+                logging.debug('VersionConflictException %d', j)
+                if j == (max_conflict_retries - 1):
+                    raise
+                backoff(j)
+                if not self.try_cache():
+                    assert self.load()
+
 
     # waits for at least one cursor to update, returns the updated
     # cursor on success, None on timeout
@@ -1166,9 +1193,14 @@ class GroupCursor:
             # note: this will update the tx/version every time and
             # wakeup the upstream, etc. debounce?
             kwargs['ping_tx'] = True  # ping last_update
+
+        # this needs a bespoke retry loop to redo the _blob_done()
+        # call in the exception path which affects the copy of the
+        # cursor for the cache
         for i in range(0,5):
             try:
-                self.update_all(tx_delta, **kwargs)
+                logging.debug('%d %s', i, kwargs)
+                self.update_all(tx_delta, max_conflict_retries = 1, **kwargs)
                 break
             except VersionConflictException:
                 logging.debug('VersionConflictException %d', i)

@@ -147,22 +147,11 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
 
         def upstream(upstream_cursor):
             time.sleep(1)
-            for i in range(0,5):
-                logging.debug(i)
-                try:
-                    upstream_cursor.start_attempt()
-                    upstream_cursor.write_envelope(
-                        TransactionMetadata(),
-                        attempt_delta=TransactionMetadata(
-                            mail_response=Response(201)))
-                    break
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    if i == 4:
-                        raise
-                    time.sleep(1)
-                    if not upstream_cursor.try_cache():
-                        assert upstream_cursor.load()
+            upstream_cursor.start_attempt()
+            upstream_cursor.write_envelope(
+                TransactionMetadata(),
+                attempt_delta=TransactionMetadata(
+                    mail_response=Response(201)))
         fut = self.executor.submit(partial(upstream, upstream_cursor))
 
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
@@ -365,18 +354,10 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             upstream_cursor.load()
         else:
             self.fail('no mail_from')
-        for i in range(0, 5):
-            try:
-                upstream_cursor.write_envelope(
-                    tx_delta = TransactionMetadata(),
-                    attempt_delta=TransactionMetadata(
-                        mail_response=Response(201)))
-            except VersionConflictException:
-                logging.debug('VersionConflictException')
-                if i == 4:
-                    raise
-                time.sleep(0.3)
-                upstream_cursor.load()
+        upstream_cursor.write_envelope(
+            tx_delta = TransactionMetadata(),
+            attempt_delta=TransactionMetadata(
+                mail_response=Response(201)))
 
         fut.result(1)
         for i in range(0,5):

@@ -7,7 +7,7 @@ import time
 from functools import partial
 
 from koukan.storage import Storage, TransactionCursor
-from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.storage_schema import BlobSpec
 from koukan.response import Response
 from koukan.output_handler import OutputHandler
 from koukan.fake_endpoints import FakeFilter, MockAsyncFilter
@@ -163,13 +163,8 @@ class OutputHandlerTest(unittest.TestCase):
             updated_tx.rcpt_to.append(Mailbox(rcpt[i]))
             delta = tx.delta(updated_tx)
             tx = updated_tx
-            while True:
-                tx_cursor.load()
-                try:
-                    tx_cursor.write_envelope(delta)
-                    break
-                except VersionConflictException:
-                    time.sleep(0.1)
+            tx_cursor.load()
+            tx_cursor.write_envelope(delta)
 
             # read rcpt resp
             for j in range(0,5):
@@ -203,13 +198,8 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp_body)
 
         # write blob
-        for i in range(0, 3):
-            try:
-                tx_cursor.write_envelope(
-                    TransactionMetadata(body=BlobSpec(create_tx_body=True)))
-                break
-            except VersionConflictException:
-                time.sleep(1)
+        tx_cursor.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='blob_rest_id'))
         blob_writer.append_data(0, body, last=True)
@@ -227,18 +217,6 @@ class OutputHandlerTest(unittest.TestCase):
 
         fut.result(timeout=5)
 
-
-
-    def write_envelope(self, cursor, tx):
-        for i in range(1,3):
-            try:
-                cursor.write_envelope(tx)
-                break
-            except VersionConflictException:
-                time.sleep(0.1)
-                cursor.load()
-        else:
-            self.fail('couldn\'t write envelope')
 
     def test_no_valid_rcpt(self):
         tx_cursor = self.storage.get_transaction_cursor()
@@ -282,7 +260,7 @@ class OutputHandlerTest(unittest.TestCase):
         updated_tx = tx.copy()
         updated_tx.rcpt_to.append(Mailbox('bob2'))
 
-        self.write_envelope(tx_cursor, tx.delta(updated_tx))
+        tx_cursor.write_envelope(tx.delta(updated_tx))
 
         while tx_cursor.tx.req_inflight():
             tx_cursor.wait(0.3)
@@ -302,16 +280,9 @@ class OutputHandlerTest(unittest.TestCase):
             endpoint.add_expectation(exp_body)
 
 
-        for i in range(0,5):
-            try:
-                tx_cursor.load()
-                tx_cursor.write_envelope(
-                    TransactionMetadata(body=BlobSpec(create_tx_body=True)))
-                break
-            except VersionConflictException:
-                time.sleep(0.2)
-        else:
-            self.fail('conflict')
+        tx_cursor.load()
+        tx_cursor.write_envelope(
+            TransactionMetadata(body=BlobSpec(create_tx_body=True)))
         blob_writer = tx_cursor.get_blob_for_append(
             BlobUri(tx_id='rest_tx_id', tx_body=True, blob='rest_blob_id'))
         d = b'hello, world!'
@@ -387,33 +358,28 @@ class OutputHandlerTest(unittest.TestCase):
         chain = FilterChain([endpoint])
 
         started = False
-        def exp_rcpt(tx, tx_delta):
+        def exp_rcpt(tx : TransactionMetadata,
+                     tx_delta : TransactionMetadata) -> TransactionMetadata:
             nonlocal started
             started = True
             logging.debug(tx)
-            time.sleep(1)
-            self.assertEqual(tx.mail_from.mailbox, 'alice')
             prev = tx.copy()
-            if tx.mail_response is None:
+            if tx_delta.mail_from:
+                self.assertEqual(tx_delta.mail_from.mailbox, 'alice')
                 tx.mail_response = Response(201)
             return prev.delta(tx)
         for i in range(0,3):
             endpoint.add_expectation(exp_rcpt)
 
-        fut = self.executor.submit(lambda: self.output('rest_tx_id', chain))
+        fut = self.executor.submit(partial(self.output, 'rest_tx_id', chain))
 
         while not started:
             logging.debug(started)
             time.sleep(0.1)
 
-        for i in range(0,2):
-            try:
-                tx_cursor.write_envelope(
-                    TransactionMetadata(cancelled=True),
-                    final_attempt_reason='downstream cancelled')
-                break
-            except VersionConflictException:
-                tx_cursor.load()
+        tx_cursor.write_envelope(
+            TransactionMetadata(cancelled=True),
+            final_attempt_reason='downstream cancelled')
 
         fut.result()  # wait/propagate exceptions
 
