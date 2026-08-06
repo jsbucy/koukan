@@ -62,8 +62,9 @@ class StorageWriterFilter(AsyncFilter):
     exploder : Optional[bool] = None
     sender : Optional[Sender] = None
     tx_handler : Optional[TxHandler]
-
     tx_group : Optional[TransactionGroup] = None
+    # per _timeout()
+    next_upstream_timeout : Optional[int] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -105,13 +106,11 @@ class StorageWriterFilter(AsyncFilter):
         assert self.endpoint_yaml is not None
         return self.sf_mode is not None or self.exploder
 
-    # AsyncFilter
+    # AsyncFilter (for Exploder/AsyncFilterWrapper)
     def wait(self, version, timeout
              ) -> Tuple[bool, Optional[TransactionMetadata]]:
         # cursor can be None after first update() to create with the
         # cutthrough/handoff workflow
-
-        # XXX timeout needs to be capped by s&f downstream timeout if any
 
         assert self.group_cursor is not None
         if self.version != version:
@@ -123,11 +122,12 @@ class StorageWriterFilter(AsyncFilter):
             return False, None
         success, cloned = res
         logging.debug([c.version for c in self.group_cursor.tx_cursors])
-        assert success
+        if not success:
+            return False, None
         return True, self._get() if cloned else None
 
 
-    # AsyncFilter
+    # AsyncFilter (for RestHandler)
     async def wait_async(self, version, timeout
                          ) -> Tuple[bool, Optional[TransactionMetadata]]:
         assert self.group_cursor is not None
@@ -135,14 +135,30 @@ class StorageWriterFilter(AsyncFilter):
             return True, None
         logging.debug(version)
         logging.debug([c.version for c in self.group_cursor.tx_cursors])
+
+        # if there's a s&f downstream timeout, cap timeout by that,
+        # _get() after will set s&f response and bump version.
+        upstream = False
+        if self.next_upstream_timeout is not None:
+            now_ms = self._millis()
+            logging.debug('%d %d', self.next_upstream_timeout, now_ms)
+            upstream_timeout = max(
+                self.next_upstream_timeout - now_ms, 0) / 1000.0
+            logging.debug('%f %f', timeout, upstream_timeout)
+            timeout = min(timeout, upstream_timeout)
+            upstream = timeout == upstream_timeout
+
         res = await self.group_cursor.wait_async(timeout)
         logging.debug(res)
-        if res is None:
+        if res is None and not upstream:
             return False, None
-        success, cloned = res
-        logging.debug([c.version for c in self.group_cursor.tx_cursors])
-        assert success
-        return True, self._get() if cloned else None
+        if res is not None:
+            success, cloned = res
+            assert success
+            return True, self._get() if cloned else None
+        elif res is None and upstream:
+            return True, self._get()
+        assert False, 'bug'
 
     def release_transaction_cursor(
             self, i : int) -> Optional[TransactionCursor]:
@@ -156,7 +172,8 @@ class StorageWriterFilter(AsyncFilter):
                     'StorageWriterFilter.get_transaction_cursor timeout %s',
                     self.create_err)
                 return None
-            elif len(self.upstream_cursor) <= i or self.upstream_cursor[i] is None:
+            elif (len(self.upstream_cursor) <= i or
+                  self.upstream_cursor[i] is None):
                 return None
             logging.debug('StorageWriterFilter.release_transaction_cursor')
             cursor = self.upstream_cursor[i]
@@ -174,6 +191,8 @@ class StorageWriterFilter(AsyncFilter):
             version += i.version
         return version
 
+    def _millis(self):
+        return time.time_ns() / 1e6
 
     def _timeout(self, delta : TransactionMetadata) -> int:
         assert self.sf_mode is not None
@@ -187,7 +206,7 @@ class StorageWriterFilter(AsyncFilter):
         if delta._body_last():
             secs += yaml.get('data_timeout', 60)
 
-        return int(time.time_ns()/1e6 + secs * 1e3)
+        return int(self._millis() + secs * 1e3)
 
     def _create(self, tx : TransactionMetadata) -> None:
         # TODO handle
@@ -235,6 +254,17 @@ class StorageWriterFilter(AsyncFilter):
             # self.rest_id = rest_id
             self.cv.notify_all()
 
+    def _update_timeout(self, downstream_resp : Optional[int], timeout):
+        if downstream_resp is not None and downstream_resp:
+            return
+        if timeout is None:
+            return
+        elif self.next_upstream_timeout is None:
+            self.next_upstream_timeout = timeout
+        else:
+            self.next_upstream_timeout = min(
+                self.next_upstream_timeout, timeout)
+
     # xxx _maybe_load()?
     def _load(self, cache_only=False) -> bool:
         logging.debug(self.rest_id)
@@ -270,6 +300,33 @@ class StorageWriterFilter(AsyncFilter):
                 assert c.tx.group is None or c.tx.group is self.tx_group
                 c.tx.group = self.tx_group
 
+        # Set next_upstream_timeout to the min of all the
+        # sf...timeouts that don't have a corresponding
+        # downstream...response. This is used to cap the timeout in
+        # wait_async().
+
+        self.next_upstream_timeout = None
+        if self.group_cursor.tx_cursors:
+            tx0 = self.group_cursor.tx_cursors[0].tx
+            assert tx0 is not None
+            logging.debug(tx0)
+            self._update_timeout(
+                tx0.downstream_mail_response, tx0.sf_mail_timeout)
+        for txc in self.group_cursor.tx_cursors:
+            assert txc.tx is not None
+            logging.debug(txc.tx)
+            for i in range(0, len(txc.tx.rcpt_to)):
+                downstream_resp = None
+                if i >= len(txc.tx.sf_rcpt_timeout):
+                    continue
+                if (i < len(txc.tx.downstream_rcpt_response) and
+                    not txc.tx.downstream_rcpt_response[i]):
+                    continue
+                # placeholder non-None value
+                self._update_timeout(1, txc.tx.sf_rcpt_timeout[i])
+            self._update_timeout(
+                txc.tx.downstream_data_response, txc.tx.sf_data_timeout)
+
         return True
 
     @staticmethod
@@ -304,7 +361,7 @@ class StorageWriterFilter(AsyncFilter):
 
     def _do_sf_unavail(self, group_tx) -> List[TransactionCursor]:
         assert self.group_cursor is not None
-        now = time.time_ns()/1e6
+        now = self._millis()
 
         def any_rcpt_ok(rcpts : List[Optional[Response]]) -> bool:
             return any([r is not None and r.ok() for r in rcpts])
@@ -425,14 +482,12 @@ class StorageWriterFilter(AsyncFilter):
             assert c.tx is not None
             return c.tx.copy()
         group_tx = [copy_tx(c) for c in self.group_cursor.tx_cursors]
-
         assert self.group_cursor.tx_cursors[0].db_id is not None
 
         # convert upstream timeout/temp err to 250 s&f resp
         sf_cursor = []
         if sf_unavail:
             sf_cursor = self._do_sf_unavail(group_tx)
-
         tx = group_tx[0].copy()
         # TODO upstream mail response is most likely 250 noop from rcpt
         # router; if the config can return a real upstream response
@@ -636,9 +691,9 @@ class StorageWriterFilter(AsyncFilter):
                 # sparse as a result of this.
                 delta = TransactionMetadata(rcpt_to=[rcpt])
                 # xxx refactor
-                to = self._timeout(delta)
-                delta.sf_mail_timeout = to
-                delta.sf_rcpt_timeout = [to]
+                timeout = self._timeout(delta)
+                delta.sf_mail_timeout = timeout
+                delta.sf_rcpt_timeout = [timeout]
                 self.group_cursor.clone_tx(
                     delta, create_leased=self.create_leased)
                 assert self.tx_group is not None

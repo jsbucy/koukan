@@ -73,7 +73,7 @@ class Test:
     # - if all same major -> return that
     # - else mixed: return 250 s&f
 
-class StorageWriterFilterTest(unittest.TestCase):
+class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.db_dir, self.db_url = create_temp_sqlite_for_test()
         self.storage = Storage.connect(
@@ -109,10 +109,6 @@ class StorageWriterFilterTest(unittest.TestCase):
         time.sleep(0.1)  # xxx  still need this?
         return fut
 
-    def join(self, fut, timeout=1):
-        # t.join(timeout=timeout)
-        # self.assertFalse(t.is_alive())
-        fut.result(timeout=timeout)
 
     # TODO coverage:
     # check_cache()
@@ -149,6 +145,26 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertEqual(upstream_cursor.rest_id, 'tx_rest_id')
         self.assertIsNotNone(upstream_cursor.tx.group)
 
+        def upstream(upstream_cursor):
+            time.sleep(1)
+            for i in range(0,5):
+                logging.debug(i)
+                try:
+                    upstream_cursor.start_attempt()
+                    upstream_cursor.write_envelope(
+                        TransactionMetadata(),
+                        attempt_delta=TransactionMetadata(
+                            mail_response=Response(201)))
+                    break
+                except VersionConflictException:
+                    logging.debug('VersionConflictException')
+                    if i == 4:
+                        raise
+                    time.sleep(1)
+                    if not upstream_cursor.try_cache():
+                        assert upstream_cursor.load()
+        fut = self.executor.submit(partial(upstream, upstream_cursor))
+
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
         self.assertIsNotNone(check_cache_result := filter.check_cache())
         version, tx, leased, other_session = check_cache_result
@@ -163,6 +179,17 @@ class StorageWriterFilterTest(unittest.TestCase):
         self.assertIsNone(tx)
         self.assertTrue(leased)
         self.assertIsNone(other_session)
+
+        for i in range(0, 5):
+            filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
+            tx = filter.get()
+            prev = filter.get()
+            logging.debug(tx)
+            if tx.mail_response is not None:
+                break
+            filter.wait(filter.version, 1)
+        else:
+            self.fail('upstream timeout')
 
         filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
         prev = filter.get()
@@ -329,7 +356,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         upstream_cursor.start_attempt()
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
-        t = self.start_update(filter, tx, tx.copy())
+        fut = self.start_update(filter, tx, tx.copy())
 
         for i in range(0,5):
             if upstream_cursor.tx.mail_from is not None:
@@ -351,7 +378,7 @@ class StorageWriterFilterTest(unittest.TestCase):
                 time.sleep(0.3)
                 upstream_cursor.load()
 
-        self.join(t)
+        fut.result(1)
         for i in range(0,5):
             tx = filter.get()
             if tx.mail_response:
@@ -364,7 +391,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         tx = filter.get()
         tx_delta = TransactionMetadata(rcpt_to = [Mailbox('bob')])
         tx.merge_from(tx_delta)
-        t = self.start_update(filter, tx, tx_delta)
+        fut = self.start_update(filter, tx, tx_delta)
         for i in range(0,5):
             if len(upstream_cursor.tx.rcpt_to) == 1:
                 break
@@ -375,7 +402,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         upstream_cursor.write_envelope(
             tx_delta=TransactionMetadata(),
             attempt_delta=TransactionMetadata(rcpt_response=[Response(202)]))
-        self.join(t)
+        fut.result(1)
 
         tx = filter.get()
         self.assertEqual(
@@ -396,7 +423,7 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         tx_delta = TransactionMetadata(body=orig_filter.get().body)
         tx.merge_from(tx_delta)
-        t = self.start_update(filter, tx, tx_delta)
+        fut = self.start_update(filter, tx, tx_delta)
 
         for i in range(0,5):
             if upstream_cursor.tx.body is not None and upstream_cursor.tx.body.finalized():
@@ -410,7 +437,7 @@ class StorageWriterFilterTest(unittest.TestCase):
             tx_delta=TransactionMetadata(),
             attempt_delta=TransactionMetadata(data_response=Response(203)))
 
-        self.join(t)
+        fut.result(1)
 
         tx = filter.get()
         self.assertEqual(tx.data_response.code, 203)
@@ -467,8 +494,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         filter._create(TransactionMetadata())
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
-        t = self.start_update(filter, tx, tx)
-        self.join(t, 3)
+        fut = self.start_update(filter, tx, tx)
+        fut.result(3)
         self.assertIsNone(tx.mail_response)
 
 
@@ -501,8 +528,28 @@ class StorageWriterFilterTest(unittest.TestCase):
 
         self.assertIsNone(self.storage.load_one())
 
+    # verifies wait_async() timeout is capped by store&forward timeout
+    async def test_store_and_forward_timeout(self):
+        endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
+        endpoint_yaml.update({
+            'sf_mode': 'upstream_unavailability'})
+        filter = self.create_filter(endpoint_yaml, create_id='tx_rest_id')
+        tx = TransactionMetadata(mail_from=Mailbox('alice@example.com'))
+        filter.update(tx, tx.copy())
+
+        filter = self.create_filter(endpoint_yaml, update_id='tx_rest_id')
+        filter.check_cache()
+        self.assertIsNone(tx.mail_response)
+        start = time.monotonic()
+        await filter.wait_async(filter.version, 5)
+        done = time.monotonic()
+        self.assertLess(done - start, 2)
+        tx = filter.get()
+        self.assertEqual(250, tx.mail_response.code)
+        self.assertIn('store&forward', tx.mail_response.message)
+
     # XXX: verify notify/retry on db tx
-    def _run_test(self, t : Test):
+    async def _run_test(self, t : Test):
         endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
         endpoint_yaml.update({
             'sf_mode': t.sf_mode})
@@ -558,17 +605,17 @@ class StorageWriterFilterTest(unittest.TestCase):
         upstream_cursors = [cursor]
         upstream(cursor, t.rcpt[0])
 
-        def get_downstream():
+        async def get_downstream():
             for i in range(0,20):
                 tx = filter.get()
                 logging.debug(tx)
                 if not tx.req_inflight():
                     return tx
-                time.sleep(0.3)
+                res = await filter.wait_async(filter.version, 1)
             else:
                 self.fail('upstream timeout')
 
-        tx = get_downstream()
+        tx = await get_downstream()
 
         for i,rcpt in enumerate(t.rcpt):
             prev = tx.copy()
@@ -593,7 +640,7 @@ class StorageWriterFilterTest(unittest.TestCase):
         for i,rcpt in enumerate(t.rcpt):
             upstream(upstream_cursors[i], rcpt)
 
-        tx = get_downstream()
+        tx = await get_downstream()
 
         def check_resp(stage, exp_stage, exp_result, exp_sf, resp):
             if exp_stage > stage:
@@ -618,8 +665,8 @@ class StorageWriterFilterTest(unittest.TestCase):
 
 
     # mail temp -> sf
-    def test_single_rcpt_mail_temp(self):
-        self._run_test(Test(
+    async def test_single_rcpt_mail_temp(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.MAIL, Result.TEMP, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
@@ -627,8 +674,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # mail perm -> perm
-    def test_single_rcpt_mail_perm(self):
-        self._run_test(Test(
+    async def test_single_rcpt_mail_perm(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.MAIL, Result.PERM)],
             stage = Stage.MAIL,
             result = Result.PERM,
@@ -636,8 +683,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # mail timeout -> sf
-    def test_single_rcpt_mail_timeout(self):
-        self._run_test(Test(
+    async def test_single_rcpt_mail_timeout(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.MAIL, Result.TIMEOUT, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
@@ -645,8 +692,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # rcpt temp -> sf
-    def test_single_rcpt_rcpt_temp(self):
-        self._run_test(Test(
+    async def test_single_rcpt_rcpt_temp(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.RCPT, Result.TEMP, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
@@ -654,8 +701,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # rcpt perm -> perm
-    def test_single_rcpt_rcpt_perm(self):
-        self._run_test(Test(
+    async def test_single_rcpt_rcpt_perm(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.RCPT, Result.PERM)],
             stage = Stage.RCPT,
             result = Result.PERM,
@@ -663,8 +710,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # rcpt timeout -> sf
-    def test_single_rcpt_rcpt_timeout(self):
-        self._run_test(Test(
+    async def test_single_rcpt_rcpt_timeout(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.RCPT, Result.TIMEOUT, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
@@ -672,8 +719,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # data temp -> sf
-    def test_single_rcpt_data_temp(self):
-        self._run_test(Test(
+    async def test_single_rcpt_data_temp(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.TEMP, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
@@ -681,8 +728,8 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # data perm -> perm
-    def test_single_rcpt_data_perm(self):
-        self._run_test(Test(
+    async def test_single_rcpt_data_perm(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.PERM)],
             stage = Stage.DATA,
             result = Result.PERM,
@@ -690,24 +737,24 @@ class StorageWriterFilterTest(unittest.TestCase):
         ))
 
     # data timeout -> sf
-    def test_single_rcpt_data_timeout(self):
-        self._run_test(Test(
+    async def test_single_rcpt_data_timeout(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.TIMEOUT, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
         ))
 
-    def test_single_rcpt_success(self):
-        self._run_test(Test(
+    async def test_single_rcpt_success(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.SUCCESS)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
         ))
 
-    def test_multi_rcpt_mixed_data(self):
-        self._run_test(Test(
+    async def test_multi_rcpt_mixed_data(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.SUCCESS),
                     Recipient(Stage.DATA, Result.PERM)],
             stage = Stage.DATA,
@@ -715,8 +762,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             sf_mode = 'upstream_unavailability'
         ))
 
-    def test_multi_rcpt_group_reject(self):
-        self._run_test(Test(
+    async def test_multi_rcpt_group_reject(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.GROUP_REJECT),
                     Recipient(Stage.DATA, Result.TIMEOUT)],
             stage = Stage.DATA,
@@ -724,8 +771,8 @@ class StorageWriterFilterTest(unittest.TestCase):
             sf_mode = 'upstream_unavailability'
         ))
 
-    def test_multi_rcpt_success(self):
-        self._run_test(Test(
+    async def test_multi_rcpt_success(self):
+        await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.SUCCESS),
                     Recipient(Stage.DATA, Result.SUCCESS)],
             stage = Stage.DATA,
