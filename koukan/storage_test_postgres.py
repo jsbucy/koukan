@@ -21,12 +21,12 @@ class StorageTestPostgres(StorageTestBase):
 
         self.s = self._connect()
 
-    def _connect(self):
+    def _connect(self, session_uri='http://storage-test'):
         if self.pg is None:
             self.storage_yaml = {}
             self.pg, self.pg_url = postgres_test_utils.setup_postgres()
 
-        return Storage.connect(self.pg_url, session_uri='http://storage-test')
+        return Storage.connect(self.pg_url, session_uri=session_uri)
 
 if __name__ == '__main__':
     logging.basicConfig(

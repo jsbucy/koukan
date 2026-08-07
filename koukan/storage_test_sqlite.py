@@ -14,8 +14,8 @@ class StorageTestSqlite(StorageTestBase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def _connect(self):
-        return Storage.connect(self.db_url, session_uri='http://storage-test')
+    def _connect(self, session_uri='http://storage-test'):
+        return Storage.connect(self.db_url, session_uri=session_uri)
 
 if __name__ == '__main__':
     logging.basicConfig(

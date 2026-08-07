@@ -44,6 +44,12 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
                 remote_host=HostPort('remote_host', 2525)),
             create_leased=True)
 
+        check_cursor = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertEqual((True, None), check_cursor.check())
+        self.assertEqual((False, False), check_cursor.wait(0.1))
+
+        self.assertEqual((False, False), downstream.wait(0.1))
+
         downstream.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
 
@@ -160,7 +166,26 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
 
         logging.debug(self.s.debug_dump())
 
-    async def test_transaction_group(self) -> None:
+    def test_write_conflict(self):
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(mail_from=Mailbox('alice')),
+            create_leased=True)
+        cursor.start_attempt()
+
+        cursor2 = self.s.get_transaction_cursor(db_id=cursor.db_id)
+        cursor2.load()
+
+        cursor.write_envelope(
+            TransactionMetadata(),
+            attempt_delta=TransactionMetadata(mail_response=Response()))
+
+        cursor2.write_envelope(
+            TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
+
+
+    async def test_group_cursor(self) -> None:
         assert self.s is not None
         tx0_cursor = self.s.get_transaction_cursor()
         tx0_cursor.create(
@@ -172,13 +197,20 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         assert upstream_cursor.load(rest_id='tx_rest_id')
         logging.debug(upstream_cursor.tx)
         upstream_cursor.start_attempt()
+        self.assertIsNotNone(upstream_cursor.inflight_session_id)
         upstream_cursor.write_envelope(
             TransactionMetadata(mail_response=Response(250)))
+
+        group = GroupCursor(self.s, rest_id='tx_rest_id')
+        self.assertTrue(group.try_cache())
 
         group = GroupCursor(self.s)
         group.load(tx_rest_id='tx_rest_id')
         assert group.tx_cursors[0].tx is not None
         self.assertEqual(0, group.tx_cursors[0].tx.group_index)
+        self.assertEqual([1], group.db_ids())
+        self.assertEqual({1:2}, group.db_id_versions())
+
         group.tx_cursors[0].write_envelope(
             TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
 
@@ -190,9 +222,19 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         assert group.tx_cursors[1].tx is not None
         self.assertEqual(1, group.tx_cursors[1].tx.group_index)
 
+        upstream2 = self.s.get_transaction_cursor(
+            db_id=group.tx_cursors[1].db_id)
+        upstream2.load()
+        upstream2.start_attempt()
+
+        group = GroupCursor(self.s, rest_id='tx_rest_id')
+        self.assertTrue(group.try_cache())
+
+
         group.update_all(
             TransactionMetadata(body = BlobSpec(create_tx_body=True)))
         logging.debug('reload')
+
 
         group = GroupCursor(self.s)
         group.load(tx_id=tx_id)
@@ -202,8 +244,8 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         assert isinstance(blob_writer, BlobCursor)
         b = b'hello, world!'
-        blob_writer.append_data(0, b, len(b), update_tx=False)
-        group.update_all(tx_delta=TransactionMetadata(), input_done=True)
+        blob_writer.append_data(0, b, len(b))
+        group.blob_done(blob_writer)
 
         logging.debug('wait -> timeout')
         self.assertIsNone(await group.wait_async(1))
@@ -406,6 +448,25 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.s._gc_session(timedelta(seconds=1)))
         self.assertFalse(self.s.testonly_get_session(stale_session)['live'])
         self.assertTrue(self.s.testonly_get_session(self.s.session_id)['live'])
+
+    def test_other_session(self):
+        s2 = self._connect('https://other-session')
+
+        downstream = self.s.get_transaction_cursor()
+        downstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525)),
+            create_leased=True)
+        downstream.start_attempt()
+
+        other = s2.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(other.load())
+        self.assertEqual(self.s.session_uri, other.tx.session_uri)
+
+        other = s2.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertEqual((False, self.s.session_uri), other.check())
+
 
     def test_recovery(self):
         old_session = self._connect()

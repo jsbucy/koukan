@@ -91,7 +91,8 @@ class TransactionCursor:
         self.rest_id = rest_id
         if (self.db_id is not None) or (self.rest_id is not None):
             self.id_version = self.parent.tx_versions.get(
-                self.db_id, self.rest_id)
+                db_id=self.db_id, rest_id=self.rest_id)
+            logging.debug(self.id_version)
             if self.id_version is not None:
                 self.version = self.id_version.version
 
@@ -383,7 +384,6 @@ class TransactionCursor:
                 blob_cursor._blob_uri = BlobUri(
                     self.rest_id, tx_body = (blob_rest_id == TX_BODY),
                     blob = blob_rest_id)
-                blob_cursor.update_tx = self.rest_id
                 blob_cursor.db_tx = None  # ugh
                 blobs.append(blob_cursor)
             else:
@@ -874,6 +874,7 @@ class TransactionCursor:
         self.version = new_version
         # xxx tx.version?
         self.in_attempt = True
+        self.inflight_session_id = self.parent.session_id
         return True
 
     # attempts to refresh this cursor/tx from the cache;
@@ -951,7 +952,8 @@ class GroupCursor:
     _parent_db_id : Optional[int] = None
     rest_id : Optional[str] = None
 
-    def __init__(self, parent, tx_cursor = None,
+    def __init__(self, parent : 'Storage',
+                 tx_cursor : Optional[TransactionCursor] = None,
                  rest_id : Optional[str] = None):
         self.parent = parent
         self.tx_cursors = []
@@ -962,7 +964,7 @@ class GroupCursor:
         if rest_id:
             self.rest_id = rest_id
 
-    def db_ids(self):
+    def db_ids(self) -> List[int]:
         out = []
         for c in self.tx_cursors:
             assert c.db_id is not None
@@ -970,11 +972,12 @@ class GroupCursor:
             out.append(c.db_id)
         return out
 
-    def db_id_versions(self):
+    def db_id_versions(self) -> Dict[int, int]:
         out = {}
         for c in self.tx_cursors:
             assert c.db_id is not None
             assert c.db_id not in out
+            assert c.version is not None
             out[c.db_id] = c.version
         return out
 
@@ -1218,18 +1221,14 @@ class BlobCursor(Blob, WritableBlob):
     length : int = 0  # max offset+len from BlobContent, next offset to write
     _content_length : Optional[int] = None  # overall length from content-range
     last = False
-    update_tx : Optional[str] = None
     _blob_uri : Optional[BlobUri] = None
     _session_uri : Optional[str] = None
     db_tx : Optional[Connection] = None
     last_update : Optional[int] = None
 
     def __init__(self, storage,
-                 update_tx : Optional[str] = None,
-                 finalize_tx : Optional[bool] = False,
                  db_tx : Optional[Connection] = None):
         self.parent = storage
-        self.update_tx = update_tx
         self.db_tx = db_tx
 
     def __hash__(self):
@@ -1262,7 +1261,6 @@ class BlobCursor(Blob, WritableBlob):
         self.last = (self.length == self._content_length)
         self._blob_uri = BlobUri(
             tx_rest_id, tx_body=(blob_rest_id == TX_BODY), blob=blob_rest_id)
-        self.update_tx = tx_rest_id
 
     def __eq__(self, x):
         if not isinstance(x, BlobCursor):
@@ -1302,8 +1300,6 @@ class BlobCursor(Blob, WritableBlob):
                     content_length : Optional[int] = None,
                     # last: set content_length to offset + len(d)
                     last : Optional[bool] = None,
-                    # xxx remove, SWF orchestrates this now
-                    update_tx = False
                     ) -> Tuple[bool, int, Optional[int]]:
         logging.info('BlobWriter.append_data %d [%s] '
                      'offset=%d self.length=%d d.len=%d '
@@ -1330,7 +1326,7 @@ class BlobCursor(Blob, WritableBlob):
                       else self.parent.begin_transaction() as db_tx):
                     success, db_length, db_content_length, cursor = (
                         self._append_data(
-                            db_tx, offset, d, content_length, last, update_tx))
+                            db_tx, offset, d, content_length, last))
                     logging.debug('%s %d %s %s',
                                   success, db_length, db_content_length, cursor)
                     if not success:
@@ -1347,29 +1343,6 @@ class BlobCursor(Blob, WritableBlob):
         self._content_length = content_length
         self.last = (self.length == self._content_length)
 
-        if not update_tx:
-            return True, db_length, self._content_length
-
-        if cursor is None and self.update_tx is not None:
-            cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
-            if not cursor.try_cache():
-                cursor = None
-        if cursor is not None:
-            # update BlobCursor in cached tx
-            logging.debug(self)
-            if cursor.blobs:
-                for i,blob in enumerate(cursor.blobs):
-                    if blob.db_id != self.db_id:
-                        continue
-                    logging.debug(blob)
-                    cursor.blobs[i] = self.clone()
-                    break
-                else:
-                    cursor = None
-
-            if cursor is not None:
-                cursor._update_version_cache(leased=None)
-
         return True, db_length, self._content_length
 
     def _append_data(
@@ -1377,8 +1350,6 @@ class BlobCursor(Blob, WritableBlob):
             content_length : Optional[int] = None,
             # last: set content_length to offset + len(d)
             last : Optional[bool] = None,
-            # xxx remove, SWF orchestrates this now
-            update_tx : bool = False
     ) -> Tuple[bool, int, Optional[int], Optional[TransactionCursor]]:
         for i in range(0,2):
             upd = (update(self.parent.blob_table)
@@ -1445,35 +1416,7 @@ class BlobCursor(Blob, WritableBlob):
         logging.debug('append_data %d %s last=%s',
                       self.length, self._content_length, self.last)
 
-        if self.update_tx is None or not update_tx:
-            return True, db_length, content_length, None
-
-        stale = (db_now - last_update) > self.parent.blob_tx_refresh_interval
-        if not stale and not blob_done:
-            return True, db_length, content_length, None
-
-        cursor = self.parent.get_transaction_cursor(rest_id=self.update_tx)
-        cached = cursor.try_cache()
-        if not cached:
-            cursor._load_db(db_tx)
-        if cursor.tx.session_uri is not None:
-            self._session_uri = cursor.tx.session_uri
-            return False, db_length, db_content_length, None
-        kwargs = {}
-        input_done = False
-        if db_length == content_length:
-            input_done = cursor._blob_done(self)
-        if input_done:
-            kwargs['input_done'] = True
-        else:
-            # note: this will update the tx/version every time and
-            # wakeup the upstream, etc.
-            kwargs['ping_tx'] = True  # ping last_update
-        logging.debug('BlobWriter.append_data tx %s %s',
-                      self.update_tx, kwargs)
-        cursor._write(db_tx, TransactionMetadata(), **kwargs)
-
-        return True, db_length, content_length, cursor
+        return True, db_length, content_length, None
 
     def pread(self, offset, length=None) -> Optional[bytes]:
         # TODO this should maybe have the same effect as load() if the

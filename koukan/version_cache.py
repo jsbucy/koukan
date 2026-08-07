@@ -269,7 +269,7 @@ class IdVersionMap:
             elif rest_id is not None:
                 idv = self.rest_id_map.get(rest_id, None)
             else:
-                raise ValueError
+                raise ValueError()
             # will take a GC cycle for erasing from ttl to propagate
             # to weak value dict
             return idv if idv is not None and idv._reusable() else None
