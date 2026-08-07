@@ -213,6 +213,34 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['bob2@example.com'],
                          [r.mailbox for r in u2.tx.rcpt_to])
 
+    def test_start_upstream_fail(self):
+        endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
+        endpoint_yaml.update({
+            'sf_timeout': 1,
+            'sf_mode': 'upstream_unavailability'})
+
+        filter = self.create_filter(
+            endpoint_yaml, create_id='tx_rest_id',
+            handler=lambda sender, release_tx: False)
+        tx = TransactionMetadata(
+            mail_from=Mailbox('alice'),
+            rcpt_to = [ Mailbox('bob@example.com'),
+                        Mailbox('bob2@example.com') ])
+        filter.update(tx, tx.copy())
+        upstream_cursor = filter.release_transaction_cursor(0)
+        upstream_cursor.start_attempt()
+        upstream_cursor.write_envelope(
+            TransactionMetadata(), attempt_delta=TransactionMetadata(
+                mail_response = Response(201),
+                rcpt_response = [Response(202)]))
+        tx = filter.get()
+        logging.debug(tx)
+        self.assertEqual(201, tx.mail_response.code)
+        self.assertEqual([202, 451], [r.code for r in tx.rcpt_response])
+        self.assertEqual('4.5.3 too many recipients '
+                         '(SWF could not schedule upstream)',
+                         tx.rcpt_response[1].message)
+
     def test_store_and_forward_unavailability(self):
         endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
         endpoint_yaml.update({

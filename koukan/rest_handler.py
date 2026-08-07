@@ -149,7 +149,8 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
         cfut = self.executor.submit(partial(self._handle_async, request, fn), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         if not await asyncio.wait_for(fut, deadline.deadline_left()):
             cfut.cancel()
@@ -325,7 +326,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(self._check_tx)
         if cfut is None:
             return self.response(
-                code=500, msg='_check_tx_async schedule read'), None
+                code=503, msg='Service Unavailable\r\n'
+                '_check_tx_async schedule read'), None
         afut = asyncio.wrap_future(cfut)
         try:
             # wait ~forever here, this is a point read
@@ -350,7 +352,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(self._get_tx)
         if cfut is None:
             return self.response(
-                code=500, msg='get tx async schedule read'), None
+                code=503, msg='Service Unavailable\r\n'
+                'get tx async schedule read'), None
         afut = asyncio.wrap_future(cfut)
         try:
             # wait ~forever here, this is a point read
@@ -573,7 +576,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             partial(self._get_blob_writer, request, blob_rest_id, tx_body), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         if fut.result() is not None:
@@ -627,7 +631,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             lambda: self._put_blob_chunk(request, b, last), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         return fut.result()
@@ -731,11 +736,12 @@ class RestHandlerFactory(HandlerFactory):
         self.service_url = service_url
         self.chunk_size = chunk_size
 
-    def create_tx(self, path_sender_name, tag) -> RestHandler:
+    def create_tx(self, path_sender_name, tag) -> Optional[RestHandler]:
         res = self.endpoint_factory.create(Sender(path_sender_name, tag))
-        # TODO possibly HandlerFactory should be able to return an
-        # error response directly here?
-        assert res is not None
+        if res is None:
+            # This happens if the top-level router couldn't schedule
+            # the upstream on Executor.
+            return None
         endpoint, yaml, sender = res
         kwargs : Dict[str, Any] = {}
         if self.chunk_size:

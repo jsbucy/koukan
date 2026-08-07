@@ -359,6 +359,8 @@ class StorageWriterFilter(AsyncFilter):
             return None
         return self._get()
 
+    # if an upstream rcpt/tx has returned a temp error or timed out,
+    # sets the corresponding downstream...response field to "250 store&forward"
     def _do_sf_unavail(self, group_tx) -> List[TransactionCursor]:
         assert self.group_cursor is not None
         now = self._millis()
@@ -457,6 +459,16 @@ class StorageWriterFilter(AsyncFilter):
             logging.debug(tx)
         return sf_cursor
 
+    # Fans in upstream tx from group_cursor into a single downstream
+    # view. Handling of upstream temp errors is per sf_mode:
+    # upstream_unavailability ~ smtp submission/msa:
+    #   covert upstream temp errors to 250 store&forward
+    # mixed_data_response ~ smtp ingress/relay:
+    #   return upstream temp errors verbatim
+    # Then if all upstream data_responses have the same major code, we
+    # return that directly. Otherwise we enable notification/retry on
+    # the upstream transactions that didn't already succeed and return
+    # a 250 store&forward data_response downstream.
     def _get(self) -> Optional[TransactionMetadata]:
         assert self.group_cursor is not None
         assert self.group_cursor.tx_cursors[0].tx is not None
@@ -478,24 +490,23 @@ class StorageWriterFilter(AsyncFilter):
         if sf_unavail:
             sf_cursor = self._do_sf_unavail(group_tx)
         tx = group_tx[0].copy()
-        # TODO upstream mail response is most likely 250 noop from rcpt
-        # router; if the config can return a real upstream response
-        # here (unlikely: only with no rcpt routing/static outbound
-        # gw), any mail_response err will end the tx
+        # TODO upstream mail response is most likely 250 noop from
+        # rcpt router. If the config can return a real upstream
+        # response here (unlikely: only with pipelining or no rcpt
+        # routing/static outbound gw), any mail_response err will end
+        # the tx.
         for cursor in self.group_cursor.tx_cursors[1:]:
             assert cursor.tx is not None
             tx.rcpt_to.extend(cursor.tx.rcpt_to)
             tx.rcpt_response.extend(cursor.tx.rcpt_response)
         tx.data_response = None
-        # xxx final_attempt_reason
-        logging.debug(tx)
-        # logging.debug(group_tx)
 
-        # TODO Normally, output flow returns a timeout response if the
-        # upstream timed out however it could be e.g. terminated by an
-        # exception in which case it's nicer behavior to return a
-        # response downstream rather than hanging.
-        # upstream_bug_timeout = False
+        # NOTE Normally, output flow returns a timeout response if the
+        # upstream timed out. If it was terminated by an exception, it
+        # will probably set a 450 internal error response in the
+        # finally: at the end of OutputHandler. If it just hangs, this
+        # will eventually cause an Executor watchdog timeout. The
+        # downstream rest client must implement its own timeouts.
 
         # rcpt_response must be returned in order
         for i,rr in enumerate(tx.rcpt_response):
@@ -635,9 +646,7 @@ class StorageWriterFilter(AsyncFilter):
             assert self.group_cursor is not None
             tx.rest_id = self.rest_id
         else:
-            if self.group_cursor is None:
-                self._load()
-                assert self.group_cursor is not None
+            assert self.group_cursor is not None
             # TODO do this in a batch if we get multiple (moot
             # without pipelining)
             assert self.group_cursor.tx_cursors[0].tx is not None
@@ -691,17 +700,18 @@ class StorageWriterFilter(AsyncFilter):
                         partial(self.release_transaction_cursor,
                                 len(self.group_cursor.tx_cursors) - 1))):
                     cursor = self.group_cursor.tx_cursors[-1]
-                    # TODO combine these writes?
                     cursor.start_attempt()
                     # TODO option to s&f on this err?
                     cursor.write_envelope(
-                        TransactionMetadata(
+                        TransactionMetadata(),
+                        attempt_delta=TransactionMetadata(
+                            mail_response=Response(250, 'swf fastfail'),
                             rcpt_response=[
                                 Response(451, '4.5.3 too many recipients '
                                          '(SWF could not schedule upstream)')]),
                         finalize_attempt=True,
-                        max_conflict_retries=1)
-                    # xxx final_attempt_reason=?
+                        max_conflict_retries=1,
+                        final_attempt_reason='SWF fastfail')
                 else:
                     created = True
                 logging.debug(sched)

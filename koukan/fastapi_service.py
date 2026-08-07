@@ -28,6 +28,9 @@ def create_app(handler_factory : HandlerFactory):
         if (sender_js := req_json.get('sender', None)):
             tag = sender_js.get('tag', None)
         handler = handler_factory.create_tx(sender, tag)
+        if handler is None:
+            return FastApiResponse(
+                status_code=503, content='Service Unavailable')
         return await handler.handle_async(
             request, partial(handler.create_tx, request, req_json=req_json))
 
