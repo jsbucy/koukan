@@ -104,7 +104,9 @@ class StorageWriterFilter(AsyncFilter):
 
     def incremental(self):
         assert self.endpoint_yaml is not None
-        return self.sf_mode is not None or self.exploder
+        return (self.sf_mode is not None or
+                self.exploder or
+                self.endpoint_yaml.get('allow_incremental', False))
 
     # AsyncFilter (for Exploder/AsyncFilterWrapper)
     def wait(self, version, timeout

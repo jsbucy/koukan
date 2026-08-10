@@ -244,6 +244,7 @@ class Service:
     ) -> Optional[Tuple[StorageWriterFilter, dict, Sender]]:
         assert self.filter_chain_factory is not None
         if (s := self.filter_chain_factory.get_sender(sender)) is None:
+            # xxx -> http 404
             return None
         sender = s
         if (endp := self.filter_chain_factory.build_filter_chain(

@@ -796,58 +796,39 @@ class RouterServiceTest(unittest.TestCase):
 
         # match new hanging get in test_rest_smoke()?
 
-    def _exploder_micro(self):
+    def _exploder_micro(self, msa=True):
         upstream_endpoint = FakeFilter()
         self.add_endpoint(upstream_endpoint)
-        def exp_rcpt(tx, tx_delta):
-            logging.debug(tx)
-            # set upstream responses so output (retry) succeeds
-            # upstream success, retry succeeds, propagates down to rest
-            updated_tx = tx.copy()
-            if tx_delta.mail_from:
-                updated_tx.mail_response = Response(201)
-            if tx_delta.rcpt_to:
-                updated_tx.rcpt_response.append(Response(202, 'upstream rcpt 1'))
-            upstream_delta = tx.delta(updated_tx)
-            tx.merge_from(upstream_delta)
-            return upstream_delta
-        upstream_endpoint.add_expectation(exp_rcpt)
 
-        def exp_body(tx, tx_delta):
-            logging.debug('exp_body')
-            upstream_delta = TransactionMetadata()
-            if tx.body and tx.body.finalized():
-                self.assertEqual(tx.body.pread(0), b'Hello, World!')
-                upstream_delta.data_response = Response(
-                    205, 'upstream data')
-            tx.merge_from(upstream_delta)
-            return upstream_delta
+        for i in range(0, 4):
+            self.add_expectation(
+                upstream_endpoint,
+                mail_response=Response(201),
+                rcpt_response=Response(202),
+                data_response=Response(203))
 
-        upstream_endpoint.add_expectation(exp_body)
-        upstream_endpoint.add_expectation(exp_body)
-
+        url = self.router_url
 
         rest_endpoint = self.create_endpoint(
-            static_base_url=self.router_url,
-            timeout_start=5, timeout_data=5)
+            static_base_url=url, timeout_start=5, timeout_data=5)
 
         logging.info('_exploder_micro start tx')
         prev = TransactionMetadata()
         tx = rest_endpoint.upstream_tx
         tx.mail_from = Mailbox('alice@example.com')
         tx.remote_host = HostPort('1.2.3.4', 12345)
+        if msa:
+            tx.sender = Sender('submission', 'smtp-msa')
         rest_endpoint.on_update(prev.delta(tx))
 
-        # no rcpt -> buffered
-        self.assertEqual(tx.mail_response.code, 250)
-        self.assertIn('exploder noop', tx.mail_response.message)
+        self.assertEqual(
+            250 if self.exploder() and msa else 201, tx.mail_response.code)
 
         logging.info('_exploder_micro patch rcpt')
         prev = tx.copy()
         tx.rcpt_to.append(Mailbox('bob@example.com'))
         rest_endpoint.on_update(prev.delta(tx))
         self.assertRcptCodesEqual([202], tx.rcpt_response)
-        self.assertEqual(tx.rcpt_response[0].message, 'upstream rcpt 1')
 
         logging.info('_exploder_micro patch body')
 
@@ -855,16 +836,15 @@ class RouterServiceTest(unittest.TestCase):
         tx.body=InlineBlob(b'Hello, World!', last=True)
         rest_endpoint.on_update(prev.delta(tx))
         logging.debug('test_exploder_multi_rcpt %s', tx)
-        self.assertEqual(205, tx.data_response.code)
-        self.assertEqual('upstream data', tx.data_response.message)
-
+        self.assertEqual(203, tx.data_response.code)
 
     def _test_micro(self, micro):
         logging.debug('warmup')
-        micro()
+        iters=100
+        for i in range(0, int(iters / 10)):
+            micro()
         logging.debug('real')
         start = time.monotonic()
-        iters=100
         para=1
         def run_micro():
             for i in range(0,int(iters/para)):
@@ -891,10 +871,17 @@ class RouterServiceTest(unittest.TestCase):
         total = done - start
         logging.warning('done %s %f %f', micro, total, iters/total)
 
-    def disabled_test_micro(self):
+    def disabled_test_rest_smoke_micro(self):
         self._test_micro(self._rest_smoke_micro)
-        self._test_micro(self._exploder_micro)
 
+    def disabled_test_exploder_micro(self):
+        endpoint_yaml = next(
+            y for y in self.root_yaml['endpoint'] if y['name'] == 'submission')
+        endpoint_yaml['allow_incremental'] = True
+
+        if self.exploder():
+            self._test_micro(partial(self._exploder_micro, msa=False))
+        self._test_micro(self._exploder_micro)
 
     def test_notification_retry_timeout(self):
         logging.info('RouterServiceTest.test_notification_retry_timeout')

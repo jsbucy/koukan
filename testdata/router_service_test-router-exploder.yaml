@@ -63,6 +63,7 @@ endpoint:
     rcpt_timeout: 10
 
 - name: submission
+  # allow_incremental: true
   output_handler:
     downstream_timeout: 10
     notification:
