@@ -97,6 +97,7 @@ endpoint:
     downstream_timeout: 1
     upstream_refresh: 1
   chain:
+  - filter: mail_ok
   - filter: router
     policy:
       destination:
@@ -126,6 +127,7 @@ endpoint:
     retry_params: {}
     upstream_refresh: 1
   chain:
+  - filter: mail_ok
   - filter: router
     policy:
       destination:

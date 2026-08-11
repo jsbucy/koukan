@@ -278,6 +278,16 @@ py_test(name='recipient_router_filter_test',
               ':fake_endpoints',
               ':sender'])
 
+py_library(name='mail_ok_filter',
+           srcs=['mail_ok_filter.py'],
+           deps=[':filter',
+                 ':filter_chain',
+                 ':response'])
+
+py_test(name='mail_ok_filter_test',
+        srcs=['mail_ok_filter_test.py'],
+        deps=[':mail_ok_filter'])
+
 py_library(name='address_list_policy',
            srcs=['address_list_policy.py'],
            deps=[':recipient_router_filter',
@@ -578,6 +588,7 @@ py_library(name='filter_chain_wiring',
                  ':exploder',
                  ':filter',
                  ':filter_chain_factory',
+                 ':mail_ok_filter',
                  ':message_builder_filter',
                  ':message_parser_filter',
                  ':message_validation_filter',

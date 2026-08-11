@@ -303,7 +303,8 @@ class End2EndTest(unittest.TestCase):
             'localhost', self.gateway_mx_port, 'nonlocalhost',
             'alice@example.com', ['bob@example.com'],
             'hello, world!')
-        self.assertEqual(550, rcpt_resp[0][0])
+        self.assertIsNone(rcpt_resp)
+        self.assertEqual(550, final_resp[0])
 
     def test_policy_reject_rcpt(self):
         self._configure_and_run()
