@@ -280,7 +280,8 @@ class StorageWriterFilter(AsyncFilter):
             if not self.group_cursor.load(tx_rest_id=self.rest_id):
                 return False
 
-        logging.debug('%s %s %s', self.rest_id, self.group_cursor.db_id_versions(), tx)
+        logging.debug('%s %s %s',
+                      self.rest_id, self.group_cursor.db_id_versions(), tx)
 
         if not self.group_cursor.tx_cursors:  # 404 e.g. after GC
             return False
@@ -331,29 +332,6 @@ class StorageWriterFilter(AsyncFilter):
 
         return True
 
-    @staticmethod
-    def reduce_data_response(
-            lhs : Optional[TransactionMetadata],
-            rhs : Optional[TransactionMetadata]
-    ) -> Optional[TransactionMetadata]:
-        if lhs is None:
-            return None
-        assert lhs is not None
-        if not lhs.rcpt_response or lhs.rcpt_response[0] is None:
-            return None
-        assert rhs is not None
-        if not rhs.rcpt_response or rhs.rcpt_response[0] is None:
-            return None
-        if lhs.rcpt_response[0].err():
-            return rhs
-        if rhs.rcpt_response[0].err():
-            return lhs
-        if (lhs.data_response is None) or (rhs.data_response is None):
-            return None
-        if (lhs.data_response.major_code() !=
-            rhs.data_response.major_code()):
-            return None
-        return lhs
 
     # AsyncFilter
     def get(self) -> Optional[TransactionMetadata]:
@@ -361,9 +339,10 @@ class StorageWriterFilter(AsyncFilter):
             return None
         return self._get()
 
-    # if an upstream rcpt/tx has returned a temp error or timed out,
-    # sets the corresponding downstream...response field to "250 store&forward"
-    def _do_sf_unavail(self, group_tx) -> List[TransactionCursor]:
+    # if an upstream rcpt/tx has returned a temp error or reached the
+    # store&forward timeout, sets the corresponding
+    # downstream...response field to "250 store&forward"
+    def _do_sf_unavail(self, tx, tx_cursor) -> bool:
         assert self.group_cursor is not None
         now = self._millis()
 
@@ -375,128 +354,96 @@ class StorageWriterFilter(AsyncFilter):
                 resp is not None and resp.temp())
             logging.debug(res)
             return res
-        sf_cursor = []
-        for i,tx in enumerate(group_tx):
-            prev = tx.copy()
-            logging.debug(tx)
-            sf_mail = False
 
-            if (not tx.downstream_mail_response and
-                tx.mail_from is not None and
-                unavail(tx, tx.mail_response, tx.sf_mail_timeout)):
-                sf_mail = True
-                tx.downstream_mail_response = DownstreamResponse.SF
-            if tx.downstream_mail_response:
-                tx.mail_response = downstream_responses[
-                    tx.downstream_mail_response]
+        prev = tx.copy()
+        logging.debug(tx)
+        sf_mail = False
+
+        if (not tx.downstream_mail_response and
+            tx.mail_from is not None and
+            unavail(tx, tx.mail_response, tx.sf_mail_timeout)):
+            sf_mail = True
+            tx.downstream_mail_response = DownstreamResponse.SF
+        if tx.downstream_mail_response:
+            tx.mail_response = downstream_responses[
+                tx.downstream_mail_response]
+            tx.rcpt_response.extend(
+                [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
+        upstream_rcpt_ok = any_rcpt_ok(tx.rcpt_response)
+        sf_rcpt = False
+        for j,rcpt in enumerate(tx.rcpt_to):
+            if j >= len(tx.rcpt_response):
+                rcpt_resp = None
+            else:
+                rcpt_resp = tx.rcpt_response[j]
+            logging.debug(rcpt_resp)
+            if ((j >= len(tx.downstream_rcpt_response) or
+                 not tx.downstream_rcpt_response[j]) and
+                (sf_mail or unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j]))):
+                tx.downstream_rcpt_response.extend(
+                    [DownstreamResponse.NONE] *
+                    (len(tx.rcpt_to) -
+                     len(tx.downstream_rcpt_response)))
+                tx.downstream_rcpt_response[j] = DownstreamResponse.SF
+            # convert DownstreamResponse enum to Response
+            if (j < len(tx.downstream_rcpt_response) and
+                tx.downstream_rcpt_response[j] is not None):
                 tx.rcpt_response.extend(
-                    [None] * (len(tx.rcpt_to) - len(tx.rcpt_response)))
-            upstream_rcpt_ok = any_rcpt_ok(tx.rcpt_response)
-            sf_rcpt = False
-            for j,rcpt in enumerate(tx.rcpt_to):
-                if j >= len(tx.rcpt_response):
-                    rcpt_resp = None
-                else:
-                    rcpt_resp = tx.rcpt_response[j]
-                logging.debug(rcpt_resp)
-                if ((j >= len(tx.downstream_rcpt_response) or
-                     not tx.downstream_rcpt_response[j]) and
-                    (sf_mail or unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j]))):
-                    tx.downstream_rcpt_response.extend(
-                        [DownstreamResponse.NONE] *
-                        (len(tx.rcpt_to) -
-                         len(tx.downstream_rcpt_response)))
-                    tx.downstream_rcpt_response[j] = DownstreamResponse.SF
-                # convert DownstreamResponse enum to Response
-                if (j < len(tx.downstream_rcpt_response) and
-                    tx.downstream_rcpt_response[j] is not None):
-                    tx.rcpt_response.extend(
-                        [None] * (j - len(tx.rcpt_response) + 1))
-                    drr = tx.downstream_rcpt_response[j]
-                    tx.rcpt_response[j] = downstream_responses[drr]
-                    if drr == DownstreamResponse.SF:
-                        sf_rcpt = True
+                    [None] * (j - len(tx.rcpt_response) + 1))
+                drr = tx.downstream_rcpt_response[j]
+                tx.rcpt_response[j] = downstream_responses[drr]
+                if drr == DownstreamResponse.SF:
+                    sf_rcpt = True
 
-            assert (DownstreamResponse.NONE not in
-                    tx.downstream_rcpt_response), tx
+        assert (DownstreamResponse.NONE not in
+                tx.downstream_rcpt_response), tx
 
-            # if any rcpt_resp is SF then data_resp is SF
-            sf_data = False
-            if tx.downstream_data_response is None:
-                if (sf_rcpt and tx._body_last()):
-                    tx.downstream_data_response = DownstreamResponse.SF
-                elif (not tx.downstream_data_response and
-                      tx._body_last() and
-                      unavail(tx, tx.data_response, tx.sf_data_timeout)):
-                    sf_data = True
-                    tx.downstream_data_response = DownstreamResponse.SF
-            logging.debug(tx.downstream_data_response)
-            if tx.downstream_data_response:
-                tx.data_response = downstream_responses[
-                    tx.downstream_data_response]
+        # if any rcpt_resp is SF then data_resp is SF
+        sf_data = False
+        if tx.downstream_data_response is None:
+            if (sf_rcpt and tx._body_last()):
+                tx.downstream_data_response = DownstreamResponse.SF
+            elif (not tx.downstream_data_response and
+                  tx._body_last() and
+                  unavail(tx, tx.data_response, tx.sf_data_timeout)):
+                sf_data = True
+                tx.downstream_data_response = DownstreamResponse.SF
+        logging.debug(tx.downstream_data_response)
+        if tx.downstream_data_response:
+            tx.data_response = downstream_responses[
+                tx.downstream_data_response]
 
-            prev_downstream_resp = TransactionMetadata()
-            downstream_resp = TransactionMetadata()
+        prev_downstream_resp = TransactionMetadata()
+        downstream_resp = TransactionMetadata()
 
-            # compute the delta of just the downstream resp fields to write
-            # prev -> prev_downstream_resp
-            # tx -> downstream_resp
-            for t,dr in (prev,prev_downstream_resp),(tx,downstream_resp):
-                dr.downstream_mail_response = t.downstream_mail_response
-                dr.downstream_rcpt_response = t.downstream_rcpt_response
-                dr.downstream_data_response = t.downstream_data_response
-            downstream_resp_delta = prev_downstream_resp.delta(
-                downstream_resp)
+        # compute the delta of just the downstream resp fields to write
+        # prev -> prev_downstream_resp
+        # tx -> downstream_resp
+        for t,dr in (prev,prev_downstream_resp),(tx,downstream_resp):
+            dr.downstream_mail_response = t.downstream_mail_response
+            dr.downstream_rcpt_response = t.downstream_rcpt_response
+            dr.downstream_data_response = t.downstream_data_response
+        downstream_resp_delta = prev_downstream_resp.delta(
+            downstream_resp)
 
-            if downstream_resp_delta:
-                if (downstream_resp_delta.downstream_data_response ==
-                    DownstreamResponse.SF):
-                    downstream_resp_delta.retry = {}
-                    downstream_resp_delta.notification = {}
-                self.group_cursor.tx_cursors[i].write_envelope(
-                    downstream_resp_delta)
+        if downstream_resp_delta:
+            if (downstream_resp_delta.downstream_data_response ==
+                DownstreamResponse.SF):
+                downstream_resp_delta.retry = {}
+                downstream_resp_delta.notification = {}
+            tx_cursor.write_envelope(downstream_resp_delta)
 
-            if sf_data:
-                sf_cursor.append(self.group_cursor.tx_cursors[i])
-            logging.debug(tx)
-        return sf_cursor
+        logging.debug(tx)
+        return sf_data
 
-    # Fans in upstream tx from group_cursor into a single downstream
-    # view. Handling of upstream temp errors is per sf_mode:
-    # upstream_unavailability ~ smtp submission/msa:
-    #   covert upstream temp errors to 250 store&forward
-    # mixed_data_response ~ smtp ingress/relay:
-    #   return upstream temp errors verbatim
-    # Then if all upstream data_responses have the same major code, we
-    # return that directly. Otherwise we enable notification/retry on
-    # the upstream transactions that didn't already succeed and return
-    # a 250 store&forward data_response downstream.
-    def _get(self) -> Optional[TransactionMetadata]:
-        assert self.group_cursor is not None
-        assert self.group_cursor.tx_cursors[0].tx is not None
-
-        assert self.endpoint_yaml is not None
-        if self.sf_mode is None:
-            assert len(self.group_cursor.tx_cursors) <= 1, [
-                c.db_id for c in self.group_cursor.tx_cursors]
-        sf_unavail = self.sf_mode == 'upstream_unavailability'
-
-        def copy_tx(c):
-            assert c.tx is not None
-            return c.tx.copy()
-        group_tx = [copy_tx(c) for c in self.group_cursor.tx_cursors]
-        assert self.group_cursor.tx_cursors[0].db_id is not None
-
-        # convert upstream timeout/temp err to 250 s&f resp
-        sf_cursor = []
-        if sf_unavail:
-            sf_cursor = self._do_sf_unavail(group_tx)
-        tx = group_tx[0].copy()
+    def _merge_upstream_tx(self, upstream_tx):
+        tx = upstream_tx[0].copy()
         # TODO upstream mail response is most likely 250 noop from
         # rcpt router. If the config can return a real upstream
         # response here (unlikely: only with pipelining or no rcpt
         # routing/static outbound gw), any mail_response err will end
         # the tx.
+        # xxx why does this use the cursor one instead of upstream_tx?
         for cursor in self.group_cursor.tx_cursors[1:]:
             assert cursor.tx is not None
             tx.rcpt_to.extend(cursor.tx.rcpt_to)
@@ -517,8 +464,44 @@ class StorageWriterFilter(AsyncFilter):
                 break
         assert None not in tx.rcpt_response
 
-        data_resp = None
-        for t in group_tx:
+        return tx
+
+    # Fans in upstream tx from group_cursor into a single downstream
+    # view. Handling of upstream temp errors is per sf_mode:
+    # upstream_unavailability ~ smtp submission/msa:
+    #   covert upstream temp errors to 250 store&forward
+    # mixed_data_response ~ smtp ingress/relay:
+    #   return upstream temp errors verbatim
+    # Then if all upstream data_responses have the same major code, we
+    # return that directly. Otherwise we enable notification/retry on
+    # the upstream transactions that didn't already succeed and return
+    # a 250 store&forward data_response downstream.
+    def _get(self) -> Optional[TransactionMetadata]:
+        assert self.group_cursor is not None
+        assert self.group_cursor.tx_cursors[0].tx is not None
+
+        assert self.endpoint_yaml is not None
+        if self.sf_mode is None:
+            assert len(self.group_cursor.tx_cursors) <= 1
+
+        def copy_tx(c):
+            assert c.tx is not None
+            return c.tx.copy()
+        upstream_tx = [copy_tx(c) for c in self.group_cursor.tx_cursors]
+        assert self.group_cursor.tx_cursors[0].db_id is not None
+
+        # convert upstream timeout/temp err to 250 s&f resp
+        sf_cursor = []
+        if self.sf_mode == 'upstream_unavailability':
+            for i,tx in enumerate(upstream_tx):
+                tx_cursor = self.group_cursor.tx_cursors[i]
+                sf = self._do_sf_unavail(tx, tx_cursor)
+                if sf:
+                    sf_cursor.append(tx_cursor)
+
+        tx = self._merge_upstream_tx(upstream_tx)
+
+        for t in upstream_tx:
             # could do a consistency check vs the other data_responses here
             if t.data_response is not None and t.data_response.group_reject:
                 tx.data_response = Response(
@@ -527,40 +510,63 @@ class StorageWriterFilter(AsyncFilter):
                 return tx
 
         if not tx._body_last() or any(
-                [t.data_response is None for t in group_tx]):
+                [t.data_response is None for t in upstream_tx]):
             logging.debug('still waiting data_response')
             return tx
 
-        if len(group_tx) == 1 and len(group_tx[0].rcpt_to) == 1:
-            tx.data_response = group_tx[0].data_response
+        def rcpt_ok(tx):
+            if tx.mail_response is None:
+                return False
+            if tx.mail_response.err():
+                return False
+            if not any(r for r in tx.rcpt_response if r is not None and r.ok()):
+                return False
+            return True
+        rcpt_ok_tx = [ t for t in upstream_tx if rcpt_ok(t) ]
+
+        # common case
+        if len(rcpt_ok_tx) == 1:
+            tx.data_response = rcpt_ok_tx[0].data_response
             logging.debug('single rcpt data resp')
             return tx
+        elif not rcpt_ok_tx:
+            tx.data_response = Response(
+                503, '5.5.1 failed precondition: all rcpts failed (SWF)')
+            return tx
 
-        data_resp_tx = reduce(
-            StorageWriterFilter.reduce_data_response, group_tx)
+        def same_data_response(lhs : TransactionMetadata,
+                               rhs : TransactionMetadata
+                               ) -> Optional[TransactionMetadata]:
+            assert lhs.data_response is not None
+            assert rhs.data_response is not None
+            if (lhs.data_response.major_code() !=
+                rhs.data_response.major_code()):
+                return None
+            return lhs
+
+        data_resp_tx = reduce(same_data_response, rcpt_ok_tx)
         logging.debug(data_resp_tx)
-        data_resp = (data_resp_tx.data_response if data_resp_tx is not None
-                     else None)
-        if data_resp is not None:
-            if len(self.group_cursor.tx_cursors) > 1:
-                data_resp = Response(
-                    data_resp.code,
-                    data_resp.message + ' (SWF Exploder same response)')
-        tx.data_response = data_resp
+        # all upstream data responses have the same major code
+        if data_resp_tx is not None:
+            data_resp = data_resp_tx.data_response
+            tx.data_response = Response(
+                data_resp.code,
+                data_resp.message + ' (SWF Exploder same response)')
+            return tx
 
-        if tx.data_response is None:  # mixed
-            for i,txi in enumerate(group_tx):
-                cursor = self.group_cursor.tx_cursors[i]
-                if cursor in sf_cursor:
-                    continue
-                def ok(r):
-                    assert r is not None
-                    return r.ok()
-                txdr = txi.data_response
-                if (ok(tx.mail_response) and
-                    any([not ok(r) for r in tx.rcpt_response])
-                    or not ok(txi.data_response)):
-                    sf_cursor.append(cursor)
+        # else mixed upstream data responses
+        for i,txi in enumerate(upstream_tx):
+            cursor = self.group_cursor.tx_cursors[i]
+            # already store&forward by _do_sf_unavail() above
+            if cursor in sf_cursor:
+                continue
+            def ok(r):
+                assert r is not None
+                return r.ok()
+            if (ok(txi.mail_response) and
+                any([ok(r) for r in txi.rcpt_response]) and
+                not ok(txi.data_response)):
+                sf_cursor.append(cursor)
 
         # NOTE there is a bit of a "if a tree falls in a
         # forest..." flavor to this: we don't actually enable
@@ -575,16 +581,18 @@ class StorageWriterFilter(AsyncFilter):
             return not c.tx.data_response.ok() and (
                 not c.tx.notification or not c.tx.retrty)
         sf_cursor = [c for c in sf_cursor if needs_retry(c) ]
-        if sf_cursor:
-            logging.debug(sf_cursor)
-            self.group_cursor.update_all(
-                TransactionMetadata(
-                    retry = {},
-                    notification={}),
-                cursors=sf_cursor)
+        if not sf_cursor:
+            return tx
 
-            tx.data_response = Response(
-                250, 'message accepted (SWF store&forward mixed upstream)')
+        logging.debug(sf_cursor)
+        self.group_cursor.update_all(
+            TransactionMetadata(
+                retry = {},
+                notification={}),
+            cursors=sf_cursor)
+
+        tx.data_response = Response(
+            250, 'message accepted (SWF store&forward mixed upstream)')
         logging.debug(tx)
         return tx
 

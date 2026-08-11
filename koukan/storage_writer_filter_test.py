@@ -557,7 +557,6 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(250, tx.mail_response.code)
         self.assertIn('store&forward', tx.mail_response.message)
 
-    # XXX: verify notify/retry on db tx
     async def _run_test(self, t : Test):
         endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
         endpoint_yaml.update({
@@ -668,10 +667,20 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
 
         check_resp(Stage.MAIL, t.stage, t.result, False, tx.mail_response)
         for i,r in enumerate(t.rcpt):
+            rcpt_response = None
+            if i < len(tx.rcpt_response):
+                rcpt_response = tx.rcpt_response[i]
             check_resp(Stage.RCPT, r.stage, r.upstream_result, r.expect_sf,
-                       tx.rcpt_response[i] if i < len(tx.rcpt_response) else None)
+                       rcpt_response)
         check_resp(Stage.DATA, t.stage, t.result, False, tx.data_response)
 
+        for i,r in enumerate(t.rcpt):
+            tx_cursor = filter.group_cursor.tx_cursors[i]
+            tx = tx_cursor.load()
+            logging.debug(tx)
+            self.assertEqual(
+                r.expect_sf,
+                (tx.retry is not None) and (tx.notification is not None))
 
     # mail temp -> sf
     async def test_single_rcpt_mail_temp(self):
@@ -762,10 +771,23 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             sf_mode = 'upstream_unavailability'
         ))
 
-    async def test_multi_rcpt_mixed_data(self):
+    async def test_multi_rcpt_mixed_data_temp(self):
+        await self._run_test(Test(
+            rcpt = [
+                # store&forward
+                Recipient(Stage.DATA, Result.TEMP, expect_sf=True),
+                # immediate accept&bounce
+                Recipient(Stage.DATA, Result.PERM, expect_sf=True)],
+            stage = Stage.DATA,
+            result = Result.SUCCESS,
+            sf_mode = 'upstream_unavailability'
+        ))
+
+    async def test_multi_rcpt_mixed_data_perm(self):
         await self._run_test(Test(
             rcpt = [Recipient(Stage.DATA, Result.SUCCESS),
-                    Recipient(Stage.DATA, Result.PERM)],
+                    # immediate accept&bounce
+                    Recipient(Stage.DATA, Result.PERM, expect_sf=True)],
             stage = Stage.DATA,
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
