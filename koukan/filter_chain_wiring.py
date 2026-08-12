@@ -181,12 +181,6 @@ class FilterChainWiring:
                 'chain': [{
                     'sender': yaml['sender'],
                     'filter': 'storage_writer',
-                    # 'rcpt_timeout': 0,
-                    # 'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
-                    # 'store_and_forward': False,
-                    # 'block_upstream': False,
-                    # 'notify': False,
-                    # 'retry': False
                 }]
             }
             if tag := yaml.get('tag', None):

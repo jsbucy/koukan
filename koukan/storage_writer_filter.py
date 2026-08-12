@@ -694,8 +694,10 @@ class StorageWriterFilter(AsyncFilter):
                 timeout = self._timeout(delta)
                 delta.sf_mail_timeout = timeout
                 delta.sf_rcpt_timeout = [timeout]
+                assert self.rest_id_factory is not None
                 self.group_cursor.clone_tx(
-                    delta, create_leased=self.create_leased)
+                    delta, create_leased=self.create_leased,
+                    rest_id=self.rest_id_factory())
                 assert self.tx_group is not None
                 self.tx_group.tx_cursors.append(
                     self.group_cursor.tx_cursors[-1].clone())

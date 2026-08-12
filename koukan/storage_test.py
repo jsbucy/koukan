@@ -218,7 +218,8 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         group.load(tx_id=tx_id)
         group.clone_tx(
             TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]),
-            create_leased = False)
+            create_leased = False,
+            rest_id='tx_rest_id2')
         assert group.tx_cursors[1].tx is not None
         self.assertEqual(1, group.tx_cursors[1].tx.group_index)
 

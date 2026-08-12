@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import atexit
 from contextlib import nullcontext
 import copy
-import secrets
 import asyncio
 
 from sqlalchemy import create_engine
@@ -1063,7 +1062,8 @@ class GroupCursor:
                 backoff(i)
         assert False, 'unreachable'
 
-    def clone_tx(self, delta : TransactionMetadata, create_leased : bool):
+    def clone_tx(self, delta : TransactionMetadata, create_leased : bool,
+                 rest_id : str):
         assert self.parent.tx_table is not None
 
         tcols = self.parent.tx_table.c
@@ -1078,8 +1078,10 @@ class GroupCursor:
         tx.group_index = len(self.tx_cursors)
 
         assert tx.merge_from(delta)
-        # xxx create without rest_id? actually VersionCache requires?
-        cursor.create(secrets.token_urlsafe(8), tx,
+        # TODO these should never be accessed by rest_id however
+        # unclear how many places in the stack assume every tx has one
+        # e.g. VersionCache.
+        cursor.create(rest_id, tx,
                       create_leased=create_leased,
                       parent_db_id=self.tx_cursors[0].db_id)
         assert cursor._parent_db_id == self.tx_cursors[0].db_id
