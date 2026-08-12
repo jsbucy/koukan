@@ -124,7 +124,8 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             create_leased = True,
             sender=Sender('ingress', yaml={}),
             endpoint_yaml_provider = lambda sender: endpoint_yaml,
-            tx_handler=handler)
+            tx_handler=handler,
+            sync_timeout=5)
 
     def test_smoke(self):
         endpoint_yaml = {
@@ -816,6 +817,34 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             result = Result.SUCCESS,
             sf_mode = 'upstream_unavailability'
         ))
+
+
+    def test_sync(self):
+        endpoint_yaml = {
+            'sf_mode': 'upstream_unavailability'
+        }
+
+        filter = self.create_filter(
+            endpoint_yaml, create_ids=['tx_rest_id'])
+
+        tx = TransactionMetadata()
+        filter.wire_downstream(tx)
+
+        def upstream(filter):
+            tx_cursor = filter.release_transaction_cursor(0)
+            tx_cursor.start_attempt()
+            while tx_cursor.tx is None or tx_cursor.tx.mail_from is None:
+                tx_cursor.wait(tx_cursor.version, 1)
+                tx_cursor.load()
+            tx_cursor.write_envelope(
+                TransactionMetadata(),
+                attempt_delta=TransactionMetadata(mail_response=Response(201)))
+        fut = self.executor.submit(partial(upstream, filter))
+
+        prev = tx.copy()
+        tx.mail_from = Mailbox('alice@example.com')
+        filter.on_update(prev.delta(tx))
+        self.assertEqual(201, tx.mail_response.code)
 
 if __name__ == '__main__':
     logging.basicConfig(

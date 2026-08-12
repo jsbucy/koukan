@@ -122,7 +122,9 @@ class Service:
             with open(config_filename, 'r') as yaml_file:
                 self.root_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
         self.filter_chain_factory = FilterChainFactory(self.root_yaml)
-        self.wiring = FilterChainWiring(self.create_exploder_output)
+        self.wiring = FilterChainWiring(
+            self.create_exploder_output,
+            self.create_exploder_output)
         self.wiring.wire(self.root_yaml, self.filter_chain_factory)
 
         if 'global' in self.root_yaml:
@@ -231,16 +233,20 @@ class Service:
         return secrets.token_urlsafe(self._rest_id_entropy)
 
     def create_exploder_output(
-            self, sender : Sender, block_upstream : bool
+            self, sender : Sender,
+            block_upstream : bool,
+            sync_timeout : Optional[int]
     ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(sender, block_upstream)
+        if (endp := self.create_storage_writer(
+                sender, block_upstream, sync_timeout)
             ) is None:
             return None
         return endp[0]
 
     def create_storage_writer(
             self, sender : Sender,
-            block_upstream : bool = True
+            block_upstream : bool = True,
+            sync_timeout : Optional[int] = None
     ) -> Optional[Tuple[StorageWriterFilter, dict, Sender]]:
         assert self.filter_chain_factory is not None
         if (s := self.filter_chain_factory.get_sender(sender)) is None:
@@ -258,7 +264,8 @@ class Service:
             create_leased=True,
             sender = sender,
             endpoint_yaml_provider = self.get_endpoint_yaml,
-            tx_handler = self._schedule_extra_rcpt_tx)
+            tx_handler = self._schedule_extra_rcpt_tx,
+            sync_timeout = sync_timeout)
         assert self.output_executor is not None
         fut = self.output_executor.submit(
             partial(self._handle_new_tx,

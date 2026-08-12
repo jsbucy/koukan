@@ -23,9 +23,10 @@ from koukan.filter import (
     Mailbox,
     TransactionGroup,
     TransactionMetadata )
+from koukan.filter_chain import Filter, FilterResult
 from koukan.blob import Blob, InlineBlob, WritableBlob
 from koukan.deadline import Deadline
-
+from koukan.storage_schema import VersionConflictException
 from koukan.rest_schema import BlobUri, parse_blob_uri
 from koukan.message_builder import MessageBuilderSpec
 from koukan.sender import Sender
@@ -44,7 +45,7 @@ downstream_responses = {
         450, 'StorageWriterFilter upstream timeout')
 }
 
-class StorageWriterFilter(AsyncFilter):
+class StorageWriterFilter(AsyncFilter, Filter):
     storage : Storage
     # tx_cursor : Optional[TransactionCursor] = None
     group_cursor : Optional[GroupCursor] = None
@@ -65,6 +66,7 @@ class StorageWriterFilter(AsyncFilter):
     tx_group : Optional[TransactionGroup] = None
     # per _timeout()
     next_upstream_timeout : Optional[int] = None
+    sync_timeout : Optional[int] = None
 
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
@@ -72,7 +74,8 @@ class StorageWriterFilter(AsyncFilter):
                  create_leased : bool = False,
                  sender : Optional[Sender] = None,
                  endpoint_yaml_provider : Optional[EndpointYamlProvider] = None,
-                 tx_handler : Optional[TxHandler] = None):
+                 tx_handler : Optional[TxHandler] = None,
+                 sync_timeout : Optional[int] = None):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
@@ -83,6 +86,8 @@ class StorageWriterFilter(AsyncFilter):
         self.tx_handler = tx_handler
         self.upstream_cursor = []
         self._maybe_load_endpoint_yaml(sender)
+        if sync_timeout:
+            self.sync_timeout = sync_timeout
 
     def _maybe_load_endpoint_yaml(
             self, sender : Optional[Sender] = None) -> None:
@@ -840,3 +845,53 @@ class StorageWriterFilter(AsyncFilter):
         leased, other_session = res
         assert self.version is not None
         return (self.version, None, leased, other_session)
+
+    # filter_chain.Filter shim for add_route / notification
+    def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
+        assert self.downstream_tx is not None
+        tx = self.downstream_tx
+        if tx_delta.body is not None and not tx_delta._body_last():
+            tx_delta.body = None
+            if not tx_delta:
+                return FilterResult()
+            tx = self.downstream_tx.copy()
+            tx.body = None
+
+        prev = tx.copy()
+        for i in range(0,5):
+            try:
+                upstream_delta = self.update(tx, tx_delta)
+                break
+            except VersionConflictException:
+                logging.debug('VersionConflictException')
+                if i == 4:
+                    raise
+                backoff(i)
+                utx = self.get()
+                assert utx is not None
+                tx = utx
+                assert tx.merge_from(tx_delta) is not None
+        self.downstream_tx.merge_from(prev.delta(tx))
+
+        deadline = Deadline(self.sync_timeout)
+        if tx.req_inflight():
+            while deadline.remaining() and tx.req_inflight():
+                version = self.version
+                assert version is not None
+                dl = deadline.deadline_left()
+                assert dl is not None
+                prev = tx.copy()
+                rv, upstream_tx = self.wait(version, dl)
+                if upstream_tx is None:
+                    upstream_tx = self.get()
+                assert upstream_tx is not None
+                tx = upstream_tx
+                logging.debug(tx)
+            tx.fill_inflight_responses(Response(450, 'timeout (SWF.on_update)'))
+            # xxx hack cf end of tx_cursor._write() to swap tx.body
+            # with one that was slow-path written e.g. if CompositeBlob
+            tx_no_body = tx.copy()
+            prev.body = tx_no_body.body = None
+            upstream_delta = prev.delta(tx_no_body)
+            self.downstream_tx.merge_from(upstream_delta)
+        return FilterResult()

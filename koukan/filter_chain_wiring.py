@@ -27,7 +27,6 @@ from koukan.filter_chain import BaseFilter, Filter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
-from koukan.async_filter_adapter import AsyncFilterAdapter
 from koukan.async_filter_wrapper import AsyncFilterWrapper
 from koukan.add_route_filter import AddRouteFilter
 from koukan.message_builder_filter import MessageBuilderFilter
@@ -39,12 +38,16 @@ from koukan.mail_ok_filter import MailOkFilter
 
 from koukan.policy_factory import PolicyFactory
 
-StorageWriterFactory = Callable[[Sender, bool],Optional[AsyncFilter]]
+ExploderUpstreamFactory = Callable[[Sender, bool, Optional[int]],
+                                   Optional[AsyncFilter]]
+AddRouteUpstreamFactory = Callable[[Sender, bool, Optional[int]],
+                                   Optional[Filter]]
 
 # really registry/factory for Filter impls that don't have a
 # specialized factory implementation
 class FilterChainWiring:
-    exploder_output_factory : Optional[StorageWriterFactory] = None
+    exploder_upstream_factory : Optional[ExploderUpstreamFactory] = None
+    add_route_upstream_factory : Optional[AddRouteUpstreamFactory] = None
     router_factory : Optional[RecipientRouterFactory] = None
     filter_chain_factory : Optional[FilterChainFactory] = None
     rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
@@ -52,8 +55,10 @@ class FilterChainWiring:
 
     def __init__(
             self,
-            exploder_output_factory : Optional[StorageWriterFactory] = None):
-        self.exploder_output_factory = exploder_output_factory
+            exploder_upstream_factory : Optional[ExploderUpstreamFactory] = None,
+            add_route_upstream_factory : Optional[AddRouteUpstreamFactory] = None):
+        self.exploder_upstream_factory = exploder_upstream_factory
+        self.add_route_upstream_factory = add_route_upstream_factory
         self.rest_endpoint_clients = []
 
     def __del__(self):
@@ -78,6 +83,7 @@ class FilterChainWiring:
         # exploder_output_factory / router handle_new_tx()
         factory.add_filter('exploder', self.exploder)
         factory.add_filter('add_route', self.add_route)
+        factory.add_filter('add_route_upstream', self.add_route_upstream)
 
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
@@ -87,7 +93,6 @@ class FilterChainWiring:
         factory.add_filter('message_validation', self.message_validation)
         factory.add_filter('spf_check', self.spf_check)
         factory.add_filter('dkim_check', self.dkim_check)
-        factory.add_filter('storage_writer', self.storage_writer)
         factory.add_filter('mail_ok', self.mail_ok)
 
     def exploder_upstream(self, sender : Sender,
@@ -97,29 +102,22 @@ class FilterChainWiring:
                           block_upstream : bool,
                           notify : bool,
                           retry : bool):
-        assert self.exploder_output_factory is not None
-        upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            sender, block_upstream)
+        assert self.exploder_upstream_factory is not None
+        upstream : Optional[AsyncFilter] = self.exploder_upstream_factory(
+            sender, block_upstream, None)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
             upstream, rcpt_timeout, store_and_forward=store_and_forward,
             notify=notify, retry=retry)
 
-    def storage_writer(self, yaml : dict, sender : Sender) -> Optional[Filter]:
-                       # sender : Sender,
-                       # rcpt_timeout : float,
-                       # data_timeout : float,
-                       # store_and_forward : bool,
-                       # block_upstream : bool,
-                       # notify : bool,
-                       # retry : bool):
-        assert self.exploder_output_factory is not None
-        upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            sender, True)  # xxx block_upstream
-        if upstream is None:
-            return None
-        return AsyncFilterAdapter(upstream, yaml.get('timeout', 30))
+    def add_route_upstream(
+            self, yaml : dict, sender : Sender) -> Optional[Filter]:
+        assert self.add_route_upstream_factory is not None
+        return self.add_route_upstream_factory(
+            sender,
+            True,  # block_upstream
+            yaml.get('timeout', 30))  # sync_timeout
 
     def exploder(self, yaml, sender : Sender):
         assert sender.yaml is not None
@@ -180,7 +178,7 @@ class FilterChainWiring:
             upstream_yaml = {
                 'chain': [{
                     'sender': yaml['sender'],
-                    'filter': 'storage_writer',
+                    'filter': 'add_route_upstream',
                 }]
             }
             if tag := yaml.get('tag', None):
