@@ -58,9 +58,6 @@ endpoint:
   output_handler:
     downstream_timeout: 10
     upstream_refresh: 10
-    notification:
-        sender: submission
-        tag: notification
     retry_params:
       backoff_factor: 0
       bug_retry: 1
@@ -76,9 +73,6 @@ endpoint:
 - name: submission
   output_handler:
     downstream_timeout: 10
-    notification:
-      sender: submission
-      tag: notification
     retry_params:
       backoff_factor: 0
       bug_retry: 1
@@ -112,11 +106,6 @@ endpoint:
     # no dest: reject
   - filter: message_parser
   - filter: sync
-
-  # - data_timeout: 10
-  #   filter: exploder
-  #   msa: false
-  #   rcpt_timeout: 10
 
 - name: ingress
   output_handler:

@@ -267,9 +267,9 @@ class OutputHandler:
                             'notification')
                         raise ValueError()
                     env_kwargs = {'finalize_attempt': True}
-                    if self._maybe_send_notification(
-                            self.cursor.final_attempt_reason, self.cursor.tx):
-                        env_kwargs['notification_done'] = True
+                    assert self._maybe_send_notification(
+                        self.cursor.final_attempt_reason, self.cursor.tx)
+                    env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
                     if not delta and not env_kwargs and not refresh:
@@ -298,7 +298,7 @@ class OutputHandler:
                 if done and not self.tx.cancelled:
                     self.tx.cancelled = True
                     self.filter_chain.update()
-                logging.debug('done %s', self.rest_id)
+        logging.debug('done %s', self.rest_id)
 
     # -> final attempt reason, next retry time
     def _next_attempt_time(self, now) -> Tuple[Optional[str], Optional[int]]:
@@ -335,10 +335,9 @@ class OutputHandler:
                                  tx : TransactionMetadata) -> bool:
         assert self.cursor.tx is not None
         logging.debug('%s %s', self.notification_params, tx)
-        if self.notification_params is None:
-            return False
         if tx.notification is None:
             return False
+        assert self.notification_params is not None
 
         resp : Optional[Response] = None
         # Note: this is not contingent on self.cursor.input_done. Thus

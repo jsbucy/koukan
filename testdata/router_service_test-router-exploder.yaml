@@ -63,12 +63,8 @@ endpoint:
     rcpt_timeout: 10
 
 - name: submission
-  # allow_incremental: true
   output_handler:
     downstream_timeout: 10
-    notification:
-      sender: submission
-      tag: notification
     retry_params:
       backoff_factor: 0
       bug_retry: 1

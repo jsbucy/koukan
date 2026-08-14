@@ -1022,13 +1022,11 @@ class RouterServiceTest(unittest.TestCase):
         # no_final_notification(bob2) + dsn output
         self._dequeue(2)
 
-        # xxx kludge, fix SyncEndpoint to wait on this
-        for i in range(0,5):
-            if not dsn_endpoint.expectation:
-                break
-            time.sleep(0.1)
-        else:
-            self.fail('didn\'t get dsn')
+        self.assertTrue(self.service.output_executor.wait_empty(5))
+
+        self.assertFalse(self.service.dequeue_one(self.service.output_executor))
+
+        self.assertFalse(dsn_endpoint.expectation)
 
     # message builder is a rest submission feature; first-class rest
     # never uses the exploder
