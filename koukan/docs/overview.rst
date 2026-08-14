@@ -122,27 +122,14 @@ Input/Downstream
 
 fastapi route → RestHandler → StorageWriterFilter → Storage (sqlalchemy)
 
+StorageWriterFilter fans out transactions originating from the smtp
+gateway to separate per-rcpt upstream transactions.
+
 Output/Upstream
 ===============
 
 Storage → OutputHandler → FilterChain → ... → http/json rest output (RestEndpoint)
 
-Exploder
-========
-
-However we need to accommodate multi-rcpt transactions from the smtp
-gateway so we add an internal hop through the Exploder to fan these
-out:
-
-RestHandler → ...Storage
-
-Storage → OutputHandler → FilterChain → ...Exploder → Storage
-
-Storage → OutputHandler → ...
-
-where the Exploder fans out a separate upstream transaction for reach
-rcpt of the downstream transaction and fans the upstream responses
-back in.
 
 Config Walkthrough
 ------------------
@@ -193,11 +180,8 @@ each rest sending application. The sender/tag selects the output_chain
 which is the key into the following endpoint stanza.
 
 The output flow (``endpoint`` stanza) configures the set of steps to
-process a message. Transactions originating as smtp must be handled by
-a chain that ends with ``exploder`` to fan-out multiple smtp
-recipients. This in turn selects another (single-recipient) output
-flow that ends with ``rest_output`` to send rest/http to the gateway or
-other receiving application.
+process a message. Transactions originating from the smtp gateway must
+be handled by a chain with ``sf_mode`` set :ref:`output_chain`.
 
 A common operation is to route messages by recipient address. This is
 done by RecipientRouterFilter called simply ``router`` in the output chain
@@ -221,10 +205,7 @@ filters no-op.
 A few other things to point out in the example config:
 
 In the ingress chains, there is a final "fallthrough" recipient router
-to reject addresses that didn't match any previous filter. There is a
-second instance of the recipient router filters in the
-ingress_exploder chain with ``dry_run: true``. This is to reject
-addresses prior to starting the upstream chain.
+to reject addresses that didn't match any previous filter.
 
 In the submission chain, the first recipient router filter matches our
 own domains to short-circuit directly to our ingress so we have

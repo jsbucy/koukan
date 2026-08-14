@@ -77,8 +77,13 @@ VersionCache. OutputHandler waits for new downstream data, feeds it to
 the upstream chain, and writes upstream responses. RestHandler writes
 new downstream data and then waits for upstream responses.
 
+.. _internals_exploder:
+
 Exploder
 --------
+
+.. note:: Exploder is superseded by store&forward from
+          StorageWriterFilter :ref:`news_exploder`
 
 The router output flow generally assumes single-recipient. SMTP has
 always supported multi-recipient transactions and some old MTAs may

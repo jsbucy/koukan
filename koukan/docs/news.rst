@@ -2,6 +2,33 @@
 NEWS
 ====
 
+.. _news_exploder:
+
+``exploder`` branch
+===================
+
+(merged ~2026/08)
+
+Reimplement :ref:`internals_exploder` functionality in
+StorageWriterFilter. Backwards-compatible with existing configs but we
+expect to deprecate Exploder in the future.
+
+:ref:`output_chain`
+
+StorageWriterFilter now directly orchestrates fan-out of rcpts from a
+downstream smtp tx to multiple/per-rcpt upstream/output tx and then
+fans-in the upstream responses.
+
+Exploder adds a lot of overhead (almost 2x rest request time, db
+writes, etc due to taking 2 trips through most of the stack) whereas
+most transactions only have 1 recipient.
+
+This creates some additional complexity in that exploder gives you a
+single point to reject the message whereas now there must be some
+synchronization across upstream tx :ref:`transaction_group`. We think
+this is a good tradeoff vs the large performance benefit.
+
+
 ``dns_policy`` branch
 =====================
 
@@ -10,8 +37,9 @@ NEWS
 Add DnsResolutionFilterOutput :ref:`dns_resolution_filter`
 
 drive-by improvements:
-- set smtp server ident
-- smtp client logging
+
+* set smtp server ident
+* smtp client logging
 
 
 ``signals_rcpt`` branch

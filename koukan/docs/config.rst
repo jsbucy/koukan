@@ -67,16 +67,38 @@ upstream_sender/upstream_tag: exploder rewrites sender/tag to this
 tag: per-tag parameter overrides
 
 
+.. _output_chain:
+
 Output Chains
 -------------
 
 name: referenced by senders
 
-msa: true if this is terminating smtp msa port 587 from clients
-injecting messages for the first time, enables store&forward in more
-circumstances, further details in internals/exploder
+sf_mode: store&forward mode for chains terminating transactions
+originating from the smtp gateway. This should be unset for
+first-class endpoints and Exploder.
+
+* ``mixed_data_response``: ~ingress/relay. Downstream is another mta
+  that is prepared to retry transient errors. Returns upstream rcpt
+  errors verbatim. If all upstream data responses have the same major
+  code, returns that. Else enables retry/notification on the upstream tx
+  and returns 250 downstream.
+* ``upstream_unavailability``: ~submission. Downstream is a client
+  that expects the server to retry. Waits for a short time for an
+  upstream response ("opportunistic cut-through"), if a temp error or
+  timeout, enables retry/notification on the upstream tx and returns 250
+  downstream. Then per mixed_data_response.
+
+StorageWriterFilter orchestrates fan-out of rcpts from a downstream
+smtp tx to multiple upstream/output tx and then fans-in the upstream
+responses.
+
+msa: (Exploder only :ref:`internals_exploder`) true if this is
+terminating smtp msa port 587 from clients injecting messages for the
+first time, enables store&forward in more circumstances.
 
 output_handler:
+
   retry_params:
 
     max_attempts: maximum number of retries
@@ -450,6 +472,34 @@ The router can optionally send filter_output to rest receivers router.yaml::
 
 This defaults to false. If enabled, the router will send HTTP PATCH to
 the transaction endpoint to populate filter_output.
+
+.. _transaction_group:
+
+Transaction Groups
+^^^^^^^^^^^^^^^^^^
+Multi-rcpt transactions originating from SMTP have some additional
+complications. All upstream tx fanned-out from the downstream are
+wired with tx.group referencing a shared TransactionGroup. This is a
+synchronization device to coordinate reusing filter
+output. cf. koukan.dkim_check_filter for an example of this.
+
+This is suitable for signals that are independent of the recipient
+e.g. dkim. Note that in general smtp returns a single data response
+for all recipients. Suppose you want to reject messages based on a
+per-recipient content policy. You have a couple of options:
+
+- don't accept additional recipients if they have a different
+  classifier than the recipients received so far. This may cause
+  errors/delays receiving multi-rcpt messages from old MTAs but may be
+  rare enough to be viable now.
+- reject the message if any of the recipient classifiers reject
+  it. This may cause false positives.
+- accept&bounce per recipient. Bouncing spam considered harmful.
+- only reject the message if all per-rcpt classifiers rejected it and
+  put it in the spam folder otherwise. This can be implemented with a
+  separate "group reject decision" signal that consumes the
+  per-upstream outputs.
+  
 
 Signals
 ^^^^^^^
