@@ -22,8 +22,6 @@ CREATE TABLE Transactions (
 
   parent_id INTEGER,
 
-  -- probably want rcpt# ?
-
   -- tag/queue/service/host
   json JSONB,
 

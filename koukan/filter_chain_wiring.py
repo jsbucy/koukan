@@ -169,8 +169,6 @@ class FilterChainWiring:
             yaml['retry'])
 
     def add_route(self, yaml, sender : Sender):
-        logging.debug(sender)
-        logging.debug(yaml)
         if 'sender' not in yaml:  # xxx noop?
             return None
         assert self.filter_chain_factory is not None

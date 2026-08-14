@@ -47,7 +47,6 @@ downstream_responses = {
 
 class StorageWriterFilter(AsyncFilter, Filter):
     storage : Storage
-    # tx_cursor : Optional[TransactionCursor] = None
     group_cursor : Optional[GroupCursor] = None
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
@@ -124,11 +123,9 @@ class StorageWriterFilter(AsyncFilter, Filter):
             return True, None
         assert len(self.group_cursor.tx_cursors) == 1
         res = self.group_cursor.tx_cursors[0].wait(timeout)
-        logging.debug(res)
         if res is None:
             return False, None
         success, cloned = res
-        logging.debug([c.version for c in self.group_cursor.tx_cursors])
         if not success:
             return False, None
         return True, self._get() if cloned else None
@@ -140,8 +137,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         assert self.group_cursor is not None
         if self.version != version:
             return True, None
-        logging.debug(version)
-        logging.debug([c.version for c in self.group_cursor.tx_cursors])
 
         # if there's a s&f downstream timeout, cap timeout by that,
         # _get() after will set s&f response and bump version.
@@ -151,12 +146,10 @@ class StorageWriterFilter(AsyncFilter, Filter):
             logging.debug('%d %d', self.next_upstream_timeout, now_ms)
             upstream_timeout = max(
                 self.next_upstream_timeout - now_ms, 0) / 1000.0
-            logging.debug('%f %f', timeout, upstream_timeout)
             timeout = min(timeout, upstream_timeout)
             upstream = timeout == upstream_timeout
 
         res = await self.group_cursor.wait_async(timeout)
-        logging.debug(res)
         if res is None and not upstream:
             return False, None
         if res is not None:
@@ -216,8 +209,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         return int(self._millis() + secs * 1e3)
 
     def _create(self, tx : TransactionMetadata) -> None:
-        # TODO handle
-        # assert len(tx.rcpt_to) <= 1
         tx_cursor = self.storage.get_transaction_cursor()
         assert self.rest_id_factory is not None
         rest_id = self.rest_id_factory()
@@ -285,9 +276,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
             if not self.group_cursor.load(tx_rest_id=self.rest_id):
                 return False
 
-        logging.debug('%s %s %s',
-                      self.rest_id, self.group_cursor.db_id_versions(), tx)
-
         if not self.group_cursor.tx_cursors:  # 404 e.g. after GC
             return False
         tx0 = self.group_cursor.tx_cursors[0].tx
@@ -354,14 +342,11 @@ class StorageWriterFilter(AsyncFilter, Filter):
         def any_rcpt_ok(rcpts : List[Optional[Response]]) -> bool:
             return any([r is not None and r.ok() for r in rcpts])
         def unavail(tx, resp : Optional[Response], timeout : int) -> bool:
-            logging.debug('%d %s %s %s', now, timeout, now > timeout, resp)
             res = (resp is None and now > timeout) or (
                 resp is not None and resp.temp())
-            logging.debug(res)
             return res
 
         prev = tx.copy()
-        logging.debug(tx)
         sf_mail = False
 
         if (not tx.downstream_mail_response and
@@ -381,7 +366,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 rcpt_resp = None
             else:
                 rcpt_resp = tx.rcpt_response[j]
-            logging.debug(rcpt_resp)
             if ((j >= len(tx.downstream_rcpt_response) or
                  not tx.downstream_rcpt_response[j]) and
                 (sf_mail or unavail(tx, rcpt_resp, tx.sf_rcpt_timeout[j]))):
@@ -413,7 +397,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
                   unavail(tx, tx.data_response, tx.sf_data_timeout)):
                 sf_data = True
                 tx.downstream_data_response = DownstreamResponse.SF
-        logging.debug(tx.downstream_data_response)
         if tx.downstream_data_response:
             tx.data_response = downstream_responses[
                 tx.downstream_data_response]
@@ -438,13 +421,12 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 downstream_resp_delta.notification = {}
             tx_cursor.write_envelope(downstream_resp_delta)
 
-        logging.debug(tx)
         return sf_data
 
     def _merge_upstream_tx(self, upstream_tx):
         tx = upstream_tx[0].copy()
         # TODO upstream mail response is most likely 250 noop from
-        # rcpt router. If the config can return a real upstream
+        # MailOkFilter. If the config can return a real upstream
         # response here (unlikely: only with pipelining or no rcpt
         # routing/static outbound gw), any mail_response err will end
         # the tx.
@@ -610,9 +592,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         try:
             upstream_delta = self._update(tx, tx_delta)
             assert upstream_delta is not None
-            # xxx update to group_cursor
-            # if self.tx_cursor is not None:
-            #     assert self.tx_cursor.version is not None
             return upstream_delta
         finally:
             if needs_create and self.upstream_cursor is None:
@@ -695,7 +674,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 # complexity in that the rcpt vector in tx0 may become
                 # sparse as a result of this.
                 delta = TransactionMetadata(rcpt_to=[rcpt])
-                # xxx refactor
+                # xxx only set these timeouts if sf_unavail?
                 timeout = self._timeout(delta)
                 delta.sf_mail_timeout = timeout
                 delta.sf_rcpt_timeout = [timeout]
@@ -731,7 +710,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
                         final_attempt_reason='SWF fastfail')
                 else:
                     created = True
-                logging.debug(sched)
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 if downstream_delta.body is not None and downstream_delta._body_last():
@@ -748,8 +726,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         # TODO how often is the cursor in this SWF reused after return
         # from this call?
         if created and self.create_leased:
-            logging.debug(self.upstream_cursor)
-            logging.debug(self.group_cursor.tx_cursors)
             with self.mu:
                 for i in range(len(self.upstream_cursor),
                                len(self.group_cursor.tx_cursors)):
@@ -846,7 +822,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         assert self.version is not None
         return (self.version, None, leased, other_session)
 
-    # filter_chain.Filter shim for add_route / notification
+    # filter_chain.Filter shim for add_route
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         assert self.downstream_tx is not None
         tx = self.downstream_tx

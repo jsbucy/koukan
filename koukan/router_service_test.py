@@ -54,9 +54,8 @@ class RouterServiceTest(unittest.TestCase):
         self.endpoints = []
 
     def get_endpoint(self, yaml, sender : Sender):
-        logging.debug('RouterServiceTest.get_endpoint %s', sender)  # stack_info=True)
+        logging.debug('RouterServiceTest.get_endpoint %s', sender)
         with self.lock:
-            #self.cv.wait_for(lambda: bool(self.endpoints))
             return self.endpoints.pop(0)
 
     def add_endpoint(self, endpoint):

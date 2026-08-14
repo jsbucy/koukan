@@ -1,7 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 from typing import List, Optional, Tuple
-import logging
 from abc import ABC, abstractmethod
 import copy
 from io import BytesIO, IOBase

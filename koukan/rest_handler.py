@@ -126,11 +126,8 @@ class RestHandler(Handler):
                 content=resp_json,
                 headers=headers_dict)
         else:
-            logging.debug(msg)
             resp = PlainTextResponse(
                 status_code=code, content=msg, headers=headers_dict)
-        logging.debug(headers_dict)
-        logging.debug(resp)
         return resp
 
     def _handle_async(self, request, fn):
@@ -486,7 +483,7 @@ class RestHandler(Handler):
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
         except VersionConflictException:
-            logging.exception('VersionConflictException')
+            logging.debug('VersionConflictException')
             return self.response(code=412, msg='update conflict')
         if upstream_delta is None:
             return self.response(

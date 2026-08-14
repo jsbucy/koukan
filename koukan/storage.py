@@ -21,8 +21,8 @@ from sqlalchemy.sql.expression import CTE, Select, exists
 from sqlalchemy import event
 
 from sqlalchemy import (
-    Integer, LargeBinary, MetaData, String, Table,
-    and_, bindparam, cast, case as sa_case, column,
+    LargeBinary, MetaData, String, Table,
+    and_, cast, case as sa_case, column,
     delete, event, func, insert, join, literal, not_, or_, select,
     true as sa_true, update, union_all, values)
 
@@ -412,7 +412,6 @@ class TransactionCursor:
             res = db_tx.execute(ins)
 
         self.blobs = blobs
-        logging.debug(blobs)
 
         if not blobs_done:
             return False
