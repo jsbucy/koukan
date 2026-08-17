@@ -620,14 +620,20 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         async def get_downstream():
             for i in range(0,20):
                 tx = filter.get()
-                logging.debug(tx)
+                logging.debug('%d %s', filter.version, tx)
                 if not tx.req_inflight():
                     return tx
+                prev = filter.version
                 res = await filter.wait_async(filter.version, 1)
+                logging.debug(res)
+                success, updated_tx = res
+                if success:
+                    self.assertTrue(filter.version > prev)
             else:
                 self.fail('upstream timeout')
 
         tx = await get_downstream()
+        self.assertIsNone(filter.next_upstream_timeout)
 
         for i,rcpt in enumerate(t.rcpt):
             prev = tx.copy()

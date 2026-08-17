@@ -252,7 +252,12 @@ class StorageWriterFilter(AsyncFilter, Filter):
             # self.rest_id = rest_id
             self.cv.notify_all()
 
-    def _update_timeout(self, downstream_resp : Optional[int], timeout):
+    def _update_timeout(self,
+                        upstream_resp : Optional[Response],
+                        downstream_resp : Optional[int],
+                        timeout : Optional[int]):
+        if upstream_resp is not None:
+            return
         if downstream_resp is not None and downstream_resp:
             return
         if timeout is None:
@@ -307,20 +312,25 @@ class StorageWriterFilter(AsyncFilter, Filter):
             assert tx0 is not None
             logging.debug(tx0)
             self._update_timeout(
+                tx0.mail_response,
                 tx0.downstream_mail_response, tx0.sf_mail_timeout)
         for txc in self.group_cursor.tx_cursors:
             assert txc.tx is not None
             logging.debug(txc.tx)
             for i in range(0, len(txc.tx.rcpt_to)):
+                upstream_resp = None
                 downstream_resp = None
-                if i >= len(txc.tx.sf_rcpt_timeout):
-                    continue
-                if (i < len(txc.tx.downstream_rcpt_response) and
-                    not txc.tx.downstream_rcpt_response[i]):
-                    continue
-                # placeholder non-None value
-                self._update_timeout(1, txc.tx.sf_rcpt_timeout[i])
+                upstream_timeout = None
+                if i < len(txc.tx.rcpt_response):
+                    upstream_resp = txc.tx.rcpt_response[i]
+                if i < len(txc.tx.sf_rcpt_timeout):
+                    upstream_timeout = txc.tx.sf_rcpt_timeout[i]
+                if i < len(txc.tx.downstream_rcpt_response):
+                    downstream_resp = txc.tx.downstream_rcpt_response[i]
+                self._update_timeout(
+                    upstream_resp, downstream_resp, upstream_timeout)
             self._update_timeout(
+                txc.tx.data_response,
                 txc.tx.downstream_data_response, txc.tx.sf_data_timeout)
 
         return True
@@ -389,11 +399,10 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
         # if any rcpt_resp is SF then data_resp is SF
         sf_data = False
-        if tx.downstream_data_response is None:
-            if (sf_rcpt and tx._body_last()):
+        if tx._body_last() and tx.downstream_data_response is None:
+            if sf_rcpt:
                 tx.downstream_data_response = DownstreamResponse.SF
             elif (not tx.downstream_data_response and
-                  tx._body_last() and
                   unavail(tx, tx.data_response, tx.sf_data_timeout)):
                 sf_data = True
                 tx.downstream_data_response = DownstreamResponse.SF
@@ -768,6 +777,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         if self.sf_mode is not None:
             delta.sf_data_timeout = self._timeout(
                 TransactionMetadata(body=writer.blob))
+            self._update_timeout(None, None, delta.sf_data_timeout)
         assert self.group_cursor is not None
         self.group_cursor.blob_done(writer.blob, delta)
 
