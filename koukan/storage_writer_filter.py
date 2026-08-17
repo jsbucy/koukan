@@ -38,11 +38,14 @@ class DownstreamResponse(IntEnum):
     NONE = 0
     SF = 1
     UPSTREAM_TIMEOUT = 2
+    TOO_MANY_RCPTS = 2
 
 downstream_responses = {
     DownstreamResponse.SF: Response(250, 'StorageWriterFilter store&forward'),
     DownstreamResponse.UPSTREAM_TIMEOUT: Response(
-        450, 'StorageWriterFilter upstream timeout')
+        450, 'StorageWriterFilter upstream timeout'),
+    DownstreamResponse.TOO_MANY_RCPTS: Response(
+        451, '4.5.3 too many recipients (SWF could not schedule upstream)')
 }
 
 class StorageWriterFilter(AsyncFilter, Filter):
@@ -143,11 +146,12 @@ class StorageWriterFilter(AsyncFilter, Filter):
         upstream = False
         if self.next_upstream_timeout is not None:
             now_ms = self._millis()
-            logging.debug('%d %d', self.next_upstream_timeout, now_ms)
             upstream_timeout = max(
                 self.next_upstream_timeout - now_ms, 0) / 1000.0
-            timeout = min(timeout, upstream_timeout)
-            upstream = timeout == upstream_timeout
+            upstream = False
+            if upstream_timeout < timeout:
+                timeout = upstream_timeout
+                upstream = True
 
         res = await self.group_cursor.wait_async(timeout)
         if res is None and not upstream:
@@ -167,7 +171,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
                     lambda: len(self.upstream_cursor) > i and
                     self.upstream_cursor[i] is not None or
                     self.create_err, 3):
-                logging.debug(self.upstream_cursor)
                 logging.warning(
                     'StorageWriterFilter.get_transaction_cursor timeout %s',
                     self.create_err)
@@ -232,6 +235,8 @@ class StorageWriterFilter(AsyncFilter, Filter):
             storage_tx.sf_mail_timeout = timeout
             if storage_tx.rcpt_to:
                 storage_tx.sf_rcpt_timeout = [timeout] * len(storage_tx.rcpt_to)
+            if storage_tx._body_last():
+                storage_tx.sf_data_timeout = timeout
         assert self.tx_group is None
         self.tx_group = TransactionGroup([])
         storage_tx.group = self.tx_group
@@ -241,16 +246,16 @@ class StorageWriterFilter(AsyncFilter, Filter):
         self.tx_group.tx_cursors.extend(
             [c.clone() for c in self.group_cursor.tx_cursors])
 
-        self.rest_id = rest_id  # XXX locking below?
+        # wake up release_transaction_cursor(0)
+        with self.mu:
+            self.rest_id = rest_id
+            self.cv.notify_all()
 
         if rcpt_to:
             prev = storage_tx.copy()
             storage_tx.rcpt_to.extend(rcpt_to)
             self._update(storage_tx, prev.delta(storage_tx))
 
-        with self.mu:
-            # self.rest_id = rest_id
-            self.cv.notify_all()
 
     def _update_timeout(self,
                         upstream_resp : Optional[Response],
@@ -270,7 +275,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
     # xxx _maybe_load()?
     def _load(self, cache_only=False) -> bool:
-        logging.debug(self.rest_id)
         tx = None
         if self.group_cursor is None:
             self.group_cursor = GroupCursor(self.storage, rest_id=self.rest_id)
@@ -310,13 +314,11 @@ class StorageWriterFilter(AsyncFilter, Filter):
         if self.group_cursor.tx_cursors:
             tx0 = self.group_cursor.tx_cursors[0].tx
             assert tx0 is not None
-            logging.debug(tx0)
             self._update_timeout(
                 tx0.mail_response,
                 tx0.downstream_mail_response, tx0.sf_mail_timeout)
         for txc in self.group_cursor.tx_cursors:
             assert txc.tx is not None
-            logging.debug(txc.tx)
             for i in range(0, len(txc.tx.rcpt_to)):
                 upstream_resp = None
                 downstream_resp = None
@@ -410,18 +412,16 @@ class StorageWriterFilter(AsyncFilter, Filter):
             tx.data_response = downstream_responses[
                 tx.downstream_data_response]
 
-        prev_downstream_resp = TransactionMetadata()
-        downstream_resp = TransactionMetadata()
-
         # compute the delta of just the downstream resp fields to write
         # prev -> prev_downstream_resp
         # tx -> downstream_resp
+        prev_downstream_resp = TransactionMetadata()
+        downstream_resp = TransactionMetadata()
         for t,dr in (prev,prev_downstream_resp),(tx,downstream_resp):
             dr.downstream_mail_response = t.downstream_mail_response
             dr.downstream_rcpt_response = t.downstream_rcpt_response
             dr.downstream_data_response = t.downstream_data_response
-        downstream_resp_delta = prev_downstream_resp.delta(
-            downstream_resp)
+        downstream_resp_delta = prev_downstream_resp.delta(downstream_resp)
 
         if downstream_resp_delta:
             if (downstream_resp_delta.downstream_data_response ==
@@ -432,18 +432,17 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
         return sf_data
 
-    def _merge_upstream_tx(self, upstream_tx):
+    def _merge_upstream_tx(self, upstream_tx : List[TransactionMetadata]):
+        assert self.group_cursor is not None
         tx = upstream_tx[0].copy()
         # TODO upstream mail response is most likely 250 noop from
         # MailOkFilter. If the config can return a real upstream
         # response here (unlikely: only with pipelining or no rcpt
         # routing/static outbound gw), any mail_response err will end
         # the tx.
-        # xxx why does this use the cursor one instead of upstream_tx?
-        for cursor in self.group_cursor.tx_cursors[1:]:
-            assert cursor.tx is not None
-            tx.rcpt_to.extend(cursor.tx.rcpt_to)
-            tx.rcpt_response.extend(cursor.tx.rcpt_response)
+        for txi in upstream_tx[1:]:
+            tx.rcpt_to.extend(txi.rcpt_to)
+            tx.rcpt_response.extend(txi.rcpt_response)
         tx.data_response = None
 
         # NOTE Normally, output flow returns a timeout response if the
@@ -480,21 +479,17 @@ class StorageWriterFilter(AsyncFilter, Filter):
         if self.sf_mode is None:
             assert len(self.group_cursor.tx_cursors) <= 1
 
-        def copy_tx(c):
-            assert c.tx is not None
-            return c.tx.copy()
-        upstream_tx = [copy_tx(c) for c in self.group_cursor.tx_cursors]
-        assert self.group_cursor.tx_cursors[0].db_id is not None
-
         # convert upstream timeout/temp err to 250 s&f resp
         sf_cursor = []
-        if self.sf_mode == 'upstream_unavailability':
-            for i,tx in enumerate(upstream_tx):
-                tx_cursor = self.group_cursor.tx_cursors[i]
-                sf = self._do_sf_unavail(tx, tx_cursor)
+        upstream_tx : List[TransactionMetadata] = []
+        for tx_cursor in self.group_cursor.tx_cursors:
+            assert tx_cursor.tx is not None
+            txi = tx_cursor.tx.copy()
+            upstream_tx.append(txi)
+            if self.sf_mode == 'upstream_unavailability':
+                sf = self._do_sf_unavail(txi, tx_cursor)
                 if sf:
                     sf_cursor.append(tx_cursor)
-
         tx = self._merge_upstream_tx(upstream_tx)
 
         for t in upstream_tx:
@@ -518,10 +513,14 @@ class StorageWriterFilter(AsyncFilter, Filter):
             if not any(r for r in tx.rcpt_response if r is not None and r.ok()):
                 return False
             return True
-        rcpt_ok_tx = [ t for t in upstream_tx if rcpt_ok(t) ]
+        # these are really non-None but need the optional to be
+        # compatible with same_data_response() (below)
+        rcpt_ok_tx : List[Optional[TransactionMetadata]] = [
+            t for t in upstream_tx if rcpt_ok(t) ]
 
         # common case
         if len(rcpt_ok_tx) == 1:
+            assert rcpt_ok_tx[0] is not None
             tx.data_response = rcpt_ok_tx[0].data_response
             logging.debug('single rcpt data resp')
             return tx
@@ -530,21 +529,23 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 503, '5.5.1 failed precondition: all rcpts failed (SWF)')
             return tx
 
-        def same_data_response(lhs : TransactionMetadata,
-                               rhs : TransactionMetadata
+        def same_data_response(lhs : Optional[TransactionMetadata],
+                               rhs : Optional[TransactionMetadata]
                                ) -> Optional[TransactionMetadata]:
+            if lhs is None or rhs is None:
+                return None
             assert lhs.data_response is not None
             assert rhs.data_response is not None
             if (lhs.data_response.major_code() !=
                 rhs.data_response.major_code()):
                 return None
             return lhs
-
         data_resp_tx = reduce(same_data_response, rcpt_ok_tx)
         logging.debug(data_resp_tx)
         # all upstream data responses have the same major code
         if data_resp_tx is not None:
             data_resp = data_resp_tx.data_response
+            assert data_resp is not None
             tx.data_response = Response(
                 data_resp.code,
                 data_resp.message + ' (SWF Exploder same response)')
@@ -653,11 +654,13 @@ class StorageWriterFilter(AsyncFilter, Filter):
             # TODO do this in a batch if we get multiple (moot
             # without pipelining)
             assert self.group_cursor.tx_cursors[0].tx is not None
-            logging.debug(self.group_cursor.tx_cursors[0].tx)
-            # xxx there was a bug in AsyncFilterAdapter where it was
+            # TODO there was a bug in AsyncFilterAdapter where it was
             # retrying after it succeeded the first time... possibly
             # this should keep a copy of the downstream multi-rcpt tx
             # to make sure the deltas make sense
+
+            # if the first tx doesn't have any rcpts yet, put the first
+            # rcpt we get there.
             if (self.sf_mode is None or
                 (downstream_delta.rcpt_to and
                  not self.group_cursor.tx_cursors[0].tx.rcpt_to)):
@@ -670,8 +673,9 @@ class StorageWriterFilter(AsyncFilter, Filter):
                     delta.rcpt_to = [delta.rcpt_to[0]]
                 self.group_cursor.tx_cursors[0].write_envelope(
                     delta, max_conflict_retries=1)
+                assert not downstream_delta.rcpt_to_list_offset
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
-                # xxx rcpt_to_list_offset?
+
 
             for rcpt in downstream_delta.rcpt_to:
                 assert rcpt is not None
@@ -707,13 +711,13 @@ class StorageWriterFilter(AsyncFilter, Filter):
                     cursor = self.group_cursor.tx_cursors[-1]
                     cursor.start_attempt()
                     # TODO option to s&f on this err?
+                    tx = TransactionMetadata()
+                    tx.downstream_rcpt_response = [
+                        DownstreamResponse.TOO_MANY_RCPTS]
                     cursor.write_envelope(
-                        TransactionMetadata(),
+                        tx,
                         attempt_delta=TransactionMetadata(
-                            mail_response=Response(250, 'swf fastfail'),
-                            rcpt_response=[
-                                Response(451, '4.5.3 too many recipients '
-                                         '(SWF could not schedule upstream)')]),
+                            mail_response=Response(250, 'swf fastfail')),
                         finalize_attempt=True,
                         max_conflict_retries=1,
                         final_attempt_reason='SWF fastfail')
