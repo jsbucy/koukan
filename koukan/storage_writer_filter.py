@@ -38,14 +38,16 @@ class DownstreamResponse(IntEnum):
     NONE = 0
     SF = 1
     UPSTREAM_TIMEOUT = 2
-    TOO_MANY_RCPTS = 2
+    BUSY = 2
 
 downstream_responses = {
     DownstreamResponse.SF: Response(250, 'StorageWriterFilter store&forward'),
     DownstreamResponse.UPSTREAM_TIMEOUT: Response(
         450, 'StorageWriterFilter upstream timeout'),
-    DownstreamResponse.TOO_MANY_RCPTS: Response(
-        451, '4.5.3 too many recipients (SWF could not schedule upstream)')
+    # https://www.iana.org/assignments/smtp-enhanced-status-codes
+    # gives 453 for this which appears to be nonstandard
+    DownstreamResponse.BUSY: Response(
+        451, '4.3.2 server busy (SWF could not schedule rcpt upstream)')
 }
 
 class StorageWriterFilter(AsyncFilter, Filter):
@@ -570,7 +572,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         # retries until the client does a GET that returns the 250
         # s&f response. Formally, the update to input_done would
         # start a timer that triggers this.
-        logging.debug([c.tx for c in sf_cursor])
         def needs_retry(c):
             assert c.tx is not None
             # would have early-returned if still waiting for timeout (above)
@@ -581,7 +582,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         if not sf_cursor:
             return tx
 
-        logging.debug(sf_cursor)
         self.group_cursor.update_all(
             TransactionMetadata(
                 retry = {},
@@ -609,6 +609,53 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 with self.mu:
                     self.create_err = True
                     self.cv.notify_all()
+
+    def _create_extra_rcpt_tx(self, rcpt : Mailbox) -> bool:
+        assert self.group_cursor is not None
+        assert rcpt is not None
+        # This creates the db tx before we know if the
+        # executor is going to overflow (below). We could try
+        # to schedule the upstream and if that fails, record
+        # the fact in tx0 but I think all that saves is the
+        # row and not the write and creates some additional
+        # complexity in that the rcpt vector in tx0 may become
+        # sparse as a result of this.
+        delta = TransactionMetadata(rcpt_to=[rcpt])
+        # xxx only set these timeouts if sf_unavail?
+        timeout = self._timeout(delta)
+        delta.sf_mail_timeout = timeout
+        delta.sf_rcpt_timeout = [timeout]
+        assert self.rest_id_factory is not None
+        cursor = self.group_cursor.clone_tx(
+            delta, create_leased=self.create_leased,
+            rest_id=self.rest_id_factory())
+        assert self.tx_group is not None
+        self.tx_group.tx_cursors.append(cursor.clone())
+
+        assert self.tx_handler is not None
+        assert self.sender is not None
+        # TODO Executor currently has no queueing, schedule()
+        # fastfails if it's full. This should probably wait for some
+        # fraction of the upstream timeout?
+        if (sched := self.tx_handler(
+                self.sender,
+                partial(self.release_transaction_cursor,
+                        len(self.group_cursor.tx_cursors) - 1))):
+            return True
+        cursor.start_attempt()
+        # TODO option to s&f on this err?
+        tx = TransactionMetadata()
+        tx.downstream_rcpt_response = [ DownstreamResponse.BUSY ]
+        cursor.write_envelope(
+            tx,
+            attempt_delta=TransactionMetadata(
+                mail_response=Response(
+                    250, 'mail ok (swf executor overflow)')),
+            finalize_attempt=True,
+            max_conflict_retries=1,
+            final_attempt_reason='SWF fastfail')
+        return False
+
 
     # caller handles VersionConflictException -> http 412
     def _update(self,
@@ -676,53 +723,9 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 assert not downstream_delta.rcpt_to_list_offset
                 downstream_delta.rcpt_to = downstream_delta.rcpt_to[1:]
 
-
             for rcpt in downstream_delta.rcpt_to:
                 assert rcpt is not None
-                # This creates the db tx before we know if the
-                # executor is going to overflow (below). We could try
-                # to schedule the upstream and if that fails, record
-                # the fact in tx0 but I think all that saves is the
-                # row and not the write and creates some additional
-                # complexity in that the rcpt vector in tx0 may become
-                # sparse as a result of this.
-                delta = TransactionMetadata(rcpt_to=[rcpt])
-                # xxx only set these timeouts if sf_unavail?
-                timeout = self._timeout(delta)
-                delta.sf_mail_timeout = timeout
-                delta.sf_rcpt_timeout = [timeout]
-                assert self.rest_id_factory is not None
-                self.group_cursor.clone_tx(
-                    delta, create_leased=self.create_leased,
-                    rest_id=self.rest_id_factory())
-                assert self.tx_group is not None
-                self.tx_group.tx_cursors.append(
-                    self.group_cursor.tx_cursors[-1].clone())
-
-                # callable to top-level router to start handler
-                # if this fails executor overflow, write rcpt_resp 450
-                # server busy, etc.
-                assert self.tx_handler is not None
-                assert self.sender is not None
-                if not (sched := self.tx_handler(
-                        self.sender,
-                        partial(self.release_transaction_cursor,
-                                len(self.group_cursor.tx_cursors) - 1))):
-                    cursor = self.group_cursor.tx_cursors[-1]
-                    cursor.start_attempt()
-                    # TODO option to s&f on this err?
-                    tx = TransactionMetadata()
-                    tx.downstream_rcpt_response = [
-                        DownstreamResponse.TOO_MANY_RCPTS]
-                    cursor.write_envelope(
-                        tx,
-                        attempt_delta=TransactionMetadata(
-                            mail_response=Response(250, 'swf fastfail')),
-                        finalize_attempt=True,
-                        max_conflict_retries=1,
-                        final_attempt_reason='SWF fastfail')
-                else:
-                    created = True
+                created |= self._create_extra_rcpt_tx(rcpt)
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 if downstream_delta.body is not None and downstream_delta._body_last():
@@ -733,8 +736,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
         logging.debug('StorageWriterFilter.update %s result %s',
                       self.rest_id, [c.tx for c in self.group_cursor.tx_cursors])
-
-        logging.debug('input tx %s', tx)
 
         # TODO how often is the cursor in this SWF reused after return
         # from this call?

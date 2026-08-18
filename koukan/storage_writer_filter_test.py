@@ -241,8 +241,8 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         logging.debug(tx)
         self.assertEqual(201, tx.mail_response.code)
         self.assertEqual([202, 451], [r.code for r in tx.rcpt_response])
-        self.assertEqual('4.5.3 too many recipients '
-                         '(SWF could not schedule upstream)',
+        self.assertEqual('4.3.2 server busy '
+                         '(SWF could not schedule rcpt upstream)',
                          tx.rcpt_response[1].message)
 
     def test_store_and_forward_unavailability(self):

@@ -1062,7 +1062,7 @@ class GroupCursor:
         assert False, 'unreachable'
 
     def clone_tx(self, delta : TransactionMetadata, create_leased : bool,
-                 rest_id : str):
+                 rest_id : str) -> TransactionCursor:
         assert self.parent.tx_table is not None
 
         tcols = self.parent.tx_table.c
@@ -1085,6 +1085,7 @@ class GroupCursor:
                       parent_db_id=self.tx_cursors[0].db_id)
         assert cursor._parent_db_id == self.tx_cursors[0].db_id
         self.tx_cursors.append(cursor)
+        return cursor
 
     def update_all(self, tx_delta : TransactionMetadata,
                    input_done : Optional[bool] = False,
