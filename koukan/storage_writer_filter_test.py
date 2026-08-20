@@ -143,7 +143,6 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             self.storage,
             rest_id_factory = rest_id_factory,
             rest_id = update_id,
-            create_leased = True,
             sender=Sender('ingress', yaml={}),
             endpoint_yaml_provider = lambda sender: endpoint_yaml,
             tx_handler=handler if handler else self.start_upstream,

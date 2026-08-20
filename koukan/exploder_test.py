@@ -146,7 +146,6 @@ class ExploderTest(unittest.TestCase):
         endpoint = StorageWriterFilter(
             self.storage,
             rest_id_factory=rest_id_factory,
-            create_leased=True,
             endpoint_yaml_provider = lambda sender: {},
             tx_handler = tx_handler)
         self.upstream_endpoints.append(endpoint)

@@ -55,7 +55,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
     group_cursor : Optional[GroupCursor] = None
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
-    create_leased : bool = False
     endpoint_yaml_provider : Optional[EndpointYamlProvider] = None
     endpoint_yaml : Optional[Dict[str, Any]] = None
     sf_mode : Optional[str] = None
@@ -70,7 +69,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
     def __init__(self, storage,
                  rest_id_factory : Optional[Callable[[], str]] = None,
                  rest_id : Optional[str] = None,
-                 create_leased : bool = False,
                  sender : Optional[Sender] = None,
                  endpoint_yaml_provider : Optional[EndpointYamlProvider] = None,
                  tx_handler : Optional[TxHandler] = None,
@@ -78,7 +76,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
         self.storage = storage
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
-        self.create_leased = create_leased
         self.endpoint_yaml_provider = endpoint_yaml_provider
         self.tx_handler = tx_handler
         self._maybe_load_endpoint_yaml(sender)
@@ -224,13 +221,14 @@ class StorageWriterFilter(AsyncFilter, Filter):
         mu = Lock()
         cv = Condition(mu)
         cursors : List[TransactionCursor] = []
-        assert self.tx_handler is not None
-        if self.create_leased and not self.tx_handler(
-                self.sender, partial(self._start_tx, mu, cv, cursors)):
-            return AsyncFilter.Result.SERVER_BUSY
-
+        started = False
+        if self.tx_handler is not None:
+            if not self.tx_handler(
+                    self.sender, partial(self._start_tx, mu, cv, cursors)):
+                return AsyncFilter.Result.SERVER_BUSY
+            started = True
         tx_cursor.create(self.rest_id, storage_tx,
-                         create_leased=self.create_leased)
+                         create_leased=started)
         self.group_cursor = GroupCursor(self.storage, tx_cursor.clone())
 
         if rcpt_to:
@@ -242,7 +240,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         self.tx_group.tx_cursors.extend(
             [c.clone() for c in self.group_cursor.tx_cursors])
 
-        if self.create_leased:
+        if started:
             with mu:
                 cursors.append(tx_cursor)
                 cv.notify_all()
@@ -586,7 +584,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
                ) -> AsyncFilter.Result:
-        needs_create = self.rest_id is None and self.create_leased
+        needs_create = self.rest_id is None and self.tx_handler is not None
         return self._update(tx, tx_delta)
 
     def _create_extra_rcpt_tx(self, rcpt : Mailbox) -> bool:
@@ -606,18 +604,17 @@ class StorageWriterFilter(AsyncFilter, Filter):
         delta.sf_rcpt_timeout = [timeout]
         assert self.rest_id_factory is not None
         cursor = self.group_cursor.clone_tx(
-            delta, create_leased=self.create_leased,
+            delta, create_leased=self.tx_handler is not None,
             rest_id=self.rest_id_factory())
         assert self.tx_group is not None
         self.tx_group.tx_cursors.append(cursor.clone())
 
-        assert self.tx_handler is not None
         assert self.sender is not None
         # TODO Executor currently has no queueing, schedule()
         # fastfails if it's full. This should probably wait for some
         # fraction of the upstream timeout?
 
-        if not self.create_leased:
+        if self.tx_handler is None:
             return True
         self.group_cursor.tx_cursors[-1] = cursor.clone()
         if self.tx_handler(self.sender, lambda: cursor):

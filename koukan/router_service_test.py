@@ -1023,9 +1023,7 @@ class RouterServiceTest(unittest.TestCase):
         self._dequeue(2)
 
         self.assertTrue(self.service.output_executor.wait_empty(5))
-
         self.assertFalse(self.service.dequeue_one(self.service.output_executor))
-
         self.assertFalse(dsn_endpoint.expectation)
 
     # message builder is a rest submission feature; first-class rest

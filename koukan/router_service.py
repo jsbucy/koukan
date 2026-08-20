@@ -260,7 +260,6 @@ class Service:
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=True,
             sender = sender,
             endpoint_yaml_provider = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx,
@@ -287,8 +286,7 @@ class Service:
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.rest_id_factory,
             endpoint_yaml_provider = self.get_endpoint_yaml,
-            tx_handler = self._schedule_extra_rcpt_tx,
-            create_leased=True)
+            tx_handler = self._schedule_extra_rcpt_tx)
 
     def _schedule_extra_rcpt_tx(
             self, sender : Sender,
@@ -329,10 +327,8 @@ class Service:
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=False,
             sender = full_sender,
-            endpoint_yaml_provider = self.get_endpoint_yaml,
-            tx_handler = self._schedule_extra_rcpt_tx), sender
+            endpoint_yaml_provider = self.get_endpoint_yaml), sender
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,
