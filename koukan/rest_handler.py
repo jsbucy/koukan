@@ -225,15 +225,22 @@ class RestHandler(Handler):
         elif err := self._validate_incremental_tx(tx):
             return err
 
-        upstream = self.async_filter.update(tx, tx.copy())
+        result = self.async_filter.update(tx, tx.copy())
+        if result == AsyncFilter.Result.OK:
+            pass
+        elif result == AsyncFilter.Result.SERVER_BUSY:
+            return self.response(code=503, msg='server busy')
+        elif result == AsyncFilter.Result.BAD_REQUEST:
+            return self.response(code=400, msg='bad request')
+        else:
+            assert False, 'bug'
+
+        assert tx.rest_id is not None
+
         cached = self.async_filter.check_cache()
-        # the factory path up to router_service fails if the OH
-        # couldn't be scheduled so if we got here, it should be leased
         assert cached is not None
         version, cached_tx, local, remote = cached
         assert cached_tx is not None
-        if upstream is None or tx.rest_id is None:
-            return self.response(code=400, msg='bad request')
         version = self.async_filter.version
         assert version is not None
         self._tx_rest_id = tx.rest_id

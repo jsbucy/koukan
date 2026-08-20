@@ -12,6 +12,7 @@ from typing import (
     TypeAlias,
     Union )
 from abc import ABC, abstractmethod
+from enum import IntEnum
 import logging
 import copy
 from threading import Condition, Lock
@@ -1195,6 +1196,11 @@ class TransactionGroup:
 # NOTE Async here is with respect to the transaction responses, not
 # program execution.
 class AsyncFilter(ABC):
+    class Result(IntEnum):
+        OK = 0
+        SERVER_BUSY = 1
+        BAD_REQUEST = 2
+
     # returns whether this endpoint supports building up the
     # transaction incrementally a la smtp
     @abstractmethod
@@ -1205,7 +1211,7 @@ class AsyncFilter(ABC):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> 'AsyncFilter.Result':
         pass
 
     @abstractmethod

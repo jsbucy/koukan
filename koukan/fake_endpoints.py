@@ -52,7 +52,7 @@ class MockAsyncFilter(AsyncFilter):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> TransactionMetadata:
+               ) -> AsyncFilter.Result:
         logging.debug('MockAsyncFilter.update %s', tx)
         exp = self.update_expectation[0]
         self.update_expectation.pop(0)
@@ -60,7 +60,7 @@ class MockAsyncFilter(AsyncFilter):
         assert upstream_delta is not None
         self._version = version
         logging.debug(upstream_delta)
-        return upstream_delta
+        return AsyncFilter.Result.OK
 
     def get(self) -> TransactionMetadata:
         cb = self.get_expectation[0]

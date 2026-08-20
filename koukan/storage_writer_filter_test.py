@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import unittest
 import logging
-from threading import Thread
+from threading import Condition, Lock
 import time
 from enum import IntEnum
 from functools import partial
@@ -12,7 +12,7 @@ from functools import partial
 from koukan.storage import Storage, TransactionCursor
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
-from koukan.filter import Mailbox, TransactionMetadata
+from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 from koukan.rest_schema import BlobUri
 
 from koukan.blob import Blob, InlineBlob
@@ -74,7 +74,15 @@ class Test:
     # - else mixed: return 250 s&f
 
 class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
+    upstream_cursors : List[TransactionCursor]
+    mu : Lock
+    cv : Condition
+
     def setUp(self):
+        self.upstream_cursors = []
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+
         self.db_dir, self.db_url = create_temp_sqlite_for_test()
         self.storage = Storage.connect(
             self.db_url, 'http://storage_writer_filter_test')
@@ -84,6 +92,17 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         self.executor.shutdown()
         self.db_dir.cleanup()
 
+    def start_upstream(self, sender, cursor):
+        with self.mu:
+            self.upstream_cursors.append(cursor)
+            self.cv.notify_all()
+        return True
+
+    def release_transaction_cursor(self):
+        with self.mu:
+            self.assertTrue(self.cv.wait_for(lambda: self.upstream_cursors, 5))
+            return self.upstream_cursors.pop(0)()
+
     def dump_db(self):
         with self.storage.begin_transaction() as db_tx:
             for l in db_tx.connection.iterdump():
@@ -92,7 +111,9 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
     def update(self, filter, tx, tx_delta):
         for i in range(0, 5):
             try:
-                upstream_delta = filter.update(tx, tx_delta)
+                prev = tx.copy()
+                assert filter.update(tx, tx_delta) == AsyncFilter.Result.OK
+                upstream_delta = prev.delta(tx)
                 self.assertTrue(len(upstream_delta.rcpt_response) <=
                                 len(tx.rcpt_to))
                 break
@@ -109,6 +130,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         time.sleep(0.1)  # xxx  still need this?
         return fut
 
+
     def create_filter(
             self, endpoint_yaml,
             create_ids : Optional[List[str]] = None,
@@ -124,7 +146,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             create_leased = True,
             sender=Sender('ingress', yaml={}),
             endpoint_yaml_provider = lambda sender: endpoint_yaml,
-            tx_handler=handler,
+            tx_handler=handler if handler else self.start_upstream,
             sync_timeout=5)
 
     def test_smoke(self):
@@ -143,7 +165,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             sender=Sender('ingress'),
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
-        upstream_cursor = filter.release_transaction_cursor(0)
+        upstream_cursor = self.release_transaction_cursor()
         self.assertEqual(upstream_cursor.rest_id, 'tx_rest_id')
         self.assertIsNotNone(upstream_cursor.tx.group)
 
@@ -189,18 +211,9 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         tx.rcpt_to = [Mailbox('bob@example.com')]
         filter.update(tx, prev.delta(tx))
 
-        upstream_sender = None
-        upstream_cursor2 = None
-        def upstream(sender, cursor):
-            nonlocal upstream_sender, upstream_cursor2
-            upstream_sender = sender
-            upstream_cursor2 = cursor
-            return True
-
         filter = self.create_filter(
             endpoint_yaml, update_id='tx_rest_id',
-            create_ids=['tx_rest_id2'],
-            handler=upstream)
+            create_ids=['tx_rest_id2'])
 
         prev = filter.get()
         logging.debug(prev.sender)
@@ -212,10 +225,10 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             ['bob@example.com', 'bob2@example.com'],
             [r.mailbox for r in tx.rcpt_to])
-        self.assertIsNotNone(upstream_sender)
-        self.assertIsNotNone(u2 := upstream_cursor2())
+        upstream_cursor2 = self.release_transaction_cursor()
+        self.assertIsNotNone(upstream_cursor2)
         self.assertEqual(['bob2@example.com'],
-                         [r.mailbox for r in u2.tx.rcpt_to])
+                         [r.mailbox for r in upstream_cursor2.tx.rcpt_to])
 
     def test_start_upstream_fail(self):
         endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
@@ -223,15 +236,23 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             'sf_timeout': 1,
             'sf_mode': 'upstream_unavailability'})
 
+        i = 0
+        def start_upstream(sender, cursor_fn):
+            nonlocal i
+            if i:
+                return False
+            i += 1
+            return self.start_upstream(sender, cursor_fn)
+
         filter = self.create_filter(
             endpoint_yaml, create_ids=['tx_rest_id', 'tx_rest_id2'],
-            handler=lambda sender, release_tx: False)
+            handler=start_upstream)
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'),
             rcpt_to = [ Mailbox('bob@example.com'),
                         Mailbox('bob2@example.com') ])
         filter.update(tx, tx.copy())
-        upstream_cursor = filter.release_transaction_cursor(0)
+        upstream_cursor = self.release_transaction_cursor()
         upstream_cursor.start_attempt()
         upstream_cursor.write_envelope(
             TransactionMetadata(), attempt_delta=TransactionMetadata(
@@ -290,7 +311,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata(
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
         filter.update(tx, tx.copy())
-        upstream_cursor = filter.release_transaction_cursor(0)
+        upstream_cursor = self.release_transaction_cursor()
 
         # create body
         logging.debug('create body')
@@ -363,6 +384,8 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             create_ids=['orig_tx_rest_id'])
 
         orig_filter.update(orig_tx, orig_tx.copy())
+        orig_upstream_cursor = self.release_transaction_cursor()
+
         blob_writer = orig_filter.get_blob_writer(
             create=True, tx_body=True)
 
@@ -373,7 +396,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata(sender=Sender('exploder'))
         filter.update(tx, tx.copy())
 
-        upstream_cursor = filter.release_transaction_cursor(0)
+        upstream_cursor = self.release_transaction_cursor()
         upstream_cursor.start_attempt()
 
         tx = TransactionMetadata(mail_from = Mailbox('alice'))
@@ -491,8 +514,8 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             rcpt_to = [Mailbox('bob')],
             body = MessageBuilderSpec(message_builder_json))
         tx.body.parse_blob_specs()
-        upstream_delta = filter.update(tx, tx.copy())
-        self.assertIsNone(upstream_delta.data_response)
+        self.assertEqual(AsyncFilter.Result.OK, filter.update(tx, tx.copy()))
+        self.assertIsNone(tx.data_response)
         upstream_cursor = self.storage.get_transaction_cursor()
         upstream_cursor.load(rest_id='test_message_builder_reuse')
         logging.debug(upstream_cursor.tx.body.json)
@@ -565,10 +588,12 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         endpoint_yaml = dict(endpoint_yaml_downstream_timeouts)
         endpoint_yaml.update({
             'sf_mode': t.sf_mode})
+
+
         filter = self.create_filter(
             endpoint_yaml,
             create_ids=['tx_rest_id%d' % i for i in range(0, len(t.rcpt))],
-            handler = lambda x,y: True)
+            handler = self.start_upstream)
 
         def to_response(r : Result) -> Optional[Response]:
             if r == Result.TEMP:
@@ -611,8 +636,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             mail_from=Mailbox('alice'))
         filter.update(tx, tx.copy())
 
-        cursor = filter.release_transaction_cursor(0)
-        assert cursor is not None
+        cursor = self.release_transaction_cursor()
         cursor.start_attempt()
         upstream_cursors = [cursor]
         upstream(cursor, t.rcpt[0])
@@ -640,8 +664,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             tx.rcpt_to.append(Mailbox('bob%d' % i))
             filter.update(tx, prev.delta(tx))
             if i > 0:
-                cursor = filter.release_transaction_cursor(i)
-                assert cursor is not None
+                cursor = self.release_transaction_cursor()
                 cursor.start_attempt()
                 upstream_cursors.append(cursor)
             else:
@@ -836,8 +859,8 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
         tx = TransactionMetadata()
         filter.wire_downstream(tx)
 
-        def upstream(filter):
-            tx_cursor = filter.release_transaction_cursor(0)
+        def upstream():
+            tx_cursor = self.release_transaction_cursor()
             tx_cursor.start_attempt()
             while tx_cursor.tx is None or tx_cursor.tx.mail_from is None:
                 tx_cursor.wait(tx_cursor.version, 1)
@@ -845,7 +868,7 @@ class StorageWriterFilterTest(unittest.IsolatedAsyncioTestCase):
             tx_cursor.write_envelope(
                 TransactionMetadata(),
                 attempt_delta=TransactionMetadata(mail_response=Response(201)))
-        fut = self.executor.submit(partial(upstream, filter))
+        fut = self.executor.submit(upstream)
 
         prev = tx.copy()
         tx.mail_from = Mailbox('alice@example.com')

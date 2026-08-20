@@ -276,7 +276,8 @@ class RouterServiceTest(unittest.TestCase):
 
         upstream_endpoint = FakeFilter()
         for i in range(0, 3):
-            self.add_expectation(upstream_endpoint, Response(201), Response(202), Response(203))
+            self.add_expectation(
+                upstream_endpoint, Response(201), Response(202), Response(203))
         self.add_endpoint(upstream_endpoint)
 
         rest_endpoint.on_update(delta)
@@ -1363,24 +1364,6 @@ class RouterServiceTest(unittest.TestCase):
             rcpt_to=[Mailbox('bob@example.com')],
             body=InlineBlob(body, last=True))
 
-        def exp_add_route(tx, tx_delta) -> TransactionMetadata:
-            if tx.cancelled:
-                return TransactionMetadata()
-            logging.debug(tx)
-            self.assertEqual('sor', tx.sender.name)
-            prev = tx.copy()
-            if tx_delta.mail_from:
-                tx.mail_response=Response(202)
-            if tx_delta.rcpt_to:
-                tx.rcpt_response=[Response(204)]
-            if tx_delta._body_last():
-                tx.data_response=Response(206)
-            return prev.delta(tx)
-        add_route_endpoint = FakeFilter()
-        for i in range(0,3):
-            add_route_endpoint.add_expectation(exp_add_route)
-        self.add_endpoint(add_route_endpoint)
-
         def exp_upstream(tx, tx_delta) -> TransactionMetadata:
             if tx.cancelled:
                 return TransactionMetadata()
@@ -1399,6 +1382,24 @@ class RouterServiceTest(unittest.TestCase):
         for i in range(0,3):
             upstream_endpoint.add_expectation(exp_upstream)
         self.add_endpoint(upstream_endpoint)
+
+        def exp_add_route(tx, tx_delta) -> TransactionMetadata:
+            if tx.cancelled:
+                return TransactionMetadata()
+            logging.debug(tx)
+            self.assertEqual('sor', tx.sender.name)
+            prev = tx.copy()
+            if tx_delta.mail_from:
+                tx.mail_response=Response(202)
+            if tx_delta.rcpt_to:
+                tx.rcpt_response=[Response(204)]
+            if tx_delta._body_last():
+                tx.data_response=Response(206)
+            return prev.delta(tx)
+        add_route_endpoint = FakeFilter()
+        for i in range(0,3):
+            add_route_endpoint.add_expectation(exp_add_route)
+        self.add_endpoint(add_route_endpoint)
 
         tx.merge_from(delta)
         rest_endpoint.on_update(delta)

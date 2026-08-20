@@ -32,7 +32,7 @@ from koukan.message_builder import MessageBuilderSpec
 from koukan.sender import Sender
 
 EndpointYamlProvider = Callable[[Sender], Optional[dict]]
-TxHandler = Callable[[Sender, Callable[[], Optional[TransactionCursor]]], bool]
+TxHandler = Callable[[Sender, Callable[[], TransactionCursor]], bool]
 
 class DownstreamResponse(IntEnum):
     NONE = 0
@@ -56,11 +56,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
     rest_id_factory : Optional[Callable[[], str]] = None
     rest_id : Optional[str] = None
     create_leased : bool = False
-    # leased cursor for cutthrough
-    upstream_cursor : List[Optional[TransactionCursor]]
-    create_err : bool = False
-    mu : Lock
-    cv : Condition
     endpoint_yaml_provider : Optional[EndpointYamlProvider] = None
     endpoint_yaml : Optional[Dict[str, Any]] = None
     sf_mode : Optional[str] = None
@@ -84,11 +79,8 @@ class StorageWriterFilter(AsyncFilter, Filter):
         self.rest_id_factory = rest_id_factory
         self.rest_id = rest_id
         self.create_leased = create_leased
-        self.mu = Lock()
-        self.cv = Condition(self.mu)
         self.endpoint_yaml_provider = endpoint_yaml_provider
         self.tx_handler = tx_handler
-        self.upstream_cursor = []
         self._maybe_load_endpoint_yaml(sender)
         if sync_timeout:
             self.sync_timeout = sync_timeout
@@ -166,25 +158,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
             return True, self._get()
         assert False, 'bug'
 
-    def release_transaction_cursor(
-            self, i : int) -> Optional[TransactionCursor]:
-        with self.mu:
-            if not self.cv.wait_for(
-                    lambda: len(self.upstream_cursor) > i and
-                    self.upstream_cursor[i] is not None or
-                    self.create_err, 3):
-                logging.warning(
-                    'StorageWriterFilter.get_transaction_cursor timeout %s',
-                    self.create_err)
-                return None
-            elif (len(self.upstream_cursor) <= i or
-                  self.upstream_cursor[i] is None):
-                return None
-            logging.debug('StorageWriterFilter.release_transaction_cursor')
-            cursor = self.upstream_cursor[i]
-            self.upstream_cursor[i] = None
-            return cursor
-
     @property
     def version(self) -> Optional[int]:
         if self.group_cursor is None:
@@ -213,10 +186,15 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
         return int(self._millis() + secs * 1e3)
 
-    def _create(self, tx : TransactionMetadata) -> None:
+    def _start_tx(self, mu, cv, cursors):
+        with mu:
+            assert cv.wait_for(lambda: cursors, 5)
+            return cursors.pop(0)
+
+    def _create(self, tx : TransactionMetadata) -> AsyncFilter.Result:
         tx_cursor = self.storage.get_transaction_cursor()
         assert self.rest_id_factory is not None
-        rest_id = self.rest_id_factory()
+        self.rest_id = self.rest_id_factory()
         storage_tx = tx.copy()
         rcpt_to = None
         if len(storage_tx.rcpt_to) > 1:
@@ -242,22 +220,33 @@ class StorageWriterFilter(AsyncFilter, Filter):
         assert self.tx_group is None
         self.tx_group = TransactionGroup([])
         storage_tx.group = self.tx_group
-        tx_cursor.create(rest_id, storage_tx,
-                         create_leased=self.create_leased)
-        self.group_cursor = GroupCursor(self.storage, tx_cursor)
-        self.tx_group.tx_cursors.extend(
-            [c.clone() for c in self.group_cursor.tx_cursors])
 
-        # wake up release_transaction_cursor(0)
-        with self.mu:
-            self.rest_id = rest_id
-            self.cv.notify_all()
+        mu = Lock()
+        cv = Condition(mu)
+        cursors : List[TransactionCursor] = []
+        assert self.tx_handler is not None
+        if self.create_leased and not self.tx_handler(
+                self.sender, partial(self._start_tx, mu, cv, cursors)):
+            return AsyncFilter.Result.SERVER_BUSY
+
+        tx_cursor.create(self.rest_id, storage_tx,
+                         create_leased=self.create_leased)
+        self.group_cursor = GroupCursor(self.storage, tx_cursor.clone())
 
         if rcpt_to:
             prev = storage_tx.copy()
             storage_tx.rcpt_to.extend(rcpt_to)
-            self._update(storage_tx, prev.delta(storage_tx))
+            if res := self._update(storage_tx, prev.delta(storage_tx)):
+                return res
 
+        self.tx_group.tx_cursors.extend(
+            [c.clone() for c in self.group_cursor.tx_cursors])
+
+        if self.create_leased:
+            with mu:
+                cursors.append(tx_cursor)
+                cv.notify_all()
+        return AsyncFilter.Result.OK
 
     def _update_timeout(self,
                         upstream_resp : Optional[Response],
@@ -390,7 +379,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 tx.downstream_rcpt_response[j] = DownstreamResponse.SF
             # convert DownstreamResponse enum to Response
             if (j < len(tx.downstream_rcpt_response) and
-                tx.downstream_rcpt_response[j] is not None):
+                tx.downstream_rcpt_response[j]):
                 tx.rcpt_response.extend(
                     [None] * (j - len(tx.rcpt_response) + 1))
                 drr = tx.downstream_rcpt_response[j]
@@ -489,8 +478,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
             txi = tx_cursor.tx.copy()
             upstream_tx.append(txi)
             if self.sf_mode == 'upstream_unavailability':
-                sf = self._do_sf_unavail(txi, tx_cursor)
-                if sf:
+                if self._do_sf_unavail(txi, tx_cursor):
                     sf_cursor.append(tx_cursor)
         tx = self._merge_upstream_tx(upstream_tx)
 
@@ -597,18 +585,9 @@ class StorageWriterFilter(AsyncFilter, Filter):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> AsyncFilter.Result:
         needs_create = self.rest_id is None and self.create_leased
-        try:
-            upstream_delta = self._update(tx, tx_delta)
-            assert upstream_delta is not None
-            return upstream_delta
-        finally:
-            if needs_create and self.upstream_cursor is None:
-                # i.e. uncaught exception
-                with self.mu:
-                    self.create_err = True
-                    self.cv.notify_all()
+        return self._update(tx, tx_delta)
 
     def _create_extra_rcpt_tx(self, rcpt : Mailbox) -> bool:
         assert self.group_cursor is not None
@@ -637,10 +616,11 @@ class StorageWriterFilter(AsyncFilter, Filter):
         # TODO Executor currently has no queueing, schedule()
         # fastfails if it's full. This should probably wait for some
         # fraction of the upstream timeout?
-        if (sched := self.tx_handler(
-                self.sender,
-                partial(self.release_transaction_cursor,
-                        len(self.group_cursor.tx_cursors) - 1))):
+
+        if not self.create_leased:
+            return True
+        self.group_cursor.tx_cursors[-1] = cursor.clone()
+        if self.tx_handler(self.sender, lambda: cursor):
             return True
         cursor.start_attempt()
         # TODO option to s&f on this err?
@@ -661,7 +641,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
     def _update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> AsyncFilter.Result:
         # TODO this currently always returns an empty delta, probably
         # it should snapshot the tx before write_envelope() and return
         # the delta from the final cursor.tx, it's possible the
@@ -677,29 +657,26 @@ class StorageWriterFilter(AsyncFilter, Filter):
             assert self.group_cursor is not None
             self.group_cursor.update_all(
                 tx_delta, final_attempt_reason='downstream cancelled')
-            return TransactionMetadata()
+            return AsyncFilter.Result.OK
 
         if not tx_delta:  # heartbeat
             assert self.group_cursor is not None
             self.group_cursor.update_all(
                 TransactionMetadata(), ping_tx=True, max_conflict_retries=1)
-            return TransactionMetadata()
+            return AsyncFilter.Result.OK
 
         downstream_tx = tx.copy()
         downstream_delta = tx_delta.copy()
         if getattr(downstream_tx, 'rest_id', None) is not None:
             del downstream_tx.rest_id
 
-        created = False
         if self.rest_id is None:
-            created = True
-            self._create(downstream_tx)
+            if res := self._create(downstream_tx):
+                return res
             assert self.group_cursor is not None
             tx.rest_id = self.rest_id
         else:
             assert self.group_cursor is not None
-            # TODO do this in a batch if we get multiple (moot
-            # without pipelining)
             assert self.group_cursor.tx_cursors[0].tx is not None
             # TODO there was a bug in AsyncFilterAdapter where it was
             # retrying after it succeeded the first time... possibly
@@ -725,7 +702,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
             for rcpt in downstream_delta.rcpt_to:
                 assert rcpt is not None
-                created |= self._create_extra_rcpt_tx(rcpt)
+                self._create_extra_rcpt_tx(rcpt)
             downstream_delta.rcpt_to = []
             if downstream_delta:
                 if downstream_delta.body is not None and downstream_delta._body_last():
@@ -737,21 +714,11 @@ class StorageWriterFilter(AsyncFilter, Filter):
         logging.debug('StorageWriterFilter.update %s result %s',
                       self.rest_id, [c.tx for c in self.group_cursor.tx_cursors])
 
-        # TODO how often is the cursor in this SWF reused after return
-        # from this call?
-        if created and self.create_leased:
-            with self.mu:
-                for i in range(len(self.upstream_cursor),
-                               len(self.group_cursor.tx_cursors)):
-                    cursor = self.group_cursor.tx_cursors[i]
-                    self.upstream_cursor.append(cursor)
-                    self.group_cursor.tx_cursors[i] = cursor.clone()
-                self.cv.notify_all()
 
-        return TransactionMetadata()
+        return AsyncFilter.Result.OK
 
     class BlobWriter(WritableBlob):
-        blob : WritableBlob
+        blob : BlobCursor
         parent : 'StorageWriterFilter'
         def __init__(self, parent, blob):
             assert blob is not None
@@ -769,12 +736,9 @@ class StorageWriterFilter(AsyncFilter, Filter):
                         ) -> Tuple[bool, int, Optional[int]]:
             res = self.blob.append_data(
                 offset, d, content_length=content_length)
-            appended, length, content_length = res
-            # reset timeout
-            # xxx: need this condition?
-            if appended and length == content_length:
+            if self.blob.finalized():
                 self.parent.blob_done(self)
-            return appended, length, content_length
+            return res
 
 
     def blob_done(self, writer) -> None:
@@ -851,7 +815,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         prev = tx.copy()
         for i in range(0,5):
             try:
-                upstream_delta = self.update(tx, tx_delta)
+                assert self.update(tx, tx_delta) == AsyncFilter.Result.OK
                 break
             except VersionConflictException:
                 logging.debug('VersionConflictException')

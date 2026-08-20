@@ -33,6 +33,7 @@ from koukan.storage_schema import (
     TX_BODY,
     BlobSpec,
     VersionConflictException,
+    WrongReplicaException,
     body_blob_uri )
 from koukan.filter import TransactionMetadata
 from koukan.rest_schema import BlobUri, WhichJson
@@ -803,13 +804,24 @@ class TransactionCursor:
         elif blobs:
             raise ValueError()
 
-    def start_attempt(self):
+    def start_attempt(self, max_conflict_retries=5):
         logging.debug('TxCursor.start_attempt %d', self.db_id)
-        with self.parent.begin_transaction() as db_tx:
-            rv = self._start_attempt(db_tx)
-        if rv:
-            self._update_version_cache(leased=True)
-        return rv
+        for i in range(0, max_conflict_retries):
+            try:
+                with self.parent.begin_transaction() as db_tx:
+                    rv = self._start_attempt(db_tx)
+                if rv:
+                    self._update_version_cache(leased=True)
+                logging.debug(rv)
+                return rv
+            except VersionConflictException:
+                logging.debug('VersionConflictException %d', i)
+                if i == (max_conflict_retries - 1):
+                    raise
+                backoff(i)
+                if not self.try_cache():
+                    assert self.load()
+        assert False, 'unreached'
 
     def _start_attempt(self, db_tx):
         assert self.parent.session_id is not None
@@ -817,6 +829,7 @@ class TransactionCursor:
         new_version = self.version + 1
 
         tcols = self.parent.tx_table.c
+
         upd = (update(self.parent.tx_table)
                .where(tcols.id == self.db_id,
                       tcols.version == self.version)
@@ -827,8 +840,8 @@ class TransactionCursor:
                .returning(tcols.version))
 
         if self.created:
-            upd = upd.where(tcols.inflight_session_id ==
-                            self.parent.session_id)
+            upd = upd.where(
+                tcols.inflight_session_id == self.parent.session_id)
         else:
             upd = upd.where(
                 tcols.inflight_session_id.is_(None))
@@ -841,10 +854,19 @@ class TransactionCursor:
         res = db_tx.execute(upd)
         row = res.fetchone()
 
-        # Without READ_CONSISTENT a downstream write can get in
-        # between here and cause a version mismatch
         if row is None:
-            raise VersionConflictException()
+            sel = select(tcols.version, tcols.inflight_session_id
+                         ).where(tcols.id == self.db_id)
+            res = db_tx.execute(sel)
+            row = res.fetchone()
+            if row[0] != self.version:
+                logging.debug('version conflict %d %d %d',
+                              self.db_id, self.version, row[0])
+                raise VersionConflictException()
+            elif self.created and (row[1] != self.parent.session_id):
+                raise WrongReplicaException()
+            elif not self.created and (row[1] is not None):
+                raise WrongReplicaException()
 
         # This is a sort of pseudo-attempt for re-entering the
         # notification logic if it was enabled after the transaction

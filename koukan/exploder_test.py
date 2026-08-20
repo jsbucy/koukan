@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 import unittest
 import logging
@@ -59,9 +59,9 @@ class Rcpt:
         self.store_and_forward = store_and_forward
 
     # ~fake OutputHandler for upstream
-    def output(self, endpoint):
+    def output(self, endpoint, cursor_cb):
         logging.debug('output start')
-        self.cursor = cursor = endpoint.release_transaction_cursor(0)
+        self.cursor = cursor = cursor_cb()
         cursor.start_attempt()
         logging.debug(cursor.attempt_id)
         tx = cursor.tx
@@ -138,12 +138,17 @@ class ExploderTest(unittest.TestCase):
     def tearDown(self):
         self.storage._del_session()
 
-    def add_endpoint(self):
+    def add_endpoint(
+            self,
+            tx_handler : Optional[Callable[[Any, Any], bool]] = None):
+        if tx_handler is None:
+            tx_handler = lambda sender, cursor: True
         endpoint = StorageWriterFilter(
             self.storage,
             rest_id_factory=rest_id_factory,
             create_leased=True,
-            endpoint_yaml_provider = lambda sender: {})
+            endpoint_yaml_provider = lambda sender: {},
+            tx_handler = tx_handler)
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
@@ -169,13 +174,16 @@ class ExploderTest(unittest.TestCase):
 
         output_threads = []
         for r in test.rcpt:
-            endpoint = self.add_endpoint()
+            def tx_handler(sender, cursor_cb):
+                output_thread = Thread(
+                    target=partial(r.output, endpoint, cursor_cb),
+                    daemon=True)
+                nonlocal output_threads
+                output_thread.start()
+                output_threads.append(output_thread)
+                return True
+            endpoint = self.add_endpoint(tx_handler)
             r.set_endpoint(endpoint)
-            output_thread = Thread(
-                target=partial(r.output, endpoint),
-                daemon=True)
-            output_thread.start()
-            output_threads.append(output_thread)
 
         delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()

@@ -36,6 +36,7 @@ class StorageWriterFactory(EndpointFactory):
     def create(self, sender : Sender
                ) -> Optional[Tuple[AsyncFilter, dict, Sender]]:
         return self.service.create_storage_writer(sender)
+
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -253,11 +254,9 @@ class Service:
             # xxx -> http 404
             return None
         sender = s
-        if (endp := self.filter_chain_factory.build_filter_chain(
-                sender)) is None:
+        endpoint_yaml = self.get_endpoint_yaml(sender)
+        if endpoint_yaml is None:
             return None
-        chain, endpoint_yaml = endp
-
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
@@ -266,15 +265,6 @@ class Service:
             endpoint_yaml_provider = self.get_endpoint_yaml,
             tx_handler = self._schedule_extra_rcpt_tx,
             sync_timeout = sync_timeout)
-        assert self.output_executor is not None
-        fut = self.output_executor.submit(
-            partial(self._handle_new_tx,
-                    partial(writer.release_transaction_cursor, 0),
-                    chain, endpoint_yaml),
-            0)
-        if block_upstream and fut is None:
-            # XXX leaves db tx leased?
-            return None
         return writer, endpoint_yaml, sender
 
     def get_endpoint_yaml(self, sender : Sender) -> Optional[dict]:
@@ -302,7 +292,7 @@ class Service:
 
     def _schedule_extra_rcpt_tx(
             self, sender : Sender,
-            tx_cursor : Callable[[], Optional[TransactionCursor]]) -> bool:
+            tx_cursor : Callable[[], TransactionCursor]) -> bool:
         assert self.filter_chain_factory is not None
         if (endp := self.filter_chain_factory.build_filter_chain(
                 sender)) is None:
@@ -317,11 +307,10 @@ class Service:
             0)
         return fut is not None
 
-    def _handle_new_tx(self,
-                       writer : Callable[[], Optional[TransactionCursor]],
-                       #StorageWriterFilter,
-                       chain : FilterChain,
-                       endpoint_yaml : dict):
+    def _handle_new_tx(
+            self, writer : Callable[[], Optional[TransactionCursor]],
+            chain : FilterChain,
+            endpoint_yaml : dict):
         tx_cursor = writer()
         if tx_cursor is None:
             logging.info('RouterService._handle_new_tx writer %s, '
@@ -334,15 +323,16 @@ class Service:
     def _notification_endpoint(self, sender : Sender
                                ) -> Optional[Tuple[AsyncFilter, Sender]]:
         assert self.filter_chain_factory is not None
-        if (s := self.filter_chain_factory.get_sender(sender)) is None:
+        full_sender = self.filter_chain_factory.get_sender(sender)
+        if full_sender is None:
             return None
-        sender = s
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory,
             create_leased=False,
-            sender = sender,
-            endpoint_yaml_provider = self.get_endpoint_yaml), sender
+            sender = full_sender,
+            endpoint_yaml_provider = self.get_endpoint_yaml,
+            tx_handler = self._schedule_extra_rcpt_tx), sender
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,

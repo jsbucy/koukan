@@ -221,23 +221,16 @@ class SyncFilterAdapter(AsyncFilter):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> AsyncFilter.Result:
         if tx.retry is not None or tx.notification is not None:
-            err = TransactionMetadata()
-            tx.fill_inflight_responses(
-                MailResponse(500, 'internal err/invalid transaction fields'),
-                err)
-            tx.merge_from(err)
-            return err
+            return AsyncFilter.Result.BAD_REQUEST
 
         with self.mu:
             version = self.id_version.get()
 
             # try this non-destructively to see if the delta is valid...
             if self.tx.merge(tx_delta) is None:
-                # bad delta, xxx this should throw an exception distinct
-                # from VersionConflictException, cannot make forward progress
-                return None
+                return AsyncFilter.Result.BAD_REQUEST
             # ... before committing to self.tx
             self.tx.merge_from(tx_delta)
             logging.debug('SyncFilterAdapter.updated merged %s', self.tx)
@@ -248,14 +241,14 @@ class SyncFilterAdapter(AsyncFilter):
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update(), 0)
-                # TODO we need a better way to report this error but
-                # throwing here will -> http 500
-                assert fut is not None
+                if fut is None:
+                    return AsyncFilter.Result.SERVER_BUSY
                 self.inflight = True
             # no longer waits for inflight
             prev = tx.copy()
             tx.rest_id = self.rest_id
-            return prev.delta(tx)
+
+        return AsyncFilter.Result.OK
 
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:

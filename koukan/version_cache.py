@@ -227,7 +227,6 @@ class IdVersionMap:
 
     def get_group(self, db_id : int) -> Optional[List[int]]:
         with self.lock:
-            logging.debug(self.tx_groups)
             if (group_ids := self.tx_groups.get(db_id, None)) is None:
                 return None
         return sorted(group_ids)
@@ -255,7 +254,6 @@ class IdVersionMap:
                     group_ids = set()
                     self.tx_groups[group_parent] = group_ids
                 group_ids.add(db_id)
-                logging.debug(self.tx_groups)
             if self.ttl is not None:
                 self.ttl_refs.add(id_version)
             return id_version
