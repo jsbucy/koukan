@@ -208,8 +208,10 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         group.load(tx_rest_id='tx_rest_id')
         assert group.tx_cursors[0].tx is not None
         self.assertEqual(0, group.tx_cursors[0].tx.group_index)
-        self.assertEqual([1], group.db_ids())
-        self.assertEqual({1:2}, group.db_id_versions())
+        self.assertEqual(1, len(group.tx_cursors))
+        cursor = group.tx_cursors[0]
+        self.assertEqual(1, cursor.db_id)
+        self.assertEqual(2, cursor.version)
 
         group.tx_cursors[0].write_envelope(
             TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))

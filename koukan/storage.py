@@ -183,7 +183,6 @@ class TransactionCursor:
         with self.parent.begin_transaction() as db_tx:
             self.version = 0
 
-            # xxx do this to a copy for cache?
             if tx.group_index is None:
                 tx.group_index = 0
             db_json = tx.to_json(WhichJson.DB)
@@ -214,7 +213,7 @@ class TransactionCursor:
             self.creation = row[1]
             self.rest_id = rest_id
             self.tx = TransactionMetadata()  # for _write() to take a delta?
-            self.tx.group = tx.group  # XXX
+            self.tx.group = tx.group
 
             self._write(db_tx, tx)
             self.tx.rest_id = rest_id
@@ -369,7 +368,7 @@ class TransactionCursor:
             elif (blob_spec.create_id or
                   blob_spec.create_tx_body or
                   isinstance(blob_spec.blob, Blob)):
-                # xxx cf end of _write(), in some cases the blobs in
+                # cf end of _write(), in some cases the blobs in
                 # the tx are swapped with the ones created here at the
                 # end
                 blob_cursor = BlobCursor(self.parent, db_tx = db_tx)
@@ -568,19 +567,14 @@ class TransactionCursor:
             raise VersionConflictException()
         self.version = row[0]
 
-        # TODO or RETURNING json
-        # XXX doesn't include response fields? tx.merge() should
-        # handle that?
         self.tx.merge_from(tx_delta)
         if attempt_delta is not None:
             self.tx.merge_from(attempt_delta)
-        # xxx final_attempt_reason, other cols?
-        # self.tx.final_attempt_reason = self.final_attempt_reason
 
         # RestHandler creation -> OH handoff tx needs to have the
         # same effect as _load_blobs()
 
-        # XXX this should only mutate the clone of the tx in
+        # TODO this should only mutate the clone of the tx in
         # _update_verison_cache() and not self.tx; the way this is, if
         # you take a delta of successive versions of cursor.tx before
         # and after this, you will get a bad delta/assert
@@ -727,7 +721,6 @@ class TransactionCursor:
 
         # TODO join this with the tx read to get it all in one round-trip?
 
-        attempt_row = None
         if load_attempt or self.no_final_notification:
             # TODO if in_attempt, query on attempt_id?? (cf assert below)
             sel = (select(self.parent.attempt_table.c.attempt_id,
@@ -737,16 +730,16 @@ class TransactionCursor:
                    .limit(1))
             res = db_tx.execute(sel)
             attempt_row = res.fetchone()
-
-        if attempt_row is not None:
-            logging.debug(attempt_row)
-            attempt_id, resp_json = attempt_row
-            assert self.tx is not None  # set above
-            self.tx.attempt_count = attempt_id
-            if resp_json is not None:
-                responses = TransactionMetadata.from_json(
-                    resp_json, WhichJson.DB_ATTEMPT)
-                assert self.tx.merge_from(responses)
+            resp_json = None
+            attempt_id = None
+            if attempt_row is not None:
+                attempt_id, resp_json = attempt_row
+                assert self.tx is not None  # set above
+                self.tx.attempt_count = attempt_id
+                if resp_json is not None:
+                    responses = TransactionMetadata.from_json(
+                        resp_json, WhichJson.DB_ATTEMPT)
+                    assert self.tx.merge_from(responses)
 
             logging.debug('TransactionCursor._load_db %d %s version=%d tx %s '
                           'attempt %s %s',
@@ -812,7 +805,6 @@ class TransactionCursor:
                     rv = self._start_attempt(db_tx)
                 if rv:
                     self._update_version_cache(leased=True)
-                logging.debug(rv)
                 return rv
             except VersionConflictException:
                 logging.debug('VersionConflictException %d', i)
@@ -829,7 +821,6 @@ class TransactionCursor:
         new_version = self.version + 1
 
         tcols = self.parent.tx_table.c
-
         upd = (update(self.parent.tx_table)
                .where(tcols.id == self.db_id,
                       tcols.version == self.version)
@@ -984,24 +975,6 @@ class GroupCursor:
         if rest_id:
             self.rest_id = rest_id
 
-    def db_ids(self) -> List[int]:
-        out = []
-        for c in self.tx_cursors:
-            assert c.db_id is not None
-            assert c.db_id not in out
-            out.append(c.db_id)
-        return out
-
-    def db_id_versions(self) -> Dict[int, int]:
-        out = {}
-        for c in self.tx_cursors:
-            assert c.db_id is not None
-            assert c.db_id not in out
-            assert c.version is not None
-            out[c.db_id] = c.version
-        return out
-
-
     def load_group(self,
                    db_tx : Connection,
                    tx_rest_id : Optional[str] = None,
@@ -1037,10 +1010,6 @@ class GroupCursor:
             return None
         for row in res:
             tx_id, parent_id = row
-            # TODO this doesn't currently read them all in a
-            # single db tx. If this raced with update_all() some
-            # of these point reads could land before and some
-            # after.
             if not out and parent_id is not None:
                 return None
             out.append(row[0])
@@ -1137,7 +1106,7 @@ class GroupCursor:
                                  ping_tx = ping_tx,
                                  input_done = input_done,
                                  require_finalized_blob = not create_body)
-                        # xxx this still depends on the hack at the end of
+                        # TODO this still depends on the hack at the end of
                         # _write() to swap body with BlobCursor
                         if i == 0 and create_body:
                             assert c.tx is not None
@@ -1145,8 +1114,6 @@ class GroupCursor:
 
                 for c in cursors:
                     c._update_version_cache()
-                    # xxx shouldn't toggle leased?
-                    #leased = (cursor.inflight_session_id == self.parent.session_id))
                 break
             except VersionConflictException:
                 logging.debug('VersionConflictException %d', j)
@@ -1226,7 +1193,6 @@ class GroupCursor:
         # cursor for the cache
         for i in range(0,5):
             try:
-                logging.debug('%d %s', i, kwargs)
                 self.update_all(tx_delta, max_conflict_retries = 1, **kwargs)
                 break
             except VersionConflictException:
@@ -1348,11 +1314,11 @@ class BlobCursor(Blob, WritableBlob):
             try:
                 with (nullcontext(self.db_tx) if self.db_tx is not None
                       else self.parent.begin_transaction() as db_tx):
-                    success, db_length, db_content_length, cursor = (
+                    success, db_length, db_content_length = (
                         self._append_data(
                             db_tx, offset, d, content_length, last))
-                    logging.debug('%s %d %s %s',
-                                  success, db_length, db_content_length, cursor)
+                    logging.debug('%s %d %s',
+                                  success, db_length, db_content_length)
                     if not success:
                         db_tx.rollback()
                         return False, db_length, db_content_length
@@ -1374,7 +1340,7 @@ class BlobCursor(Blob, WritableBlob):
             content_length : Optional[int] = None,
             # last: set content_length to offset + len(d)
             last : Optional[bool] = None,
-    ) -> Tuple[bool, int, Optional[int], Optional[TransactionCursor]]:
+    ) -> Tuple[bool, int, Optional[int]]:
         for i in range(0,2):
             upd = (update(self.parent.blob_table)
                    .where(self.parent.blob_table.c.id == self.db_id)
@@ -1403,7 +1369,7 @@ class BlobCursor(Blob, WritableBlob):
                 db_length, db_content_length, last_update, db_now = row
                 break
             if i == 1:
-                return False, db_length, db_content_length, None
+                return False, db_length, db_content_length
 
             sel = select(
                 func.length(self.parent.blob_table.c.content),
@@ -1417,7 +1383,7 @@ class BlobCursor(Blob, WritableBlob):
             assert row is not None
             db_length, db_content_length, last_update, db_now = row
             if offset > db_length:
-                return False, db_length, db_content_length, None
+                return False, db_length, db_content_length
             # if there was a previous partial update e.g. due to an http
             # error, just resync here so rest clients don't have to deal with
             # chunked PUTs. We expect
@@ -1440,7 +1406,7 @@ class BlobCursor(Blob, WritableBlob):
         logging.debug('append_data %d %s last=%s',
                       self.length, self._content_length, self.last)
 
-        return True, db_length, content_length, None
+        return True, db_length, content_length
 
     def pread(self, offset, length=None) -> Optional[bytes]:
         # TODO this should maybe have the same effect as load() if the
