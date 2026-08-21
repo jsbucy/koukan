@@ -723,6 +723,8 @@ class StorageWriterFilter(AsyncFilter, Filter):
             self.blob = blob
         def len(self) -> int:
             return self.blob.len()
+        def content_length(self):
+            return self.blob.content_length()
         def rest_id(self) -> Optional[str]:
             return self.blob.rest_id()
         def session_url(self) -> Optional[str]:

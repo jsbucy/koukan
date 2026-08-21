@@ -70,8 +70,14 @@ class BlobTest(unittest.TestCase):
     def test_append_blob(self):
         src = InlineBlob(b'abcdef')
         dest = InlineBlob(b'xyz')
-        self.assertEqual(3, dest.append_blob(src, 2, 3, chunk_size=2))
-        self.assertEqual(b'xyzcde', dest.pread(0))
+        self.assertEqual(
+            (True, 6, None),
+            dest.append_blob(src, 2, 3, chunk_size=2, set_content_length=False))
+        self.assertEqual(
+            (True, 9, 9),
+            dest.append_blob(src, 3, chunk_size=2, set_content_length=True))
+
+        self.assertEqual(b'xyzcdedef', dest.pread(0))
 
 if __name__ == '__main__':
     logging.basicConfig(

@@ -47,6 +47,9 @@ class WritableBlob(ABC):
     @abstractmethod
     def len(self) -> int:
         pass
+    @abstractmethod
+    def content_length(self) -> Optional[int]:
+        pass
 
     # write at offset which must be the current end
     # bool: whether offset was correct/write was applied, resulting range
@@ -64,34 +67,36 @@ class WritableBlob(ABC):
         return None
 
 
-    def append_blob(self, src : Blob, start : int = 0, length : int = 0,
+    def append_blob(self, src : Blob, off : int = 0, length : int = 0,
                     set_content_length = True,
-                    chunk_size : int = 2**16) -> int:
+                    chunk_size : int = 2**16
+                    ) -> Tuple[bool, int, Optional[int]]:
         if length == 0:
-            cl =  src.content_length()
+            cl = src.content_length()
             length = cl if cl is not None else src.len()
-        off = start
-        dstart = doff = self.len()
-        while off < (length + start):
-            left = ((start + length) - off)
+            length -= off
+        end = off + length
+        doff = self.len()
+        while off < end:
+            left = end - off
             last = False
-            if left < chunk_size:
-                last = True
-            else:
+            if left > chunk_size:
                 left = chunk_size
+            if off + left == end:
+                last = True
             d = src.pread(off, left)
             assert d is not None
             content_length = None
             if set_content_length and last:
-                content_length = off + len(d)
-            appended, dlength, content_length_out = self.append_data(
-                doff, d, content_length)
-            if (not appended or dlength != (doff + len(d)) or
-                content_length_out != content_length):
-                return dlength - dstart
+                content_length = doff + len(d)
+
+            res = self.append_data(doff, d, content_length)
+            # this can only fail due to a bug or concurrent mutation
+            assert res[0]
+            appended, dlength, content_length_out = res
             off += (dlength - doff)
-            doff = self.len()
-        return (off - start)
+            doff = dlength
+        return True, self.len(), self.content_length()
 
 # InlineBlob stores exactly one contiguous byte range aligned to the
 # end of a possibly larger address space. It supports appending

@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta
 from functools import partial
 
-from koukan.blob import Blob
+from koukan.blob import Blob, InlineBlob
 from koukan.storage import (
     BlobCursor,
     GroupCursor,
@@ -165,6 +165,27 @@ class StorageTestBase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.s.load_one())
 
         logging.debug(self.s.debug_dump())
+
+    # write tx with isinstance(tx.body, Blob) representative of
+    # - rest w/inline body
+    # - add-route
+    # - notification
+    # - exploder
+    def test_write_blob(self):
+        downstream = self.s.get_transaction_cursor()
+        body = b'hello, world!'
+        downstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525),
+                mail_from=Mailbox('alice@example.com'),
+                rcpt_to=[Mailbox('bob@example.com')],
+                body=InlineBlob(body, last=True)),
+            create_leased=True)
+
+        upstream = self.s.get_transaction_cursor(db_id=downstream.db_id)
+        upstream.load()
+        self.assertEqual(body, upstream.tx.body.pread(0))
 
     def test_write_conflict(self):
         cursor = self.s.get_transaction_cursor()

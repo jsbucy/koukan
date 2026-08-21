@@ -64,13 +64,15 @@ class SyncFilterAdapter(AsyncFilter):
         # queue of staged appends, these are propagated to
         # parent.body in _update_once()
         q : List[bytes]
-        content_length : Optional[int] = None
+        _content_length : Optional[int] = None
         def __init__(self, parent):
             self.parent = parent
             self.q = []
 
         def len(self):
             return self.offset
+        def content_length(self):
+            return self._content_length
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
@@ -79,16 +81,16 @@ class SyncFilterAdapter(AsyncFilter):
                 # flow control: don't buffer multiple chunks from downstream
                 # TODO this can probably be further simplified
                 self.parent.cv.wait_for(lambda: not(self.q))
-                assert self.content_length is None or (
-                    content_length == self.content_length)
-                if self.content_length is not None and (
-                        self.offset + len(d) > self.content_length):
-                    return False, self.offset, self.content_length
+                assert self._content_length is None or (
+                    content_length == self._content_length)
+                if self._content_length is not None and (
+                        self.offset + len(d) > self._content_length):
+                    return False, self.offset, self._content_length
                 if offset != self.offset:
                     return False, self.offset, None
                 self.q.append(d)
                 self.offset += len(d)
-                self.content_length = content_length
+                self._content_length = content_length
             self.parent._blob_wakeup()
             return True, self.offset, content_length
 
@@ -184,9 +186,9 @@ class SyncFilterAdapter(AsyncFilter):
             # body goes in delta if it changed
             delta.body = self.body
             for b in self.blob_writer.q:
-                last = (self.blob_writer.content_length is not None and
+                last = (self.blob_writer._content_length is not None and
                         (self.body.len() + len(b) ==
-                         self.blob_writer.content_length))
+                         self.blob_writer._content_length))
                 self.body.append(b, last)
                 dequeued += len(b)
                 logging.debug('append %d %s', len(b), self.body)

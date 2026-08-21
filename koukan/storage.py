@@ -375,7 +375,18 @@ class TransactionCursor:
                 blob_cursor._create(db_tx)
                 if blob_spec.blob:
                     assert blob_spec.blob.finalized()
-                    blob_cursor.append_blob(blob_spec.blob)
+                    # NOTE
+                    # 1: this goes via the WritableBlob
+                    # implementation of append_blob()
+                    # 2: a single BlobCursor.append_data() call is
+                    # atomic but append_blob() goes a chunk at a time
+                    # so it may partially-update the db_tx if one of
+                    # the appends fails. Since this is writing to a
+                    # newly-created blob, this seems unlikely other
+                    # than due to transient db errors or bugs in this
+                    # code.
+                    appended, x, cl = blob_cursor.append_blob(blob_spec.blob)
+                    assert appended and cl == blob_spec.blob.content_length()
                 if not blob_spec.create_id and not blob_spec.create_tx_body:
                     create_id = str(i)
                 blob_rest_id = (TX_BODY if blob_spec.create_tx_body
@@ -1305,29 +1316,14 @@ class BlobCursor(Blob, WritableBlob):
 
         tx_version = None
         cursor = None
-        # TODO it might be possible to move this version conflict
-        # retry loop into _append_data() but we would need to ensure that
-        # tx_cursor._load_db()
-        # tx_cursor._write()
-        # is idempotent when executed multiple times within the same db_tx
-        for i in range(0,5):
-            try:
-                with (nullcontext(self.db_tx) if self.db_tx is not None
-                      else self.parent.begin_transaction() as db_tx):
-                    success, db_length, db_content_length = (
-                        self._append_data(
-                            db_tx, offset, d, content_length, last))
-                    logging.debug('%s %d %s',
-                                  success, db_length, db_content_length)
-                    if not success:
-                        db_tx.rollback()
-                        return False, db_length, db_content_length
-                    break
-            except VersionConflictException:
-                logging.debug('VersionConflictException')
-                if i == 4:
-                    raise
-                backoff(i)
+        with (nullcontext(self.db_tx) if self.db_tx is not None
+              else self.parent.begin_transaction() as db_tx):
+            res = self._append_data(db_tx, offset, d, content_length, last)
+            logging.debug(res)
+            if not res[0]:
+                return res
+            x, db_length, db_content_length = res
+            assert db_content_length == content_length
 
         self.length = db_length
         self._content_length = content_length
