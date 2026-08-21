@@ -6,7 +6,6 @@ import logging
 import secrets
 import time
 
-from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response

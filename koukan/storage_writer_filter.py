@@ -9,7 +9,6 @@ from functools import partial, reduce
 from threading import Lock, Condition
 import time
 
-from koukan.backoff import backoff
 from koukan.storage import (
     BlobCursor,
     GroupCursor,
@@ -732,7 +731,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
-                        ) -> Tuple[bool, int, Optional[int]]:
+                        ) -> Optional[Tuple[bool, int, Optional[int]]]:
             res = self.blob.append_data(
                 offset, d, content_length=content_length)
             if self.blob.finalized():
@@ -820,7 +819,6 @@ class StorageWriterFilter(AsyncFilter, Filter):
                 logging.debug('VersionConflictException')
                 if i == 4:
                     raise
-                backoff(i)
                 utx = self.get()
                 assert utx is not None
                 tx = utx

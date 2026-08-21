@@ -53,10 +53,11 @@ class WritableBlob(ABC):
 
     # write at offset which must be the current end
     # bool: whether offset was correct/write was applied, resulting range
+    # None -> internal error: blob disappeared?
     @abstractmethod
     def append_data(self, offset : int, d : bytes,
                     content_length : Optional[int] = None
-                    ) -> Tuple[bool, int, Optional[int]]:
+                    ) -> Optional[Tuple[bool, int, Optional[int]]]:
         pass
 
     def rest_id(self) -> Optional[str]:
@@ -70,7 +71,7 @@ class WritableBlob(ABC):
     def append_blob(self, src : Blob, off : int = 0, length : int = 0,
                     set_content_length = True,
                     chunk_size : int = 2**16
-                    ) -> Tuple[bool, int, Optional[int]]:
+                    ) -> Optional[Tuple[bool, int, Optional[int]]]:
         if length == 0:
             cl = src.content_length()
             length = cl if cl is not None else src.len()
@@ -92,7 +93,10 @@ class WritableBlob(ABC):
 
             res = self.append_data(doff, d, content_length)
             # this can only fail due to a bug or concurrent mutation
-            assert res[0]
+            if res is None:
+                return None
+            if not res[0]:
+                return False, self.len(), self.content_length()
             appended, dlength, content_length_out = res
             off += (dlength - doff)
             doff = dlength

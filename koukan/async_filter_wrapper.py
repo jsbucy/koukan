@@ -11,7 +11,6 @@ from koukan.filter_chain import FilterResult, Filter
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
-from koukan.backoff import backoff
 
 # AsyncFilterWrapper provdes store&forward business logic on top of
 # StorageWriterFilter for Exploder and related workflows
@@ -95,7 +94,6 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
                 logging.debug('VersionConflictException')
                 if i == 4:
                     raise
-                backoff(i)
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t

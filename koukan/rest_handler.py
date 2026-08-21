@@ -668,8 +668,10 @@ class RestHandler(Handler):
             length = None
 
         assert self.blob is not None
-        appended, result_len, content_length = self.blob.append_data(
-            start + self.bytes_read, b, length)
+        append = self.blob.append_data(start + self.bytes_read, b, length)
+        if append is None:
+            return self.response(code=404, msg='blob disappeared?')
+        appended, result_len, content_length = append
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
