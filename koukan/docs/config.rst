@@ -76,7 +76,7 @@ name: referenced by senders
 
 sf_mode: store&forward mode for chains terminating transactions
 originating from the smtp gateway. This should be unset for
-first-class endpoints and Exploder.
+first-class rest endpoints and Exploder.
 
 * ``mixed_data_response``: ~ingress/relay. Downstream is another mta
   that is prepared to retry transient errors. Returns upstream rcpt
@@ -85,9 +85,9 @@ first-class endpoints and Exploder.
   and returns 250 downstream.
 * ``upstream_unavailability``: ~submission. Downstream is a client
   that expects the server to retry. Waits for a short time for an
-  upstream response ("opportunistic cut-through"), if a temp error or
-  timeout, enables retry/notification on the upstream tx and returns 250
-  downstream. Then per mixed_data_response.
+  upstream response ("opportunistic cut-through"). If there is a temp
+  error or timeout, enables retry/notification on the upstream tx and
+  returns 250 downstream. Then per mixed_data_response.
 
 StorageWriterFilter orchestrates fan-out of rcpts from a downstream
 smtp tx to multiple upstream/output tx and then fans-in the upstream
@@ -489,14 +489,14 @@ for all recipients. Suppose you want to reject messages based on a
 per-recipient content policy. You have a couple of options:
 
 - don't accept additional recipients if they have a different
-  classifier than the recipients received so far. This may cause
+  policy than the recipients received so far. This may cause
   errors/delays receiving multi-rcpt messages from old MTAs but may be
   rare enough to be viable now.
 - reject the message if any of the recipient classifiers reject
   it. This may cause false positives.
 - accept&bounce per recipient. Bouncing spam considered harmful.
 - only reject the message if all per-rcpt classifiers rejected it and
-  put it in the spam folder otherwise. This can be implemented with a
+  quarantine otherwise. This can be implemented with a
   separate "group reject decision" signal that consumes the
   per-upstream outputs.
   
