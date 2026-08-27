@@ -81,13 +81,15 @@ first-class rest endpoints and Exploder.
 * ``mixed_data_response``: ~ingress/relay. Downstream is another mta
   that is prepared to retry transient errors. Returns upstream rcpt
   errors verbatim. If all upstream data responses have the same major
-  code, returns that. Else enables retry/notification on the upstream tx
-  and returns 250 downstream.
+  code, returns that. If the upstream/per-rcpt tx have different data
+  responses, then store&forward: enable retry/notification on the
+  upstream tx that didn't succeed already and returns 250 downstream.
 * ``upstream_unavailability``: ~submission. Downstream is a client
   that expects the server to retry. Waits for a short time for an
   upstream response ("opportunistic cut-through"). If there is a temp
-  error or timeout, enables retry/notification on the upstream tx and
-  returns 250 downstream. Then per mixed_data_response.
+  error or timeout, store&forward the upstream tx and returns 250
+  downstream. From this point, follow the same data_response logic as
+  mixed_data_response (above).
 
 StorageWriterFilter orchestrates fan-out of rcpts from a downstream
 smtp tx to multiple upstream/output tx and then fans-in the upstream
@@ -492,10 +494,10 @@ per-recipient content policy. You have a couple of options:
   policy than the recipients received so far. This may cause
   errors/delays receiving multi-rcpt messages from old MTAs but may be
   rare enough to be viable now.
-- reject the message if any of the recipient classifiers reject
+- reject the message if any of the recipient policies reject
   it. This may cause false positives.
 - accept&bounce per recipient. Bouncing spam considered harmful.
-- only reject the message if all per-rcpt classifiers rejected it and
+- only reject the message if all per-rcpt policies rejected it and
   quarantine otherwise. This can be implemented with a
   separate "group reject decision" signal that consumes the
   per-upstream outputs.

@@ -325,12 +325,14 @@ class TransactionCursor:
                     if self._load() is None:
                         return False
 
-        # note: we don't lock VersionCache across the db tx so the
-        # following is possible:
+        # note: the following is possible:
         # t1: write db v1
         # t2: write db v2
         # t2: update VersionCache v2
         # t1: update VersionCache v1 -> exception
+        # TODO: this is a little difficult to reason about, it might
+        # be better to lock the tx across the db tx and VersionCache
+        # update.
         try:
             self._update_version_cache(
                 leased = False if finalize_attempt else None)
@@ -342,6 +344,7 @@ class TransactionCursor:
                 if self._load() is None:
                     return False
         return True
+
     def _maybe_write_blob(self, db_tx : Connection, tx : TransactionMetadata,
                           require_finalized = True
                           ) -> bool:  # blobs done

@@ -135,7 +135,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         # _get() after will set s&f response and bump version.
         upstream = False
         if self.next_upstream_timeout is not None:
-            now_ms = self._millis()
+            now_ms = self._time_ms()
             upstream_timeout = max(
                 self.next_upstream_timeout - now_ms, 0) / 1000.0
             upstream = False
@@ -165,7 +165,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
             version += i.version
         return version
 
-    def _millis(self):
+    def _time_ms(self):
         return time.time_ns() / 1e6
 
     def _timeout(self, delta : TransactionMetadata) -> int:
@@ -180,7 +180,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         if delta._body_last():
             secs += yaml.get('data_timeout', 60)
 
-        return int(self._millis() + secs * 1e3)
+        return int(self._time_ms() + secs * 1e3)
 
     def _start_tx(self, mu, cv, cursors):
         with mu:
@@ -337,7 +337,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
     # downstream...response field to "250 store&forward"
     def _do_sf_unavail(self, tx, tx_cursor) -> bool:
         assert self.group_cursor is not None
-        now = self._millis()
+        now = self._time_ms()
 
         def any_rcpt_ok(rcpts : List[Optional[Response]]) -> bool:
             return any([r is not None and r.ok() for r in rcpts])
@@ -513,7 +513,8 @@ class StorageWriterFilter(AsyncFilter, Filter):
             return tx
         elif not rcpt_ok_tx:
             tx.data_response = Response(
-                503, '5.5.1 failed precondition: all rcpts failed (SWF)')
+                503, '5.5.1 failed precondition: '
+                'all rcpts failed (StorageWriterFilter)')
             return tx
 
         def same_data_response(lhs : Optional[TransactionMetadata],
