@@ -536,7 +536,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
             assert data_resp is not None
             tx.data_response = Response(
                 data_resp.code,
-                data_resp.message + ' (SWF Exploder same response)')
+                data_resp.message + ' (StorageWriterFilter same response)')
             return tx
 
         # else mixed upstream data responses
@@ -606,6 +606,7 @@ class StorageWriterFilter(AsyncFilter, Filter):
         cursor = self.group_cursor.clone_tx(
             delta, create_leased=self.tx_handler is not None,
             rest_id=self.rest_id_factory())
+        assert cursor.tx is not None
         assert self.tx_group is not None
         self.tx_group.tx_cursors.append(cursor.clone())
 
@@ -614,15 +615,16 @@ class StorageWriterFilter(AsyncFilter, Filter):
         # fastfails if it's full. This should probably wait for some
         # fraction of the upstream timeout?
 
+        # Exploder, add_route, OutputHandler notification
         if self.tx_handler is None:
             return True
-        self.group_cursor.tx_cursors[-1] = cursor.clone()
         if self.tx_handler(self.sender, lambda: cursor):
             return True
         cursor.start_attempt()
         # TODO option to s&f on this err?
         tx = TransactionMetadata()
-        tx.downstream_rcpt_response = [ DownstreamResponse.BUSY ]
+        tx.downstream_rcpt_response = (
+            [ DownstreamResponse.BUSY ] * len(cursor.tx.rcpt_to))
         cursor.write_envelope(
             tx,
             attempt_delta=TransactionMetadata(
