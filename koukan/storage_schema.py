@@ -10,6 +10,9 @@ from koukan.blob import Blob
 class VersionConflictException(Exception):
     pass
 
+class WrongReplicaException(Exception):
+    pass
+
 def internal_blob_prefix(b):
     return b.startswith('__internal')
 

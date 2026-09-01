@@ -2,6 +2,50 @@
 NEWS
 ====
 
+.. _news_exploder:
+
+``exploder`` branch
+===================
+
+(merged ~2026/08)
+
+Reimplement :ref:`internals_exploder` functionality in
+StorageWriterFilter. Backwards-compatible with existing configs but we
+expect to deprecate Exploder in the future.
+
+:ref:`output_chain`
+
+StorageWriterFilter now directly orchestrates fan-out of rcpts from a
+downstream smtp tx to multiple/per-rcpt upstream/output tx and then
+fans-in the upstream responses.
+
+Exploder adds a lot of overhead (almost 2x rest request time, db
+writes, etc) due to adding a second trip through most of the stack whereas
+most transactions only have 1 recipient.
+
+This creates some additional complexity in that exploder gives you a
+single point to reject the message whereas now there must be some
+synchronization across upstream tx :ref:`transaction_group`. We think
+this is a good tradeoff vs the large performance benefit.
+
+Migration Guide
+---------------
+
+Look at the diffs to ``router.yaml`` ``1b7256b9`` for an example. In
+the sample configs, smtp submission/ingress sender/tags inject into a
+_exploder chain. These ends with an exploder filter instance.
+
+1. remove exploder filter from the end of the _exploder chain.
+
+2. Merge the exploder instance's ``output_chain`` into the _exploder
+   chain including the final ``rest_output``
+
+3. ``msa: true`` -> ``sf_mode: upstream_unavailability``
+
+   ``msa: false`` -> ``sf_mode: mixed_data_response``
+
+4. add ``mail_ok`` filter before first ``router``
+
 ``dns_policy`` branch
 =====================
 
@@ -10,8 +54,9 @@ NEWS
 Add DnsResolutionFilterOutput :ref:`dns_resolution_filter`
 
 drive-by improvements:
-- set smtp server ident
-- smtp client logging
+
+* set smtp server ident
+* smtp client logging
 
 
 ``signals_rcpt`` branch

@@ -15,6 +15,8 @@ CREATE TABLE Transactions (
   id INTEGER PRIMARY KEY,  -- autoincrement?
   rest_id TEXT UNIQUE,
 
+  parent_id INTEGER,
+
   -- tag/queue/service/host
   json JSON,
 
@@ -48,12 +50,17 @@ CREATE TABLE Transactions (
   -- after it has reached a final status; this is to facilitate recovering these
   no_final_notification BOOL,
 
+  FOREIGN KEY(parent_id) REFERENCES Transactions(id)
+    ON UPDATE CASCADE
+    ON DELETE SET NULL,
+
   FOREIGN KEY(inflight_session_id, inflight_session_live) REFERENCES Sessions(id, live)
     ON UPDATE SET NULL
     ON DELETE SET NULL
 );
 
 CREATE INDEX TxRestId on Transactions (rest_id);
+CREATE INDEX TxParentId on Transactions(parent_id);
 
 CREATE TABLE TransactionBlobRefs (
   transaction_id INTEGER,

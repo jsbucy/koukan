@@ -80,9 +80,13 @@ class RemoteHostFilter(Filter):
         tx = self.downstream_tx
         assert tx is not None
         if tx.remote_host is None or not tx.remote_host.host:
+            # XXX doesn't populate filter_output
+            # this should assert on mail_from to say this has to be
+            # present by then?  cf "annotations" 2026/3/30
             return None
         ans = None
         try:
+            # XXX throws dns.exception.SyntaxError if not an ip
             ans = self.resolver.resolve_address(tx.remote_host.host)
         except ServFailExceptions:
             tx.add_filter_output(self.fullname(), RemoteHostFilterOutput(

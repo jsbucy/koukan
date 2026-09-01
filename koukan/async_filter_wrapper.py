@@ -11,7 +11,6 @@ from koukan.filter_chain import FilterResult, Filter
 from koukan.deadline import Deadline
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
-from koukan.backoff import backoff
 
 # AsyncFilterWrapper provdes store&forward business logic on top of
 # StorageWriterFilter for Exploder and related workflows
@@ -87,13 +86,14 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         upstream_delta = None
         for i in range(0,5):
             try:
-                upstream_delta = self.filter.update(upstream_tx, tx_delta)
+                prev = upstream_tx.copy()
+                assert self.filter.update(upstream_tx, tx_delta) == AsyncFilter.Result.OK
+                upstream_delta = prev.delta(upstream_tx)
                 break
             except VersionConflictException:
                 logging.debug('VersionConflictException')
                 if i == 4:
                     raise
-                backoff(i)
                 t = self.filter.get()
                 assert t is not None
                 upstream_tx = t
@@ -108,7 +108,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
 
     def update(self, downstream_tx : TransactionMetadata,
                downstream_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> AsyncFilter.Result:
         tx = downstream_tx.copy()
         tx_delta = downstream_delta.copy()
         # OutputHandler may send but Storage currently does not accept
@@ -124,7 +124,7 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         logging.debug(upstream_tx)
         upstream_delta = tx_orig.delta(upstream_tx)
         downstream_tx.merge_from(upstream_delta)
-        return upstream_delta
+        return AsyncFilter.Result.OK
 
     def get(self) -> Optional[TransactionMetadata]:
         tx = self.filter.get()
@@ -226,7 +226,9 @@ class AsyncFilterWrapper(AsyncFilter, Filter):
         logging.debug(tx_delta)
         assert self.downstream_tx is not None
 
-        upstream_delta = self.update(self.downstream_tx, tx_delta)
+        prev = self.downstream_tx.copy()
+        assert self.update(self.downstream_tx, tx_delta) == AsyncFilter.Result.OK
+        upstream_delta = prev.delta(self.downstream_tx)
         tx = tx_orig = self.downstream_tx.copy()
         deadline = Deadline(self.timeout)
         if tx.req_inflight():

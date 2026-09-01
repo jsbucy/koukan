@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 import unittest
 import logging
@@ -14,7 +14,7 @@ from koukan.storage import Storage, TransactionCursor
 from koukan.response import Response
 from koukan.filter import AsyncFilter, Mailbox, TransactionMetadata
 from koukan.storage_writer_filter import StorageWriterFilter
-from koukan.storage_schema import BlobSpec, VersionConflictException
+from koukan.storage_schema import BlobSpec
 
 from koukan.blob import CompositeBlob, InlineBlob
 
@@ -59,9 +59,9 @@ class Rcpt:
         self.store_and_forward = store_and_forward
 
     # ~fake OutputHandler for upstream
-    def output(self, endpoint):
+    def output(self, endpoint, cursor_cb):
         logging.debug('output start')
-        self.cursor = cursor = endpoint.release_transaction_cursor()
+        self.cursor = cursor = cursor_cb()
         cursor.start_attempt()
         logging.debug(cursor.attempt_id)
         tx = cursor.tx
@@ -80,15 +80,10 @@ class Rcpt:
 
             if env_delta:
                 logging.debug(env_delta)
-                try:
-                    # finalize_attempt=True if data_resp ??
-                    cursor.write_envelope(
-                        tx_delta=TransactionMetadata(),
-                        attempt_delta=env_delta)
-                except VersionConflictException:
-                    logging.debug('VersionConflictException')
-                    time.sleep(0.3)
-                    cursor.load()
+                # finalize_attempt=True if data_resp ??
+                cursor.write_envelope(
+                    tx_delta=TransactionMetadata(),
+                    attempt_delta=env_delta)
                 err = False
                 for r in [self.mail_resp, self.rcpt_resp, data_resp]:
                     if (r is not None) and r.err():
@@ -143,9 +138,16 @@ class ExploderTest(unittest.TestCase):
     def tearDown(self):
         self.storage._del_session()
 
-    def add_endpoint(self):
+    def add_endpoint(
+            self,
+            tx_handler : Optional[Callable[[Any, Any], bool]] = None):
+        if tx_handler is None:
+            tx_handler = lambda sender, cursor: True
         endpoint = StorageWriterFilter(
-            self.storage, rest_id_factory=rest_id_factory, create_leased=True)
+            self.storage,
+            rest_id_factory=rest_id_factory,
+            endpoint_yaml_provider = lambda sender: {},
+            tx_handler = tx_handler)
         self.upstream_endpoints.append(endpoint)
         return endpoint
 
@@ -161,22 +163,26 @@ class ExploderTest(unittest.TestCase):
 
     def _test_one(self, msa, test : Test):
         logging.debug('_test_one()', stack_info=True)
-        exploder = Exploder(Sender('submission', 'smtp-msa'),
-                            Sender('submission', 'smtp-msa-upstream'),
-                            partial(self.factory, msa),
-                            rcpt_timeout=5)
+        exploder = Exploder(
+            Sender('submission', 'smtp-msa', yaml={}),
+            Sender('submission', 'smtp-msa-upstream', yaml={}),
+            partial(self.factory, msa),
+            rcpt_timeout=5)
         tx = TransactionMetadata()
         exploder.wire_downstream(tx)
 
         output_threads = []
         for r in test.rcpt:
-            endpoint = self.add_endpoint()
+            def tx_handler(sender, cursor_cb):
+                output_thread = Thread(
+                    target=partial(r.output, endpoint, cursor_cb),
+                    daemon=True)
+                nonlocal output_threads
+                output_thread.start()
+                output_threads.append(output_thread)
+                return True
+            endpoint = self.add_endpoint(tx_handler)
             r.set_endpoint(endpoint)
-            output_thread = Thread(
-                target=partial(r.output, endpoint),
-                daemon=True)
-            output_thread.start()
-            output_threads.append(output_thread)
 
         delta = TransactionMetadata(mail_from=Mailbox(test.mail_from))
         downstream_cursor = self.storage.get_transaction_cursor()

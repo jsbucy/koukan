@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import time
 import logging
 from threading import Lock, Condition
@@ -36,6 +36,7 @@ class StorageWriterFactory(EndpointFactory):
     def create(self, sender : Sender
                ) -> Optional[Tuple[AsyncFilter, dict, Sender]]:
         return self.service.create_storage_writer(sender)
+
     def get(self, rest_id : str) -> Optional[AsyncFilter]:
         return self.service.get_storage_writer(rest_id)
 
@@ -63,7 +64,6 @@ class Service:
     _rest_id_entropy : int = 16
     root_yaml : Optional[dict] = None
 
-
     def __init__(self, root_yaml=None):
         self.lock = Lock()
         self.cv = Condition(self.lock)
@@ -72,6 +72,7 @@ class Service:
 
         if self.daemon_executor is None:
             self.daemon_executor = Executor(10, watchdog_timeout=300)
+
 
     def wait_shutdown(self, timeout : float, executor : Executor) -> bool:
         deadline = Deadline(timeout)
@@ -122,7 +123,9 @@ class Service:
             with open(config_filename, 'r') as yaml_file:
                 self.root_yaml = yaml.load(yaml_file, Loader=yaml.CLoader)
         self.filter_chain_factory = FilterChainFactory(self.root_yaml)
-        self.wiring = FilterChainWiring(self.create_exploder_output)
+        self.wiring = FilterChainWiring(
+            self.create_exploder_output,
+            self.create_exploder_output)
         self.wiring.wire(self.root_yaml, self.filter_chain_factory)
 
         if 'global' in self.root_yaml:
@@ -231,39 +234,36 @@ class Service:
         return secrets.token_urlsafe(self._rest_id_entropy)
 
     def create_exploder_output(
-            self, sender : Sender, block_upstream : bool
+            self, sender : Sender,
+            block_upstream : bool,
+            sync_timeout : Optional[int]
     ) -> Optional[StorageWriterFilter]:
-        if (endp := self.create_storage_writer(sender, block_upstream)
+        if (endp := self.create_storage_writer(
+                sender, block_upstream, sync_timeout)
             ) is None:
             return None
         return endp[0]
 
     def create_storage_writer(
             self, sender : Sender,
-            block_upstream : bool = True
+            block_upstream : bool = True,
+            sync_timeout : Optional[int] = None
     ) -> Optional[Tuple[StorageWriterFilter, dict, Sender]]:
         assert self.filter_chain_factory is not None
         if (s := self.filter_chain_factory.get_sender(sender)) is None:
+            # xxx -> http 404
             return None
         sender = s
-        if (endp := self.filter_chain_factory.build_filter_chain(
-                sender)) is None:
+        endpoint_yaml = self.get_endpoint_yaml(sender)
+        if endpoint_yaml is None:
             return None
-        chain, endpoint_yaml = endp
-
         writer = StorageWriterFilter(
             storage=self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=True,
             sender = sender,
-            endpoint_yaml = self.get_endpoint_yaml)
-        assert self.output_executor is not None
-        fut = self.output_executor.submit(
-            partial(self._handle_new_tx, writer, chain, endpoint_yaml),
-            0)
-        if block_upstream and fut is None:
-            # XXX leaves db tx leased?
-            return None
+            endpoint_yaml_provider = self.get_endpoint_yaml,
+            tx_handler = self._schedule_extra_rcpt_tx,
+            sync_timeout = sync_timeout)
         return writer, endpoint_yaml, sender
 
     def get_endpoint_yaml(self, sender : Sender) -> Optional[dict]:
@@ -285,12 +285,31 @@ class Service:
         return StorageWriterFilter(
             storage=self.storage, rest_id=rest_id,
             rest_id_factory=self.rest_id_factory,
-            endpoint_yaml = self.get_endpoint_yaml)
+            endpoint_yaml_provider = self.get_endpoint_yaml,
+            tx_handler = self._schedule_extra_rcpt_tx)
 
-    def _handle_new_tx(self, writer : StorageWriterFilter,
-                       chain : FilterChain,
-                       endpoint_yaml : dict):
-        tx_cursor = writer.release_transaction_cursor()
+    def _schedule_extra_rcpt_tx(
+            self, sender : Sender,
+            tx_cursor : Callable[[], TransactionCursor]) -> bool:
+        assert self.filter_chain_factory is not None
+        if (endp := self.filter_chain_factory.build_filter_chain(
+                sender)) is None:
+            logging.warning('failed to build_filter_chain for sender %s',
+                            sender)
+            return False
+        chain, endpoint_yaml = endp
+
+        assert self.output_executor is not None
+        fut = self.output_executor.submit(
+            partial(self._handle_new_tx, tx_cursor, chain, endpoint_yaml),
+            0)
+        return fut is not None
+
+    def _handle_new_tx(
+            self, writer : Callable[[], Optional[TransactionCursor]],
+            chain : FilterChain,
+            endpoint_yaml : dict):
+        tx_cursor = writer()
         if tx_cursor is None:
             logging.info('RouterService._handle_new_tx writer %s, '
                          'rest_id is None, downstream error?', writer)
@@ -299,11 +318,17 @@ class Service:
         logging.debug('RouterService._handle_new_tx %s', tx_cursor.rest_id)
         self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
-    def _notification_endpoint(self):
+    def _notification_endpoint(self, sender : Sender
+                               ) -> Optional[Tuple[AsyncFilter, Sender]]:
+        assert self.filter_chain_factory is not None
+        full_sender = self.filter_chain_factory.get_sender(sender)
+        if full_sender is None:
+            return None
         return StorageWriterFilter(
             self.storage,
             rest_id_factory=self.rest_id_factory,
-            create_leased=False)
+            sender = full_sender,
+            endpoint_yaml_provider = self.get_endpoint_yaml), sender
 
     def handle_tx(self, storage_tx : TransactionCursor,
                   chain : FilterChain,
@@ -319,12 +344,13 @@ class Service:
             mailer_daemon_mailbox=self.root_yaml['global'].get(
                 'mailer_daemon_mailbox', None),
             retry_params = output_yaml.get('retry_params', None),
-            notification_params = output_yaml.get('notification', None),
+            notification_params = output_yaml.get('notification', {
+                'sender': 'submission',
+                'tag': 'notification'
+            }),
             heartbeat=self.output_executor.ping_watchdog)
         try:
             handler.handle()
-        except Exception as e:
-            logging.exception('Service.handle_tx(): OutputHandler.handle')
         finally:
             if storage_tx.in_attempt:
                 logging.error(
@@ -332,24 +358,25 @@ class Service:
 
     def _dequeue(self, deq : Optional[List[Optional[bool]]] = None) -> bool:
         assert self.storage is not None
-        storage_tx = self.storage.load_one()
+
+        tx_cursor = self.storage.load_one()
         if deq is not None:
             with self.lock:
-                deq[0] = storage_tx is not None
+                deq[0] = tx_cursor is not None
                 self.cv.notify_all()
 
-        if storage_tx is None:
+        if tx_cursor is None:
             return False
-        assert storage_tx.tx is not None
+        assert tx_cursor.tx is not None
         assert self.filter_chain_factory is not None
-        assert storage_tx.tx.sender is not None
-        res = self.filter_chain_factory.build_filter_chain(storage_tx.tx.sender)
+        assert tx_cursor.tx.sender is not None
+        res = self.filter_chain_factory.build_filter_chain(tx_cursor.tx.sender)
         assert res is not None
         chain, endpoint_yaml = res
         logging.debug('_dequeue %s %s',
-                      storage_tx.db_id, storage_tx.rest_id)
+                      tx_cursor.db_id, tx_cursor.rest_id)
 
-        self.handle_tx(storage_tx, chain, endpoint_yaml)
+        self.handle_tx(tx_cursor, chain, endpoint_yaml)
 
         return True
 

@@ -22,19 +22,17 @@ def create_app(handler_factory : HandlerFactory):
     async def create_transaction(
             sender : str,
             request : FastApiRequest) -> FastApiResponse:
-        try:
-            req_json = await request.json()
-            tag = None
-            # xxx bootstrap Sender?
-            if (sender_js := req_json.get('sender', None)):
-                tag = sender_js.get('tag', None)
-            handler = handler_factory.create_tx(sender, tag)
-            return await handler.handle_async(
-                request, partial(handler.create_tx, request, req_json=req_json))
-        except Exception as e:
-            logging.exception('create_transaction')
-            return FastApiResponse(status_code=500)
-
+        req_json = await request.json()
+        tag = None
+        # xxx bootstrap Sender?
+        if (sender_js := req_json.get('sender', None)):
+            tag = sender_js.get('tag', None)
+        handler = handler_factory.create_tx(sender, tag)
+        if handler is None:
+            return FastApiResponse(
+                status_code=503, content='Service Unavailable')
+        return await handler.handle_async(
+            request, partial(handler.create_tx, request, req_json=req_json))
 
     @app.patch('/transactions/{tx_rest_id}')
     async def update_transaction(tx_rest_id : str,
@@ -54,11 +52,7 @@ def create_app(handler_factory : HandlerFactory):
     async def get_transaction(tx_rest_id : str,
                               request : FastApiRequest) -> FastApiResponse:
         handler = handler_factory.get_tx(tx_rest_id)
-        try:
-            return await handler.get_tx_async(request)
-        except Exception:
-            logging.exception('get_transaction')
-            return FastApiResponse(500)
+        return await handler.get_tx_async(request)
 
     # body stream
     @app.put('/transactions/{tx_rest_id}/body')

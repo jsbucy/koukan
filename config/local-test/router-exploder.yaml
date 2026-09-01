@@ -70,7 +70,6 @@ rest_endpoint:
 endpoint:
 # smtp downstream
 - name: submission_exploder
-  sf_mode: upstream_unavailability
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -112,44 +111,15 @@ endpoint:
     code: 550
     message: rcpt_to dns nxdomain/nullmx
 
-  - filter: received_header
-    received_hostname: gargantua1    
-
-  - filter: mail_ok
+  # XXX does this rcpt router do anything?
   - filter: router
-    policy:
-      name: hello
-  # send my own domains directly to my ingress
-  - filter: router
-    policy:
-      name: address_list
-      domains:
-      - example.com
-      - rest-application.example.com
-      destination:
-        endpoint: short_circuit
-  # send everything else to the rhs of the addr via the smtp gw
-  - filter: router
+    dry_run: true
     policy:
       name: dest_domain
       destination:
-        endpoint: gateway
   - filter: router
     # no policy: match everything
     # no dest: reject
-
-  - filter: dkim_sign
-    # key: config/local-test/dkim.key
-    domain: example.com
-    selector: sel
-  - filter: hello
-
-  - filter: dns_resolution
-    suffix: ''  # match everything
-    static_hosts:
-      - host: 127.0.0.1
-        port: 3025
-
   - filter: policy_action
     match:
       not:
@@ -181,33 +151,11 @@ endpoint:
       validity_threshold: HIGH
     action: REJECT
     tag: message_validation
-
-
-  - filter: policy_action
-    tag: dns_perm
-    match:
-      # could also validate mail_result here but presumably we're
-      # limiting senders to our own domains that we know work, etc.
-      matcher: koukan.mx_resolution.DnsResolutionFilter
-      resolution_result: NX
-    action: REJECT
-    code: 550
-    message: rcpt_to dns nxdomain/nullmx
-  - filter: policy_action
-    tag: dns_temp
-    match:
-      matcher: koukan.mx_resolution.DnsResolutionFilter
-      resolution_result: TEMP
-    action: REJECT
-    code: 450
-    message: rcpt_to dns temp
-
-  - filter: rest_output
-    verify: localhost.crt
+  - filter: exploder
+    output_chain: submission
+    msa: true
     rcpt_timeout: 300
     data_timeout: 300
-    chunk_size: 1048576
-
 
 # first-class rest or smtp/exploder upstream
 - name: submission
@@ -257,8 +205,6 @@ endpoint:
   # for submission?
   - filter: received_header
     received_hostname: gargantua1    
-
-  - filter: mail_ok
   - filter: router
     policy:
       name: hello
@@ -319,7 +265,6 @@ endpoint:
 
 
 - name: ingress_exploder
-  sf_mode: mixed_data_response
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -348,20 +293,8 @@ endpoint:
     tag: max_rcpts
     code: 451
     message: 4.5.3 too many recipients
-
-  - filter: remote_host
-  - filter: policy_action
-    match:
-      any:
-        - matcher: koukan.remote_host_filter.RemoteHostFilter
-          fcrdns: false
-        - matcher: koukan.remote_host_filter.RemoteHostFilter
-          ehlo_alignment: false
-    action: REJECT
-    tag: remote_host
-
-  - filter: mail_ok
   - filter: router
+    dry_run: true
     policy:
       name: address_list
       domains:
@@ -375,6 +308,7 @@ endpoint:
           - host: 'fake_smtpd'
             port: 3025
   - filter: router
+    dry_run: true
     policy:
       name: address_list
       domains:
@@ -387,11 +321,10 @@ endpoint:
         options:
           receive_parsing:
   - filter: router
+    dry_run: true
     # no policy: match everything
     # no dest: reject
-
-  - filter: received_header
-    received_hostname: gargantua1    
+  - filter: remote_host
   - filter: message_validation
   - filter: dns_resolution
     suffix: ''  # match everything
@@ -411,9 +344,18 @@ endpoint:
   - filter: dkim_check
   - filter: policy_action
     match:
-      matcher: koukan.dkim_check_filter.DkimCheckFilter
+      matcher: koukan.remote_host_filter.DkimCheckFilter
     tag: dkim_smoke
     action: LOG
+  - filter: policy_action
+    match:
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
 
   - filter: policy_action
     match:
@@ -421,31 +363,13 @@ endpoint:
       validity_threshold: MEDIUM
     action: REJECT
     tag: message_validation
-
-  - filter: add_route
-    sender: sor
-
-  - filter: message_parser
-  - filter: dns_resolution
-    literal: 'fake_smtpd'
-    static_hosts:
-      - host: 127.0.0.1
-        port: 3025
-    overwrite: true
-  - filter: rest_output
-    verify: localhost.crt
+  - filter: exploder
+    msa: false
+    output_chain: ingress
     rcpt_timeout: 300
     data_timeout: 300
-    chunk_size: 1048576
-
-
-
 
 - name: ingress
-  downstream:
-    mail_timeout: 5
-    rcpt_timeout: 5
-    data_timeout: 10
   output_handler:
     downstream_timeout: 5
     upstream_refresh: 1
@@ -478,18 +402,6 @@ endpoint:
   - filter: remote_host
   - filter: received_header
     received_hostname: gargantua1    
-
-  - filter: policy_action
-    match:
-      any:
-        - matcher: koukan.remote_host_filter.RemoteHostFilter
-          fcrdns: false
-        - matcher: koukan.remote_host_filter.RemoteHostFilter
-          ehlo_alignment: false
-    action: REJECT
-    tag: remote_host
-
-  - filter: mail_ok
   - filter: router
     policy:
       name: address_list
@@ -523,6 +435,16 @@ endpoint:
 
   - filter: policy_action
     match:
+      any:
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          fcrdns: false
+        - matcher: koukan.remote_host_filter.RemoteHostFilter
+          ehlo_alignment: false
+    action: REJECT
+    tag: remote_host
+
+  - filter: policy_action
+    match:
       matcher: koukan.message_validation_filter.MessageValidationFilter
       validity_threshold: MEDIUM
     action: REJECT
@@ -544,7 +466,6 @@ endpoint:
     chunk_size: 1048576
 
 - name: sink
-  sf_mode: upstream_unavailability
   chain:
   - filter: policy_action
     match:
@@ -561,7 +482,6 @@ endpoint:
     action: REJECT
     code: 501
     message: 5.1.3 Bad mailbox address syntax
-
   - filter: router
     policy:
       name: address_list

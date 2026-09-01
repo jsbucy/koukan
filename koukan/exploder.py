@@ -88,15 +88,14 @@ class Recipient:
         assert self.filter is not None
         self.filter.update(self.tx, self.tx.copy())
 
-    def update(self, delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+    def update(self, delta : TransactionMetadata) -> None:
         delta = delta.copy_valid(WhichJson.EXPLODER_UPDATE)
         assert self.tx is not None
         self.tx.merge_from(delta)
         if not delta:
-            return TransactionMetadata()
+            return
         assert self.filter is not None
-        return self.filter.update(self.tx, delta)
+        self.filter.update(self.tx, delta)
 
     def wait(self, timeout : Optional[float]):
         assert self.tx is not None
@@ -113,6 +112,7 @@ class Recipient:
         tt = t.copy()
         for ti in [orig, tt]:
             ti.body = None
+            ti.group = None
         assert orig.maybe_delta(tt) is not None  # check buggy filter
         self.tx = t
 

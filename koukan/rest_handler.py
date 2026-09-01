@@ -109,7 +109,7 @@ class RestHandler(Handler):
 
     def response(self,
                  code : int = 200,
-                 msg : Optional[str] = None,
+                 msg : str = '',
                  resp_json : Optional[dict] = None,
                  headers : Optional[List[Tuple[str,str]]] = None,
                  etag : Optional[str] = None
@@ -119,13 +119,16 @@ class RestHandler(Handler):
             headers_dict.update({k:str(v) for k,v in headers})
         if etag is not None:
             headers_dict['etag'] = etag
+        resp : Optional[HttpResponse] = None
         if resp_json is not None:
-            return FastApiJsonResponse(
+            resp = FastApiJsonResponse(
                 status_code=code,
                 content=resp_json,
                 headers=headers_dict)
-        return PlainTextResponse(
-            status_code=code, content=msg, headers=headers_dict)
+        else:
+            resp = PlainTextResponse(
+                status_code=code, content=msg, headers=headers_dict)
+        return resp
 
     def _handle_async(self, request, fn):
         try:
@@ -143,7 +146,8 @@ class RestHandler(Handler):
         deadline = Deadline(timeout)
         cfut = self.executor.submit(partial(self._handle_async, request, fn), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         if not await asyncio.wait_for(fut, deadline.deadline_left()):
             cfut.cancel()
@@ -221,15 +225,22 @@ class RestHandler(Handler):
         elif err := self._validate_incremental_tx(tx):
             return err
 
-        upstream = self.async_filter.update(tx, tx.copy())
+        result = self.async_filter.update(tx, tx.copy())
+        if result == AsyncFilter.Result.OK:
+            pass
+        elif result == AsyncFilter.Result.SERVER_BUSY:
+            return self.response(code=503, msg='server busy')
+        elif result == AsyncFilter.Result.BAD_REQUEST:
+            return self.response(code=400, msg='bad request')
+        else:
+            assert False, 'bug'
+
+        assert tx.rest_id is not None
+
         cached = self.async_filter.check_cache()
-        # the factory path up to router_service fails if the OH
-        # couldn't be scheduled so if we got here, it should be leased
         assert cached is not None
         version, cached_tx, local, remote = cached
         assert cached_tx is not None
-        if upstream is None or tx.rest_id is None:
-            return self.response(code=400, msg='bad request')
         version = self.async_filter.version
         assert version is not None
         self._tx_rest_id = tx.rest_id
@@ -319,7 +330,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(self._check_tx)
         if cfut is None:
             return self.response(
-                code=500, msg='_check_tx_async schedule read'), None
+                code=503, msg='Service Unavailable\r\n'
+                '_check_tx_async schedule read'), None
         afut = asyncio.wrap_future(cfut)
         try:
             # wait ~forever here, this is a point read
@@ -344,7 +356,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(self._get_tx)
         if cfut is None:
             return self.response(
-                code=500, msg='get tx async schedule read'), None
+                code=503, msg='Service Unavailable\r\n'
+                'get tx async schedule read'), None
         afut = asyncio.wrap_future(cfut)
         try:
             # wait ~forever here, this is a point read
@@ -386,8 +399,8 @@ class RestHandler(Handler):
         fresh_etag = etag is not None and self._check_etag(etag, version)
         if timeout is None or not is_local or not fresh_etag:
             if fresh_etag:
-                return self.response(code=304, msg='unchanged',
-                                     headers=[('etag', self._etag(version))])
+                return self.response(
+                    code=304, headers=[('etag', self._etag(version))])
             # do a full read every time with no etag
             if tx is None or etag is None:
                 err, tx = await self._get_tx_async()
@@ -406,8 +419,7 @@ class RestHandler(Handler):
             version, deadline.deadline_left())
 
         if not wait_result:
-            return self.response(code=304, msg='unchanged',
-                                 headers=[('etag', etag)])
+            return self.response(code=304, headers=[('etag', etag)])
 
         if tx is None:
             err, tx = await self._get_tx_async()
@@ -478,6 +490,7 @@ class RestHandler(Handler):
         try:
             upstream_delta = self.async_filter.update(tx, downstream_delta)
         except VersionConflictException:
+            logging.debug('VersionConflictException')
             return self.response(code=412, msg='update conflict')
         if upstream_delta is None:
             return self.response(
@@ -567,7 +580,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             partial(self._get_blob_writer, request, blob_rest_id, tx_body), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         if fut.result() is not None:
@@ -621,7 +635,8 @@ class RestHandler(Handler):
         cfut = self.executor.submit(
             lambda: self._put_blob_chunk(request, b, last), 0)
         if cfut is None:
-            return self.response(code=500, msg='failed to schedule')
+            return self.response(code=503, msg='Service Unavailable\r\n'
+                                 'failed to schedule')
         fut = asyncio.wrap_future(cfut)
         await fut
         return fut.result()
@@ -653,8 +668,10 @@ class RestHandler(Handler):
             length = None
 
         assert self.blob is not None
-        appended, result_len, content_length = self.blob.append_data(
-            start + self.bytes_read, b, length)
+        append = self.blob.append_data(start + self.bytes_read, b, length)
+        if append is None:
+            return self.response(code=404, msg='blob disappeared?')
+        appended, result_len, content_length = append
         logging.debug(
             'RestHandler._put_blob_chunk %s %s %d %s',
             self._blob_rest_id, appended, result_len, content_length)
@@ -725,11 +742,12 @@ class RestHandlerFactory(HandlerFactory):
         self.service_url = service_url
         self.chunk_size = chunk_size
 
-    def create_tx(self, path_sender_name, tag) -> RestHandler:
+    def create_tx(self, path_sender_name, tag) -> Optional[RestHandler]:
         res = self.endpoint_factory.create(Sender(path_sender_name, tag))
-        # TODO possibly HandlerFactory should be able to return an
-        # error response directly here?
-        assert res is not None
+        if res is None:
+            # This happens if the top-level router couldn't schedule
+            # the upstream on Executor.
+            return None
         endpoint, yaml, sender = res
         kwargs : Dict[str, Any] = {}
         if self.chunk_size:

@@ -6,7 +6,6 @@ import logging
 import secrets
 import time
 
-from koukan.backoff import backoff
 from koukan.storage import Storage, TransactionCursor, BlobCursor
 from koukan.storage_schema import VersionConflictException
 from koukan.response import Response
@@ -30,7 +29,7 @@ class OutputHandler:
     cursor : TransactionCursor
     filter_chain : FilterChain
     rest_id : str
-    notification_endpoint_factory : Callable[[], AsyncFilter]
+    notification_endpoint_factory : Callable[[Sender], Optional[Tuple[AsyncFilter, Sender]]]
     mailer_daemon_mailbox : Optional[str] = None
 
     prev_downstream : TransactionMetadata
@@ -266,9 +265,9 @@ class OutputHandler:
                             'notification')
                         raise ValueError()
                     env_kwargs = {'finalize_attempt': True}
-                    if self._maybe_send_notification(
-                            self.cursor.final_attempt_reason, self.cursor.tx):
-                        env_kwargs['notification_done'] = True
+                    assert self._maybe_send_notification(
+                        self.cursor.final_attempt_reason, self.cursor.tx)
+                    env_kwargs['notification_done'] = True
                 else:
                     delta, env_kwargs, refresh = self._handle_once()
                     if not delta and not env_kwargs and not refresh:
@@ -276,8 +275,6 @@ class OutputHandler:
                         # to finally as it is?
                         continue
 
-            except Exception as e:
-                logging.exception('uncaught exception in OutputHandler')
             finally:
                 done = env_kwargs.get('finalize_attempt', False)
                 assert not self.cursor.input_done or done
@@ -285,26 +282,16 @@ class OutputHandler:
                     450, 'internal error: OutputHandler failed to populate '
                     'response')
                 self.tx.fill_inflight_responses(err_resp, delta)
-                for i in range(0,5):
-                    try:
-                        prev = self.cursor.tx.copy()
-                        db_tx_delta = delta.copy_valid(WhichJson.DB)
-                        db_attempt_delta = delta.copy_valid(
-                            WhichJson.DB_ATTEMPT)
-                        db_tx_delta.filter_output = None
-                        db_attempt_delta.filter_output = delta.filter_output
-                        self.cursor.write_envelope(
-                            db_tx_delta, attempt_delta=db_attempt_delta,
-                            **env_kwargs)
-                        self.prev_downstream.merge_from(
-                            prev.delta(self.cursor.tx))
-                        break
-                    except VersionConflictException:
-                        logging.debug('VersionConflictException')
-                        if i == 4:
-                            raise
-                        backoff(i)
-                        self.cursor.load()
+                db_tx_delta = delta.copy_valid(WhichJson.DB)
+                db_attempt_delta = delta.copy_valid(
+                    WhichJson.DB_ATTEMPT)
+                db_tx_delta.filter_output = None
+                db_attempt_delta.filter_output = delta.filter_output
+                self.cursor.write_envelope(
+                    db_tx_delta, attempt_delta=db_attempt_delta,
+                    **env_kwargs)
+                self.prev_downstream.merge_from(db_tx_delta)
+                self.prev_downstream.merge_from(db_attempt_delta)
 
                 if done and not self.tx.cancelled:
                     self.tx.cancelled = True
@@ -346,10 +333,9 @@ class OutputHandler:
                                  tx : TransactionMetadata) -> bool:
         assert self.cursor.tx is not None
         logging.debug('%s %s', self.notification_params, tx)
-        if self.notification_params is None:
-            return False
         if tx.notification is None:
             return False
+        assert self.notification_params is not None
 
         resp : Optional[Response] = None
         # Note: this is not contingent on self.cursor.input_done. Thus
@@ -446,15 +432,19 @@ class OutputHandler:
         # This expects to get retry params from the output chain
         # similar to rest submission: retries enabled, notifications disabled
         # cf FilterChainWiring.add_route()
+        sender = Sender(
+            self.notification_params['sender'],
+            tag=self.notification_params.get('tag', None))
+
+        res = self.notification_endpoint_factory(sender)
+        assert res is not None
+        notification_endpoint, sender = res
         notification_tx = TransactionMetadata(
-            sender=Sender(
-                self.notification_params['sender'],
-                tag=self.notification_params.get('tag', None)),
+            sender=sender,
             mail_from=Mailbox(''),
             # TODO may need to save some esmtp e.g. SMTPUTF8
             rcpt_to=[Mailbox(mail_from.mailbox)],
             body = InlineBlob(dsn, last=True))
-        notification_endpoint = self.notification_endpoint_factory()
         # timeout=0 i.e. fire&forget, don't wait for upstream
         # but internal temp (e.g. db write fail, should be uncommon)
         # should result in the parent retrying even if it was

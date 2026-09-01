@@ -26,6 +26,24 @@ maybe just your own domain. You might be delivering operational
 mail/alerts to a mailbox server within the same cluster. In these cases,
 you want to deploy something locally and forget about it.
 
+Isn't this the same thing as JMAP?
+----------------------------------
+
+JMAP is a modern alternative to IMAP that provides a rich http/json
+api to a mailbox with complex queries, windowing, etc.  Koukan lives
+below JMAP in the groupware stack. Koukan is message transport send/receive
+only.  Koukan is a perfect fit to be the underlying transport
+for JMAP:
+
+* it is trivial to convert between Koukan's message_builder representation and
+  JMAP bodyStructure
+* JMAP EmailSubmission can query Koukan for live delivery status
+
+internet <-> Koukan <-> JMAP mailbox server
+
+Stay tuned!
+
+
 Am I the target audience for Koukan?
 ------------------------------------
 

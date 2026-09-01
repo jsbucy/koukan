@@ -12,6 +12,7 @@ from dkim import dknewkey
 import tempfile
 import yaml
 from urllib.parse import urljoin
+from parameterized import parameterized_class
 
 from koukan.gateway import SmtpGateway
 from koukan.router_service import Service
@@ -38,6 +39,8 @@ def _get_router_endpoint_yaml(router_yaml : dict, name : str
             return endpoint
     return None
 
+@parameterized_class(('router_yaml_name',), [
+    ('router.yaml',), ('router-exploder.yaml',)])
 class End2EndTest(unittest.TestCase):
     dkim_tempdir = None
     receiver_tempdir = None
@@ -92,11 +95,10 @@ class End2EndTest(unittest.TestCase):
     def _update_dkim(self, chain):
         last = 0
         dkim = None
-        for i,f in enumerate(chain):
-            if f['filter'] == 'dkim_sign':
-                dkim = i
-                break
-        filter_yaml = chain[dkim]
+        filter_yaml = next(
+            (f for f in chain if f['filter'] == 'dkim_sign'), None)
+        if filter_yaml is None:
+            return
         if not self.dkim_tempdir:
             self.dkim_tempdir = tempfile.TemporaryDirectory()
         dir = self.dkim_tempdir.name
@@ -137,7 +139,7 @@ class End2EndTest(unittest.TestCase):
         self.router_rest_port = self._find_free_port()
         self.router_base_url = 'http://localhost:%d/' % self.router_rest_port
         self.router_submission_url = urljoin(self.router_base_url, '/senders/submission/transactions')
-        with open('config/local-test/router.yaml', 'r') as f:
+        with open('config/local-test/' + self.router_yaml_name, 'r') as f:
             self.router_yaml = yaml.load(f, Loader=yaml.CLoader)
 
         router_yaml = self.router_yaml
@@ -164,7 +166,7 @@ class End2EndTest(unittest.TestCase):
         self._update_rest_endpoint(router_yaml['rest_endpoint'])
 
         for endpoint in router_yaml['endpoint']:
-            if endpoint['name'] in ['msa-output', 'submission']:
+            if endpoint['name'] in ['submission', 'submission_exploder']:
                 self._update_dkim(endpoint['chain'])
             for filter in endpoint['chain']:
                 self._update_router(filter)
@@ -203,6 +205,9 @@ class End2EndTest(unittest.TestCase):
             self.executor.ping_watchdog)
         self.executor.submit(self.http_server.run)
 
+    def exploder(self):
+        return 'exploder' in self.router_yaml_name
+
     def setUp(self):
         self.dead_socket = socketserver.TCPServer(
             ("localhost", 0), lambda x,y,z: None, bind_and_activate=False)
@@ -240,12 +245,15 @@ class End2EndTest(unittest.TestCase):
     # mx smtp -> smtp
     def test_smoke(self):
         self._configure_and_run()
-        rcpt_resp, final_resp = send_smtp(
+        resp = send_smtp(
             'localhost', self.gateway_mx_port, 'localhost',
             'alice@example.com', ['bob@nowhere.com', 'bob@example.com'],
             'hello, world!')
+        logging.debug(resp)
+        rcpt_resp, final_resp = resp
         self.assertEqual(550, rcpt_resp[0][0])
         self.assertEqual(250, rcpt_resp[1][0])
+        self.assertEqual(250, final_resp[0], msg=final_resp)
 
         for handler in self.fake_smtpd.handlers:
             # smtpd machinery constructs extra handlers during startup?
@@ -295,18 +303,22 @@ class End2EndTest(unittest.TestCase):
             'localhost', self.gateway_mx_port, 'nonlocalhost',
             'alice@example.com', ['bob@example.com'],
             'hello, world!')
+        self.assertIsNone(rcpt_resp)
         self.assertEqual(550, final_resp[0])
 
     def test_policy_reject_rcpt(self):
         self._configure_and_run()
         rcpt_resp, final_resp = send_smtp(
             'localhost', self.gateway_mx_port, 'localhost',
-            'alice@example.com', ['bob@example.com', 'bob+2@example.com'],
+            'alice@example.com', ['bob@example.com',
+                                  'bob2@example.com',
+                                  'bob3@example.com'],
             'hello, world!')
 
         self.assertEqual(250, rcpt_resp[0][0])
-        self.assertEqual(451, rcpt_resp[1][0])
-        self.assertIn(b'4.5.3 too many recipients', rcpt_resp[1][1])
+        self.assertEqual(250, rcpt_resp[1][0])
+        self.assertEqual(451, rcpt_resp[2][0])
+        self.assertIn(b'4.5.3 too many recipients', rcpt_resp[2][1])
         self.assertEqual(250, final_resp[0])
 
 
@@ -375,12 +387,15 @@ class End2EndTest(unittest.TestCase):
         with open(tx.tx_json_path, 'rb') as tx_json_file:
             tx_json = json.load(tx_json_file)
             logging.debug(tx_json)
+            logging.debug(json.dumps(tx.message_json, indent=2))
+
         self.assertEqual('bob@rest-application.example.com',
                          tx_json['rcpt_to'][0]['m'])
 
         self.assertIsNotNone(filter_output := tx_json['filter_output'])
         self.assertEqual(
-            {'koukan.dkim_check_filter.DkimCheckFilter',
+            {'koukan.spf_check_filter.SpfCheckFilter',
+             'koukan.dkim_check_filter.DkimCheckFilter',
              'koukan.message_validation_filter.MessageValidationFilter',
              'koukan.mx_resolution.DnsResolutionFilter',
              'koukan.remote_host_filter.RemoteHostFilter',
@@ -391,8 +406,6 @@ class End2EndTest(unittest.TestCase):
             filter_output[
                 'koukan.message_validation_filter.MessageValidationFilter'])
 
-        logging.debug(json.dumps(tx.tx_json, indent=2))
-        logging.debug(json.dumps(tx.message_json, indent=2))
         blob_content = {}
         for blob_id,path in tx.blob_paths.items():
             with open(path, 'rb') as f:
@@ -559,24 +572,29 @@ class End2EndTest(unittest.TestCase):
 
     def _test_add_route(self, filter_yaml):
         self._configure()
-        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, 'ingress')
+        chain = 'ingress' if self.exploder() else 'ingress_exploder'
+        endpoint_yaml = _get_router_endpoint_yaml(self.router_yaml, chain)
 
         add_route_yaml = next(
-            y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route')
-        add_route_yaml.update(filter_yaml)
+            (y for y in endpoint_yaml['chain'] if y['filter'] == 'add_route'),
+            None)
+        if add_route_yaml:
+            add_route_yaml.update(filter_yaml)
 
         self._run()
         time.sleep(1)
 
-        send_smtp('localhost', self.gateway_mx_port, 'localhost',
+        rcpt_resp, final_resp = send_smtp('localhost', self.gateway_mx_port, 'localhost',
                   'alice@example.com', ['bob@example.com'],
                   'hello, world!')
+        self.assertEqual(250, final_resp[0])
 
         for handler in self.fake_smtpd.handlers:
             # smtpd machinery constructs extra handlers during startup?
             if handler.ehlo is None:
                 logging.debug('empty handler? %s', handler)
                 continue
+            logging.debug(handler)
             self.assertEqual(handler.ehlo, 'localhost')
             self.assertEqual(handler.mail_from, 'alice@example.com')
             self.assertEqual(len(handler.mail_options), 1)
@@ -604,8 +622,12 @@ class End2EndTest(unittest.TestCase):
             if tx is None:
                 break
             storage_tx += 1
-        self.assertEqual(3 if 'store_and_forward' in filter_yaml else 2,
-                         storage_tx)
+        expected_storage_tx = 1
+        if 'store_and_forward' in filter_yaml:
+            expected_storage_tx += 1
+        if self.exploder():
+            expected_storage_tx += 1
+        self.assertEqual(expected_storage_tx, storage_tx)
 
     def test_add_route_sync(self):
         return self._test_add_route({'output_chain': 'sink'})
@@ -633,7 +655,8 @@ class End2EndTest(unittest.TestCase):
         self.assertEqual(250, rcpt_resp[0][0])
         self.assertEqual(550, data_resp[0])
         self.assertEqual(
-            b'5.6.0 message rejected message_validation', data_resp[1])
+            b'5.6.0 message rejected message_validation (SWF group reject)',
+            data_resp[1])
 
 
 

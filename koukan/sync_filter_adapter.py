@@ -64,13 +64,15 @@ class SyncFilterAdapter(AsyncFilter):
         # queue of staged appends, these are propagated to
         # parent.body in _update_once()
         q : List[bytes]
-        content_length : Optional[int] = None
+        _content_length : Optional[int] = None
         def __init__(self, parent):
             self.parent = parent
             self.q = []
 
         def len(self):
             return self.offset
+        def content_length(self):
+            return self._content_length
 
         def append_data(self, offset : int, d : bytes,
                         content_length : Optional[int] = None
@@ -79,16 +81,16 @@ class SyncFilterAdapter(AsyncFilter):
                 # flow control: don't buffer multiple chunks from downstream
                 # TODO this can probably be further simplified
                 self.parent.cv.wait_for(lambda: not(self.q))
-                assert self.content_length is None or (
-                    content_length == self.content_length)
-                if self.content_length is not None and (
-                        self.offset + len(d) > self.content_length):
-                    return False, self.offset, self.content_length
+                assert self._content_length is None or (
+                    content_length == self._content_length)
+                if self._content_length is not None and (
+                        self.offset + len(d) > self._content_length):
+                    return False, self.offset, self._content_length
                 if offset != self.offset:
                     return False, self.offset, None
                 self.q.append(d)
                 self.offset += len(d)
-                self.content_length = content_length
+                self._content_length = content_length
             self.parent._blob_wakeup()
             return True, self.offset, content_length
 
@@ -184,9 +186,9 @@ class SyncFilterAdapter(AsyncFilter):
             # body goes in delta if it changed
             delta.body = self.body
             for b in self.blob_writer.q:
-                last = (self.blob_writer.content_length is not None and
+                last = (self.blob_writer._content_length is not None and
                         (self.body.len() + len(b) ==
-                         self.blob_writer.content_length))
+                         self.blob_writer._content_length))
                 self.body.append(b, last)
                 dequeued += len(b)
                 logging.debug('append %d %s', len(b), self.body)
@@ -221,23 +223,16 @@ class SyncFilterAdapter(AsyncFilter):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> AsyncFilter.Result:
         if tx.retry is not None or tx.notification is not None:
-            err = TransactionMetadata()
-            tx.fill_inflight_responses(
-                MailResponse(500, 'internal err/invalid transaction fields'),
-                err)
-            tx.merge_from(err)
-            return err
+            return AsyncFilter.Result.BAD_REQUEST
 
         with self.mu:
             version = self.id_version.get()
 
             # try this non-destructively to see if the delta is valid...
             if self.tx.merge(tx_delta) is None:
-                # bad delta, xxx this should throw an exception distinct
-                # from VersionConflictException, cannot make forward progress
-                return None
+                return AsyncFilter.Result.BAD_REQUEST
             # ... before committing to self.tx
             self.tx.merge_from(tx_delta)
             logging.debug('SyncFilterAdapter.updated merged %s', self.tx)
@@ -248,14 +243,14 @@ class SyncFilterAdapter(AsyncFilter):
 
             if not self.inflight:
                 fut = self.executor.submit(lambda: self._update(), 0)
-                # TODO we need a better way to report this error but
-                # throwing here will -> http 500
-                assert fut is not None
+                if fut is None:
+                    return AsyncFilter.Result.SERVER_BUSY
                 self.inflight = True
             # no longer waits for inflight
             prev = tx.copy()
             tx.rest_id = self.rest_id
-            return prev.delta(tx)
+
+        return AsyncFilter.Result.OK
 
     def get(self) -> Optional[TransactionMetadata]:
         with self.mu:

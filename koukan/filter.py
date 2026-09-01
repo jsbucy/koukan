@@ -12,8 +12,10 @@ from typing import (
     TypeAlias,
     Union )
 from abc import ABC, abstractmethod
+from enum import IntEnum
 import logging
 import copy
+from threading import Condition, Lock
 
 from koukan.response import Response
 
@@ -178,6 +180,7 @@ class TxField:
     is_list : bool = False
     is_dict : bool = False
     copy : Optional[Copy] = None
+    pod = False  # Plain Old Data, can be serialized to json directly
 
     def __init__(self,
                  json_field : str,
@@ -187,7 +190,8 @@ class TxField:
                  rest_placeholder : bool = False,
                  is_list : bool = False,
                  is_dict : bool = False,
-                 copy : Optional[Copy] = None):
+                 copy : Optional[Copy] = None,
+                 pod : bool = False):
         self.json_field = json_field
         # None -> in-process/internal only, never serialized to json
         self.validity = validity if validity else set()
@@ -199,6 +203,7 @@ class TxField:
         self.is_list = is_list
         self.is_dict = is_dict
         self.copy = copy
+        self.pod = pod
 
     def valid(self, which_json : WhichJson):
         if which_json == WhichJson.ALL:
@@ -333,7 +338,7 @@ def body_to_json(body : Union[BlobSpec, Blob, MessageBuilderSpec, None],
     raise ValueError()
 
 def _copy_body(b, which_js):
-    if isinstance(b, MessageBuilderSpec):
+    if isinstance(b, MessageBuilderSpec) or isinstance(b, Blob):
         return b.clone()
     else:
         return b
@@ -452,6 +457,8 @@ _tx_fields = [
             validity=set([
                 WhichJson.DB,
                 WhichJson.DB_ATTEMPT,
+                WhichJson.EXPLODER_CREATE,
+                WhichJson.EXPLODER_UPDATE,
                 WhichJson.REST_CREATE,
                 WhichJson.REST_UPDATE,
                 WhichJson.REST_READ,
@@ -460,6 +467,34 @@ _tx_fields = [
             is_dict=True),
     # cleared after each OutputHandler/FilterChain cycle
     TxField('ephemeral_filter_output', validity=None, is_dict=True),
+
+    # private to StorageWriterFilter for store-and-forward/smtp transactions
+    TxField('sf_mail_timeout',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('sf_rcpt_timeout',
+            is_list=True,
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('sf_data_timeout',
+            validity=set([WhichJson.DB]),
+            pod=True),
+
+    TxField('downstream_mail_response',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('downstream_rcpt_response',
+            is_list=True,
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('downstream_data_response',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('group_index',
+            validity=set([WhichJson.DB]),
+            pod=True),
+    TxField('group',
+            validity=set([]))
 ]
 tx_json_fields = { f.json_field : f for f in _tx_fields }
 
@@ -516,13 +551,25 @@ class TransactionMetadata:
     filter_output_dict_json : Optional[Dict[str, Any]] = None
     ephemeral_filter_output : Optional[Dict[str, Any]] = None
 
-    def __init__(self, 
+    sf_mail_timeout : Optional[int] = None
+    sf_rcpt_timeout : List[int]
+    sf_data_timeout : Optional[int] = None
+    downstream_mail_response : Optional[int] = None
+    downstream_rcpt_response : List[int]
+    downstream_data_response : Optional[int] = None
+
+    # index of this tx in group
+    group_index : Optional[int] = None
+
+    group : Optional['TransactionGroup'] = None
+
+    def __init__(self,
                  local_host : Optional[HostPort] = None,
                  remote_host : Optional[HostPort] = None,
                  mail_from : Optional[Mailbox] = None,
                  mail_response : Optional[Response] = None,
                  rcpt_to : Optional[Sequence[Mailbox]] = None,
-                 rcpt_response : Optional[Sequence[Response]] = None,
+                 rcpt_response : Optional[Sequence[Optional[Response]]] = None,
                  body : Union[BlobSpec, Blob, MessageBuilderSpec, None] = None,
                  data_response : Optional[Response] = None,
                  notification : Optional[dict] = None,
@@ -531,8 +578,8 @@ class TransactionMetadata:
                  cancelled : Optional[bool] = None,
                  resolution : Optional[Resolution] = None,
                  rest_id : Optional[str] = None,
-                 sender : Optional[Sender] = None
-                 ):
+                 sender : Optional[Sender] = None,
+                 group_index : Optional[int] = None):
         self.local_host = local_host
         self.remote_host = remote_host
         self.mail_from = mail_from
@@ -548,6 +595,9 @@ class TransactionMetadata:
         self.resolution = resolution
         self.rest_id = rest_id
         self.sender = sender
+        self.sf_rcpt_timeout = []
+        self.downstream_rcpt_response = []
+        self.group_index = group_index
 
     def __repr__(self):
         out = ''
@@ -625,6 +675,8 @@ class TransactionMetadata:
                     v = [None for v in js_v]
                 elif field.from_json is not None:
                     v = [field.from_json(v, which_js) for v in js_v]
+                elif field.pod:
+                    v = list(js_v)
                 else:
                     raise ValueError()
                 if field.list_offset() in tx_json and (
@@ -643,13 +695,14 @@ class TransactionMetadata:
             setattr(tx, f, v)
         return tx
 
-    def _body_last(self):
+    def _body_last(self) -> bool:
         if isinstance(self.body, BlobSpec):
             return self.body.finalized
-        elif isinstance(self.body, Union[Blob, MessageBuilderSpec]):
+        elif isinstance(self.body, Blob) or isinstance(self.body, MessageBuilderSpec):
             return self.body.finalized()
         elif self.body is not None:
             raise ValueError()
+        return False
 
     # returns True if there is a request field (mail/rcpt/data)
     # without a corresponding response field in tx
@@ -759,7 +812,17 @@ class TransactionMetadata:
                 if field.emit_rest_placeholder(which_js):
                     v_js = [{}] * len(v)
                 else:
-                    v_js = [vv.to_json(which_js) for vv in v]
+                    v_js = []
+                    for vv in v:
+                        assert vv is not None, '%s %s' % (name, v)
+                        if field.to_json:
+                            vv_js = field.to_json(vv, which_js)
+                        elif not field.pod:
+                            vv_js = vv.to_json(which_js, which_js)
+                        else:
+                            vv_js = vv
+                        v_js.append(vv_js)
+
                 offset = getattr(self, field.list_offset(), None)
                 if which_js == WhichJson.REST_UPDATE and offset:
                     json[field.list_offset()] = offset
@@ -831,7 +894,7 @@ class TransactionMetadata:
             # TODO could verify that old_v == new_v
             setattr(out, f, old_v)
             return
-        assert isinstance(old_v, list)
+        assert isinstance(old_v, list), '%s %s' % (f, old_v)
         if not(new_v):
             setattr(out, f, old_v)
             return
@@ -884,7 +947,7 @@ class TransactionMetadata:
             return
         if (old_v is not None) and (new_v is None):
            logging.debug('tx.delta invalid del %s (was %s)', f, old_v)
-           assert False, (which_json, old_v, new_v)
+           assert False, (which_json, f, old_v, new_v)
         if (old_v is None) and (new_v is not None):
             setattr(out, f, new_v)
             return
@@ -920,7 +983,7 @@ class TransactionMetadata:
             setattr(out, f, None)
             return
         assert isinstance(old_v, list)
-        assert isinstance(new_v, list)
+        assert isinstance(new_v, list), '%s %s' % (f, new_v)
         if json_field.emit_rest_placeholder(which_json):
             if any([x != None for x in new_v]):
                 assert False, 'non-None placeholder ' + f
@@ -937,7 +1000,7 @@ class TransactionMetadata:
             if old_v[i] is not None and new_v[i] is None:
                 assert False, 'tx.delta ' + f + ' ->None'
             if old_v[i] != new_v[i]:
-                assert False, 'tx.delta ' + f + ' !='
+                assert False, 'tx.delta ' + f + ' ' + str(old_v[i]) + ' != ' + str(new_v[i])
         setattr(out, f, new_v[old_len:])
         setattr(out, json_field.list_offset(), old_len)
 
@@ -1020,11 +1083,124 @@ class TransactionMetadata:
             return None
         return self.ephemeral_filter_output.get(f, None)
 
+class _GroupResult:
+    tx_index : int
+    filter_output : Optional[FilterOutput] = None
+    def __init__(self, tx_index):
+        self.tx_index = tx_index
+
+# Coordinates parallel upstream/output flows for transactions for each
+# rcpt of a multi-rcpt downstream smtp transaction.
+class TransactionGroup:
+    tx_cursors : List[Any]  # 'TransactionCursor']
+    inflight : Dict[str, _GroupResult]
+    mu : Lock
+    cv : Condition
+
+    def __init__(self, cursors):
+        self.tx_cursors = cursors
+        self.inflight = {}
+        self.mu = Lock()
+        self.cv = Condition(self.mu)
+
+    def __enter__(self):
+        self.mu.acquire()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.mu.release()
+
+    def tx(self) -> List[TransactionMetadata]:
+        def _tx(cursor):
+            assert cursor.tx is not None
+            return cursor.tx
+        return [_tx(c) for c in self.tx_cursors]
+
+    # Blocks up to deadline or until pred returns true for the ith cursor
+    def wait_tx(self, i : int, pred : Callable[[TransactionMetadata], bool],
+                deadline : Deadline) -> Optional[TransactionMetadata]:
+        tx_cursor = self.tx_cursors[i]
+        while not (matched := pred(tx_cursor.tx)) and deadline.remaining():
+            if tx_cursor.wait(deadline.deadline_left())[0]:
+                if not tx_cursor.try_cache():
+                    tx_cursor.load()
+        if matched:
+            return tx_cursor.tx
+        return None
+
+    # inflight waiting for filter_output:
+    # if (inflight_index := group.maybe_start_inflight(
+    #       'my_filter', tx.group_index)) == tx.group_index
+    #   tx.set_filter_output('my_filter', MyFilterOutput())
+    #   group.set_done('my_filter')
+    # else:
+    #   success = group.wait_inflight('my_filter', timeout)
+    #   if success:
+    #     group.wait_tx(inflight_index, lambda tx: ...)
+    #     filter_output = group.tx()[inflight_index].get_filter_output(
+    #       'my_filter')
+
+    # if filter_name (get_filter_output, etc) is already inflight,
+    # returns the group_index. Otherwise, if tx_index is not None,
+    # marks it inflight.
+    def maybe_start_inflight(self, filter_name : str,
+                             tx_index : Optional[int] = None
+                             ) -> Optional[int]:
+        with self.mu:
+            logging.debug(filter_name)
+            result = self.inflight.get(filter_name, None)
+            if result is None:
+                if tx_index is not None:
+                    self.inflight[filter_name] = _GroupResult(tx_index)
+                    return tx_index
+                else:
+                    return None
+            logging.debug('%s %s', result.tx_index, result.filter_output)
+
+            # assert result.tx_index != tx_index
+            return result.tx_index
+
+    # Waits up to timeout for filter_name to have a non-none result or
+    # filter_name to not be inflight (due to an error). Returns the
+    # FilterOutput on success, None on timeout or no longer inflight.
+    def wait_inflight(self, filter_name : str, timeout : Optional[float]
+                      ) -> Optional[FilterOutput]:
+        logging.debug(filter_name)
+        with self.mu:
+            if filter_name not in self.inflight:
+                return None
+            result = None
+            def pred():
+                nonlocal result
+                result = self.inflight.get(filter_name, None)
+                return result is None or result.filter_output is not None
+            rv = self.cv.wait_for(pred, timeout)
+            logging.debug('%s %s', filter_name, rv)
+            if not rv or result is None:
+                return None
+            return result.filter_output
+
+    # if filter_output is None, removes filter_name from inflight set
+    # to signal an error.
+    def set_done(self, filter_name : str,
+                 filter_output : Optional[FilterOutput]):
+        with self.mu:
+            result = self.inflight.get(filter_name, None)
+            assert result is not None
+            if filter_output is None:
+                del self.inflight[filter_name]
+                return
+            result.filter_output = filter_output
+            self.cv.notify_all()
 
 # interface from RestHandler to StorageWriterFilter
 # NOTE Async here is with respect to the transaction responses, not
 # program execution.
 class AsyncFilter(ABC):
+    class Result(IntEnum):
+        OK = 0
+        SERVER_BUSY = 1
+        BAD_REQUEST = 2
+
     # returns whether this endpoint supports building up the
     # transaction incrementally a la smtp
     @abstractmethod
@@ -1035,7 +1211,7 @@ class AsyncFilter(ABC):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> Optional[TransactionMetadata]:
+               ) -> 'AsyncFilter.Result':
         pass
 
     @abstractmethod
@@ -1064,7 +1240,8 @@ class AsyncFilter(ABC):
     # postcondition: true -> version() != version
     # false -> timeout
     @abstractmethod
-    def wait(self, version : int, timeout : Optional[float]) -> Tuple[bool, Optional[TransactionMetadata]]:
+    def wait(self, version : int, timeout : Optional[float]
+             ) -> Tuple[bool, Optional[TransactionMetadata]]:
         pass
 
     @abstractmethod
@@ -1073,7 +1250,9 @@ class AsyncFilter(ABC):
         pass
 
 
-    CheckTxResult = Tuple[int, Optional[TransactionMetadata], bool, Optional[str]]
+    # version, tx, leased?, other session
+    CheckTxResult = Tuple[
+        int, Optional[TransactionMetadata], bool, Optional[str]]
 
     @abstractmethod
     def check_cache(self) -> Optional[CheckTxResult]:

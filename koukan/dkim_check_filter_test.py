@@ -1,6 +1,7 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
 import logging
 import unittest
 import tempfile
@@ -22,10 +23,12 @@ from koukan.matcher_result import MatcherResult
 from koukan.rest_schema import WhichJson
 
 from koukan.blob import InlineBlob
+from koukan.executor import Executor
 
 from koukan.message_validation_filter import (
     MessageValidationFilter,
     MessageValidationFilterOutput )
+from koukan.fake_endpoints import FakeTxGroup
 
 
 class DkimCheckFilterTest(unittest.TestCase):
@@ -156,6 +159,64 @@ class DkimCheckFilterTest(unittest.TestCase):
             {'status': 2,
              'headers': ['from', 'subject', 'message-id', 'date', 'from']},
             result.to_json())
+
+    def test_invalid_rfc822(self):
+        tx = TransactionMetadata(
+            body=InlineBlob(b'hello, world!', last=True))
+        f = DkimCheckFilter(self.dns)
+        f.wire_downstream(tx)
+        f.on_update(tx)
+        filter_output = tx.get_filter_output(f.fullname())
+        self.assertEqual(0, len(filter_output.results))
+
+    def test_group_reuse(self):
+        tx0 = TransactionMetadata(group_index=0)
+        tx1 = TransactionMetadata(group_index=1)
+
+        group = tx0.group = tx1.group = FakeTxGroup([tx0, tx1])
+
+        f0 = DkimCheckFilter(self.dns)
+        f0.wire_downstream(tx0)
+
+        f0.on_update(TransactionMetadata(
+            body=InlineBlob(b'Subject: hello\r\n\r\nworld!\r\n', last=True)))
+        filter_output = tx0.get_filter_output(f0.fullname())
+
+        f1 = DkimCheckFilter(self.dns)
+        f1.wire_downstream(tx1)
+
+        f1.on_update(TransactionMetadata(
+            body=InlineBlob(b'Hello, world!', last=True)))
+
+        out1 = tx1.get_filter_output(f1.fullname())
+        self.assertIs(out1, filter_output)
+
+    def test_inflight_waiting(self):
+        tx0 = TransactionMetadata(group_index=0)
+        tx1 = TransactionMetadata(group_index=1)
+
+        group = tx0.group = tx1.group = FakeTxGroup([tx0, tx1])
+
+        f0 = DkimCheckFilter(self.dns)
+        f0.wire_downstream(tx0)
+
+        f1 = DkimCheckFilter(self.dns)
+        f1.wire_downstream(tx1)
+
+        group.maybe_start_inflight(f1.fullname(), 0)
+
+        executor = Executor(inflight_limit=10)
+        fut = executor.submit(
+            partial(f1.on_update, TransactionMetadata(
+            body=InlineBlob(b'Hello, world!', last=True))))
+
+        filter_output = DkimCheckFilterOutput()
+        group.set_done(f1.fullname(), filter_output)
+
+        fut.result()
+        out1 = tx1.get_filter_output(f1.fullname())
+        self.assertIs(out1, filter_output)
+
 
 
 if __name__ == '__main__':

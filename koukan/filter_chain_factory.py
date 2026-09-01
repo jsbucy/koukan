@@ -104,19 +104,16 @@ class FilterChainFactory:
         tags = sender_yaml.get('tag', None)
         tag_yaml = None
         if tags and sender.tag:
-            for ty in tags:
-                if ty['name'] == sender.tag:
-                    tag_yaml = ty
-                    break
-            else:
+            tag_yaml = next(
+                (ty for ty in tags if ty['name'] == sender.tag), None)
+            if tag_yaml is None:
                 return None
         result_sender = Sender(sender.name, sender.tag)
         result_sender.yaml = dict(sender_yaml)
         if tags is not None:
             del result_sender.yaml['tag']
         if tag_yaml is not None:
-            for k,v in tag_yaml.items():
-                result_sender.yaml[k] = v
+            result_sender.yaml.update(tag_yaml)
         return result_sender
 
     def build_filter_chain(self, sender : Sender,
@@ -127,10 +124,11 @@ class FilterChainFactory:
         output_chain = sender_yaml.get('output_chain', None)
         tags = sender_yaml.get('tag', [])
         if tags and sender.tag:
-            for tag_yaml in tags:
-                if tag_yaml['name'] == sender.tag and (
-                        toc := tag_yaml.get('output_chain', None)):
-                    output_chain = toc
+            tag_yaml = next(
+                (ty for ty in tags if ty['name'] == sender.tag), None)
+            if tag_yaml is not None and (
+                    toc := tag_yaml.get('output_chain', None)):
+                output_chain = toc
 
         assert output_chain is not None
         if endpoint_yaml is None:

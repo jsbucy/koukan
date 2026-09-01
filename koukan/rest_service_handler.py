@@ -49,7 +49,7 @@ class Handler(ABC):
 # error, etc.
 class HandlerFactory(ABC):
     @abstractmethod
-    def create_tx(self, sender: str, tag : Optional[str]) -> Handler:
+    def create_tx(self, sender: str, tag : Optional[str]) -> Optional[Handler]:
         pass
 
     @abstractmethod

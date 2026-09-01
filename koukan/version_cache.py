@@ -1,6 +1,6 @@
 # Copyright The Koukan Authors
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from threading import (
     Condition,
     Lock )
@@ -104,7 +104,13 @@ class IdVersion:
                           self.leased, leased)
             if version < self.version:
                 raise VersionConflictException()
+            # Same version is expected if another read gets in between
+            # the db update and the cache update:
+            # t1: db tx -> v4
+            # t2: read v4; update version cache
+            # t1: update version cache v4
             if version == self.version:
+                logging.debug('same version noop')
                 return
             self.last_update = time.monotonic()
             self.version = version
@@ -118,10 +124,12 @@ class IdVersion:
             self.cv.notify_all()
 
             def done(afut, version, cursor):
-                logging.debug('async wakeup done')
-                # XXX currently throws InvalidStateError after waiter
-                # timed out? this is benign?
-                afut.set_result((version, cursor))
+                logging.debug('async wakeup done')  # %s', cursor.db_id if cursor else None)
+                # InvalidStateError is ~expected after waiter timed out?
+                try:
+                    afut.set_result((version, cursor))
+                except asyncio.exceptions.InvalidStateError:
+                    pass
 
             for loop,future,waiter_version in self.async_waiters:
                 assert version > waiter_version
@@ -137,20 +145,22 @@ class IdVersion:
                          version : int,
                          timeout : Optional[float],
                          cursor_out : Optional[Any] = None
+                         # false if timed out, true if cloned
                          ) -> Tuple[bool, bool]:
         loop = asyncio.get_running_loop()
         afut = loop.create_future()
 
         with self.lock:
             if self.version > version:
-                logging.debug('cache version %d version %d',
-                              self.version, version)
+                if cursor_out is not None and self.cursor is not None:
+                    cursor_out.copy_from(self.cursor)
+                    return True, True
                 return True, False
             self.async_waiters.append((loop, afut, version))
 
         try:
             new_version, cursor = await asyncio.wait_for(afut, timeout)
-            logging.debug('new_version %d version %d', new_version, version)
+            logging.debug('new_version %d version %d cursor %s', new_version, version, cursor)
             assert new_version > version
             clone = False
             if cursor is not None and cursor_out is not None:
@@ -158,7 +168,7 @@ class IdVersion:
                 cursor_out.copy_from(cursor)
                 clone = True
             return True, clone
-        except TimeoutError:
+        except (TimeoutError, asyncio.CancelledError) as e:
             with self.lock:
                 for i,(loop,fut,version) in enumerate(self.async_waiters):
                     if fut == afut:
@@ -175,19 +185,25 @@ class IdVersionMap:
     # rest_id -> IdVersion
     rest_id_map : WeakValueDictionary[str, IdVersion]
 
+    tx_groups : Dict[int, Set[int]]
+
     ttl_refs : Set[IdVersion]
     last_gc : float
+    # TODO does this need to be baked in? could just be passed to gc()?
     ttl : Optional[int] = None
 
     def __init__(self, ttl=None):
+        assert ttl is not None
         self.id_version_map = WeakValueDictionary()
         self.rest_id_map = WeakValueDictionary()
+        self.tx_groups = {}
         self.lock = Lock()
         self.ttl_refs = set()
         self.last_gc = time.monotonic()
         self.ttl = ttl
 
     def gc(self):
+        logging.debug(self.ttl)
         if self.ttl is None:
             return
         now = time.monotonic()
@@ -196,10 +212,24 @@ class IdVersionMap:
         self.last_gc = now
         to_delete = []
         for i in self.ttl_refs:
-            if i.expired():
-                to_delete.append(i)
+            if not i.expired():
+                continue
+            to_delete.append(i)
+            if i.cursor:
+                group_parent = i.cursor.parent_db_id()
+                group = self.tx_groups.get(group_parent, None)
+                if group is not None:
+                    group.remove(i.cursor.db_id)
+                    if not group:
+                        del self.tx_groups[group_parent]
         for i in to_delete:
             self.ttl_refs.remove(i)
+
+    def get_group(self, db_id : int) -> Optional[List[int]]:
+        with self.lock:
+            if (group_ids := self.tx_groups.get(db_id, None)) is None:
+                return None
+        return sorted(group_ids)
 
     def insert_or_update(self, db_id : int, rest_id : str, version : int,
                          cursor : Optional[Any] = None,
@@ -217,6 +247,13 @@ class IdVersionMap:
                 self.rest_id_map[rest_id] = id_version
             else:
                 id_version.update(version, cursor, leased)
+            if cursor is not None:
+                group_parent = cursor.parent_db_id()
+                logging.debug('%d %s', db_id, group_parent)
+                if (group_ids := self.tx_groups.get(group_parent, None)) is None:
+                    group_ids = set()
+                    self.tx_groups[group_parent] = group_ids
+                group_ids.add(db_id)
             if self.ttl is not None:
                 self.ttl_refs.add(id_version)
             return id_version
@@ -230,7 +267,7 @@ class IdVersionMap:
             elif rest_id is not None:
                 idv = self.rest_id_map.get(rest_id, None)
             else:
-                raise ValueError
+                raise ValueError()
             # will take a GC cycle for erasing from ttl to propagate
             # to weak value dict
             return idv if idv is not None and idv._reusable() else None

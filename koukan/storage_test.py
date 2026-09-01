@@ -12,8 +12,12 @@ import os
 from datetime import datetime, timedelta
 from functools import partial
 
-from koukan.blob import Blob
-from koukan.storage import BlobCursor, Storage, TransactionCursor
+from koukan.blob import Blob, InlineBlob
+from koukan.storage import (
+    BlobCursor,
+    GroupCursor,
+    Storage,
+    TransactionCursor )
 from koukan.storage_schema import BlobSpec, VersionConflictException
 from koukan.response import Response
 from koukan.filter import HostPort, Mailbox, TransactionMetadata
@@ -21,24 +25,12 @@ from koukan.rest_schema import BlobUri
 
 from koukan.message_builder import MessageBuilderSpec
 
-import koukan.postgres_test_utils as postgres_test_utils
-import koukan.sqlite_test_utils as sqlite_test_utils
-
-def setUpModule():
-    postgres_test_utils.setUpModule()
-
-def tearDownModule():
-    postgres_test_utils.tearDownModule()
-
-
-class StorageTestBase(unittest.TestCase):
-    sqlite : bool
+class StorageTestBase(unittest.IsolatedAsyncioTestCase):
+    s : Optional[Storage] = None
 
     def setUp(self):
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s [%(thread)d] %(filename)s:%(lineno)d '
-            '%(message)s')
+        if self.__class__ == StorageTestBase:
+            raise unittest.SkipTest("Skipping base class tests")
 
     def tearDown(self):
         self.s._del_session()
@@ -51,6 +43,12 @@ class StorageTestBase(unittest.TestCase):
             TransactionMetadata(
                 remote_host=HostPort('remote_host', 2525)),
             create_leased=True)
+
+        check_cursor = self.s.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertEqual((True, None), check_cursor.check())
+        self.assertEqual((False, False), check_cursor.wait(0.1))
+
+        self.assertEqual((False, False), downstream.wait(0.1))
 
         downstream.write_envelope(TransactionMetadata(
             mail_from=Mailbox('alice')))
@@ -109,6 +107,10 @@ class StorageTestBase(unittest.TestCase):
         self.assertTrue(blob_writer.last)
         del blob_writer
 
+        # blob -> tx input_done orchestration moving to SWF
+        downstream.load()
+        downstream.write_envelope(TransactionMetadata(), input_done = True)
+
         downstream.load()
         downstream.write_envelope(
             TransactionMetadata(
@@ -163,6 +165,137 @@ class StorageTestBase(unittest.TestCase):
         self.assertIsNone(self.s.load_one())
 
         logging.debug(self.s.debug_dump())
+
+    # write tx with isinstance(tx.body, Blob) representative of
+    # - rest w/inline body
+    # - add-route
+    # - notification
+    # - exploder
+    def test_write_blob(self):
+        downstream = self.s.get_transaction_cursor()
+        body = b'hello, world!'
+        downstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525),
+                mail_from=Mailbox('alice@example.com'),
+                rcpt_to=[Mailbox('bob@example.com')],
+                body=InlineBlob(body, last=True)),
+            create_leased=True)
+
+        upstream = self.s.get_transaction_cursor(db_id=downstream.db_id)
+        upstream.load()
+        self.assertEqual(body, upstream.tx.body.pread(0))
+
+    def test_write_conflict(self):
+        cursor = self.s.get_transaction_cursor()
+        cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(mail_from=Mailbox('alice')),
+            create_leased=True)
+        cursor.start_attempt()
+
+        cursor2 = self.s.get_transaction_cursor(db_id=cursor.db_id)
+        cursor2.load()
+
+        cursor.write_envelope(
+            TransactionMetadata(),
+            attempt_delta=TransactionMetadata(mail_response=Response()))
+
+        cursor2.write_envelope(
+            TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
+
+
+    async def test_group_cursor(self) -> None:
+        assert self.s is not None
+        tx0_cursor = self.s.get_transaction_cursor()
+        tx0_cursor.create(
+            'tx_rest_id',
+            TransactionMetadata(mail_from=Mailbox('alice')))
+        tx_id = tx0_cursor.db_id
+
+        upstream_cursor = self.s.get_transaction_cursor()
+        assert upstream_cursor.load(rest_id='tx_rest_id')
+        logging.debug(upstream_cursor.tx)
+        upstream_cursor.start_attempt()
+        self.assertIsNotNone(upstream_cursor.inflight_session_id)
+        upstream_cursor.write_envelope(
+            TransactionMetadata(mail_response=Response(250)))
+
+        group = GroupCursor(self.s, rest_id='tx_rest_id')
+        self.assertTrue(group.try_cache())
+
+        group = GroupCursor(self.s)
+        group.load(tx_rest_id='tx_rest_id')
+        assert group.tx_cursors[0].tx is not None
+        self.assertEqual(0, group.tx_cursors[0].tx.group_index)
+        self.assertEqual(1, len(group.tx_cursors))
+        cursor = group.tx_cursors[0]
+        self.assertEqual(1, cursor.db_id)
+        self.assertEqual(2, cursor.version)
+
+        group.tx_cursors[0].write_envelope(
+            TransactionMetadata(rcpt_to=[Mailbox('bob@example.com')]))
+
+        group = GroupCursor(self.s)
+        group.load(tx_id=tx_id)
+        group.clone_tx(
+            TransactionMetadata(rcpt_to=[Mailbox('bob2@example.com')]),
+            create_leased = False,
+            rest_id='tx_rest_id2')
+        assert group.tx_cursors[1].tx is not None
+        self.assertEqual(1, group.tx_cursors[1].tx.group_index)
+
+        upstream2 = self.s.get_transaction_cursor(
+            db_id=group.tx_cursors[1].db_id)
+        upstream2.load()
+        upstream2.start_attempt()
+
+        group = GroupCursor(self.s, rest_id='tx_rest_id')
+        self.assertTrue(group.try_cache())
+
+
+        group.update_all(
+            TransactionMetadata(body = BlobSpec(create_tx_body=True)))
+        logging.debug('reload')
+
+
+        group = GroupCursor(self.s)
+        group.load(tx_id=tx_id)
+        self.assertEqual(2, len(group.tx_cursors))
+
+        blob_writer = group.tx_cursors[0].get_blob_for_append(
+            BlobUri(tx_id='tx_rest_id', tx_body=True))
+        assert isinstance(blob_writer, BlobCursor)
+        b = b'hello, world!'
+        blob_writer.append_data(0, b, len(b))
+        group.blob_done(blob_writer)
+
+        logging.debug('wait -> timeout')
+        self.assertIsNone(await group.wait_async(1))
+        time.sleep(1)
+        logging.debug('wait done')
+
+        assert upstream_cursor.load()
+        logging.debug(upstream_cursor.tx)
+        logging.debug(upstream_cursor.version)
+        upstream_cursor.write_envelope(
+            TransactionMetadata(),
+            attempt_delta=TransactionMetadata(rcpt_response=[Response(201)]))
+        logging.debug(upstream_cursor.version)
+
+        logging.debug([c.version for c in group.tx_cursors])
+        self.assertEqual((group.tx_cursors[0], True),
+                         await group.wait_async(1))
+        logging.debug([c.version for c in group.tx_cursors])
+        group.load()
+        def code(resp):
+            assert resp is not None
+            return resp.code
+        assert group.tx_cursors[0].tx is not None
+        self.assertEqual(
+            [201], [code(r) for r in group.tx_cursors[0].tx.rcpt_response])
+
 
     def test_mixed_notify_retry(self):
         cursor = self.s.get_transaction_cursor()
@@ -219,7 +352,7 @@ class StorageTestBase(unittest.TestCase):
             mail_from=Mailbox('alice'), rcpt_to=[Mailbox('bob')])
 
         # reusing body of non-existent tx should fail
-        with self.assertRaises(ValueError):
+        with self.assertRaises(AssertionError):
             tx_writer2.create('tx_rest_id2', TransactionMetadata(
                 body=BlobSpec(
                     reuse_uri=BlobUri(tx_id='nonexistent', tx_body=True))))
@@ -340,6 +473,25 @@ class StorageTestBase(unittest.TestCase):
         self.assertFalse(self.s.testonly_get_session(stale_session)['live'])
         self.assertTrue(self.s.testonly_get_session(self.s.session_id)['live'])
 
+    def test_other_session(self):
+        s2 = self._connect('https://other-session')
+
+        downstream = self.s.get_transaction_cursor()
+        downstream.create(
+            'tx_rest_id',
+            TransactionMetadata(
+                remote_host=HostPort('remote_host', 2525)),
+            create_leased=True)
+        downstream.start_attempt()
+
+        other = s2.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertTrue(other.load())
+        self.assertEqual(self.s.session_uri, other.tx.session_uri)
+
+        other = s2.get_transaction_cursor(rest_id='tx_rest_id')
+        self.assertEqual((False, self.s.session_uri), other.check())
+
+
     def test_recovery(self):
         old_session = self._connect()
         old_tx = old_session.get_transaction_cursor()
@@ -352,6 +504,8 @@ class StorageTestBase(unittest.TestCase):
             BlobUri(tx_id='tx_rest_id', tx_body=True))
         b = b'hello, world!'
         blob_writer.append_data(0, b, len(b))
+        old_tx.write_envelope(TransactionMetadata(), input_done=True)
+
         # don't cleanup the session
         old_session.session_id = None
         try:
@@ -744,6 +898,8 @@ class StorageTestBase(unittest.TestCase):
         b = b'hello, world!'
         blob_writer.append_data(0, b, last=True)
 
+        downstream.write_envelope(TransactionMetadata(), input_done=True)
+
         self.assertTrue(upstream.try_cache())
         self.assertEqual(len(b), upstream.tx.body.content_length())
         self.assertEqual(0, self.s._tx_reads - prev_reads)
@@ -804,6 +960,9 @@ class StorageTestBase(unittest.TestCase):
         b1 = b'hello blob1'
         blob1_writer.append_data(0, b1, last=True)
 
+        downstream._blob_done(blob1_writer)
+        downstream.write_envelope(TransactionMetadata(), ping_tx=True)
+
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]
         self.assertEqual('blob1', blob1_reader.blob_uri().blob)
@@ -830,6 +989,8 @@ class StorageTestBase(unittest.TestCase):
         b2 = b'hello blob2'
         blob2_writer.append_data(0, b2, last=True)
 
+        downstream.write_envelope(TransactionMetadata(), input_done=True)
+
         self.assertTrue(upstream.try_cache())
         blob1_reader = upstream.blobs[0]
         self.assertEqual('blob1', blob1_reader.blob_uri().blob)
@@ -851,36 +1012,3 @@ class StorageTestBase(unittest.TestCase):
         self.assertEqual(1, self.s._tx_reads - prev_reads)
         prev_reads = self.s._tx_reads
 
-
-class StorageTestSqlite(StorageTestBase):
-    def setUp(self):
-        super().setUp()
-        self.dir, self.db_url = sqlite_test_utils.create_temp_sqlite_for_test()
-        self.s = self._connect()
-
-    def tearDown(self):
-        self.dir.cleanup()
-
-    def _connect(self):
-        return Storage.connect(self.db_url, session_uri='http://storage-test')
-
-
-class StorageTestPostgres(StorageTestBase):
-    pg : Optional[object] = None
-    storage_yaml : Optional[dict] = None
-
-    def setUp(self):
-        super().setUp()
-
-        self.s = self._connect()
-
-    def _connect(self):
-        if self.pg is None:
-            self.storage_yaml = {}
-            self.pg, self.pg_url = postgres_test_utils.setup_postgres()
-
-        return Storage.connect(self.pg_url, session_uri='http://storage-test')
-
-
-if __name__ == '__main__':
-    unittest.main()

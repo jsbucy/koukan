@@ -10,6 +10,7 @@ from koukan.response import Response, Esmtp
 from koukan.filter import (
     AsyncFilter,
     Mailbox,
+    TransactionGroup,
     TransactionMetadata )
 from koukan.filter_chain import FilterResult, Filter
 
@@ -51,7 +52,7 @@ class MockAsyncFilter(AsyncFilter):
     def update(self,
                tx : TransactionMetadata,
                tx_delta : TransactionMetadata
-               ) -> TransactionMetadata:
+               ) -> AsyncFilter.Result:
         logging.debug('MockAsyncFilter.update %s', tx)
         exp = self.update_expectation[0]
         self.update_expectation.pop(0)
@@ -59,7 +60,7 @@ class MockAsyncFilter(AsyncFilter):
         assert upstream_delta is not None
         self._version = version
         logging.debug(upstream_delta)
-        return upstream_delta
+        return AsyncFilter.Result.OK
 
     def get(self) -> TransactionMetadata:
         cb = self.get_expectation[0]
@@ -127,9 +128,32 @@ class FakeFilter(Filter):
 
     def on_update(self, tx_delta : TransactionMetadata) -> FilterResult:
         if not self.expectation:
-            raise IndexError()
+            raise IndexError(id(self))
         exp = self.expectation[0]
         self.expectation.pop(0)
         assert self.downstream_tx is not None
         exp(self.downstream_tx, tx_delta)
         return FilterResult()
+
+
+class FakeTxGroup(TransactionGroup):
+    _tx : List[TransactionMetadata]
+    def __init__(self, tx):
+        super().__init__([])
+        self._tx = tx
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def tx(self) -> List[TransactionMetadata]:
+        return self._tx
+
+    def wait_tx(self, i, pred : Callable[[TransactionMetadata], bool],
+                deadline) -> Optional[TransactionMetadata]:
+        tx = self._tx[i]
+        if pred(tx):
+            return tx
+        return None

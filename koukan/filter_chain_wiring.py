@@ -23,7 +23,7 @@ from koukan.filter import (
     AsyncFilter,
     HostPort,
     Resolution )
-from koukan.filter_chain import BaseFilter, FilterChain
+from koukan.filter_chain import BaseFilter, Filter, FilterChain
 from koukan.exploder import Exploder
 from koukan.remote_host_filter import RemoteHostFilter
 from koukan.received_header_filter import ReceivedHeaderFilter
@@ -34,15 +34,20 @@ from koukan.sender import Sender
 from koukan.message_validation_filter import MessageValidationFilter
 from koukan.spf_check_filter import SpfCheckFilter
 from koukan.dkim_check_filter import DkimCheckFilter
+from koukan.mail_ok_filter import MailOkFilter
 
 from koukan.policy_factory import PolicyFactory
 
-StorageWriterFactory = Callable[[Sender, bool],Optional[AsyncFilter]]
+ExploderUpstreamFactory = Callable[[Sender, bool, Optional[int]],
+                                   Optional[AsyncFilter]]
+AddRouteUpstreamFactory = Callable[[Sender, bool, Optional[int]],
+                                   Optional[Filter]]
 
 # really registry/factory for Filter impls that don't have a
 # specialized factory implementation
 class FilterChainWiring:
-    exploder_output_factory : Optional[StorageWriterFactory] = None
+    exploder_upstream_factory : Optional[ExploderUpstreamFactory] = None
+    add_route_upstream_factory : Optional[AddRouteUpstreamFactory] = None
     router_factory : Optional[RecipientRouterFactory] = None
     filter_chain_factory : Optional[FilterChainFactory] = None
     rest_endpoint_clients : List[Tuple[dict, RestEndpointClientProvider]]
@@ -50,8 +55,10 @@ class FilterChainWiring:
 
     def __init__(
             self,
-            exploder_output_factory : Optional[StorageWriterFactory] = None):
-        self.exploder_output_factory = exploder_output_factory
+            exploder_upstream_factory : Optional[ExploderUpstreamFactory] = None,
+            add_route_upstream_factory : Optional[AddRouteUpstreamFactory] = None):
+        self.exploder_upstream_factory = exploder_upstream_factory
+        self.add_route_upstream_factory = add_route_upstream_factory
         self.rest_endpoint_clients = []
 
     def __del__(self):
@@ -76,6 +83,7 @@ class FilterChainWiring:
         # exploder_output_factory / router handle_new_tx()
         factory.add_filter('exploder', self.exploder)
         factory.add_filter('add_route', self.add_route)
+        factory.add_filter('add_route_upstream', self.add_route_upstream)
 
         factory.add_filter('router', self.router_factory.build_router)
         factory.add_filter('message_builder', self.message_builder)
@@ -85,6 +93,7 @@ class FilterChainWiring:
         factory.add_filter('message_validation', self.message_validation)
         factory.add_filter('spf_check', self.spf_check)
         factory.add_filter('dkim_check', self.dkim_check)
+        factory.add_filter('mail_ok', self.mail_ok)
 
     def exploder_upstream(self, sender : Sender,
                           rcpt_timeout : float,
@@ -93,14 +102,22 @@ class FilterChainWiring:
                           block_upstream : bool,
                           notify : bool,
                           retry : bool):
-        assert self.exploder_output_factory is not None
-        upstream : Optional[AsyncFilter] = self.exploder_output_factory(
-            sender, block_upstream)
+        assert self.exploder_upstream_factory is not None
+        upstream : Optional[AsyncFilter] = self.exploder_upstream_factory(
+            sender, block_upstream, None)
         if upstream is None:
             return None
         return AsyncFilterWrapper(
             upstream, rcpt_timeout, store_and_forward=store_and_forward,
             notify=notify, retry=retry)
+
+    def add_route_upstream(
+            self, yaml : dict, sender : Sender) -> Optional[Filter]:
+        assert self.add_route_upstream_factory is not None
+        return self.add_route_upstream_factory(
+            sender,
+            True,  # block_upstream
+            yaml.get('timeout', 30))  # sync_timeout
 
     def exploder(self, yaml, sender : Sender):
         assert sender.yaml is not None
@@ -152,37 +169,35 @@ class FilterChainWiring:
             yaml['retry'])
 
     def add_route(self, yaml, sender : Sender):
-        if 'sender' not in yaml:
+        if 'sender' not in yaml:  # xxx noop?
             return None
         assert self.filter_chain_factory is not None
-        if yaml.get('store_and_forward', None):
-            # we configure AsyncFilterWrapper *not* to toggle
-            # retry/notify upstream; it gets that from the upstream
-            # chain
+        if yaml.get('store_and_forward', None):  # async/SWF
             upstream_yaml = {
                 'chain': [{
                     'sender': yaml['sender'],
-                    'filter': 'exploder_upstream',
-                    'rcpt_timeout': 0,
-                    'data_timeout': 0,  # 0 upstream timeout ~ effectively swallow errors
-                    'store_and_forward': True,
-                    'block_upstream': False,
-                    'notify': False,
-                    'retry': False
+                    'filter': 'add_route_upstream',
                 }]
             }
             if tag := yaml.get('tag', None):
                 upstream_yaml['tag'] = tag
+            add_route_sender = Sender(yaml['sender'])
+            logging.debug(add_route_sender)
+            logging.debug(upstream_yaml)
             res = self.filter_chain_factory.build_filter_chain(
-                    Sender(yaml['sender']), upstream_yaml)
+                add_route_sender, upstream_yaml)
             assert res is not None
             add_route, unused_yaml = res
-        else:
+        else:  # sync
             output = self.filter_chain_factory.build_filter_chain(
                 Sender(yaml['sender'], yaml.get('tag', None)))
             if output is None:
                 return None
             add_route, output_yaml = output
+        # TODO indirect add_route:
+        # lambda: build_filter_chain()
+        # so we don't construct it if the tx fails before this filter
+        # is ever invoked?
         return AddRouteFilter(add_route, yaml['sender'], yaml.get('tag', None))
 
     def rest_output(self, yaml, sender : Sender):
@@ -201,6 +216,7 @@ class FilterChainWiring:
                 client = c[1]
                 break
         else:
+            # http_client
             client = RestEndpointClientProvider(**client_args)
             self.rest_endpoint_clients.append((client_args, client))
 
@@ -249,3 +265,6 @@ class FilterChainWiring:
 
     def dkim_check(self, yaml, sender : Sender):
         return DkimCheckFilter(yaml.get('extra_domains', []))
+
+    def mail_ok(self, yaml, sender):
+        return MailOkFilter()

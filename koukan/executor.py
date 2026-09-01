@@ -115,3 +115,7 @@ class Executor:
 
         assert not self.worker_exception
         return watchdog_result
+
+    def wait_empty(self, timeout):
+        with self.lock:
+            return self.cv.wait_for(lambda: not self.inflight, timeout)
