@@ -41,6 +41,7 @@ _exploder chain. These ends with an exploder filter instance.
    chain including the final ``rest_output``
 
 3. ``msa: true`` -> ``sf_mode: upstream_unavailability``
+
    ``msa: false`` -> ``sf_mode: mixed_data_response``
 
 4. add ``mail_ok`` filter before first ``router``
