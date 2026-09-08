@@ -393,8 +393,6 @@ endpoint:
   - filter: received_header
     received_hostname: gargantua1    
   - filter: message_validation
-  - filter: dns_resolution
-    suffix: ''  # match everything
   - filter: policy_action
     tag: dns_nx
     match:
