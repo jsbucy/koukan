@@ -1,0 +1,52 @@
+# Copyright The Koukan Authors
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Bazel
+        # Bazelisk reads the version from .bazelversion automatically.
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Ensure PostgreSQL binaries are available
+        # storage_test, router_service_test, exploder_test and end2end_test
+        # start a throwaway server via testing.postgresql, which needs the
+        # initdb/postgres binaries on PATH. They ship preinstalled on the
+        # runner under /usr/lib/postgresql/<version>/bin; install as a
+        # fallback if a future image drops them.
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql
+          fi
+          pg_bin="$(dirname "$(ls /usr/lib/postgresql/*/bin/initdb | sort -V | tail -1)")"
+          echo "Using PostgreSQL binaries in: $pg_bin"
+          echo "$pg_bin" >> "$GITHUB_PATH"
+
+      - name: Run tests and type checks
+        # The mypy aspect in .bazelrc runs as part of the build, so this also
+        # type-checks the tests and everything they depend on. --build_tests_only
+        # keeps the job focused on the test surface and avoids building
+        # standalone targets (e.g. the example scripts) that no test depends on.
+        run: bazel test //... --build_tests_only --test_output=errors --keep_going
