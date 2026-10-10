@@ -69,11 +69,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    rfc822_message = None
-    if args.rfc822_filename:
-        # open as text messes with line endings
-        with open(args.rfc822_filename, 'rb') as f:
-            rfc822_message = f.read().decode('utf-8')
+    if not args.rfc822_filename:
+        parser.error('--rfc822_filename is required')
+    # open as text messes with line endings
+    with open(args.rfc822_filename, 'rb') as f:
+        rfc822_message = f.read().decode('utf-8')
 
     logging.debug(args.rcpt_to)
 

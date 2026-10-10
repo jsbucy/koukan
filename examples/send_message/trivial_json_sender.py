@@ -69,10 +69,10 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    message_builder = None
-    if args.message_builder_filename:
-      with open(args.message_builder_filename, 'r') as f:
-        message_builder = json.load(f)
+    if not args.message_builder_filename:
+      parser.error('--message_builder_filename is required')
+    with open(args.message_builder_filename, 'r') as f:
+      message_builder = json.load(f)
 
     logging.debug(message_builder)
 
