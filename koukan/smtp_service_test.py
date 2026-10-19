@@ -32,7 +32,10 @@ class SmtpServiceTest(unittest.TestCase):
         logging.basicConfig(level=logging.DEBUG)
         handler_factory = lambda: SmtpHandler(
             chain_factory = lambda: self.chain,
-            executor = Executor(inflight_limit=100, watchdog_timeout=3600),
+            timeout_mail=5,
+            timeout_rcpt=5,
+            timeout_data=5,
+            executor = Executor(inflight_limit=100, watchdog_timeout=10),
             sender = 'gateway',
             tag = 'mx',
             chunk_size = 64
@@ -59,12 +62,19 @@ class SmtpServiceTest(unittest.TestCase):
               exp_mail_resp : Response,
               # (mailbox, tx rcpt resp, exp resp code)
               rcpts : List[Tuple[str,Optional[Response],Response]] = [],
-              tx_data_resp : Optional[Response] = None, exp_data_resp = None):
+              tx_data_resp : Optional[Response] = None, exp_data_resp = None,
+              mail_timeout = False,
+              rcpt_timeout = False,
+              data_timeout = False):
         resp = self.smtp_client.ehlo('gargantua1')
         self.assertEqual(resp[0], 250)
 
         def exp(tx, tx_delta):
             logging.debug(tx)
+            if mail_timeout:
+                logging.debug('mail timeout')
+                time.sleep(5)
+                return
             if tx_mail_resp:
                 tx.mail_response = tx_mail_resp
 
@@ -75,6 +85,10 @@ class SmtpServiceTest(unittest.TestCase):
         for i,(rcpt, tx_rcpt_resp, exp_rcpt_resp) in enumerate(rcpts):
             def exp(tx, tx_delta):
                 logging.debug(tx)
+                if rcpt_timeout:
+                    logging.debug('rcpt timeout')
+                    time.sleep(5)
+                    return
                 if tx_rcpt_resp:
                     tx.rcpt_response.append(tx_rcpt_resp)
             self.endpoint.add_expectation(exp)
@@ -96,6 +110,10 @@ class SmtpServiceTest(unittest.TestCase):
         body = InlineBlob(b'')
         def exp_body(tx, tx_delta):
             logging.debug(tx.body)
+            if data_timeout:
+                logging.debug('data timeout')
+                time.sleep(5)
+                return
             if tx.body:
                 body.append(tx.body.pread(body.len()))
                 logging.debug(body.pread(0))
@@ -111,15 +129,31 @@ class SmtpServiceTest(unittest.TestCase):
         self.trans('alice', Response(550), Response(550),
                    [('bob', None, Response(503))])
 
+    def test_mail_timeout(self):
+        self.trans('alice', None, Response(450),
+                   [('bob', None, Response(503))],
+                   mail_timeout=True)
+
     def test_rcpt_fail(self):
         self.trans('alice', Response(250), Response(250),
                    [('bob', Response(550), Response(550))])
+
+    def test_rcpt_timeout(self):
+        self.trans('alice', Response(250), Response(250),
+                   [('bob', Response(550), Response(450))],
+                   rcpt_timeout=True)
 
     def test_data_fail(self):
         self.trans('alice', Response(250), Response(250),
                    [('bob', Response(550), Response(550)),
                     ('bob2', Response(250), Response(250))],
                    Response(450), Response(450))
+
+    def test_data_timeout(self):
+        self.trans('alice', Response(250), Response(250),
+                   [('bob', Response(550), Response(550)),
+                    ('bob2', Response(250), Response(250))],
+                   Response(450), Response(450), data_timeout=True)
 
     def test_success(self):
         self.trans('alice', Response(250), Response(250),

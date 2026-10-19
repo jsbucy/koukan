@@ -210,7 +210,7 @@ class SmtpHandler:
         self.chain.tx.mail_from = Mailbox(
             mail_from if mail_from != '<>' else '', params)
         fut = self.executor.submit(
-            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
+            partial(self._update_tx, self.cx_id, self.chain), timeout=0)
         if fut is None:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -241,7 +241,7 @@ class SmtpHandler:
         rcpt_num = len(self.chain.tx.rcpt_to)
         self.chain.tx.rcpt_to.append(Mailbox(rcpt_to, params))
         fut = self.executor.submit(
-            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
+            partial(self._update_tx, self.cx_id, self.chain), timeout=0)
         if fut is None:
             return '450 server busy'
         await asyncio.wait([asyncio.wrap_future(fut)],
@@ -289,36 +289,41 @@ class SmtpHandler:
         assert isinstance(body, InlineBlob)
         assert body.content_length() is None
         assert isinstance(self.chain.tx.body, InlineBlob)
-        if last or (self.chain.tx.body.available() + len(data) <= self.chunk_size):
-            body.append(data, last)
-            data = b''
-        stale = now - self.last_refresh > self.refresh_interval
-        if not last and not stale and not data:
-            return None
-        self.last_refresh = now
 
-        logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
-                     self.cx_id, body.available(), last)
+        # Don't assume any relationship between aiosmtpd.SMTP.chunk_size and
+        # SmtpHandler.chunk_size.
+        while data:
+            chunk = min(self.chunk_size - self.chain.tx.body.available(),
+                        len(data))
+            chunk_last = last and chunk == len(data)
+            body.append(data[0:chunk], chunk_last)
+            data = data[chunk:]
+            stale = now - self.last_refresh > self.refresh_interval
+            if not last and not stale and not data:
+                return None
+            self.last_refresh = now
 
-        fut = self.executor.submit(
-            lambda: self._update_tx(self.cx_id, self.chain), timeout=0)
-        if fut is None:
-            return '450 server busy'
-        await asyncio.wait([asyncio.wrap_future(fut)],
-                           timeout=self.timeout_data)
-        logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
-                     self.cx_id, self.chain.tx.data_response)
-        self.chain.tx.body.trim_front(self.chain.tx.body.len())
+            logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
+                         self.cx_id, body.available(), chunk_last)
 
-        if data:
-            body.append(data, last)
+            fut = self.executor.submit(
+                partial(self._update_tx, self.cx_id, self.chain), timeout=0)
+            if fut is None:
+                return '450 server busy'
+            await asyncio.wait([asyncio.wrap_future(fut)],
+                               timeout=self.timeout_data)
+            logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
+                         self.cx_id, self.chain.tx.data_response)
+            self.chain.tx.body.trim_front(self.chain.tx.body.len())
 
-        if self.chain.tx.data_response is None:
-            assert not last
-            return None
-        data_resp = self.chain.tx.data_response.to_smtp_resp()
-        self.tx = None
-        return data_resp
+            if self.chain.tx.data_response is not None:
+                data_resp = self.chain.tx.data_response.to_smtp_resp()
+                self.tx = None
+                return data_resp
+
+            if chunk_last:
+                return '450 data content upstream timeout/internal err'
+        return None
 
     # TODO send heartbeat update
     # async def handle_NOOP(server : SMTP,
