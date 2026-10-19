@@ -183,7 +183,10 @@ class SmtpGateway(EndpointFactory):
                               rest_yaml.get('gc_done_ttl', 10))
 
     def smtp_handler_factory(self, **kwargs):
-        return SmtpHandler(**kwargs)
+        return SmtpHandler(
+            # TODO might want separate queue/limits per smtp_listener?
+            executor = self.executor,
+            **kwargs)
 
     def main(self, argv : List[str] = [], alive=None):
         if self.config_yaml is None:
@@ -243,7 +246,6 @@ class SmtpGateway(EndpointFactory):
             handler_factory = partial(
                 self.smtp_handler_factory,
                 chain_factory=partial(self.rest_factory, endpoint_yaml),
-                executor=Executor(inflight_limit=100, watchdog_timeout=3600),
                 timeout_rcpt=service_yaml.get('rcpt_timeout', rcpt_timeout),
                 timeout_data=service_yaml.get('data_timeout', data_timeout),
                 chunk_size=endpoint_yaml.get('chunk_size', 2**20),
