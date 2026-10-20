@@ -293,11 +293,11 @@ class SmtpHandler:
         # Don't assume any relationship between aiosmtpd.SMTP.chunk_size and
         # SmtpHandler.chunk_size.
         while data:
-            chunk = min(self.chunk_size - self.chain.tx.body.available(),
+            chunk_size = min(self.chunk_size - self.chain.tx.body.available(),
                         len(data))
-            chunk_last = last and chunk == len(data)
-            body.append(data[0:chunk], chunk_last)
-            data = data[chunk:]
+            chunk_last = last and (chunk_size == len(data))
+            body.append(data[0:chunk_size], chunk_last)
+            data = data[chunk_size:]
             stale = now - self.last_refresh > self.refresh_interval
             if not last and not stale and not data:
                 return None
