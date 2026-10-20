@@ -208,7 +208,7 @@ class Service:
                 listener_yaml['addr'],
                 listener_yaml.get('cert', None),
                 listener_yaml.get('key', None),
-                alive=alive if alive else self.heartbeat)
+                alive=partial(self.heartbeat, alive))
             self.http_server.run()
         except:
             logging.exception('router service main: http server exception')
@@ -221,7 +221,9 @@ class Service:
         self.daemon_executor.submit(
             partial(self.main, alive=self.daemon_executor.ping_watchdog))
 
-    def heartbeat(self):
+    def heartbeat(self, alive):
+        if (alive is not None) and not alive():
+            return False
         for e in [e for e in [self.rest_executor,
                               self.output_executor,
                               self.daemon_executor] if e is not None]:

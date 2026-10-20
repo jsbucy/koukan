@@ -67,7 +67,7 @@ class SmtpGateway(EndpointFactory):
             service.stop()
 
         if self.http_server:
-            logging.debug('SmtpGateway https erver shutdown')
+            logging.debug('SmtpGateway http server shutdown')
             try:
                 self.http_server.shutdown()
             except:
@@ -286,11 +286,13 @@ class SmtpGateway(EndpointFactory):
             app,
             rest_listener_yaml['addr'],
             cert=cert, key=key,
-            alive=alive if alive else self.heartbeat)
+            alive=partial(self.heartbeat, alive))
         self.http_server.run()
         logging.debug('SmtpGateway.main() done')
 
-    def heartbeat(self):
+    def heartbeat(self, alive):
+        if (alive is not None) and not alive():
+            return False
         if self.executor.check_watchdog():
             return True
         if self.http_server is not None:
