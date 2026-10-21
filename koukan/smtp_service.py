@@ -72,9 +72,6 @@ class SmtpHandler:
     local_socket = None
     peername = None
 
-    ehlo = False
-    quit = False
-
     proxy_protocol = False
     remote_host : Optional[HostPort] = None
     local_host : Optional[HostPort] = None
@@ -119,10 +116,7 @@ class SmtpHandler:
     # doesn't have a convenient hook for this? Possible to poll after
     # idle timeout?
     def __del__(self):
-        if not self.ehlo or not self.quit:
-            return
-        logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
-        self._cancel()
+        self._cancel(log=' client hung up?')
 
     async def handle_PROXY(self, server : SMTP,
                            session : Session,
@@ -141,7 +135,6 @@ class SmtpHandler:
     def _ehlo(self, hostname, esmtp):
         self.local_socket = self.smtp.transport.get_extra_info('sockname')
         self.peername = self.smtp.transport.get_extra_info('peername')
-        self.ehlo = True
         logging.info('SmtpHandler %s %s %s %s %s',
                      self.cx_id, 'EHLO' if esmtp else 'HELO',
                      hostname,
@@ -164,7 +157,7 @@ class SmtpHandler:
         self._ehlo(hostname, esmtp=False)
         return '250 ' + server.hostname
 
-    def _cancel(self):
+    def _cancel(self, log=''):
         if self.upstream is None:
             return
         upstream = self.upstream
@@ -174,7 +167,7 @@ class SmtpHandler:
         tx = upstream.chain.tx
         if tx.cancelled or tx.data_response is not None:
             return
-        logging.debug('%s cancel', self.cx_id)
+        logging.debug('%s cancel' + log, self.cx_id)
         # This can be called from __del__() so this closure must not
         # access this SmtpHandler.
         # if we can't schedule this, there's nothing more we can do
@@ -188,7 +181,6 @@ class SmtpHandler:
                           envelope : Envelope) -> str:
         logging.info('SmtpHandler.handle_QUIT %s', self.cx_id)
         self._cancel()
-        self.quit = True
         # smtplib throws if the QUIT response isn't exactly 221
         return '221 ok'
 
