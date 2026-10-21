@@ -39,13 +39,35 @@ def next_cx():
 
 ChainFactory = Callable[[], FilterChain]
 
+class Upstream:
+    chain : FilterChain
+    cx_id : str
+    def __init__(self, chain, cx_id):
+        self.chain = chain
+        self.cx_id = cx_id
+
+    # caller must ensure no concurrent calls to update()/cancel()
+    def update(self):
+        logging.debug('SmtpHandler._update_tx %s', self.cx_id)
+        self.chain.update()
+        logging.debug('SmtpHandler._update_tx %s done', self.cx_id)
+
+    def cancel(self):
+        assert self.chain.tx is not None
+        tx = self.chain.tx
+        assert not tx.cancelled and tx.data_response is None
+        tx.cancelled = True
+        logging.debug('%s cancel', self.cx_id)
+        self.chain.update()
+        logging.debug('%s cancel done', self.cx_id)
+
 class SmtpHandler:
     chain_factory : ChainFactory
     executor : Executor
     smtp : Optional[SMTP] = None
     cx_id : str  # connection id, log token
 
-    chain : Optional[FilterChain] = None
+    upstream : Optional[Upstream] = None
 
     local_socket = None
     peername = None
@@ -90,13 +112,16 @@ class SmtpHandler:
         # self.smtp.transport doesn't get set up until after
         # Controller.factory returns?
 
-    # TODO would be nice to abort the upstream transaction if the
-    # client goes away, subclass aiosmtpd.smtp.SMTP and
-    # override connection_lost()? In the meantime this gives us a
-    # little visibility.
+    # Try to be polite and abort the upstream transaction if the
+    # client goes away. Doing this wth the finalizer may not be timely but is
+    # better than nothing.
+    # TODO would be better to get an upcall from aiosmtpd but it
+    # doesn't have a convenient hook for this? Possible to poll after
+    # idle timeout?
     def __del__(self):
-        if self.ehlo and not self.quit:
-            logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
+        if not self.ehlo or not self.quit:
+            return
+        logging.info('SmtpHandler.__del__ (never quit) %s', self.cx_id)
         self._cancel()
 
     async def handle_PROXY(self, server : SMTP,
@@ -137,17 +162,26 @@ class SmtpHandler:
                           hostname : str) -> str:
         session.host_name = hostname
         self._ehlo(hostname, esmtp=False)
-        return '250 {}'.format(server.hostname)
+        return '250 ' + server.hostname
 
     def _cancel(self):
-        if self.chain is None:
+        if self.upstream is None:
             return
-        if self.chain is not None:
-            self.chain.tx.cancelled = True
-            fut = self.executor.submit(
-                partial(self._update_tx,
-                        self.cx_id, self.chain), timeout=0)
-        self.chain = None
+        upstream = self.upstream
+        self.upstream = None
+        if upstream.chain.tx is None:
+            return
+        tx = upstream.chain.tx
+        if tx.cancelled or tx.data_response is not None:
+            return
+        logging.debug('%s cancel', self.cx_id)
+        # This can be called from __del__() so this closure must not
+        # access this SmtpHandler.
+        # if we can't schedule this, there's nothing more we can do
+        # TODO short wait ok here?
+        cfut = self.executor.submit(upstream.cancel, timeout=0)
+        if cfut is None:
+            logging.debug('%s _cancel() could not schedule', self.cx_id)
 
     async def handle_QUIT(self, server : SMTP,
                           session : Session,
@@ -165,21 +199,36 @@ class SmtpHandler:
         self._cancel()
         return '250 ok'
 
-    def _update_tx(self, cx_id, chain):
-        logging.debug('SmtpHandler._update_tx %s', cx_id)
-        chain.update()
-        logging.debug('SmtpHandler._update_tx %s done', cx_id)
+    async def _update_upstream(self, timeout) -> Optional[str]:
+        assert self.upstream is not None
+        # TODO wait up to 10% of timeout to schedule rather than fastfail?
+        cfut = self.executor.submit(self.upstream.update, timeout=0)
+        if cfut is None:
+            logging.debug('%s _update_upstream could not schedule', self.cx_id)
+            return '450 server busy'
+        afut = asyncio.wrap_future(cfut)
+        done, pending = await asyncio.wait([afut], timeout=timeout)
+        if afut in done:
+            return None
+        logging.debug('%s _update_upstream() timeout', self.cx_id)
+        # Upstream is expected to respect the timeout so this is not
+        # expected and may lead to an Executor watchdog timeout. The
+        # upstream is an an undefined state at this point so don't try
+        # to cancel here.
+        self.upstream = None
+        return '450 upstream timeout/internal err'
 
     async def handle_MAIL(self, server : SMTP,
                           session : Session,
                           envelope : Envelope,
                           mail_from : str,
                           mail_esmtp : List[str]) -> str:
-        self.chain = self.chain_factory()
-        self.chain.init(TransactionMetadata(
+        self.upstream = Upstream(self.chain_factory(), self.cx_id)
+        self.upstream.chain.init(TransactionMetadata(
             sender=Sender(name=self.sender, tag=self.tag)))
-        assert self.chain.tx is not None
-        self.chain.tx.smtp_meta = {
+        assert self.upstream.chain.tx is not None
+        tx = self.upstream.chain.tx
+        tx.smtp_meta = {
             'ehlo_host': session.host_name,
             'esmtp': session.extended_smtp,
             'tls': session.ssl is not None,
@@ -195,9 +244,9 @@ class SmtpHandler:
                 self.local_host = HostPort.from_seq(self.local_socket)
 
         if self.remote_host is not None:
-            self.chain.tx.remote_host = self.remote_host
+            tx.remote_host = self.remote_host
         if self.local_host is not None:
-            self.chain.tx.local_host = self.local_host
+            tx.local_host = self.local_host
 
         params = [EsmtpParam.from_str(s) for s in mail_esmtp]
         # aiosmtpd.SMTP.smtp_MAIL() uses
@@ -207,56 +256,51 @@ class SmtpHandler:
         # aiosmtpd expects envelope.mail_from to be non-empty <> for
         # the rcpt command precondition check but the rest of our
         # stack expects '' for rfc5321 "null reverse-path"
-        self.chain.tx.mail_from = Mailbox(
+        tx.mail_from = Mailbox(
             mail_from if mail_from != '<>' else '', params)
-        fut = self.executor.submit(
-            partial(self._update_tx, self.cx_id, self.chain), timeout=0)
-        if fut is None:
-            return '450 server busy'
-        await asyncio.wait([asyncio.wrap_future(fut)],
-                           timeout=self.timeout_mail)
-        logging.debug('handle_MAIL wait fut done')
+        if err := await self._update_upstream(self.timeout_mail):
+            return err
         logging.info('SmtpHandler.handle_MAIL %s resp %s',
-                     self.cx_id, self.chain.tx.mail_response)
-        if self.chain.tx.mail_response is None:
-            return '450 MAIL upstream timeout/internal err'
-        if self.chain.tx.mail_response.ok():
+                     self.cx_id, tx.mail_response)
+        if tx.mail_response is None:  # FilterChain/RestEndpoint bug
+            # don't try to cancel after bug in upstream
+            logging.debug('%s no mail_response', self.cx_id)
+            self.upstream = None
+            return '450 service unavailable'
+        if tx.mail_response.ok():
             # aiosmtpd expects this
             envelope.mail_from = mail_from
             envelope.mail_options.extend(mail_esmtp)
-        return self.chain.tx.mail_response.to_smtp_resp()
+        return tx.mail_response.to_smtp_resp()
 
     async def handle_RCPT(self, server : SMTP,
                           session : Session,
                           envelope : Envelope,
                           rcpt_to : str,
                           rcpt_esmtp : List[str]) -> str:
-        assert self.chain is not None
-        assert self.chain.tx is not None
-
+        if self.upstream is None:  # previous internal error
+            return '450 service unavailable'
+        assert self.upstream.chain.tx is not None
+        tx = self.upstream.chain.tx
         logging.info('SmtpHandler.handle_RCPT %s %s %s',
                      self.cx_id, rcpt_to, rcpt_esmtp)
         params = [EsmtpParam.from_str(s) for s in rcpt_esmtp]
 
-        rcpt_num = len(self.chain.tx.rcpt_to)
-        self.chain.tx.rcpt_to.append(Mailbox(rcpt_to, params))
-        fut = self.executor.submit(
-            partial(self._update_tx, self.cx_id, self.chain), timeout=0)
-        if fut is None:
-            return '450 server busy'
-        await asyncio.wait([asyncio.wrap_future(fut)],
-                           timeout=self.timeout_rcpt)
-
+        rcpt_num = len(tx.rcpt_to)
+        tx.rcpt_to.append(Mailbox(rcpt_to, params))
+        if err := await self._update_upstream(self.timeout_rcpt):
+            return err
         logging.info('SmtpHandler.handle_RCPT %s response %s',
-                     self.cx_id, self.chain.tx.rcpt_response)
+                     self.cx_id, tx.rcpt_response)
 
-        # for now without pipelining we send one rcpt upstream at a time
-        if len(self.chain.tx.rcpt_response) != len(self.chain.tx.rcpt_to):
-            return '450 RCPT upstream timeout/internal err'
-        rcpt_resp = self.chain.tx.rcpt_response[rcpt_num]
-
-        if rcpt_resp is None:
-            return '450 RCPT upstream timeout/internal err'
+        # For now without pipelining we send one rcpt upstream at a time.
+        # No response after update -> bug.
+        if ((len(tx.rcpt_response) != len(tx.rcpt_to)) or
+            (rcpt_resp := tx.rcpt_response[rcpt_num]) is None):
+            logging.debug('%s no rcpt_response %d', self.cx_id, rcpt_num)
+            # don't try to cancel after bug in upstream
+            self.upstream = None
+            return '450 service unavailable'
         if rcpt_resp.ok():
             # aiosmtpd expects this
             envelope.rcpt_tos.append(rcpt_to)
@@ -279,22 +323,23 @@ class SmtpHandler:
                                 data : bytes,
                                 decoded_data : Optional[str],
                                 last : bool) -> Optional[str]:
-        assert self.chain is not None
-        assert self.chain.tx is not None
+        if self.upstream is None:  # previous internal error
+            return '450 service unavailable'
+        assert self.upstream.chain.tx is not None
+        tx = self.upstream.chain.tx
         now = time.monotonic()
-        if self.chain.tx.body is None:
-            self.chain.tx.body = InlineBlob(b'')
+        if tx.body is None:
+            tx.body = InlineBlob(b'')
             self.last_refresh = now
-        body = self.chain.tx.body
+        body = tx.body
         assert isinstance(body, InlineBlob)
         assert body.content_length() is None
-        assert isinstance(self.chain.tx.body, InlineBlob)
+        assert isinstance(tx.body, InlineBlob)
 
         # Don't assume any relationship between aiosmtpd.SMTP.chunk_size and
         # SmtpHandler.chunk_size.
         while data:
-            chunk_size = min(self.chunk_size - self.chain.tx.body.available(),
-                        len(data))
+            chunk_size = min(self.chunk_size - tx.body.available(), len(data))
             chunk_last = last and (chunk_size == len(data))
             body.append(data[0:chunk_size], chunk_last)
             data = data[chunk_size:]
@@ -306,23 +351,21 @@ class SmtpHandler:
             logging.info('SmtpHandler.handle_DATA_CHUNK %s %d bytes, last: %s',
                          self.cx_id, body.available(), chunk_last)
 
-            fut = self.executor.submit(
-                partial(self._update_tx, self.cx_id, self.chain), timeout=0)
-            if fut is None:
-                return '450 server busy'
-            await asyncio.wait([asyncio.wrap_future(fut)],
-                               timeout=self.timeout_data)
+            if err := await self._update_upstream(self.timeout_data):
+                return err
             logging.info('SmtpHandler.handle_DATA_CHUNK %s resp %s',
-                         self.cx_id, self.chain.tx.data_response)
-            self.chain.tx.body.trim_front(self.chain.tx.body.len())
+                         self.cx_id, tx.data_response)
+            tx.body.trim_front(tx.body.len())
 
-            if self.chain.tx.data_response is not None:
-                data_resp = self.chain.tx.data_response.to_smtp_resp()
+            if tx.data_response is not None:
+                data_resp = tx.data_response.to_smtp_resp()
                 self.tx = None
                 return data_resp
-
-            if chunk_last:
-                return '450 data content upstream timeout/internal err'
+            if chunk_last:  # (and no data_response) -> bug
+                logging.debug('%s no data_response', self.cx_id)
+                # don't try to cancel after bug in upstream
+                self.upstream = None
+                return '450 service unavailable'
         return None
 
     # TODO send heartbeat update

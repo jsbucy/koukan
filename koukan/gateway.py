@@ -235,7 +235,11 @@ class SmtpGateway(EndpointFactory):
             endpoint_yaml = self.rest_endpoint_yaml(service_yaml['endpoint'])
             assert endpoint_yaml is not None
 
-            # cf router config.Config.exploder()
+            # TODO we should enforce that these timeouts align with
+            # the RestEndpoint timeouts in rest_factory(); we always
+            # want RestEndpoint to time out and return an error
+            # response first because SmtpHandler treats an Executor
+            # timeout as a bug.
             rcpt_timeout=40
             data_timeout=310
             if msa:
