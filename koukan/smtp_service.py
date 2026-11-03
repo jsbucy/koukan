@@ -109,13 +109,19 @@ class SmtpHandler:
         # self.smtp.transport doesn't get set up until after
         # Controller.factory returns?
 
-    # Try to be polite and abort the upstream transaction if the
-    # client goes away. Doing this wth the finalizer may not be timely but is
-    # better than nothing.
-    # TODO would be better to get an upcall from aiosmtpd but it
-    # doesn't have a convenient hook for this? Possible to poll after
-    # idle timeout?
-    def __del__(self):
+    async def handle_STARTTLS(self, server : SMTP,
+                              session : Session,
+                              envelope : Envelope) -> bool:
+        self._cancel()
+        return True
+
+    async def handle_exception(self, err):
+        logging.debug('SmtpHandler.handle_exception() %s', err)
+        self._cancel()
+        return '450 service unavailable'
+
+    def connection_lost(self):
+        logging.debug('SmtpHandler.connection_lost')
         self._cancel(log=' client hung up?')
 
     async def handle_PROXY(self, server : SMTP,
@@ -215,6 +221,7 @@ class SmtpHandler:
                           envelope : Envelope,
                           mail_from : str,
                           mail_esmtp : List[str]) -> str:
+        self._cancel()
         self.upstream = Upstream(self.chain_factory(), self.cx_id)
         self.upstream.chain.init(TransactionMetadata(
             sender=Sender(name=self.sender, tag=self.tag)))
@@ -368,6 +375,20 @@ class SmtpHandler:
     #     pass
 
 
+class SmtpWrapper(SMTP):
+    def __init__(self, handler, **kwargs):
+        super().__init__(handler, **kwargs)
+
+    def connection_lost(self):
+        logging.debug('SmtpWrapper.connection_lost')
+        self.event_handler.connection_lost()
+        super().connection_lost()
+
+    def eof_received(self):
+        logging.debug('SmtpWrapper.eof_received')
+        self.event_handler.connection_lost()
+        super().eof_received()
+
 SmtpHandlerFactory = Callable[[], SmtpHandler]
 class ControllerTls(Controller):
     # don't clash with aiosmtpd.Controller.ssl_context!
@@ -417,14 +438,14 @@ class ControllerTls(Controller):
         # responses https://github.com/jsbucy/koukan/issues/2
         ssl_context = (self.controller_tls_ssl_context if not self.smtps
                        else None)
-        smtp = SMTP(handler,
-                    #require_starttls=True,
-                    enable_SMTPUTF8 = True,  # xxx config
-                    tls_context=ssl_context,
-                    authenticator=self.auth,
-                    proxy_protocol_timeout=self.proxy_protocol_timeout,
-                    ident='ESMTP koukan smtp gateway',
-                    **kwargs)
+        smtp = SmtpWrapper(handler,
+                           #require_starttls=True,
+                           enable_SMTPUTF8 = True,  # xxx config
+                           tls_context=ssl_context,
+                           authenticator=self.auth,
+                           proxy_protocol_timeout=self.proxy_protocol_timeout,
+                           ident='ESMTP koukan smtp gateway',
+                           **kwargs)
         handler.set_smtp(smtp)
         return smtp
 
