@@ -8,7 +8,6 @@ import sys
 from functools import partial
 
 from threading import (
-    BoundedSemaphore,
     Condition,
     Lock,
     Thread,
@@ -16,7 +15,7 @@ from threading import (
 from concurrent.futures import Future
 
 class Executor:
-    inflight_sem : BoundedSemaphore
+    inflight_limit : int
     inflight : Dict[Thread, int]  # start time
     lock : Lock
     cv : Condition
@@ -26,8 +25,8 @@ class Executor:
 
     def __init__(self, inflight_limit,
                  watchdog_timeout : Optional[int] = None):
+        self.inflight_limit = inflight_limit
         self.inflight = {}
-        self.inflight_sem = BoundedSemaphore(inflight_limit)
 
         self.lock = Lock()
         self.cv = Condition(self.lock)
@@ -59,9 +58,9 @@ class Executor:
             if self._shutdown:
                 return None
             start = time.monotonic()
-            if not self.inflight_sem.acquire(
-                    blocking=(timeout is None or timeout > 0),
-                    timeout=(None if timeout == 0 else timeout)):
+            if not self.cv.wait_for(
+                    lambda: len(self.inflight) < self.inflight_limit,
+                    timeout):
                 return None
 
             fut : Future = Future()
@@ -83,7 +82,6 @@ class Executor:
             fut.set_exception(e)
         finally:
             with self.lock:
-                self.inflight_sem.release(1)
                 del self.inflight[this_thread]
                 self.cv.notify_all()
 

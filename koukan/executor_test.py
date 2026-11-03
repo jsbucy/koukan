@@ -16,10 +16,6 @@ def raise_exception():
     raise Exception()
 
 class ExecutorTest(unittest.TestCase):
-    def setUp(self):
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(asctime)s %(message)s')
-
     def testReturn(self):
         ex = Executor(1, 1)
         fut = ex.submit(lambda: 3)
@@ -52,4 +48,8 @@ class ExecutorTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s [%(thread)d] '
+                        '%(filename)s:%(lineno)d %(message)s')
+
     unittest.main()
