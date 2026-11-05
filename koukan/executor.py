@@ -15,16 +15,17 @@ from threading import (
 from concurrent.futures import Future
 
 class Executor:
+    INTERNAL_TIMEOUT = 30.0
     inflight_limit : int
     inflight : Dict[Thread, int]  # start time
     lock : Lock
     cv : Condition
-    watchdog_timeout : Optional[int] = None
+    watchdog_timeout : Optional[float] = None
     _shutdown : bool = False
     worker_exception = False
 
     def __init__(self, inflight_limit,
-                 watchdog_timeout : Optional[int] = None):
+                 watchdog_timeout : Optional[float] = None):
         self.inflight_limit = inflight_limit
         self.inflight = {}
 
@@ -50,8 +51,14 @@ class Executor:
         return True
 
     def check_watchdog(self) -> bool:
-        with self.lock:
+        if not self.lock.acquire(timeout=self.INTERNAL_TIMEOUT):
+            logging.error('Executor.check_watchdog() timed out acquiring '
+                          'lock, possible deadlock?')
+            return False
+        try:
             return self._check_watchdog_locked()
+        finally:
+            self.lock.release()
 
     def submit(self, fn, timeout=None) -> Optional[Future]:
         with self.lock:
@@ -93,25 +100,32 @@ class Executor:
             self.inflight[t] = time.monotonic()
         return True
 
-    def shutdown(self, timeout : Optional[int] = None) -> bool:
-        with self.lock:
+    def shutdown(self, timeout : Optional[float] = None) -> bool:
+        t_o = timeout if timeout is not None else self.INTERNAL_TIMEOUT
+        if not self.lock.acquire(timeout=t_o):
+            logging.error('Executor.shutdown() timed out acquiring '
+                          'lock, possible deadlock?')
+            return False
+
+        try:
             # stop new work coming in
             self._shutdown = True
 
-        watchdog_result = True
-        if timeout:
-            for i in range(0, int(timeout)):
-                logging.debug('Executor.shutdown waiting on %s',
-                              self.inflight)
-                with self.lock:
+            watchdog_result = True
+            if timeout:
+                for i in range(0, int(timeout)):
+                    logging.debug('Executor.shutdown waiting on %s',
+                                  self.inflight)
                     watchdog_result = self._check_watchdog_locked(timeout)
                     if not watchdog_result:
                         break
                     if self.cv.wait_for(lambda: len(self.inflight) == 0,
                                         timeout=1):
                         break
+            assert not self.worker_exception
+        finally:
+            self.lock.release()
 
-        assert not self.worker_exception
         return watchdog_result
 
     def wait_empty(self, timeout):
